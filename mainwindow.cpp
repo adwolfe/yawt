@@ -29,6 +29,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->playButton, &QToolButton::clicked, ui->videoLoader, &VideoLoader::play);
     connect(ui->framePosition, &QSpinBox::valueChanged, this, &MainWindow::seekFrame);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
+    connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeToggle);
+    connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeToggle);
 }
 
 // SLOTS
@@ -76,6 +78,16 @@ void MainWindow::seekFrame(int frame)
 {
     ui->videoLoader->seekToFrame(frame, 1);
     ui->frameSlider->setSliderPosition(frame);
+}
+
+
+void MainWindow::panModeToggle()
+{
+    ui->videoLoader->setInteractionMode(InteractionMode::PanZoom);
+}
+void MainWindow::roiModeToggle()
+{
+    ui->videoLoader->setInteractionMode(InteractionMode::DrawROI);
 }
 
 

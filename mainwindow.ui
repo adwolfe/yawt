@@ -60,30 +60,22 @@
         <item>
          <layout class="QHBoxLayout" name="horizontalLayout">
           <item>
-           <widget class="QToolButton" name="toolButton_2">
+           <widget class="QToolButton" name="panModeButton">
             <property name="text">
              <string>...</string>
+            </property>
+            <property name="autoRaise">
+             <bool>true</bool>
             </property>
            </widget>
           </item>
           <item>
-           <widget class="QToolButton" name="toolButton">
+           <widget class="QToolButton" name="roiModeButton">
             <property name="text">
              <string>...</string>
             </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QToolButton" name="toolButton_3">
-            <property name="text">
-             <string>...</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QToolButton" name="toolButton_4">
-            <property name="text">
-             <string>...</string>
+            <property name="autoRaise">
+             <bool>true</bool>
             </property>
            </widget>
           </item>

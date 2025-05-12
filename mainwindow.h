@@ -23,6 +23,9 @@ public slots:
     void seekFrame(int frame);
     void initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize);
     void frameSliderMoved(int value);
+    void panModeToggle();
+    void roiModeToggle();
+
 
 
 private:
