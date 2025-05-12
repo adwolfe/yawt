@@ -14,20 +14,13 @@ LIBS += -L/opt/homebrew/lib -lopencv_core -lopencv_imgproc -lopencv_highgui -lop
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
-    thresholdvideoworker.cpp \
-    trackingthread.cpp \
     videofiletreeview.cpp \
-    videoloader.cpp \
-    wormtracker.cpp
+    videoloader.cpp
 
 HEADERS += \
     mainwindow.h \
-    thresholdvideoworker.h \
-    trackingthread.h \
     videofiletreeview.h \
-    videoloader.h \
-    worm.h \
-    wormtracker.h
+    videoloader.h
 
 FORMS += \
     mainwindow.ui
