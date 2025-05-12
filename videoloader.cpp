@@ -186,15 +186,15 @@ void VideoLoader::stop() {
     qDebug() << "Playback stopped.";
 }
 
-void VideoLoader::seekToFrame(int frameNumber) {
+void VideoLoader::seekToFrame(int frameNumber, bool suppressEmit) {
     if (!isVideoLoaded()) {
         return;
     }
     frameNumber = qBound(0, frameNumber, totalFramesCount > 0 ? totalFramesCount - 1 : 0);
-    displayFrame(frameNumber);
+    displayFrame(frameNumber, suppressEmit);
 }
 
-void VideoLoader::displayFrame(int frameNumber) {
+void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
     if (!videoCapture.isOpened() || originalFrameSize.isEmpty()) {
         qWarning() << "displayFrame called with no video loaded or invalid state.";
         currentFrameIdx = -1;
@@ -221,18 +221,27 @@ void VideoLoader::displayFrame(int frameNumber) {
         if (!currentCvFrame.empty()) {
             convertCvMatToQImage(currentCvFrame, currentQImageFrame);
             currentFrameIdx = frameNumber;
-            emit frameChanged(currentFrameIdx, currentQImageFrame);
+            if (!suppressEmit)
+            {
+                emit frameChanged(currentFrameIdx, currentQImageFrame);
+            }
         } else {
             qWarning() << "Read empty frame at index" << frameNumber;
             currentFrameIdx = frameNumber;
             currentQImageFrame = QImage();
-            emit frameChanged(currentFrameIdx, currentQImageFrame);
+            if (!suppressEmit)
+            {
+                emit frameChanged(currentFrameIdx, currentQImageFrame);
+            }
         }
     } else {
         qWarning() << "Failed to read frame at index" << frameNumber;
         currentFrameIdx = frameNumber;
         currentQImageFrame = QImage();
-        emit frameChanged(currentFrameIdx, currentQImageFrame);
+        if (!suppressEmit)
+        {
+            emit frameChanged(currentFrameIdx, currentQImageFrame);
+        }
         if (m_isPlaying) {
             stop();
         }

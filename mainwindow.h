@@ -20,7 +20,10 @@ public:
 public slots:
     void chooseWorkingDirectory();
     void updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame);
-    void seekFrame(QString frame);
+    void seekFrame(int frame);
+    void initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize);
+    void frameSliderMoved(int value);
+
 
 private:
     Ui::MainWindow *ui;

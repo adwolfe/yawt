@@ -11,18 +11,25 @@ MainWindow::MainWindow(QWidget *parent)
     QString initialDirectory = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     ui->videoTreeView->setRootDirectory(initialDirectory);
     ui->dirSelected->setText(initialDirectory);
+    ui->framePosition->setKeyboardTracking(0);
+    ui->frameSlider->setMinimum(0);
+    ui->frameSlider->setSingleStep(10);
+    ui->frameSlider->setPageStep(100);
+    //ui->frameSlider->setTracking(0);
 
-    // Interact with video
+
+
+    // Slots that update main window
+    connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
+    connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
+
+    // Slots that update the video loader
     connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
     connect(ui->playButton, &QToolButton::clicked, ui->videoLoader, &VideoLoader::play);
-    connect(ui->framePosition, &QLineEdit::textChanged, this, &MainWindow::seekFrame);
-
-    // Interact with main window
-    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
-    connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
-
+    connect(ui->framePosition, &QSpinBox::valueChanged, this, &MainWindow::seekFrame);
+    connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
 }
-
 
 // SLOTS
 
@@ -42,16 +49,34 @@ void MainWindow::chooseWorkingDirectory()
 
 }
 
+void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize)
+// Called upon loading a video
+{
+    ui->frameSlider->setMaximum(totalFrames);
+    ui->frameSlider->setValue(0);
+    ui->framePosition->setMaximum(totalFrames);
+    ui->framePosition->setValue(0);
+}
+
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame)
+// When the video loader changes the frame (like, during playing)
 {
-    ui->framePosition->setText(QString::number(currentFrameNumber));
+    ui->framePosition->setValue(currentFrameNumber);
+    ui->frameSlider->setSliderPosition(currentFrameNumber);
 }
 
-void MainWindow::seekFrame(QString frame)
+void MainWindow::frameSliderMoved(int value)
 {
-    ui->videoLoader->seekToFrame(frame.toInt());
+    ui->videoLoader->seekToFrame(value, 1);
+    ui->framePosition->setValue(value);
 }
 
+
+void MainWindow::seekFrame(int frame)
+{
+    ui->videoLoader->seekToFrame(frame, 1);
+    ui->frameSlider->setSliderPosition(frame);
+}
 
 
 MainWindow::~MainWindow()

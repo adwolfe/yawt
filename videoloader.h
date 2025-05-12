@@ -53,7 +53,7 @@ public slots:
     void play();
     void pause();
     void stop();
-    void seekToFrame(int frameNumber);
+    void seekToFrame(int frameNumber, bool suppressEmit = 0);
     void setZoomFactor(double factor); // Zooms towards center
     void setZoomFactorAtPoint(double factor, const QPointF& widgetPoint); // Zooms towards point
     void setInteractionMode(InteractionMode mode); // Switch between PanZoom and DrawROI
@@ -85,7 +85,7 @@ private slots:
 private:
     // --- Helper Methods ---
     bool openVideoFile(const QString &filePath);
-    void displayFrame(int frameNumber);
+    void displayFrame(int frameNumber, bool suppressEmit = 0);
     void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg);
     QRectF calculateTargetRect() const; // Calculate the drawing rectangle based on zoom/pan
     QPointF mapPointToVideo(const QPointF& widgetPoint) const; // Maps widget coordinates to video coordinates
