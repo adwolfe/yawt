@@ -33,5 +33,6 @@ public slots:
 private:
     Ui::MainWindow *ui;
     bool m_threshModeToggle = false;
+    void applyStyleSheet(QWidget *widget, const QString &styleSheetPath);
 };
 #endif // MAINWINDOW_H

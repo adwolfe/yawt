@@ -2,6 +2,7 @@
 #include "ui_mainwindow.h"
 #include <QStandardPaths>
 #include <QFileDialog>
+#include <QIcon>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -15,7 +16,29 @@ MainWindow::MainWindow(QWidget *parent)
     ui->frameSlider->setMinimum(0);
     ui->frameSlider->setSingleStep(10);
     ui->frameSlider->setPageStep(100);
-    //ui->frameSlider->setTracking(0);
+    ui->playPauseButton->setObjectName("playPauseButton"); // Crucial for QSS selector
+    ui->playPauseButton->setCheckable(true); // Make it toggle state
+    ui->playPauseButton->setChecked(false);
+
+    // Set a fixed size matching the QSS (important for border-radius)
+    // If your QSS uses min/max width/height, setFixedSize isn't strictly
+    // necessary, but it guarantees the size.
+    //ui->playPauseButton->setFixedSize(50, 50);
+
+    // --- Connect the toggled signal ---
+    // This is where you put your existing play/pause logic
+    QObject::connect(ui->playPauseButton, &QToolButton::toggled, [&](bool checked) {
+        if (checked) {
+            qDebug() << "State changed to: Checked (Pause)";
+            ui->videoLoader->play();
+            ui->playPauseButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MediaPlaybackPause));
+        } else {
+            qDebug() << "State changed to: Unchecked (Play)";
+            ui->videoLoader->pause();
+            ui->playPauseButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MediaPlaybackStart));
+        }
+    });
+    //applyStyleSheet(ui->playPauseButton, ":/resources/qss/playpause.qss"); // Preferred method
 
 
 
@@ -26,7 +49,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Slots that update the video loader
     connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
-    connect(ui->playButton, &QToolButton::clicked, ui->videoLoader, &VideoLoader::play);
+    //connect(ui->playPauseButton, &QToolButton::clicked, ui->videoLoader, &VideoLoader::play);
     connect(ui->framePosition, &QSpinBox::valueChanged, this, &MainWindow::seekFrame);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
     connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeToggle);
@@ -102,6 +125,17 @@ void MainWindow::threshModeToggle()
     m_threshModeToggle = !m_threshModeToggle;
     ui->videoLoader->toggleThresholdView(m_threshModeToggle);
 
+}
+
+void MainWindow::applyStyleSheet(QWidget *widget, const QString &styleSheetPath) {
+    QFile file(styleSheetPath);
+    if (file.open(QFile::ReadOnly | QFile::Text)) {
+        QString styleSheet = QLatin1String(file.readAll());
+        widget->setStyleSheet(styleSheet);
+        file.close();
+    } else {
+        qWarning() << "Could not open stylesheet file:" << styleSheetPath;
+    }
 }
 
 

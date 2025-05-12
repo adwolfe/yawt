@@ -1,4 +1,4 @@
-QT += core gui widgets
+QT += core gui widgets svg
 
 CONFIG += c++17
 CONFIG += warn_on
@@ -12,15 +12,26 @@ INCLUDEPATH += /opt/homebrew/include/opencv4
 LIBS += -L/opt/homebrew/lib -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio
 
 SOURCES += \
+    folderfirstsortproxymodel.cpp \
     main.cpp \
     mainwindow.cpp \
+    trackingmanager.cpp \
     videofiletreeview.cpp \
-    videoloader.cpp
+    videoloader.cpp \
+    videoprocessor.cpp \
+    wormobject.cpp \
+    wormtracker.cpp
 
 HEADERS += \
+    folderfirstsortproxymodel.h \
     mainwindow.h \
+    trackdata.h \
+    trackingmanager.h \
     videofiletreeview.h \
-    videoloader.h
+    videoloader.h \
+    videoprocessor.h \
+    wormobject.h \
+    wormtracker.h
 
 FORMS += \
     mainwindow.ui
@@ -33,3 +44,6 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 # Optional: enable debug info
 CONFIG += debug
+
+RESOURCES += \
+    resources.qrc
