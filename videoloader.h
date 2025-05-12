@@ -6,11 +6,11 @@
 #include <QImage>
 #include <QPixmap>
 #include <QTimer>
-#include <QRectF> // Use QRectF for precision
+#include <QRectF>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QWheelEvent>
-#include <QCursor> // For setting cursors
+#include <QCursor>
 
 // OpenCV Headers
 #include <opencv2/core.hpp>
@@ -21,15 +21,21 @@
  * @brief Defines the interaction modes for the VideoLoader widget.
  */
 enum class InteractionMode {
-    PanZoom, // Default mode: Left-click drag to pan, Wheel to zoom towards cursor
-    DrawROI  // Mode for drawing ROI: Left-click drag defines ROI
+    PanZoom,
+    DrawROI,
+    Crop
 };
 
 /**
- * @brief The VideoLoader class handles loading, displaying, and interacting with video files.
- * Supports playback, frame scrubbing, zoom-to-cursor, panning, and ROI selection
- * via different interaction modes.
+ * @brief Defines available thresholding algorithms.
  */
+enum class ThresholdAlgorithm {
+    Global,         // Simple global threshold
+    Otsu,           // Otsu's binarization (auto global threshold)
+    AdaptiveMean,   // Adaptive threshold using mean of neighborhood
+    AdaptiveGaussian // Adaptive threshold using Gaussian weighted sum of neighborhood
+};
+
 class VideoLoader : public QWidget {
     Q_OBJECT
 
@@ -47,28 +53,48 @@ public:
     QRectF getCurrentRoi() const;
     InteractionMode getCurrentInteractionMode() const;
 
+    // Thresholding status
+    bool isThresholdViewEnabled() const;
+    ThresholdAlgorithm getCurrentThresholdAlgorithm() const;
+    int getThresholdValue() const;
+    bool getAssumeLightBackground() const;
+    int getAdaptiveBlockSize() const;
+    double getAdaptiveCValue() const;
+
+
 public slots:
     // --- Control Slots ---
     bool loadVideo(const QString &filePath);
-    void play();
+    void play(); // Toggles play/pause
     void pause();
-    void stop();
-    void seekToFrame(int frameNumber, bool suppressEmit = 0);
-    void setZoomFactor(double factor); // Zooms towards center
-    void setZoomFactorAtPoint(double factor, const QPointF& widgetPoint); // Zooms towards point
-    void setInteractionMode(InteractionMode mode); // Switch between PanZoom and DrawROI
+    // void stop(); // Removed as per user request
+    void seekToFrame(int frameNumber, bool suppressEmit = false);
+    void setZoomFactor(double factor);
+    void setZoomFactorAtPoint(double factor, const QPointF& widgetPoint);
+    void setInteractionMode(InteractionMode mode);
     void clearRoi();
-    // void cropToRoi(); // Placeholder for future crop functionality slot
+
+    // --- Thresholding Control Slots ---
+    void toggleThresholdView(bool enabled);
+    void setThresholdAlgorithm(ThresholdAlgorithm algorithm);
+    void setThresholdValue(int value); // For Global threshold
+    void setAssumeLightBackground(bool isLight); // True for light bg/dark objects
+    void setAdaptiveThresholdBlockSize(int blockSize); // For adaptive algorithms (odd, >=3)
+    void setAdaptiveThresholdC(double cValue);      // For adaptive algorithms
 
 signals:
     // --- UI Update Signals ---
     void videoLoaded(const QString& filePath, int totalFrames, double fps, QSize frameSize);
     void videoLoadFailed(const QString& filePath, const QString& errorMessage);
-    void frameChanged(int currentFrameNumber, const QImage& currentFrame);
+    void videoProcessingStarted(const QString& message);
+    void videoProcessingFinished(const QString& message, bool success);
+    void frameChanged(int currentFrameNumber, const QImage& currentFrame); // Emits original or thresholded QImage
     void playbackStateChanged(bool isPlaying);
-    void roiDefined(const QRectF &roi); // ROI in original video coordinates
+    void roiDefined(const QRectF &roi);
     void zoomFactorChanged(double newZoomFactor);
-    void interactionModeChanged(InteractionMode newMode); // Signal when mode changes
+    void interactionModeChanged(InteractionMode newMode);
+    void thresholdParametersChanged(ThresholdAlgorithm algorithm, int value, bool lightBg, int blockSize, double cVal);
+
 
 protected:
     // --- Qt Event Handlers ---
@@ -77,7 +103,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
-    void resizeEvent(QResizeEvent *event) override; // Handle widget resize
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void processNextFrame();
@@ -85,21 +111,25 @@ private slots:
 private:
     // --- Helper Methods ---
     bool openVideoFile(const QString &filePath);
-    void displayFrame(int frameNumber, bool suppressEmit = 0);
-    void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg);
-    QRectF calculateTargetRect() const; // Calculate the drawing rectangle based on zoom/pan
-    QPointF mapPointToVideo(const QPointF& widgetPoint) const; // Maps widget coordinates to video coordinates
-    QPointF mapPointFromVideo(const QPointF& videoPoint) const; // Maps video coordinates to widget coordinates
-    void updateCursorShape(); // Sets cursor based on current mode and state
-    void clampPanOffset(); // Keep video view within reasonable bounds
+    void displayFrame(int frameNumber, bool suppressEmit = false);
+    void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg); // Converts BGR/Gray CV::Mat to QImage
+    QRectF calculateTargetRect() const;
+    QPointF mapPointToVideo(const QPointF& widgetPoint) const;
+    QPointF mapPointFromVideo(const QPointF& videoPoint) const;
+    void updateCursorShape();
+    void clampPanOffset();
+    void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
+    bool performVideoCrop(const QRectF& cropRectVideoCoords, QString& outCroppedFilePath);
+    void applyThresholding(); // Applies current threshold settings to currentCvFrame -> m_thresholdedFrame_mono
 
 
     // --- OpenCV Video Members ---
     cv::VideoCapture videoCapture;
-    cv::Mat currentCvFrame;
+    cv::Mat currentCvFrame;       // Original current frame from OpenCV
+    cv::Mat m_thresholdedFrame_mono; // Grayscale thresholded mask
 
     // --- Qt Display Members ---
-    QImage currentQImageFrame;
+    QImage currentQImageFrame;    // QImage to be displayed (either original or thresholded)
     QTimer *playbackTimer;
 
     // --- Video Properties ---
@@ -114,20 +144,26 @@ private:
 
     // --- Interaction State ---
     InteractionMode m_currentMode;
-    bool m_isPanning;             // True if currently dragging to pan
-    QPointF m_lastMousePos;       // Last mouse position for panning delta
+    bool m_isPanning;
+    QPointF m_lastMousePos;
 
-    // --- ROI Selection Members ---
-    // Note: roiSelectionActive flag removed, use m_currentMode == InteractionMode::DrawROI instead
-    QRectF currentRoiRect;        // ROI in original video coordinates (QRectF for precision)
-    QPoint roiStartPoint;         // Mouse press point for ROI in widget coordinates
-    QPoint roiEndPoint;           // Mouse move/release point for ROI in widget coordinates
-    bool roiBeingDefined;         // True while mouse is pressed and moving for ROI
+    // --- ROI & Crop Selection Members ---
+    QRectF m_activeRoiRect;
+    QPoint m_roiStartPointWidget;
+    QPoint m_roiEndPointWidget;
+    bool m_isDefiningRoi;
 
     // --- Zoom & Pan Members ---
     double m_zoomFactor;
-    QPointF m_panOffset;          // Pan offset: Translation applied *after* scaling around center.
-        // Represents shift of the video relative to centered view.
+    QPointF m_panOffset;
+
+    // --- Thresholding Members ---
+    bool m_showThresholdMask;
+    ThresholdAlgorithm m_thresholdAlgorithm;
+    int m_thresholdValue;             // For Global/Otsu (Otsu ignores this input if used)
+    bool m_assumeLightBackground;     // True: objects are darker than background
+    int m_adaptiveBlockSize;          // For adaptive thresholding (e.g., 11, 21, etc.)
+    double m_adaptiveC;               // Constant for adaptive thresholding (e.g., 2, 5, etc.)
 };
 
 #endif // VIDEOLOADER_H

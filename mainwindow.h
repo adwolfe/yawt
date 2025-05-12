@@ -25,10 +25,13 @@ public slots:
     void frameSliderMoved(int value);
     void panModeToggle();
     void roiModeToggle();
+    void cropModeToggle();
+    void threshModeToggle();
 
 
 
 private:
     Ui::MainWindow *ui;
+    bool m_threshModeToggle = false;
 };
 #endif // MAINWINDOW_H

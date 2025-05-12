@@ -31,6 +31,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
     connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeToggle);
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeToggle);
+    connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeToggle);
+    connect(ui->threshModeButton, &QToolButton::clicked, this, &MainWindow::threshModeToggle);
+
 }
 
 // SLOTS
@@ -88,6 +91,17 @@ void MainWindow::panModeToggle()
 void MainWindow::roiModeToggle()
 {
     ui->videoLoader->setInteractionMode(InteractionMode::DrawROI);
+}
+void MainWindow::cropModeToggle()
+{
+    ui->videoLoader->setInteractionMode(InteractionMode::Crop);
+}
+
+void MainWindow::threshModeToggle()
+{
+    m_threshModeToggle = !m_threshModeToggle;
+    ui->videoLoader->toggleThresholdView(m_threshModeToggle);
+
 }
 
 
