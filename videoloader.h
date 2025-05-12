@@ -11,11 +11,17 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QCursor>
+#include <QList> // For storing WormTrackers
+#include <QVariantMap> // For passing parameters
 
 // OpenCV Headers
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
+
+// Forward declarations from this project
+class WormTracker;
+class Worm;
 
 /**
  * @brief Defines the interaction modes for the VideoLoader widget.
@@ -23,17 +29,18 @@
 enum class InteractionMode {
     PanZoom,
     DrawROI,
-    Crop
+    Crop,
+    SelectWorms // New mode for selecting initial worm positions
 };
 
 /**
  * @brief Defines available thresholding algorithms.
  */
 enum class ThresholdAlgorithm {
-    Global,         // Simple global threshold
-    Otsu,           // Otsu's binarization (auto global threshold)
-    AdaptiveMean,   // Adaptive threshold using mean of neighborhood
-    AdaptiveGaussian // Adaptive threshold using Gaussian weighted sum of neighborhood
+    Global,
+    Otsu,
+    AdaptiveMean,
+    AdaptiveGaussian
 };
 
 class VideoLoader : public QWidget {
@@ -50,7 +57,7 @@ public:
     int getCurrentFrameNumber() const;
     QSize getVideoFrameSize() const;
     double getZoomFactor() const;
-    QRectF getCurrentRoi() const;
+    QRectF getCurrentRoi() const; // General purpose ROI
     InteractionMode getCurrentInteractionMode() const;
 
     // Thresholding status
@@ -60,27 +67,31 @@ public:
     bool getAssumeLightBackground() const;
     int getAdaptiveBlockSize() const;
     double getAdaptiveCValue() const;
-
+    QVariantMap getCurrentThresholdParameters() const; // Get all threshold params
 
 public slots:
     // --- Control Slots ---
     bool loadVideo(const QString &filePath);
-    void play(); // Toggles play/pause
+    void play();
     void pause();
-    // void stop(); // Removed as per user request
     void seekToFrame(int frameNumber, bool suppressEmit = false);
     void setZoomFactor(double factor);
     void setZoomFactorAtPoint(double factor, const QPointF& widgetPoint);
     void setInteractionMode(InteractionMode mode);
-    void clearRoi();
+    void clearRoi(); // Clears m_activeRoiRect
 
     // --- Thresholding Control Slots ---
     void toggleThresholdView(bool enabled);
     void setThresholdAlgorithm(ThresholdAlgorithm algorithm);
-    void setThresholdValue(int value); // For Global threshold
-    void setAssumeLightBackground(bool isLight); // True for light bg/dark objects
-    void setAdaptiveThresholdBlockSize(int blockSize); // For adaptive algorithms (odd, >=3)
-    void setAdaptiveThresholdC(double cValue);      // For adaptive algorithms
+    void setThresholdValue(int value);
+    void setAssumeLightBackground(bool isLight);
+    void setAdaptiveThresholdBlockSize(int blockSize);
+    void setAdaptiveThresholdC(double cValue);
+
+    // --- Worm Tracking Control Slots ---
+    void setNumberOfWormsToSelect(int num); // User specifies how many worms
+    void startTrackingSelectedWorms();    // Initiates the tracking process for all selected worms
+    void stopAllTracking();               // Stops all active worm tracking threads
 
 signals:
     // --- UI Update Signals ---
@@ -88,12 +99,19 @@ signals:
     void videoLoadFailed(const QString& filePath, const QString& errorMessage);
     void videoProcessingStarted(const QString& message);
     void videoProcessingFinished(const QString& message, bool success);
-    void frameChanged(int currentFrameNumber, const QImage& currentFrame); // Emits original or thresholded QImage
+    void frameChanged(int currentFrameNumber, const QImage& currentFrame);
     void playbackStateChanged(bool isPlaying);
-    void roiDefined(const QRectF &roi);
+    void roiDefined(const QRectF &roi); // General purpose ROI
     void zoomFactorChanged(double newZoomFactor);
     void interactionModeChanged(InteractionMode newMode);
     void thresholdParametersChanged(ThresholdAlgorithm algorithm, int value, bool lightBg, int blockSize, double cVal);
+
+    // --- Worm Tracking Signals ---
+    void wormSelected(int wormId, const QPointF& position); // When a worm is clicked in SelectWorms mode
+    void allWormsSelected(); // When the specified number of worms have been selected
+    void trackingUpdateForDisplay(int wormId, TrackingDirection direction, int frameNum, const QImage& cropImage); // For live display of tracking ROIs
+    void wormTrackingCompleted(int wormId); // A specific worm's tracking (both directions) is done
+    void allTrackingCompleted(); // All worms' tracking is done
 
 
 protected:
@@ -107,12 +125,17 @@ protected:
 
 private slots:
     void processNextFrame();
+    // Slots to handle signals from WormTracker instances
+    void onWormTrackerFinished(int wormId);
+    void onWormTrackerError(int wormId, const QString& message);
+    void onWormTrackerDisplayUpdate(int wormId, TrackingDirection direction, int frameNum, const QImage& cropImage);
+
 
 private:
     // --- Helper Methods ---
     bool openVideoFile(const QString &filePath);
     void displayFrame(int frameNumber, bool suppressEmit = false);
-    void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg); // Converts BGR/Gray CV::Mat to QImage
+    void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg);
     QRectF calculateTargetRect() const;
     QPointF mapPointToVideo(const QPointF& widgetPoint) const;
     QPointF mapPointFromVideo(const QPointF& videoPoint) const;
@@ -120,23 +143,24 @@ private:
     void clampPanOffset();
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
     bool performVideoCrop(const QRectF& cropRectVideoCoords, QString& outCroppedFilePath);
-    void applyThresholding(); // Applies current threshold settings to currentCvFrame -> m_thresholdedFrame_mono
+    void applyThresholding();
+    void handleWormSelection(const QPointF& widgetClickPos); // Logic for SelectWorms mode
 
 
     // --- OpenCV Video Members ---
     cv::VideoCapture videoCapture;
-    cv::Mat currentCvFrame;       // Original current frame from OpenCV
-    cv::Mat m_thresholdedFrame_mono; // Grayscale thresholded mask
+    cv::Mat currentCvFrame;
+    cv::Mat m_thresholdedFrame_mono;
 
     // --- Qt Display Members ---
-    QImage currentQImageFrame;    // QImage to be displayed (either original or thresholded)
+    QImage currentQImageFrame;
     QTimer *playbackTimer;
 
     // --- Video Properties ---
     QString currentFilePath;
     int totalFramesCount;
     double framesPerSecond;
-    int currentFrameIdx;
+    int currentFrameIdx; // This is the KEYFRAME for worm selection
     QSize originalFrameSize;
 
     // --- Playback State ---
@@ -148,10 +172,10 @@ private:
     QPointF m_lastMousePos;
 
     // --- ROI & Crop Selection Members ---
-    QRectF m_activeRoiRect;
+    QRectF m_activeRoiRect; // General purpose ROI for DrawROI mode
     QPoint m_roiStartPointWidget;
     QPoint m_roiEndPointWidget;
-    bool m_isDefiningRoi;
+    bool m_isDefiningRoi; // For DrawROI and Crop modes
 
     // --- Zoom & Pan Members ---
     double m_zoomFactor;
@@ -160,10 +184,17 @@ private:
     // --- Thresholding Members ---
     bool m_showThresholdMask;
     ThresholdAlgorithm m_thresholdAlgorithm;
-    int m_thresholdValue;             // For Global/Otsu (Otsu ignores this input if used)
-    bool m_assumeLightBackground;     // True: objects are darker than background
-    int m_adaptiveBlockSize;          // For adaptive thresholding (e.g., 11, 21, etc.)
-    double m_adaptiveC;               // Constant for adaptive thresholding (e.g., 2, 5, etc.)
+    int m_thresholdValue;
+    bool m_assumeLightBackground;
+    int m_adaptiveBlockSize;
+    double m_adaptiveC;
+
+    // --- Worm Tracking Members ---
+    QList<WormTracker*> m_wormTrackers;
+    QList<Worm*> m_selectedWormsData; // Temporary storage during selection
+    int m_numberOfWormsToSelect;
+    int m_wormsSelectedCount;
+    bool m_allTrackingTasksCompleted; // Flag to check if all trackers are done
 };
 
 #endif // VIDEOLOADER_H
