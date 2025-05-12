@@ -14,6 +14,7 @@ LIBS += -L/opt/homebrew/lib -lopencv_core -lopencv_imgproc -lopencv_highgui -lop
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
+    thresholdvideoworker.cpp \
     trackingthread.cpp \
     videofiletreeview.cpp \
     videoloader.cpp \
@@ -21,6 +22,7 @@ SOURCES += \
 
 HEADERS += \
     mainwindow.h \
+    thresholdvideoworker.h \
     trackingthread.h \
     videofiletreeview.h \
     videoloader.h \
