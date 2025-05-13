@@ -5,6 +5,7 @@
 #include <opencv2/imgproc.hpp>
 #include <QPointF>
 #include <QRectF>
+#include <QMetaEnum>
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
 
@@ -15,12 +16,14 @@
  * @brief Defines available thresholding algorithms.
  * (Moved from videoloader.h)
  */
+
 enum class ThresholdAlgorithm {
     Global,         // Simple global threshold
     Otsu,           // Otsu's binarization (auto global threshold)
     AdaptiveMean,   // Adaptive threshold using mean of neighborhood
     AdaptiveGaussian // Adaptive threshold using Gaussian weighted sum of neighborhood
 };
+
 
 /**
  * @brief Structure to hold parameters for thresholding and pre-processing.

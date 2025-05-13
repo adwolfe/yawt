@@ -18,6 +18,7 @@ SOURCES += \
     mainwindow.cpp \
     trackingcommon.cpp \
     trackingmanager.cpp \
+    trackingprogressdialog.cpp \
     videofiletreeview.cpp \
     videoloader.cpp \
     videoprocessor.cpp \
@@ -33,6 +34,7 @@ HEADERS += \
     trackeditemdata.h \
     trackingcommon.h \
     trackingmanager.h \
+    trackingprogressdialog.h \
     videofiletreeview.h \
     videoloader.h \
     videoprocessor.h \
@@ -41,7 +43,8 @@ HEADERS += \
     wormtracker.h
 
 FORMS += \
-    mainwindow.ui
+    mainwindow.ui \
+    trackingprogressdialog.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

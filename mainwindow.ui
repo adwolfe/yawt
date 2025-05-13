@@ -300,7 +300,7 @@ QToolButton#playPauseButton:checked:hover {
           <property name="frameShadow">
            <enum>QFrame::Shadow::Sunken</enum>
           </property>
-          <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+          <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
            <property name="spacing">
             <number>0</number>
            </property>
@@ -357,6 +357,19 @@ QToolButton#playPauseButton:checked:hover {
              </property>
              <property name="text">
               <string>Thresholding:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="label_8">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="text">
+              <string>Pixel size:</string>
              </property>
             </widget>
            </item>
@@ -500,6 +513,22 @@ QToolButton#playPauseButton:checked:hover {
              </property>
             </widget>
            </item>
+           <item row="4" column="2">
+            <widget class="QDoubleSpinBox" name="doubleSpinBox">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignmentFlag::AlignCenter</set>
+             </property>
+             <property name="suffix">
+              <string> pixels/um</string>
+             </property>
+            </widget>
+           </item>
            <item row="13" column="0" colspan="3">
             <widget class="QGroupBox" name="adaptiveGroupBox">
              <property name="title">
@@ -612,32 +641,10 @@ QToolButton#playPauseButton:checked:hover {
              </layout>
             </widget>
            </item>
-           <item row="4" column="0">
-            <widget class="QLabel" name="label_8">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
+           <item row="14" column="0" colspan="3">
+            <widget class="QPushButton" name="trackingDialogButton">
              <property name="text">
-              <string>Pixel size:</string>
-             </property>
-            </widget>
-           </item>
-           <item row="4" column="2">
-            <widget class="QDoubleSpinBox" name="doubleSpinBox">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
-             </property>
-             <property name="suffix">
-              <string> pixels/um</string>
+              <string>Begin Tracking</string>
              </property>
             </widget>
            </item>

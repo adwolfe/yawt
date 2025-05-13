@@ -63,6 +63,7 @@ public:
     bool isBlurEnabled() const;
     int getBlurKernelSize() const;
     double getBlurSigmaX() const;
+    QString getCurrentVideoPath() const;
 
 
 public slots:

@@ -143,6 +143,11 @@ bool VideoLoader::loadVideo(const QString &filePath) {
     return true;
 }
 
+QString VideoLoader::getCurrentVideoPath() const {
+    return currentFilePath; // currentFilePath is already a member variable
+}
+
+
 // play, pause, setPlaybackSpeed, seekToFrame, setZoomFactor*, clearRoi as before
 bool VideoLoader::openVideoFile(const QString &filePath) {
     if (videoCapture.isOpened()) {

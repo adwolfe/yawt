@@ -3,6 +3,8 @@
 
 #include <QMainWindow>
 #include "wormtablemodel.h"
+#include "trackingprogressdialog.h"
+#include "trackingmanager.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -39,11 +41,16 @@ public slots:
     void setBlurKernel(int value);
     void updateBackgroundColor(int index);
     void onWormBlobDetected(const QPointF& centroid, const QRectF& bbox);
+    void onStartTrackingActionTriggered();
+    void handleBeginTrackingFromDialog();
+    void handleCancelTrackingFromDialog();
 
 
 private:
     Ui::MainWindow *ui;
     bool m_threshModeToggle = false;
     WormTableModel *m_wormTableModel;
+    TrackingProgressDialog *m_trackingProgressDialog;
+    TrackingManager *m_trackingManager;
 };
 #endif // MAINWINDOW_H
