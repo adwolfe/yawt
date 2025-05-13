@@ -19,14 +19,12 @@ MainWindow::MainWindow(QWidget *parent)
     ui->playPauseButton->setObjectName("playPauseButton"); // Crucial for QSS selector
     ui->playPauseButton->setCheckable(true); // Make it toggle state
     ui->playPauseButton->setChecked(false);
+    ui->adaptiveRadio->setChecked(true);
+    ui->globalRadio->setChecked(false);
+    ui->globalGroupBox->setVisible(false);
+    ui->globalThreshAutoCheck->setChecked(false);
 
-    // Set a fixed size matching the QSS (important for border-radius)
-    // If your QSS uses min/max width/height, setFixedSize isn't strictly
-    // necessary, but it guarantees the size.
-    //ui->playPauseButton->setFixedSize(50, 50);
-
-    // --- Connect the toggled signal ---
-    // This is where you put your existing play/pause logic
+    // Slots that update main window
     QObject::connect(ui->playPauseButton, &QToolButton::toggled, [&](bool checked) {
         if (checked) {
             qDebug() << "State changed to: Checked (Pause)";
@@ -38,14 +36,18 @@ MainWindow::MainWindow(QWidget *parent)
             ui->playPauseButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MediaPlaybackStart));
         }
     });
-    //applyStyleSheet(ui->playPauseButton, ":/resources/qss/playpause.qss"); // Preferred method
 
-
-
-    // Slots that update main window
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
     connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
+
+    //Threshold settings slots
+    connect(ui->globalRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdModeSettings);
+    connect(ui->adaptiveRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdModeSettings);
+    connect(ui->globalThreshAutoCheck, &QCheckBox::clicked, this, &MainWindow::setGlobalOtsuMode);
+    connect(ui->globalThreshSlider, &QAbstractSlider::valueChanged, this, &MainWindow::setGlobalThreshValue);
+    connect(ui->globalThreshValueSpin, &QSpinBox::valueChanged, this, &MainWindow::setGlobalThreshValue);
+
 
     // Slots that update the video loader
     connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
@@ -55,7 +57,13 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeToggle);
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeToggle);
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeToggle);
-    connect(ui->threshModeButton, &QToolButton::clicked, this, &MainWindow::threshModeToggle);
+    connect(ui->threshModeButton, &QToolButton::clicked, this, &MainWindow::threshModeViewToggle);
+
+    // Close out by updating threshold settings in videoLoader
+
+    ui->globalThreshSlider->setValue(50);
+    ui->globalThreshAutoCheck->setChecked(true);
+    setGlobalOtsuMode(true);
 
 }
 
@@ -120,21 +128,55 @@ void MainWindow::cropModeToggle()
     ui->videoLoader->setInteractionMode(InteractionMode::Crop);
 }
 
-void MainWindow::threshModeToggle()
+void MainWindow::threshModeViewToggle()
 {
     m_threshModeToggle = !m_threshModeToggle;
     ui->videoLoader->toggleThresholdView(m_threshModeToggle);
 
 }
 
-void MainWindow::applyStyleSheet(QWidget *widget, const QString &styleSheetPath) {
-    QFile file(styleSheetPath);
-    if (file.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = QLatin1String(file.readAll());
-        widget->setStyleSheet(styleSheet);
-        file.close();
+void MainWindow::updateThresholdModeSettings()
+{
+    auto senderObject = sender();
+    if (senderObject == ui->adaptiveRadio) {
+        ui->globalRadio->setChecked(false);
+        ui->adaptiveGroupBox->setVisible(true);
+        ui->globalGroupBox->setVisible(false);
+        // update videoLoader settings
+    } else if (senderObject == ui->globalRadio){
+        ui->adaptiveRadio->setChecked(false);
+        ui->globalGroupBox->setVisible(true);
+        ui->adaptiveGroupBox->setVisible(false);
+        if(ui->globalThreshAutoCheck->isChecked())
+        {
+            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
+        } else
+            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
+    }
+}
+
+void MainWindow::setGlobalThreshValue(int value)
+{
+    auto senderObject = sender();
+    if (senderObject == ui->globalThreshSlider)
+    {
+        ui->globalThreshValueSpin->setValue(value);
+    } else
+        ui->globalThreshSlider->setValue(value);
+    ui->videoLoader->setThresholdValue(value);
+}
+
+void MainWindow::setGlobalOtsuMode(bool checked)
+{
+    if (checked)
+    {
+        ui->globalThreshSlider->setDisabled(true);
+        ui->globalThreshValueSpin->setDisabled(true);
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
     } else {
-        qWarning() << "Could not open stylesheet file:" << styleSheetPath;
+        ui->globalThreshSlider->setEnabled(true);
+        ui->globalThreshValueSpin->setEnabled(true);
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
     }
 }
 

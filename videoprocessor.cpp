@@ -1,5 +1,5 @@
 // VideoProcessor.cpp
-#include "VideoProcessor.h"
+#include "videoprocessor.h"
 #include <QDebug>
 #include <QThread> // For interruption check
 #include <algorithm> // For std::reverse
@@ -139,7 +139,7 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
 
     switch (settings.algorithm) {
     case ThresholdAlgorithm::Global:
-        cv::threshold(grayFrame, outputFrame, settings.thresholdValue, 255, thresholdTypeOpenCV);
+        cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
         break;
     case ThresholdAlgorithm::Otsu:
         cv::threshold(grayFrame, outputFrame, 0, 255, thresholdTypeOpenCV | cv::THRESH_OTSU);
@@ -156,7 +156,7 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
         break;
     default:
         // Fallback to global if algorithm unknown
-        cv::threshold(grayFrame, outputFrame, settings.thresholdValue, 255, thresholdTypeOpenCV);
+        cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
         break;
     }
 }

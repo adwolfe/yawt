@@ -26,13 +26,15 @@ public slots:
     void panModeToggle();
     void roiModeToggle();
     void cropModeToggle();
-    void threshModeToggle();
+    void threshModeViewToggle();
+    void updateThresholdModeSettings();
+    void setGlobalOtsuMode(bool checked);
+    void setGlobalThreshValue(int value);
 
 
 
 private:
     Ui::MainWindow *ui;
     bool m_threshModeToggle = false;
-    void applyStyleSheet(QWidget *widget, const QString &styleSheetPath);
 };
 #endif // MAINWINDOW_H

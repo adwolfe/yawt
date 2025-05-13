@@ -46,12 +46,13 @@ public:
     // --- Public Methods ---
     bool isVideoLoaded() const;
     int getTotalFrames() const;
-    double getFPS() const;
+    double getFPS() const; // This remains the ORIGINAL video FPS
     int getCurrentFrameNumber() const;
     QSize getVideoFrameSize() const;
     double getZoomFactor() const;
     QRectF getCurrentRoi() const;
     InteractionMode getCurrentInteractionMode() const;
+    double getPlaybackSpeed() const; // Getter for current playback speed
 
     // Thresholding status
     bool isThresholdViewEnabled() const;
@@ -67,12 +68,12 @@ public slots:
     bool loadVideo(const QString &filePath);
     void play(); // Toggles play/pause
     void pause();
-    // void stop(); // Removed as per user request
     void seekToFrame(int frameNumber, bool suppressEmit = false);
     void setZoomFactor(double factor);
     void setZoomFactorAtPoint(double factor, const QPointF& widgetPoint);
     void setInteractionMode(InteractionMode mode);
     void clearRoi();
+    void setPlaybackSpeed(double multiplier); // New slot to change playback speed
 
     // --- Thresholding Control Slots ---
     void toggleThresholdView(bool enabled);
@@ -89,11 +90,12 @@ signals:
     void videoProcessingStarted(const QString& message);
     void videoProcessingFinished(const QString& message, bool success);
     void frameChanged(int currentFrameNumber, const QImage& currentFrame); // Emits original or thresholded QImage
-    void playbackStateChanged(bool isPlaying);
+    void playbackStateChanged(bool isPlaying, double currentSpeed); // Added currentSpeed
     void roiDefined(const QRectF &roi);
     void zoomFactorChanged(double newZoomFactor);
     void interactionModeChanged(InteractionMode newMode);
     void thresholdParametersChanged(ThresholdAlgorithm algorithm, int value, bool lightBg, int blockSize, double cVal);
+    void playbackSpeedChanged(double newSpeedMultiplier); // New signal
 
 
 protected:
@@ -121,6 +123,7 @@ private:
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
     bool performVideoCrop(const QRectF& cropRectVideoCoords, QString& outCroppedFilePath);
     void applyThresholding(); // Applies current threshold settings to currentCvFrame -> m_thresholdedFrame_mono
+    void updateTimerInterval(); // Helper to set timer interval based on FPS and speed multiplier
 
 
     // --- OpenCV Video Members ---
@@ -135,12 +138,13 @@ private:
     // --- Video Properties ---
     QString currentFilePath;
     int totalFramesCount;
-    double framesPerSecond;
+    double framesPerSecond;       // ORIGINAL video FPS
     int currentFrameIdx;
     QSize originalFrameSize;
 
     // --- Playback State ---
     bool m_isPlaying;
+    double m_playbackSpeedMultiplier; // New: For controlling playback speed (1.0 is normal)
 
     // --- Interaction State ---
     InteractionMode m_currentMode;

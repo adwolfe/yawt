@@ -16,16 +16,38 @@
 class WormObject; // If WormObject needs to be referenced here, though likely not for these structs
 
 /**
- * @brief Structure to hold parameters for thresholding.
- * This mirrors the relevant settings from VideoLoader.
+ * @brief Structure to hold parameters for thresholding and pre-processing.
+ * This mirrors the relevant settings from VideoLoader and adds pre-processing options.
  */
 struct ThresholdSettings {
-    ThresholdAlgorithm algorithm = ThresholdAlgorithm::Global;
-    int thresholdValue = 127;
+    // General setting for interpreting pixel values (background vs. foreground)
+    // If true, assumes a light background and darker objects of interest.
+    // This typically maps to cv::THRESH_BINARY_INV for dark objects on light bg,
+    // or cv::THRESH_BINARY for light objects on dark bg.
     bool assumeLightBackground = true;
-    int adaptiveBlockSize = 11;
-    double adaptiveCValue = 2.0;
-    // Add any other relevant parameters from VideoLoader, e.g., blur settings if you make them configurable
+
+    // Main algorithm choice for thresholding.
+    // This determines which of the subsequent parameter groups are relevant.
+    ThresholdAlgorithm algorithm = ThresholdAlgorithm::Global;
+
+    // --- Parameters for Global Thresholding ---
+    // (Used if algorithm is ThresholdAlgorithm::Global)
+    // (Ignored if algorithm is ThresholdAlgorithm::Otsu, as Otsu calculates it)
+    int globalThresholdValue = 127;
+
+    // --- Parameters for Adaptive Thresholding ---
+    // (Used if algorithm is ThresholdAlgorithm::AdaptiveMean or ThresholdAlgorithm::AdaptiveGaussian)
+    int adaptiveBlockSize = 11;    // Size of the pixel neighborhood (must be odd, >=3).
+    double adaptiveCValue = 2.0;   // Constant subtracted from the mean or weighted mean. Can be negative.
+
+    // --- Pre-processing: Gaussian Blur ---
+    bool enableBlur = false;        // Whether to apply Gaussian blur before thresholding.
+    int blurKernelSize = 5;        // Kernel size for Gaussian blur (must be odd, >=3, e.g., 3, 5, 7).
+        // Used if enableBlur is true.
+    double blurSigmaX = 0.0;       // Gaussian kernel standard deviation in X direction.
+        // If 0, it's calculated from blurKernelSize.
+        // (sigmaY will also be 0 or calculated similarly).
+        // Used if enableBlur is true.
 };
 
 /**
