@@ -11,16 +11,15 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QCursor>
+#include <QList> // For QList
 
 // OpenCV Headers
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
 
-// Include TrackData for ThresholdSettings struct definition
-// Make sure TrackData.h is accessible in your include paths.
-#include "trackingcommon.h"
-
+// Include common tracking types (contains ThresholdAlgorithm and ThresholdSettings)
+#include "trackingcommon.h" // Lowercase include
 
 /**
  * @brief Defines the interaction modes for the VideoLoader widget.
@@ -28,8 +27,11 @@
 enum class InteractionMode {
     PanZoom,
     DrawROI,
-    Crop
+    Crop,
+    SelectWorms // New mode
 };
+
+// ThresholdAlgorithm enum is now defined in TrackingCommon.h
 
 class VideoLoader : public QWidget {
     Q_OBJECT
@@ -41,33 +43,32 @@ public:
     // --- Public Methods ---
     bool isVideoLoaded() const;
     int getTotalFrames() const;
-    double getFPS() const; // This remains the ORIGINAL video FPS
+    double getFPS() const;
     int getCurrentFrameNumber() const;
     QSize getVideoFrameSize() const;
     double getZoomFactor() const;
     QRectF getCurrentRoi() const;
     InteractionMode getCurrentInteractionMode() const;
-    double getPlaybackSpeed() const; // Getter for current playback speed
+    double getPlaybackSpeed() const;
 
     // --- Thresholding and Pre-processing Status Getters ---
     bool isThresholdViewEnabled() const;
-    ThresholdSettings getCurrentThresholdSettings() const; // Helper to get all settings
+    ThresholdSettings getCurrentThresholdSettings() const;
 
-    // Individual getters (can be removed if getCurrentThresholdSettings is preferred)
     ThresholdAlgorithm getCurrentThresholdAlgorithm() const;
     int getThresholdValue() const;
     bool getAssumeLightBackground() const;
     int getAdaptiveBlockSize() const;
     double getAdaptiveCValue() const;
-    bool isBlurEnabled() const; // New
-    int getBlurKernelSize() const; // New
-    double getBlurSigmaX() const; // New
+    bool isBlurEnabled() const;
+    int getBlurKernelSize() const;
+    double getBlurSigmaX() const;
 
 
 public slots:
     // --- Control Slots ---
     bool loadVideo(const QString &filePath);
-    void play(); // Toggles play/pause
+    void play();
     void pause();
     void seekToFrame(int frameNumber, bool suppressEmit = false);
     void setZoomFactor(double factor);
@@ -75,17 +76,18 @@ public slots:
     void setInteractionMode(InteractionMode mode);
     void clearRoi();
     void setPlaybackSpeed(double multiplier);
+    void clearWormSelections(); // New slot to clear current selections
 
     // --- Thresholding & Pre-processing Control Slots ---
     void toggleThresholdView(bool enabled);
     void setThresholdAlgorithm(ThresholdAlgorithm algorithm);
-    void setThresholdValue(int value); // For Global threshold
-    void setAssumeLightBackground(bool isLight); // True for light bg/dark objects
-    void setAdaptiveThresholdBlockSize(int blockSize); // For adaptive algorithms (odd, >=3)
-    void setAdaptiveThresholdC(double cValue);      // For adaptive algorithms
-    void setEnableBlur(bool enabled); // New
-    void setBlurKernelSize(int kernelSize); // New (must be odd, >=3)
-    void setBlurSigmaX(double sigmaX); // New (0 for auto)
+    void setThresholdValue(int value);
+    void setAssumeLightBackground(bool isLight);
+    void setAdaptiveThresholdBlockSize(int blockSize);
+    void setAdaptiveThresholdC(double cValue);
+    void setEnableBlur(bool enabled);
+    void setBlurKernelSize(int kernelSize);
+    void setBlurSigmaX(double sigmaX);
 
 signals:
     // --- UI Update Signals ---
@@ -93,14 +95,15 @@ signals:
     void videoLoadFailed(const QString& filePath, const QString& errorMessage);
     void videoProcessingStarted(const QString& message);
     void videoProcessingFinished(const QString& message, bool success);
-    void frameChanged(int currentFrameNumber, const QImage& currentFrame); // Emits original or thresholded QImage
+    void frameChanged(int currentFrameNumber, const QImage& currentFrame);
     void playbackStateChanged(bool isPlaying, double currentSpeed);
     void roiDefined(const QRectF &roi);
     void zoomFactorChanged(double newZoomFactor);
     void interactionModeChanged(InteractionMode newMode);
-    // Updated signal to include all relevant parameters
     void thresholdParametersChanged(const ThresholdSettings& newSettings);
     void playbackSpeedChanged(double newSpeedMultiplier);
+    // New signal for when a worm blob is selected
+    void wormBlobSelected(const QPointF& centroidVideoCoords, const QRectF& boundingRectVideoCoords);
 
 
 protected:
@@ -127,24 +130,24 @@ private:
     void clampPanOffset();
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
     bool performVideoCrop(const QRectF& cropRectVideoCoords, QString& outCroppedFilePath);
-    void applyThresholding(); // Applies current threshold settings to currentCvFrame -> m_thresholdedFrame_mono
+    void applyThresholding();
     void updateTimerInterval();
-    void emitThresholdParametersChanged(); // Helper to emit the signal with current settings
+    void emitThresholdParametersChanged();
 
 
     // --- OpenCV Video Members ---
     cv::VideoCapture videoCapture;
-    cv::Mat currentCvFrame;       // Original current frame from OpenCV
-    cv::Mat m_thresholdedFrame_mono; // Grayscale thresholded mask
+    cv::Mat currentCvFrame;
+    cv::Mat m_thresholdedFrame_mono; // This is the frame used for blob selection
 
     // --- Qt Display Members ---
-    QImage currentQImageFrame;    // QImage to be displayed (either original or thresholded)
+    QImage currentQImageFrame;
     QTimer *playbackTimer;
 
     // --- Video Properties ---
     QString currentFilePath;
     int totalFramesCount;
-    double framesPerSecond;       // ORIGINAL video FPS
+    double framesPerSecond;
     int currentFrameIdx;
     QSize originalFrameSize;
 
@@ -163,21 +166,24 @@ private:
     QPoint m_roiEndPointWidget;
     bool m_isDefiningRoi;
 
+    // --- Worm Selection Members (for drawing feedback) ---
+    QList<QPointF> m_selectedCentroids_temp;
+    QList<QRectF> m_selectedBounds_temp;
+
     // --- Zoom & Pan Members ---
     double m_zoomFactor;
     QPointF m_panOffset;
 
     // --- Thresholding & Pre-processing Members ---
-    // These now mirror the ThresholdSettings struct
     bool m_showThresholdMask;
     ThresholdAlgorithm m_thresholdAlgorithm;
     int m_thresholdValue;
     bool m_assumeLightBackground;
     int m_adaptiveBlockSize;
-    double m_adaptiveC = 0.00;
-    bool m_enableBlur;         // New
-    int m_blurKernelSize;      // New
-    double m_blurSigmaX;       // New
+    double m_adaptiveC;
+    bool m_enableBlur;
+    int m_blurKernelSize;
+    double m_blurSigmaX;
 };
 
 #endif // VIDEOLOADER_H

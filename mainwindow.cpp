@@ -61,7 +61,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeToggle);
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeToggle);
     connect(ui->threshModeButton, &QToolButton::clicked, this, &MainWindow::threshModeViewToggle);
-
+    connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::selectionModeToggle);
     // Close out by updating threshold settings in videoLoader
 
     ui->globalThreshSlider->setValue(50);
@@ -148,7 +148,16 @@ void MainWindow::threshModeViewToggle()
 {
     m_threshModeToggle = !m_threshModeToggle;
     ui->videoLoader->toggleThresholdView(m_threshModeToggle);
+}
 
+void MainWindow::selectionModeToggle()
+{
+    //if(!m_threshModeToggle)
+    //{
+    //    m_threshModeToggle = true;
+    //    ui->videoLoader->toggleThresholdView(true);
+    //}
+    ui->videoLoader->setInteractionMode(InteractionMode::SelectWorms);
 }
 
 void MainWindow::updateThresholdModeSettings()

@@ -27,6 +27,7 @@ public slots:
     void roiModeToggle();
     void cropModeToggle();
     void threshModeViewToggle();
+    void selectionModeToggle();
     void updateThresholdModeSettings();
     void setGlobalMode(bool checked);
     void setAdaptiveMode(int value);

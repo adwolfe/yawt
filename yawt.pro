@@ -15,6 +15,7 @@ SOURCES += \
     folderfirstsortproxymodel.cpp \
     main.cpp \
     mainwindow.cpp \
+    trackingcommon.cpp \
     trackingmanager.cpp \
     videofiletreeview.cpp \
     videoloader.cpp \
