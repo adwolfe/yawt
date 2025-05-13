@@ -19,10 +19,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->playPauseButton->setObjectName("playPauseButton"); // Crucial for QSS selector
     ui->playPauseButton->setCheckable(true); // Make it toggle state
     ui->playPauseButton->setChecked(false);
-    ui->adaptiveRadio->setChecked(true);
-    ui->globalRadio->setChecked(false);
-    ui->globalGroupBox->setVisible(false);
-    ui->globalThreshAutoCheck->setChecked(false);
+
 
     // Slots that update main window
     QObject::connect(ui->playPauseButton, &QToolButton::toggled, [&](bool checked) {
@@ -44,9 +41,15 @@ MainWindow::MainWindow(QWidget *parent)
     //Threshold settings slots
     connect(ui->globalRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdModeSettings);
     connect(ui->adaptiveRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdModeSettings);
-    connect(ui->globalThreshAutoCheck, &QCheckBox::clicked, this, &MainWindow::setGlobalOtsuMode);
+    connect(ui->globalThreshAutoCheck, &QCheckBox::clicked, this, &MainWindow::setGlobalMode);
     connect(ui->globalThreshSlider, &QAbstractSlider::valueChanged, this, &MainWindow::setGlobalThreshValue);
     connect(ui->globalThreshValueSpin, &QSpinBox::valueChanged, this, &MainWindow::setGlobalThreshValue);
+    connect(ui->adaptiveTypeCombo, &QComboBox::currentIndexChanged, this, &MainWindow::setAdaptiveMode);
+    connect(ui->blockSizeSpin, &QSpinBox::valueChanged, this, &MainWindow::setBlockSize);
+    connect(ui->tuningDoubleSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::setTuning);
+    connect(ui->blurCheck, &QCheckBox::clicked, this, &MainWindow::setPreBlur);
+    connect(ui->blurKernelSpin, &QSpinBox::valueChanged, this, &MainWindow::setBlurKernel);
+
 
 
     // Slots that update the video loader
@@ -63,7 +66,20 @@ MainWindow::MainWindow(QWidget *parent)
 
     ui->globalThreshSlider->setValue(50);
     ui->globalThreshAutoCheck->setChecked(true);
-    setGlobalOtsuMode(true);
+    setGlobalMode(true);
+    ui->adaptiveRadio->setChecked(true);
+    ui->adaptiveTypeCombo->setCurrentIndex(0);
+    ui->blockSizeSpin->setValue(5);
+    setBlockSize(ui->blockSizeSpin->value());
+    ui->tuningDoubleSpin->setValue(2.00);
+    setTuning(ui->blurKernelSpin->value());
+    ui->blurKernelSpin->setValue(5);
+    setBlurKernel(ui->blurKernelSpin->value());
+    ui->blurCheck->setChecked(true);
+    setPreBlur(ui->blurCheck->isChecked());
+    setAdaptiveMode(0);
+    ui->globalGroupBox->setVisible(false);
+
 
 }
 
@@ -142,7 +158,11 @@ void MainWindow::updateThresholdModeSettings()
         ui->globalRadio->setChecked(false);
         ui->adaptiveGroupBox->setVisible(true);
         ui->globalGroupBox->setVisible(false);
-        // update videoLoader settings
+        if (ui->adaptiveTypeCombo->currentIndex() == 0)
+        {
+            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
+        } else
+            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
     } else if (senderObject == ui->globalRadio){
         ui->adaptiveRadio->setChecked(false);
         ui->globalGroupBox->setVisible(true);
@@ -166,7 +186,7 @@ void MainWindow::setGlobalThreshValue(int value)
     ui->videoLoader->setThresholdValue(value);
 }
 
-void MainWindow::setGlobalOtsuMode(bool checked)
+void MainWindow::setGlobalMode(bool checked)
 {
     if (checked)
     {
@@ -178,6 +198,40 @@ void MainWindow::setGlobalOtsuMode(bool checked)
         ui->globalThreshValueSpin->setEnabled(true);
         ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
     }
+}
+
+void MainWindow::setAdaptiveMode(int value)
+{
+    if (value == 0)
+    {
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
+    } else
+    {
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
+    }
+}
+
+void MainWindow::setBlockSize(int value)
+{
+    ui->videoLoader->setAdaptiveThresholdBlockSize(value);
+}
+void MainWindow::setTuning(double value)
+{
+    ui->videoLoader->setAdaptiveThresholdC(value);
+}
+void MainWindow::setPreBlur(bool checked)
+{
+    ui->videoLoader->setEnableBlur(checked);
+    if(checked)
+    {
+        ui->blurKernelSpin->setEnabled(true);
+    } else {
+        ui->blurKernelSpin->setDisabled(true);
+    }
+}
+void MainWindow::setBlurKernel(int value)
+{
+    ui->videoLoader->setBlurKernelSize(value);
 }
 
 

@@ -26,6 +26,7 @@ HEADERS += \
     folderfirstsortproxymodel.h \
     mainwindow.h \
     trackdata.h \
+    trackingcommon.h \
     trackingmanager.h \
     videofiletreeview.h \
     videoloader.h \

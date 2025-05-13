@@ -1,4 +1,4 @@
-#include "VideoLoader.h"
+#include "videoloader.h"
 #include <QDebug>
 #include <QPainterPath>
 #include <QtMath> // For qBound, qFuzzyCompare, qRound
@@ -366,7 +366,7 @@ void VideoLoader::setThresholdAlgorithm(ThresholdAlgorithm algorithm) {
     if (m_showThresholdMask && isVideoLoaded() && currentFrameIdx >=0) {
         displayFrame(currentFrameIdx, true);
     }
-    emit thresholdParametersChanged(m_thresholdAlgorithm, m_thresholdValue, m_assumeLightBackground, m_adaptiveBlockSize, m_adaptiveC);
+    emitThresholdParametersChanged();
     update();
 }
 
@@ -378,7 +378,7 @@ void VideoLoader::setThresholdValue(int value) {
     if (m_showThresholdMask && isVideoLoaded() && currentFrameIdx >=0 && m_thresholdAlgorithm == ThresholdAlgorithm::Global) {
         displayFrame(currentFrameIdx, true);
     }
-    emit thresholdParametersChanged(m_thresholdAlgorithm, m_thresholdValue, m_assumeLightBackground, m_adaptiveBlockSize, m_adaptiveC);
+    emitThresholdParametersChanged();
     update();
 }
 
@@ -389,7 +389,7 @@ void VideoLoader::setAssumeLightBackground(bool isLight) {
     if (m_showThresholdMask && isVideoLoaded() && currentFrameIdx >=0) {
         displayFrame(currentFrameIdx, true);
     }
-    emit thresholdParametersChanged(m_thresholdAlgorithm, m_thresholdValue, m_assumeLightBackground, m_adaptiveBlockSize, m_adaptiveC);
+    emitThresholdParametersChanged();
     update();
 }
 
@@ -403,7 +403,7 @@ void VideoLoader::setAdaptiveThresholdBlockSize(int blockSize) {
         (m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveMean || m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveGaussian)) {
         displayFrame(currentFrameIdx, true);
     }
-    emit thresholdParametersChanged(m_thresholdAlgorithm, m_thresholdValue, m_assumeLightBackground, m_adaptiveBlockSize, m_adaptiveC);
+    emitThresholdParametersChanged();
     update();
 }
 
@@ -415,7 +415,76 @@ void VideoLoader::setAdaptiveThresholdC(double cValue) {
         (m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveMean || m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveGaussian)) {
         displayFrame(currentFrameIdx, true);
     }
-    emit thresholdParametersChanged(m_thresholdAlgorithm, m_thresholdValue, m_assumeLightBackground, m_adaptiveBlockSize, m_adaptiveC);
+    emitThresholdParametersChanged();
+    update();
+}
+
+void VideoLoader::setEnableBlur(bool enabled) {
+    // Check if the value is actually changing
+    if (m_enableBlur == enabled) return;
+
+    // Update the member variable
+    m_enableBlur = enabled;
+    qDebug() << "Gaussian Blur" << (enabled ? "enabled" : "disabled");
+
+    // If the threshold view is active, update the displayed frame
+    if (m_showThresholdMask && isVideoLoaded() && currentFrameIdx >= 0) {
+        displayFrame(currentFrameIdx, true); // Re-apply thresholding with new blur state
+    }
+
+    // Emit signal that parameters changed
+    emitThresholdParametersChanged();
+
+    // Ensure widget repaints if needed
+    update();
+}
+
+void VideoLoader::setBlurKernelSize(int kernelSize) {
+    // Validate: kernel size must be >= 3 and odd
+    if (kernelSize < 3) kernelSize = 3;
+    if (kernelSize % 2 == 0) kernelSize += 1; // Ensure odd
+
+    // Check if the value is actually changing
+    if (m_blurKernelSize == kernelSize) return;
+
+    // Update the member variable
+    m_blurKernelSize = kernelSize;
+    qDebug() << "Blur kernel size set to:" << kernelSize;
+
+    // If threshold view is active AND blur is enabled, update the displayed frame
+    if (m_showThresholdMask && isVideoLoaded() && currentFrameIdx >= 0 && m_enableBlur) {
+        displayFrame(currentFrameIdx, true); // Re-apply thresholding with new kernel size
+    }
+
+    // Emit signal that parameters changed
+    emitThresholdParametersChanged();
+
+    // Ensure widget repaints if needed
+    update();
+}
+
+// Note: The function signature in the header was correct, but the implementation
+// needs the class scope specifier `VideoLoader::`
+void VideoLoader::setBlurSigmaX(double sigmaX) {
+    // Validate: sigma cannot be negative (0 means auto-calculate from kernel size)
+    sigmaX = qMax(0.0, sigmaX);
+
+    // Check if the value is actually changing (using fuzzy compare for doubles)
+    if (qFuzzyCompare(m_blurSigmaX, sigmaX)) return;
+
+    // Update the member variable
+    m_blurSigmaX = sigmaX;
+    qDebug() << "Blur sigmaX set to:" << sigmaX << (sigmaX == 0.0 ? " (Auto)" : "");
+
+    // If threshold view is active AND blur is enabled, update the displayed frame
+    if (m_showThresholdMask && isVideoLoaded() && currentFrameIdx >= 0 && m_enableBlur) {
+        displayFrame(currentFrameIdx, true); // Re-apply thresholding with new sigma
+    }
+
+    // Emit signal that parameters changed
+    emitThresholdParametersChanged();
+
+    // Ensure widget repaints if needed
     update();
 }
 
@@ -793,47 +862,103 @@ bool VideoLoader::performVideoCrop(const QRectF& cropRectVideoCoords, QString& o
     return framesWrittenCount > 0; // Success if at least one frame was written
 }
 
-// New private method to apply thresholding
+/// Updated private method to apply thresholding, now including blur logic
 void VideoLoader::applyThresholding() {
+    // Ensure there's a valid source frame
     if (currentCvFrame.empty()) {
-        m_thresholdedFrame_mono = cv::Mat();
+        m_thresholdedFrame_mono = cv::Mat(); // Clear output if no input
         return;
     }
 
     cv::Mat grayFrame;
+    // Convert to grayscale if necessary
     if (currentCvFrame.channels() == 3 || currentCvFrame.channels() == 4) {
         cv::cvtColor(currentCvFrame, grayFrame, cv::COLOR_BGR2GRAY);
     } else {
+        // Assume already grayscale, clone to avoid modifying original if it's the same Mat object
         grayFrame = currentCvFrame.clone();
     }
 
-    // --- Apply Gaussian Blur if enabled (from ThresholdSettings) ---
-    // This part needs to be updated if ThresholdSettings struct is passed or member variables are used
-    // For now, assuming fixed blur from original context or no blur if not specified
-    // cv::GaussianBlur(grayFrame, grayFrame, cv::Size(5, 5), 0); // Example fixed blur
+    // --- Apply Gaussian Blur if enabled ---
+    // Check if blur is enabled and kernel size is valid (must be odd and >= 3)
+    if (m_enableBlur && m_blurKernelSize >= 3) {
+        try {
+            // Apply blur using the member variables for kernel size and sigma
+            // Note: sigmaY is automatically derived from sigmaX if set to 0 (default behavior)
+            cv::GaussianBlur(grayFrame, grayFrame, cv::Size(m_blurKernelSize, m_blurKernelSize), m_blurSigmaX);
+        } catch (const cv::Exception& ex) {
+            // Log an error if blur fails, but continue without blur
+            qWarning() << "OpenCV exception during GaussianBlur:" << ex.what()
+                       << "Kernel Size:" << m_blurKernelSize << "SigmaX:" << m_blurSigmaX;
+            // Optionally, you could disable blur temporarily: m_enableBlur = false;
+        }
+    }
+    // --- End Blur ---
 
+    // Determine the OpenCV threshold type based on background assumption
     int thresholdTypeOpenCV = m_assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
 
-    switch (m_thresholdAlgorithm) {
-    case ThresholdAlgorithm::Global:
-        cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255, thresholdTypeOpenCV);
-        break;
-    case ThresholdAlgorithm::Otsu:
-        cv::threshold(grayFrame, m_thresholdedFrame_mono, 0, 255, thresholdTypeOpenCV | cv::THRESH_OTSU);
-        break;
-    case ThresholdAlgorithm::AdaptiveMean:
-        cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
-                              cv::ADAPTIVE_THRESH_MEAN_C, thresholdTypeOpenCV,
-                              m_adaptiveBlockSize, m_adaptiveC);
-        break;
-    case ThresholdAlgorithm::AdaptiveGaussian:
-        cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
-                              cv::ADAPTIVE_THRESH_GAUSSIAN_C, thresholdTypeOpenCV,
-                              m_adaptiveBlockSize, m_adaptiveC);
-        break;
-    default:
-        cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255, thresholdTypeOpenCV);
-        break;
+    // Apply the selected thresholding algorithm
+    try {
+        switch (m_thresholdAlgorithm) {
+        case ThresholdAlgorithm::Global:
+            cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255, thresholdTypeOpenCV);
+            break;
+        case ThresholdAlgorithm::Otsu:
+            // Note: m_thresholdValue is ignored by Otsu
+            cv::threshold(grayFrame, m_thresholdedFrame_mono, 0, 255, thresholdTypeOpenCV | cv::THRESH_OTSU);
+            break;
+        case ThresholdAlgorithm::AdaptiveMean:
+            // Ensure block size is valid for adaptive threshold (already validated in setter, but double-check)
+            if (m_adaptiveBlockSize >= 3) {
+                cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
+                                      cv::ADAPTIVE_THRESH_MEAN_C, thresholdTypeOpenCV,
+                                      m_adaptiveBlockSize, m_adaptiveC);
+            } else {
+                qWarning() << "Invalid adaptiveBlockSize for AdaptiveMean:" << m_adaptiveBlockSize;
+                // Fallback or set output to empty/black? Setting empty for now.
+                m_thresholdedFrame_mono = cv::Mat();
+            }
+            break;
+        case ThresholdAlgorithm::AdaptiveGaussian:
+            // Ensure block size is valid
+            if (m_adaptiveBlockSize >= 3) {
+                cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
+                                      cv::ADAPTIVE_THRESH_GAUSSIAN_C, thresholdTypeOpenCV,
+                                      m_adaptiveBlockSize, m_adaptiveC);
+            } else {
+                qWarning() << "Invalid adaptiveBlockSize for AdaptiveGaussian:" << m_adaptiveBlockSize;
+                m_thresholdedFrame_mono = cv::Mat();
+            }
+            break;
+        default: // Fallback to global if algorithm somehow unknown
+            qWarning() << "Unknown threshold algorithm specified, falling back to Global.";
+            cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255, thresholdTypeOpenCV);
+            break;
+        }
+    } catch (const cv::Exception& ex) {
+        // Log error if thresholding fails
+        qWarning() << "OpenCV exception during thresholding:" << ex.what()
+                   << "Algorithm:" << static_cast<int>(m_thresholdAlgorithm);
+        // Set output to empty to indicate failure
+        m_thresholdedFrame_mono = cv::Mat();
     }
 }
 
+void VideoLoader::emitThresholdParametersChanged() {
+    // This function gets the current settings and emits the signal
+    emit thresholdParametersChanged(getCurrentThresholdSettings());
+}
+
+ThresholdSettings VideoLoader::getCurrentThresholdSettings() const {
+    ThresholdSettings settings;
+    settings.assumeLightBackground = m_assumeLightBackground;
+    settings.algorithm = m_thresholdAlgorithm;
+    settings.globalThresholdValue = m_thresholdValue;
+    settings.adaptiveBlockSize = m_adaptiveBlockSize;
+    settings.adaptiveCValue = m_adaptiveC;
+    settings.enableBlur = m_enableBlur;
+    settings.blurKernelSize = m_blurKernelSize;
+    settings.blurSigmaX = m_blurSigmaX;
+    return settings;
+}

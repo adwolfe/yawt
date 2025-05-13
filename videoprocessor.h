@@ -7,7 +7,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
-#include "trackdata.h" // For ThresholdSettings
+#include "trackingcommon.h" // For ThresholdSettings
 
 class VideoProcessor : public QObject {
     Q_OBJECT

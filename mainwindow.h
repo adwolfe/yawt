@@ -28,9 +28,13 @@ public slots:
     void cropModeToggle();
     void threshModeViewToggle();
     void updateThresholdModeSettings();
-    void setGlobalOtsuMode(bool checked);
+    void setGlobalMode(bool checked);
+    void setAdaptiveMode(int value);
     void setGlobalThreshValue(int value);
-
+    void setBlockSize(int value);
+    void setTuning(double value);
+    void setPreBlur(bool checked);
+    void setBlurKernel(int value);
 
 
 private:
