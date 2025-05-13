@@ -13,6 +13,7 @@ LIBS += -L/opt/homebrew/lib -lopencv_core -lopencv_imgproc -lopencv_highgui -lop
 
 SOURCES += \
     folderfirstsortproxymodel.cpp \
+    itemtypedelegate.cpp \
     main.cpp \
     mainwindow.cpp \
     trackingcommon.cpp \
@@ -26,6 +27,7 @@ SOURCES += \
 
 HEADERS += \
     folderfirstsortproxymodel.h \
+    itemtypedelegate.h \
     mainwindow.h \
     trackdata.h \
     trackeditemdata.h \

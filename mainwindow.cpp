@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include "itemtypedelegate.h"
 
 #include <QComboBox>
 #include <QItemDelegate>
@@ -92,9 +93,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     ui->wormTableView->setModel(m_wormTableModel);
 
-    // Optional: Set up a delegate for the "Type" column to use a QComboBox
-    // You'd need to create a custom QItemDelegate for this.
-    // For now, the user can type the string ("Worm", "Start Point", etc.)
+    ItemTypeDelegate *typeDelegate = new ItemTypeDelegate(this);
+
+    ui->wormTableView->setItemDelegateForColumn(WormTableModel::Column::Type, typeDelegate);
+    ui->wormTableView->setSizeAdjustPolicy(QTableView::AdjustToContents);
 
 }
 

@@ -62,15 +62,23 @@
         </property>
         <item>
          <widget class="QLabel" name="label_5">
+          <property name="font">
+           <font>
+            <bold>true</bold>
+           </font>
+          </property>
           <property name="text">
            <string>Tracked ROIs</string>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QPushButton" name="pushButton">
+         <widget class="QPushButton" name="clearAllButton">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
           <property name="text">
-           <string>Clear</string>
+           <string>Clear all</string>
           </property>
          </widget>
         </item>
@@ -292,18 +300,18 @@ QToolButton#playPauseButton:checked:hover {
           <property name="frameShadow">
            <enum>QFrame::Shadow::Sunken</enum>
           </property>
-          <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0">
+          <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0">
            <property name="spacing">
             <number>0</number>
            </property>
-           <item row="7" column="0" colspan="3">
+           <item row="8" column="0" colspan="3">
             <widget class="Line" name="line">
              <property name="orientation">
               <enum>Qt::Orientation::Horizontal</enum>
              </property>
             </widget>
            </item>
-           <item row="8" column="0" colspan="3">
+           <item row="9" column="0" colspan="3">
             <layout class="QHBoxLayout" name="horizontalLayout_5">
              <property name="spacing">
               <number>20</number>
@@ -327,14 +335,14 @@ QToolButton#playPauseButton:checked:hover {
              </item>
             </layout>
            </item>
-           <item row="4" column="0" colspan="3">
+           <item row="5" column="0" colspan="3">
             <widget class="Line" name="line_4">
              <property name="orientation">
               <enum>Qt::Orientation::Horizontal</enum>
              </property>
             </widget>
            </item>
-           <item row="5" column="0" colspan="3">
+           <item row="6" column="0" colspan="3">
             <widget class="QLabel" name="labelThresholding">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
@@ -349,6 +357,29 @@ QToolButton#playPauseButton:checked:hover {
              </property>
              <property name="text">
               <string>Thresholding:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="2">
+            <widget class="QLabel" name="fpsLabel">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="font">
+              <font>
+               <italic>false</italic>
+               <bold>false</bold>
+               <underline>false</underline>
+              </font>
+             </property>
+             <property name="text">
+              <string>0 fps</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignmentFlag::AlignCenter</set>
              </property>
             </widget>
            </item>
@@ -370,7 +401,7 @@ QToolButton#playPauseButton:checked:hover {
              </property>
             </widget>
            </item>
-           <item row="6" column="2">
+           <item row="7" column="2">
             <widget class="QComboBox" name="bgCombo">
              <property name="currentIndex">
               <number>1</number>
@@ -387,7 +418,7 @@ QToolButton#playPauseButton:checked:hover {
              </item>
             </widget>
            </item>
-           <item row="11" column="0" colspan="3">
+           <item row="12" column="0" colspan="3">
             <widget class="QGroupBox" name="globalGroupBox">
              <property name="title">
               <string>Global parameters</string>
@@ -450,14 +481,26 @@ QToolButton#playPauseButton:checked:hover {
              </layout>
             </widget>
            </item>
-           <item row="6" column="0">
+           <item row="7" column="0">
             <widget class="QLabel" name="label">
              <property name="text">
               <string>Background:</string>
              </property>
             </widget>
            </item>
-           <item row="12" column="0" colspan="3">
+           <item row="3" column="0">
+            <widget class="QLabel" name="label_7">
+             <property name="font">
+              <font>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="text">
+              <string>Capture rate:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="13" column="0" colspan="3">
             <widget class="QGroupBox" name="adaptiveGroupBox">
              <property name="title">
               <string>Adaptive parameters</string>
@@ -569,38 +612,32 @@ QToolButton#playPauseButton:checked:hover {
              </layout>
             </widget>
            </item>
-           <item row="3" column="0">
-            <widget class="QLabel" name="label_7">
-             <property name="font">
-              <font>
-               <bold>false</bold>
-              </font>
-             </property>
-             <property name="text">
-              <string>Capture rate:</string>
-             </property>
-            </widget>
-           </item>
-           <item row="3" column="2">
-            <widget class="QLabel" name="fpsLabel">
+           <item row="4" column="0">
+            <widget class="QLabel" name="label_8">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
                <horstretch>0</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
              </property>
-             <property name="font">
-              <font>
-               <italic>false</italic>
-               <bold>false</bold>
-               <underline>false</underline>
-              </font>
-             </property>
              <property name="text">
-              <string>0 fps</string>
+              <string>Pixel size:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="2">
+            <widget class="QDoubleSpinBox" name="doubleSpinBox">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
              </property>
              <property name="alignment">
               <set>Qt::AlignmentFlag::AlignCenter</set>
+             </property>
+             <property name="suffix">
+              <string> pixels/um</string>
              </property>
             </widget>
            </item>
