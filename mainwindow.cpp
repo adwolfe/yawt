@@ -1,5 +1,10 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+
+#include <QComboBox>
+#include <QItemDelegate>
+#include <QTableView>
+
 #include <QStandardPaths>
 #include <QFileDialog>
 #include <QIcon>
@@ -49,6 +54,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->tuningDoubleSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::setTuning);
     connect(ui->blurCheck, &QCheckBox::clicked, this, &MainWindow::setPreBlur);
     connect(ui->blurKernelSpin, &QSpinBox::valueChanged, this, &MainWindow::setBlurKernel);
+    connect(ui->videoLoader, &VideoLoader::wormBlobSelected, this, &MainWindow::onWormBlobDetected);
+
 
 
 
@@ -62,6 +69,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeToggle);
     connect(ui->threshModeButton, &QToolButton::clicked, this, &MainWindow::threshModeViewToggle);
     connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::selectionModeToggle);
+    connect(ui->bgCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateBackgroundColor);
     // Close out by updating threshold settings in videoLoader
 
     ui->globalThreshSlider->setValue(50);
@@ -80,6 +88,13 @@ MainWindow::MainWindow(QWidget *parent)
     setAdaptiveMode(0);
     ui->globalGroupBox->setVisible(false);
 
+    m_wormTableModel = new WormTableModel(this);
+
+    ui->wormTableView->setModel(m_wormTableModel);
+
+    // Optional: Set up a delegate for the "Type" column to use a QComboBox
+    // You'd need to create a custom QItemDelegate for this.
+    // For now, the user can type the string ("Worm", "Start Point", etc.)
 
 }
 
@@ -108,6 +123,7 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->frameSlider->setValue(0);
     ui->framePosition->setMaximum(totalFrames);
     ui->framePosition->setValue(0);
+    ui->fpsLabel->setText(QString::number(fps)+" fps");
 }
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame)
@@ -158,6 +174,11 @@ void MainWindow::selectionModeToggle()
     //    ui->videoLoader->toggleThresholdView(true);
     //}
     ui->videoLoader->setInteractionMode(InteractionMode::SelectWorms);
+}
+
+void MainWindow::updateBackgroundColor(int index)
+{
+    ui->videoLoader->setAssumeLightBackground(index);
 }
 
 void MainWindow::updateThresholdModeSettings()
@@ -243,6 +264,22 @@ void MainWindow::setBlurKernel(int value)
     ui->videoLoader->setBlurKernelSize(value);
 }
 
+void MainWindow::onWormBlobDetected(const QPointF& centroid, const QRectF& bbox) {
+    // Get current frame number from VideoLoader or store it when selection mode starts
+    int currentFrame = ui->videoLoader->getCurrentFrameNumber(); // Assuming videoLoader is your VideoLoader instance
+    m_wormTableModel->addItem(centroid, bbox, currentFrame, ItemType::Worm); // Default to "Worm"
+}
+
+//void MainWindow::onDeleteSelectedWormClicked() {
+//    QModelIndexList selectedRows = ui->wormTableView->selectionModel()->selectedRows();
+//    // Sort rows in descending order to correctly remove multiple rows
+//    std::sort(selectedRows.begin(), selectedRows.end(), [](const QModelIndex& a, const QModelIndex& b){
+//        return a.row() > b.row();
+//    });
+//    for (const QModelIndex &index : selectedRows) {
+//        m_wormTableModel->removeRows(index.row(), 1);
+//    }
+//}
 
 MainWindow::~MainWindow()
 {

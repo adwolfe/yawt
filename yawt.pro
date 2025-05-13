@@ -21,18 +21,21 @@ SOURCES += \
     videoloader.cpp \
     videoprocessor.cpp \
     wormobject.cpp \
+    wormtablemodel.cpp \
     wormtracker.cpp
 
 HEADERS += \
     folderfirstsortproxymodel.h \
     mainwindow.h \
     trackdata.h \
+    trackeditemdata.h \
     trackingcommon.h \
     trackingmanager.h \
     videofiletreeview.h \
     videoloader.h \
     videoprocessor.h \
     wormobject.h \
+    wormtablemodel.h \
     wormtracker.h
 
 FORMS += \

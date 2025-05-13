@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include "wormtablemodel.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -36,10 +37,13 @@ public slots:
     void setTuning(double value);
     void setPreBlur(bool checked);
     void setBlurKernel(int value);
+    void updateBackgroundColor(int index);
+    void onWormBlobDetected(const QPointF& centroid, const QRectF& bbox);
 
 
 private:
     Ui::MainWindow *ui;
     bool m_threshModeToggle = false;
+    WormTableModel *m_wormTableModel;
 };
 #endif // MAINWINDOW_H
