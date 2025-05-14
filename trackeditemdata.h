@@ -3,6 +3,7 @@
 
 #include <QPointF>
 #include <QRectF>
+#include <QColor>
 #include <QString> // For typeToString and stringToType
 
 // Enum for the type of tracked item
@@ -37,6 +38,7 @@ inline ItemType stringToItemType(const QString& typeStr) {
 // Structure to hold data for each item in the table
 struct TrackedItem {
     int id;                         // Unique auto-generated ID
+    //QColor color;                   // Color for worm ROI
     ItemType type;                  // Type of the item
     QPointF initialCentroid;        // Centroid in video coordinates at selection
     QRectF initialBoundingBox;      // Bounding box in video coordinates at selection

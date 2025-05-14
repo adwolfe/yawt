@@ -71,8 +71,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeToggle);
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeToggle);
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeToggle);
-    connect(ui->threshModeButton, &QToolButton::clicked, this, &MainWindow::threshModeViewToggle);
+    connect(ui->showThreshButton, &QToolButton::clicked, this, &MainWindow::threshModeViewToggle);
     connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::selectionModeToggle);
+    connect(ui->trackModeButton, &QToolButton::clicked, this, &MainWindow::trackModeToggle);
     connect(ui->bgCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateBackgroundColor);
     // Close out by updating threshold settings in videoLoader
 
@@ -101,6 +102,10 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->setItemDelegateForColumn(WormTableModel::Column::Type, typeDelegate);
     ui->wormTableView->setSizeAdjustPolicy(QTableView::AdjustToContents);
     m_trackingManager = new TrackingManager(this);
+    connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracks);
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::setVisibleTracks);
+
+    panModeToggle();
 
 
 }
@@ -157,10 +162,39 @@ void MainWindow::seekFrame(int frame)
 void MainWindow::panModeToggle()
 {
     ui->videoLoader->setInteractionMode(InteractionMode::PanZoom);
+    ui->panModeButton->setChecked(true);
+    ui->roiModeButton->setChecked(false);
+    ui->selectionModeButton->setChecked(false);
+    ui->trackModeButton->setChecked(false);
 }
 void MainWindow::roiModeToggle()
 {
     ui->videoLoader->setInteractionMode(InteractionMode::DrawROI);
+    ui->panModeButton->setChecked(false);
+    ui->roiModeButton->setChecked(true);
+    ui->selectionModeButton->setChecked(false);
+    ui->trackModeButton->setChecked(false);
+}
+void MainWindow::trackModeToggle()
+{
+    ui->videoLoader->setInteractionMode(InteractionMode::ViewEditTracks);
+    ui->panModeButton->setChecked(false);
+    ui->roiModeButton->setChecked(false);
+    ui->selectionModeButton->setChecked(false);
+    ui->trackModeButton->setChecked(true);
+}
+void MainWindow::selectionModeToggle()
+{
+    if(!m_threshModeToggle)
+    {
+        threshModeViewToggle();
+
+    }
+    ui->videoLoader->setInteractionMode(InteractionMode::SelectWorms);
+    ui->panModeButton->setChecked(false);
+    ui->roiModeButton->setChecked(false);
+    ui->selectionModeButton->setChecked(true);
+    ui->trackModeButton->setChecked(false);
 }
 void MainWindow::cropModeToggle()
 {
@@ -173,15 +207,7 @@ void MainWindow::threshModeViewToggle()
     ui->videoLoader->toggleThresholdView(m_threshModeToggle);
 }
 
-void MainWindow::selectionModeToggle()
-{
-    //if(!m_threshModeToggle)
-    //{
-    //    m_threshModeToggle = true;
-    //    ui->videoLoader->toggleThresholdView(true);
-    //}
-    ui->videoLoader->setInteractionMode(InteractionMode::SelectWorms);
-}
+
 
 void MainWindow::updateBackgroundColor(int index)
 {
@@ -430,7 +456,54 @@ void MainWindow::handleCancelTrackingFromDialog() {
     }
 }
 
+void MainWindow::acceptTracks(const AllWormTracks& tracks)
+{
+    qDebug() << "Tracks sent to videoLoader: " << tracks.size();
+    ui->videoLoader->setTracksToDisplay(tracks);
+}
 
+void MainWindow::setVisibleTracks(const QItemSelection &selected, const QItemSelection &deselected)
+{
+    // Presumed to be in a slot within your MainWindow class,
+    // connected to the selectionModel's selectionChanged signal,
+    // or called when you need to update visible tracks.
+
+    QSet<int> selectedWormIDs; // Member variable or local
+
+    if (ui->wormTableView && m_wormTableModel) { // Check if pointers are valid
+        QItemSelectionModel *selectionModel = ui->wormTableView->selectionModel();
+        if (selectionModel) {
+            QModelIndexList selectedRows = selectionModel->selectedRows();
+            // Clear previous selections if you're rebuilding the set each time
+            selectedWormIDs.clear();
+
+            for (const QModelIndex &rowIdx : selectedRows) {
+            // selectedRows() gives one index per selected row, typically from the first column.
+            // We use its row() to get the model row.
+                int row = rowIdx.row();
+
+                // Get the model index for the ID column
+                QModelIndex idModelIndex = m_wormTableModel->index(row, WormTableModel::Column::ID);
+
+                if (idModelIndex.isValid()) {
+                    bool conversionOk;
+                    // Assuming the ID is stored/displayed as an int or convertible string
+                    int wormId = m_wormTableModel->data(idModelIndex, Qt::DisplayRole).toInt(&conversionOk);
+
+                    if (conversionOk) {
+                        selectedWormIDs.insert(wormId);
+                    } else {
+                        qWarning() << "Could not convert worm ID to int for row" << row
+                                   << "at column" << WormTableModel::Column::ID;
+                    }
+                }
+            }
+        }
+    }
+
+    qDebug() << "Selected Worm IDs:" << selectedWormIDs;
+    ui->videoLoader->setVisibleTrackIDs(selectedWormIDs);
+}
 //void MainWindow::onDeleteSelectedWormClicked() {
 //    QModelIndexList selectedRows = ui->wormTableView->selectionModel()->selectedRows();
 //    // Sort rows in descending order to correctly remove multiple rows

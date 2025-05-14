@@ -63,10 +63,11 @@ public:
     // Enum for column indices for clarity
     enum Column {
         ID = 0,
+        //Color =
         Type = 1,
-        CentroidX = 2, // Optional: display centroid X
-        CentroidY = 3, // Optional: display centroid Y
-        Frame = 4      // Optional: display frame of selection
+        //CentroidX = 2, // Optional: display centroid X
+        //CentroidY = 3, // Optional: display centroid Y
+        //Frame = 4      // Optional: display frame of selection
         // Add more columns if needed, e.g., for bounding box details
     };
 

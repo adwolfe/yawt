@@ -17,12 +17,12 @@ QVariant WormTableModel::headerData(int section, Qt::Orientation orientation, in
         return "ID";
     case Column::Type:
         return "Type";
-    case Column::CentroidX:
-        return "Centroid X";
-    case Column::CentroidY:
-        return "Centroid Y";
-    case Column::Frame:
-        return "Frame";
+    //case Column::CentroidX:
+    //    return "Centroid X";
+    //case Column::CentroidY:
+    //    return "Centroid Y";
+    //case Column::Frame:
+    //    return "Frame";
     default:
         return QVariant();
     }
@@ -58,12 +58,12 @@ QVariant WormTableModel::data(const QModelIndex &index, int role) const {
             // For EditRole, we might want to return the index for a QComboBox delegate
             // For DisplayRole, return the string representation
             return itemTypeToString(item.type);
-        case Column::CentroidX:
-            return QString::number(item.initialCentroid.x(), 'f', 2); // Format to 2 decimal places
-        case Column::CentroidY:
-            return QString::number(item.initialCentroid.y(), 'f', 2);
-        case Column::Frame:
-            return item.frameOfSelection;
+        //case Column::CentroidX:
+        //    return QString::number(item.initialCentroid.x(), 'f', 2); // Format to 2 decimal places
+        //case Column::CentroidY:
+        //    return QString::number(item.initialCentroid.y(), 'f', 2);
+        //case Column::Frame:
+        //    return item.frameOfSelection;
         default:
             return QVariant();
         }
@@ -91,10 +91,10 @@ bool WormTableModel::setData(const QModelIndex &index, const QVariant &value, in
     }
     // ID, Centroid, Frame are not directly editable by user in this basic setup
     case Column::ID:
-    case Column::CentroidX:
-    case Column::CentroidY:
-    case Column::Frame:
-        return false; // These are not editable through setData for now
+    //case Column::CentroidX:
+    //case Column::CentroidY:
+    //case Column::Frame:
+    //    return false; // These are not editable through setData for now
     default:
         return false;
     }

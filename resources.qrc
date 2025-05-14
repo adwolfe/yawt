@@ -5,11 +5,11 @@
         <file>resources/poke_alt2.svg</file>
         <file>resources/poke_alt.svg</file>
         <file>resources/trax.svg</file>
-        <file>resources/roi.svg</file>
         <file>resources/pan.svg</file>
         <file>resources/crop.svg</file>
         <file>resources/thresh.svg</file>
         <file>resources/poke.svg</file>
         <file>resources/thresh_alt.svg</file>
+        <file>resources/roi.svg</file>
     </qresource>
 </RCC>

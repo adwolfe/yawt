@@ -444,7 +444,7 @@ void TrackingManager::checkForAllTrackersFinished() {
             }
         }
         emit allTracksUpdated(m_finalTracks);
-        outputTracksToDebug(m_finalTracks);
+        //outputTracksToDebug(m_finalTracks);
         QString csvOutputPath;
         if (!m_videoPath.isEmpty()) {
             QFileInfo videoInfo(m_videoPath);

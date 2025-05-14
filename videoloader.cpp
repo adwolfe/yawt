@@ -6,6 +6,7 @@
 #include <QResizeEvent>
 #include <QMessageBox>
 #include <QFileInfo>
+#include <QWheelEvent>
 #include <QRandomGenerator> // For generating distinct track colors
 
 // Default crop parameters
@@ -469,14 +470,31 @@ void VideoLoader::mousePressEvent(QMouseEvent *event) {
 // mouseMoveEvent, mouseReleaseEvent, wheelEvent, resizeEvent as before
 // ... (ensure these functions are present from previous updates) ...
 void VideoLoader::mouseMoveEvent(QMouseEvent *event) { /* ... as before ... */
-    QPointF currentPos = event->position(); QPointF delta = currentPos - m_lastMousePos;
-    m_lastMousePos = currentPos; if (!isVideoLoaded()) { QWidget::mouseMoveEvent(event); return; }
+    QPointF currentPos = event->position();
+    QPointF delta = currentPos - m_lastMousePos;
+    m_lastMousePos = currentPos;
+    if (!isVideoLoaded()) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
     if (m_isPanning && (event->buttons() & Qt::LeftButton)) {
-        m_panOffset += delta; clampPanOffset(); update(); event->accept();
-    } else if ((m_currentMode == InteractionMode::DrawROI || m_currentMode == InteractionMode::Crop) && m_isDefiningRoi && (event->buttons() & Qt::LeftButton)) {
-        m_roiEndPointWidget = event->pos(); update(); event->accept();
-    } else { QWidget::mouseMoveEvent(event); }
+        m_panOffset += delta;
+        clampPanOffset();
+        update();
+        event->accept();
+    } else if ((m_currentMode == InteractionMode::DrawROI ||
+                m_currentMode == InteractionMode::Crop) &&
+                m_isDefiningRoi && (event->buttons() & Qt::LeftButton)) {
+        m_roiEndPointWidget = event->pos();
+        update();
+        event->accept();
+    } else {
+        QWidget::mouseMoveEvent(event);
+    }
+
 }
+
+
 void VideoLoader::mouseReleaseEvent(QMouseEvent *event) { /* ... as before ... */
     if (!isVideoLoaded()) { QWidget::mouseReleaseEvent(event); return; }
     if (event->button() == Qt::LeftButton) {
@@ -492,14 +510,13 @@ void VideoLoader::mouseReleaseEvent(QMouseEvent *event) { /* ... as before ... *
     } else { QWidget::mouseReleaseEvent(event); }
 }
 void VideoLoader::wheelEvent(QWheelEvent *event) { /* ... as before ... */
-    if (!isVideoLoaded() || m_currentMode != InteractionMode::PanZoom) { event->ignore(); return; }
+    if (!isVideoLoaded()) { event->ignore(); return; }
     int deg = event->angleDelta().y()/8; if(deg==0){event->ignore();return;} int steps=deg/15; double zs=0.15, mult=qPow(1.0+zs,steps);
     setZoomFactorAtPoint(m_zoomFactor*mult, event->position()); event->accept();
 }
 void VideoLoader::resizeEvent(QResizeEvent *event) { /* ... as before ... */
     QWidget::resizeEvent(event); if (isVideoLoaded()) { clampPanOffset(); update(); }
 }
-
 
 // --- Private Helper Methods ---
 // updateCursorShape, clampPanOffset, handleRoiDefinedForCrop, performVideoCrop, applyThresholding, updateTimerInterval, emitThresholdParametersChanged, calculateTargetRect, mapPointToVideo, mapPointFromVideo as before

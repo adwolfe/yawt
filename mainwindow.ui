@@ -167,6 +167,32 @@
            <iconset resource="resources.qrc">
             <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
           </property>
+          <property name="checkable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="trackModeButton">
+          <property name="enabled">
+           <bool>true</bool>
+          </property>
+          <property name="toolTip">
+           <string>Show/Hide Tracks</string>
+          </property>
+          <property name="statusTip">
+           <string>Show/hide tracks</string>
+          </property>
+          <property name="text">
+           <string>...</string>
+          </property>
+          <property name="icon">
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
+          </property>
+          <property name="checkable">
+           <bool>true</bool>
+          </property>
          </widget>
         </item>
         <item>
@@ -195,12 +221,12 @@
             <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
           </property>
           <property name="checkable">
-           <bool>true</bool>
+           <bool>false</bool>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QToolButton" name="threshModeButton">
+         <widget class="QToolButton" name="showThreshButton">
           <property name="statusTip">
            <string>Show/Hide threshold</string>
           </property>
@@ -217,22 +243,16 @@
          </widget>
         </item>
         <item>
-         <widget class="QToolButton" name="toolButton">
-          <property name="enabled">
-           <bool>false</bool>
-          </property>
-          <property name="toolTip">
-           <string>Show/Hide Tracks</string>
-          </property>
-          <property name="statusTip">
-           <string>Show/hide tracks</string>
-          </property>
+         <widget class="QToolButton" name="showTracksButton">
           <property name="text">
            <string>...</string>
           </property>
           <property name="icon">
            <iconset resource="resources.qrc">
-            <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
+            <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
+          </property>
+          <property name="checkable">
+           <bool>true</bool>
           </property>
          </widget>
         </item>
@@ -333,11 +353,11 @@ QToolButton#playPauseButton:checked:hover {
       <property name="currentIndex">
        <number>0</number>
       </property>
-      <widget class="QWidget" name="previewTab">
+      <widget class="QWidget" name="trackingTab">
        <attribute name="title">
         <string>Tracking</string>
        </attribute>
-       <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="1">
+       <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="0">
         <item>
          <widget class="QFrame" name="frame">
           <property name="frameShape">
@@ -347,54 +367,45 @@ QToolButton#playPauseButton:checked:hover {
            <enum>QFrame::Shadow::Sunken</enum>
           </property>
           <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+           <property name="leftMargin">
+            <number>6</number>
+           </property>
+           <property name="topMargin">
+            <number>6</number>
+           </property>
+           <property name="rightMargin">
+            <number>6</number>
+           </property>
+           <property name="bottomMargin">
+            <number>6</number>
+           </property>
            <property name="spacing">
             <number>0</number>
            </property>
-           <item row="10" column="0" colspan="3">
-            <layout class="QHBoxLayout" name="horizontalLayout_5">
-             <property name="spacing">
-              <number>20</number>
+           <item row="5" column="0" colspan="3">
+            <widget class="Line" name="line_4">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
              </property>
-             <item>
-              <widget class="QRadioButton" name="adaptiveRadio">
-               <property name="text">
-                <string>Adaptive</string>
-               </property>
-               <property name="checked">
-                <bool>true</bool>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QRadioButton" name="globalRadio">
-               <property name="text">
-                <string>Global</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </item>
-           <item row="8" column="2">
-            <widget class="QComboBox" name="bgCombo">
-             <property name="currentIndex">
-              <number>1</number>
-             </property>
-             <item>
-              <property name="text">
-               <string>Dark (worms are light)</string>
-              </property>
-             </item>
-             <item>
-              <property name="text">
-               <string>Light (worms are dark)</string>
-              </property>
-             </item>
             </widget>
+           </item>
+           <item row="4" column="1">
+            <spacer name="horizontalSpacer_2">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
            </item>
            <item row="3" column="2">
             <widget class="QLabel" name="fpsLabel">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
                <horstretch>0</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
@@ -414,7 +425,7 @@ QToolButton#playPauseButton:checked:hover {
              </property>
             </widget>
            </item>
-           <item row="9" column="0" colspan="3">
+           <item row="9" column="0" colspan="2">
             <widget class="Line" name="line">
              <property name="orientation">
               <enum>Qt::Orientation::Horizontal</enum>
@@ -428,20 +439,51 @@ QToolButton#playPauseButton:checked:hover {
              </property>
             </widget>
            </item>
-           <item row="4" column="2">
-            <widget class="QDoubleSpinBox" name="doubleSpinBox">
+           <item row="2" column="0" colspan="3">
+            <widget class="QLabel" name="label_6">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
                <horstretch>0</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
              </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
+             <property name="font">
+              <font>
+               <bold>true</bold>
+              </font>
              </property>
-             <property name="suffix">
-              <string> pixels/um</string>
+             <property name="text">
+              <string>Video settings</string>
              </property>
+            </widget>
+           </item>
+           <item row="8" column="2">
+            <widget class="QComboBox" name="bgCombo">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>50</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="currentIndex">
+              <number>1</number>
+             </property>
+             <item>
+              <property name="text">
+               <string>Dark (worms are light)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Light (worms are dark)</string>
+              </property>
+             </item>
             </widget>
            </item>
            <item row="14" column="0" colspan="3">
@@ -556,10 +598,10 @@ QToolButton#playPauseButton:checked:hover {
              </layout>
             </widget>
            </item>
-           <item row="2" column="0" colspan="3">
-            <widget class="QLabel" name="label_6">
+           <item row="7" column="0" colspan="3">
+            <widget class="QLabel" name="labelThresholding">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
                <horstretch>0</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
@@ -570,26 +612,7 @@ QToolButton#playPauseButton:checked:hover {
               </font>
              </property>
              <property name="text">
-              <string>Video settings</string>
-             </property>
-            </widget>
-           </item>
-           <item row="15" column="0" colspan="3">
-            <widget class="QPushButton" name="trackingDialogButton">
-             <property name="text">
-              <string>Begin Tracking</string>
-             </property>
-            </widget>
-           </item>
-           <item row="3" column="0">
-            <widget class="QLabel" name="label_7">
-             <property name="font">
-              <font>
-               <bold>false</bold>
-              </font>
-             </property>
-             <property name="text">
-              <string>Capture rate:</string>
+              <string>Thresholding:</string>
              </property>
             </widget>
            </item>
@@ -628,6 +651,9 @@ QToolButton#playPauseButton:checked:hover {
                 <property name="maximum">
                  <number>255</number>
                 </property>
+                <property name="value">
+                 <number>90</number>
+                </property>
                 <property name="orientation">
                  <enum>Qt::Orientation::Horizontal</enum>
                 </property>
@@ -641,6 +667,9 @@ QToolButton#playPauseButton:checked:hover {
                 <property name="maximum">
                  <number>255</number>
                 </property>
+                <property name="value">
+                 <number>90</number>
+                </property>
                </widget>
               </item>
               <item row="0" column="1">
@@ -649,52 +678,79 @@ QToolButton#playPauseButton:checked:hover {
                  <string>Automatic</string>
                 </property>
                 <property name="checked">
-                 <bool>true</bool>
+                 <bool>false</bool>
                 </property>
                </widget>
               </item>
              </layout>
             </widget>
            </item>
-           <item row="5" column="0" colspan="3">
-            <widget class="Line" name="line_4">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-            </widget>
-           </item>
-           <item row="4" column="0">
-            <widget class="QLabel" name="label_8">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
+           <item row="15" column="0" colspan="3">
+            <widget class="QPushButton" name="trackingDialogButton">
              <property name="text">
-              <string>Pixel size:</string>
+              <string>Begin Tracking</string>
              </property>
             </widget>
            </item>
-           <item row="7" column="0" colspan="3">
-            <widget class="QLabel" name="labelThresholding">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
+           <item row="3" column="0">
+            <widget class="QLabel" name="label_7">
              <property name="font">
               <font>
-               <bold>true</bold>
+               <bold>false</bold>
               </font>
              </property>
              <property name="text">
-              <string>Thresholding:</string>
+              <string>Capture rate:</string>
              </property>
             </widget>
            </item>
-           <item row="6" column="0">
+           <item row="10" column="0" colspan="3">
+            <layout class="QHBoxLayout" name="horizontalLayout_5">
+             <property name="spacing">
+              <number>20</number>
+             </property>
+             <item>
+              <widget class="QRadioButton" name="globalRadio">
+               <property name="text">
+                <string>Global</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QRadioButton" name="adaptiveRadio">
+               <property name="text">
+                <string>Adaptive</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item row="4" column="2">
+            <widget class="QDoubleSpinBox" name="doubleSpinBox">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>25</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignmentFlag::AlignCenter</set>
+             </property>
+             <property name="suffix">
+              <string> pixels/um</string>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="1">
             <spacer name="verticalSpacer">
              <property name="orientation">
               <enum>Qt::Orientation::Vertical</enum>
@@ -707,6 +763,25 @@ QToolButton#playPauseButton:checked:hover {
              </property>
             </spacer>
            </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="label_8">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>Pixel size:</string>
+             </property>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>
@@ -716,6 +791,18 @@ QToolButton#playPauseButton:checked:hover {
        <attribute name="title">
         <string>Cleanup</string>
        </attribute>
+       <layout class="QGridLayout" name="gridLayout_4">
+        <item row="0" column="0">
+         <widget class="QFrame" name="frame_2">
+          <property name="frameShape">
+           <enum>QFrame::Shape::StyledPanel</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Shadow::Raised</enum>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </widget>
      </widget>
     </item>

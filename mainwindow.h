@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QItemSelection>
 #include "wormtablemodel.h"
 #include "trackingprogressdialog.h"
 #include "trackingmanager.h"
@@ -31,6 +32,7 @@ public slots:
     void cropModeToggle();
     void threshModeViewToggle();
     void selectionModeToggle();
+    void trackModeToggle();
     void updateThresholdModeSettings();
     void setGlobalMode(bool checked);
     void setAdaptiveMode(int value);
@@ -44,6 +46,8 @@ public slots:
     void onStartTrackingActionTriggered();
     void handleBeginTrackingFromDialog();
     void handleCancelTrackingFromDialog();
+    void acceptTracks(const AllWormTracks& tracks);
+    void setVisibleTracks(const QItemSelection &selected, const QItemSelection &deselected);
 
 
 private:
