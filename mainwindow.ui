@@ -108,11 +108,18 @@
         </property>
         <item>
          <widget class="QToolButton" name="panModeButton">
+          <property name="toolTip">
+           <string>Pan/Drag</string>
+          </property>
+          <property name="statusTip">
+           <string>Pan, drag, and zoom</string>
+          </property>
           <property name="text">
            <string>...</string>
           </property>
           <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::ZoomFitBest"/>
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/pan.svg</normaloff>:/resources/pan.svg</iconset>
           </property>
           <property name="checkable">
            <bool>true</bool>
@@ -127,11 +134,18 @@
           <property name="enabled">
            <bool>true</bool>
           </property>
+          <property name="toolTip">
+           <string>Draw ROI</string>
+          </property>
+          <property name="statusTip">
+           <string>Draw ROI</string>
+          </property>
           <property name="text">
            <string>...</string>
           </property>
           <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::MediaPlaybackStop"/>
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/roi.svg</normaloff>:/resources/roi.svg</iconset>
           </property>
           <property name="checkable">
            <bool>true</bool>
@@ -143,11 +157,15 @@
         </item>
         <item>
          <widget class="QToolButton" name="selectionModeButton">
+          <property name="statusTip">
+           <string>Detect</string>
+          </property>
           <property name="text">
            <string>...</string>
           </property>
           <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::ListAdd"/>
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
           </property>
          </widget>
         </item>
@@ -166,11 +184,15 @@
         </item>
         <item>
          <widget class="QToolButton" name="cropModeButton">
+          <property name="statusTip">
+           <string>Crop to ROI</string>
+          </property>
           <property name="text">
            <string>...</string>
           </property>
           <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::ViewRestore"/>
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
           </property>
           <property name="checkable">
            <bool>true</bool>
@@ -179,14 +201,38 @@
         </item>
         <item>
          <widget class="QToolButton" name="threshModeButton">
+          <property name="statusTip">
+           <string>Show/Hide threshold</string>
+          </property>
           <property name="text">
            <string>...</string>
           </property>
           <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::ImageLoading"/>
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/thresh_alt.svg</normaloff>:/resources/thresh_alt.svg</iconset>
           </property>
           <property name="checkable">
            <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="toolButton">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="toolTip">
+           <string>Show/Hide Tracks</string>
+          </property>
+          <property name="statusTip">
+           <string>Show/hide tracks</string>
+          </property>
+          <property name="text">
+           <string>...</string>
+          </property>
+          <property name="icon">
+           <iconset resource="resources.qrc">
+            <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
           </property>
          </widget>
         </item>
@@ -700,6 +746,8 @@ QToolButton#playPauseButton:checked:hover {
    <header>videofiletreeview.h</header>
   </customwidget>
  </customwidgets>
- <resources/>
+ <resources>
+  <include location="resources.qrc"/>
+ </resources>
  <connections/>
 </ui>
