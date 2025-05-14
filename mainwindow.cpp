@@ -90,7 +90,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->blurCheck->setChecked(true);
     setPreBlur(ui->blurCheck->isChecked());
     setAdaptiveMode(0);
-    ui->globalGroupBox->setVisible(false);
+    ui->globalGroupBox->setEnabled(false);
 
     m_wormTableModel = new WormTableModel(this);
 
@@ -100,8 +100,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     ui->wormTableView->setItemDelegateForColumn(WormTableModel::Column::Type, typeDelegate);
     ui->wormTableView->setSizeAdjustPolicy(QTableView::AdjustToContents);
-
     m_trackingManager = new TrackingManager(this);
+
 
 }
 
@@ -193,8 +193,8 @@ void MainWindow::updateThresholdModeSettings()
     auto senderObject = sender();
     if (senderObject == ui->adaptiveRadio) {
         ui->globalRadio->setChecked(false);
-        ui->adaptiveGroupBox->setVisible(true);
-        ui->globalGroupBox->setVisible(false);
+        ui->adaptiveGroupBox->setEnabled(true);
+        ui->globalGroupBox->setEnabled(false);
         if (ui->adaptiveTypeCombo->currentIndex() == 0)
         {
             ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
@@ -202,8 +202,8 @@ void MainWindow::updateThresholdModeSettings()
             ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
     } else if (senderObject == ui->globalRadio){
         ui->adaptiveRadio->setChecked(false);
-        ui->globalGroupBox->setVisible(true);
-        ui->adaptiveGroupBox->setVisible(false);
+        ui->globalGroupBox->setEnabled(true);
+        ui->adaptiveGroupBox->setEnabled(false);
         if(ui->globalThreshAutoCheck->isChecked())
         {
             ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
@@ -279,7 +279,7 @@ void MainWindow::onWormBlobDetected(const QPointF& centroid, const QRectF& bbox)
 
 
 void MainWindow::onStartTrackingActionTriggered() {
-    // Inside MainWindow::onStartTrackingActionTriggered()
+
 
     qDebug() << "Attempting to start tracking action...";
 
