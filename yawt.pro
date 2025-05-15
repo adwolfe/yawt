@@ -30,6 +30,7 @@ SOURCES += \
 
 HEADERS += \
     mainwindow.h \
+<<<<<<< HEAD
     tracking/trackdata.h \
     tracking/trackeditemdata.h \
     tracking/trackingcommon.h \
@@ -43,6 +44,17 @@ HEADERS += \
     widgets/trackingprogressdialog.h \
     widgets/videofiletreeview.h \
     widgets/videoloader.h
+=======
+    trackingcommon.h \
+    trackingmanager.h \
+    trackingprogressdialog.h \
+    videofiletreeview.h \
+    videoloader.h \
+    videoprocessor.h \
+    wormobject.h \
+    wormtablemodel.h \
+    wormtracker.h
+>>>>>>> devel
 
 FORMS += \
     mainwindow.ui \

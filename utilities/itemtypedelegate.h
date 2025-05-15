@@ -3,7 +3,7 @@
 #define ITEMTYPEDELEGATE_H
 
 #include <QStyledItemDelegate> // QStyledItemDelegate is often preferred over QItemDelegate
-#include "trackeditemdata.h"   // For ItemType and helper functions
+#include "trackingcommon.h"   // For ItemType and helper functions
 
 // This is here to allow for a dropdown in the wormTableView
 

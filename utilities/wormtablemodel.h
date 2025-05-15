@@ -5,7 +5,7 @@
 #include <QList>
 #include <QPointF>
 #include <QRectF>
-#include "trackeditemdata.h" // Contains TrackedItem and ItemType
+#include "trackingcommon.h" // Contains TrackedItem and ItemType
 
 class WormTableModel : public QAbstractTableModel {
     Q_OBJECT

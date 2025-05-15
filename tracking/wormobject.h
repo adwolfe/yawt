@@ -6,7 +6,7 @@
 #include <QRectF>
 #include <QPointF>
 #include <vector>
-#include "trackdata.h" // For WormTrackPoint
+#include "trackingcommon.h" // For WormTrackPoint
 
 class WormObject {
 public:
