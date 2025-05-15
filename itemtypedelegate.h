@@ -3,7 +3,7 @@
 #define ITEMTYPEDELEGATE_H
 
 #include <QStyledItemDelegate> // QStyledItemDelegate is often preferred over QItemDelegate
-#include "trackeditemdata.h"   // For ItemType and helper functions
+#include "trackingcommon.h"   // For ItemType and helper functions
 
 class ItemTypeDelegate : public QStyledItemDelegate {
     Q_OBJECT

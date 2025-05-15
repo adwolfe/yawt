@@ -30,8 +30,6 @@ HEADERS += \
     folderfirstsortproxymodel.h \
     itemtypedelegate.h \
     mainwindow.h \
-    trackdata.h \
-    trackeditemdata.h \
     trackingcommon.h \
     trackingmanager.h \
     trackingprogressdialog.h \

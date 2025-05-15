@@ -8,9 +8,85 @@
 #include <QMetaEnum>
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
+#include <QColor>
+#include <QString> // For typeToString and stringToType
+#include <vector>
+#include <map>
+
 
 // This header defines types and structures common to video loading,
 // processing, and tracking to avoid circular dependencies.
+
+// Forward declaration
+class WormObject; // If WormObject needs to be referenced here, though likely not for these structs
+
+
+/**
+ * @brief Represents a single point in a worm's track.
+ */
+struct WormTrackPoint {
+    int frameNumberOriginal; // Frame number in the original video
+    cv::Point2f position;    // Position (centroid) in video coordinates
+    QRectF roi;              // ROI used for this worm at this frame (in video coordinates)
+    // Potentially add confidence, state (e.g. merged) if needed per point
+};
+
+/**
+ * @brief Typedef for storing all tracks.
+ * Maps a unique worm ID to its sequence of track points.
+ */
+typedef std::map<int, std::vector<WormTrackPoint>> AllWormTracks;
+
+
+/**
+ * @brief Structure to pass initial information about a worm to be tracked.
+ */
+struct InitialWormInfo {
+    int id;
+    QRectF initialRoi; // ROI on the keyframe in video coordinates
+};
+
+
+// Enum for the type of tracked item
+enum class ItemType {
+    Worm,
+    StartPoint,
+    EndPoint,
+    ControlPoint,
+    Undefined // Default or unassigned
+};
+
+// Helper functions to convert ItemType to/from QString for display and editing
+inline QString itemTypeToString(ItemType type) {
+    switch (type) {
+    case ItemType::Worm: return "Worm";
+    case ItemType::StartPoint: return "Start Point";
+    case ItemType::EndPoint: return "End Point";
+    case ItemType::ControlPoint: return "Control Point";
+    case ItemType::Undefined: return "Undefined";
+    default: return "Unknown";
+    }
+}
+
+inline ItemType stringToItemType(const QString& typeStr) {
+    if (typeStr == "Worm") return ItemType::Worm;
+    if (typeStr == "Start Point") return ItemType::StartPoint;
+    if (typeStr == "End Point") return ItemType::EndPoint;
+    if (typeStr == "Control Point") return ItemType::ControlPoint;
+    return ItemType::Undefined;
+}
+
+// Structure to hold data for each item in the table
+struct TrackedItem {
+    int id;                         // Unique auto-generated ID
+    //QColor color;                   // Color for worm ROI
+    ItemType type;                  // Type of the item
+    QPointF initialCentroid;        // Centroid in video coordinates at selection
+    QRectF initialBoundingBox;      // Bounding box in video coordinates at selection
+    int frameOfSelection;           // Frame number where this item was selected
+    // Add other relevant data as needed, e.g., color for display
+};
+
 
 /**
  * @brief Defines available thresholding algorithms.

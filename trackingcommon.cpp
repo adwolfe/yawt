@@ -2,6 +2,7 @@
 #include "trackingcommon.h" // Lowercase include
 #include <QtMath>       // For qSqrt, qPow
 
+
 namespace TrackingHelper {
 
 DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
