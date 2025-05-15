@@ -22,9 +22,6 @@
 #include <opencv2/imgproc.hpp>
 
 #include "trackingcommon.h" // Contains ThresholdAlgorithm and ThresholdSettings
-#include "trackeditemdata.h"  // Contains AllWormTracks, WormTrackPoint
-#include "trackdata.h"
-
 /**
  * @brief Defines the interaction modes for the VideoLoader widget.
  */

@@ -11,7 +11,6 @@
 #include <opencv2/core.hpp>
 
 #include "trackingcommon.h" // For ThresholdSettings
-#include "trackeditemdata.h" // For InitialWormInfo, AllWormTracks, WormTrackPoint
 #include "wormobject.h"      // For WormObject
 #include "videoprocessor.h"
 #include "wormtracker.h"

@@ -6,7 +6,6 @@
 #include <QString>
 #include <vector>
 #include "trackingcommon.h" // Contains ThresholdAlgorithm definition
-#include "trackeditemdata.h"
 
 // Forward declarations
 namespace Ui {

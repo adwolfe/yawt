@@ -1,7 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "itemtypedelegate.h"
-#include "trackdata.h"
+#include "trackingcommon.h"
 
 #include <QComboBox>
 #include <QItemDelegate>
