@@ -129,28 +129,66 @@ struct ThresholdSettings {
 
 namespace TrackingHelper {
 
+/**
+     * @brief Structure to hold information about a detected blob.
+     */
 struct DetectedBlob {
-    QPointF centroid;
-    QRectF boundingBox;
-    double area = 0.0;
-    std::vector<cv::Point> contourPoints; // Store the actual contour points
-    bool isValid = false;
+    QPointF centroid;                     // Centroid of the blob in video coordinates
+    QRectF boundingBox;                   // Bounding box of the blob in video coordinates
+    double area = 0.0;                    // Area of the blob
+    std::vector<cv::Point> contourPoints; // Raw contour points (in video coordinates)
+    bool isValid = false;                 // Flag indicating if this blob data is valid
+
+    // Default constructor
+    DetectedBlob() : area(0.0), isValid(false) {}
 };
 
 /**
-     * @brief Finds the blob in a binary image closest to a click point.
-     * @param binaryImage The input 8-bit single-channel binary image (CV_8UC1). Non-zero pixels are foreground.
-     * @param clickPointVideoCoords The click coordinates in the same space as the binaryImage.
+     * @brief Finds the blob in a binary image closest to a click point, or the one containing the click.
+     * This function first looks for blobs whose bounding box contains the click.
+     * If none are found, it then looks for the blob whose centroid is closest to the click,
+     * within a specified maximum distance.
+     * @param binaryImage The input 8-bit single-channel binary image (CV_8UC1).
+     * Non-zero pixels are considered foreground.
+     * @param clickPointVideoCoords The click coordinates in the same coordinate system as the binaryImage.
      * @param minArea Minimum contour area to be considered a valid blob.
-     * @param maxDistanceForSelection Max distance from click to a blob's centroid if click is not inside any bounding box.
-     * @return DetectedBlob structure. Check DetectedBlob::isValid.
+     * @param maxArea Maximum contour area to be considered a valid blob.
+     * @param maxDistanceForSelection Max distance (in pixels) from click to a blob's centroid
+     * if the click is not inside any blob's bounding box.
+     * @return DetectedBlob structure. Check DetectedBlob::isValid to see if a suitable blob was found.
      */
 DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
                              const QPointF& clickPointVideoCoords,
                              double minArea = 5.0,
-                             double maxDistanceForSelection = 30.0); // Pixels
+                             double maxArea = 10000.0, // Added maxArea
+                             double maxDistanceForSelection = 30.0);
+
+/**
+     * @brief Finds all plausible blobs within a given ROI of a binary image.
+     * @param binaryImage The input 8-bit single-channel binary image (CV_8UC1).
+     * @param roiToSearch The QRectF defining the region of interest in video coordinates.
+     * @param minArea Minimum area for a blob to be considered.
+     * @param maxArea Maximum area for a blob to be considered.
+     * @param minAspectRatio Minimum aspect ratio (width/height or height/width, always >= 1).
+     * @param maxAspectRatio Maximum aspect ratio.
+     * @return QList of DetectedBlob structs for all plausible blobs found.
+     */
+QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
+                                               const QRectF& roiToSearch,
+                                               double minArea,
+                                               double maxArea,
+                                               double minAspectRatio,
+                                               double maxAspectRatio);
 
 } // namespace TrackingHelper
+
+namespace TrackingConstants {
+constexpr double DEFAULT_MIN_WORM_AREA = 10.0;
+constexpr double DEFAULT_MAX_WORM_AREA = 1000.0; // Adjust as needed
+constexpr double MERGE_AREA_FACTOR = 1.5; // Factor to determine if a blob is likely merged
+const double DEFAULT_MIN_ASPECT_RATIO = 0.1; // e.g. long thin objects
+const double DEFAULT_MAX_ASPECT_RATIO = 10.0;
+}
 
 
 #endif // TRACKINGCOMMON_H

@@ -22,7 +22,7 @@ SOURCES += \
     videofiletreeview.cpp \
     videoloader.cpp \
     videoprocessor.cpp \
-    wormobject.cpp \
+    #wormobject.cpp \
     wormtablemodel.cpp \
     wormtracker.cpp
 
@@ -36,7 +36,7 @@ HEADERS += \
     videofiletreeview.h \
     videoloader.h \
     videoprocessor.h \
-    wormobject.h \
+    #wormobject.h \
     wormtablemodel.h \
     wormtracker.h
 

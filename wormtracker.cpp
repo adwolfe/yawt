@@ -1,10 +1,15 @@
-#include "wormtracker.h"
-#include <QDebug> // For logging
+// wormtracker.cpp
+#include "wormtracker.h" // Lowercase include
+#include <QDebug>
+#include <QtMath>       // For qSqrt, qPow, qAbs
+#include <algorithm>    // For std::sort, std::min_element etc. if needed
+#include <limits>       // For std::numeric_limits
+#include <QLineF>
 
-// A reasonable default size for ROI adjustment, can be made configurable
-const QSizeF DEFAULT_ROI_SIZE_MULTIPLIER(3.0, 3.0); // ROI will be roughly 3x worm size
-const QSizeF MIN_ROI_SIZE(20, 20); // Minimum ROI size in pixels
-const QSizeF DEFAULT_WORM_SIZE_GUESS(10, 2); // A very rough guess for worm dimensions (width, height)
+
+// ROI adjustment parameters
+const QSizeF DEFAULT_ROI_SIZE_MULTIPLIER_WORMTRACKER(2.5, 2.5); // ROI will be roughly X times worm size
+const QSizeF MIN_ROI_SIZE_WORMTRACKER(30, 30);                  // Minimum ROI size in pixels
 
 WormTracker::WormTracker(int wormId,
                          QRectF initialRoi,
@@ -19,13 +24,21 @@ WormTracker::WormTracker(int wormId,
     m_videoKeyFrameNum(videoKeyFrameNum),
     m_framesToProcess(nullptr),
     m_trackingActive(false),
-    m_estimatedWormSize(DEFAULT_WORM_SIZE_GUESS) // Initialize with a guess
+    m_currentState(TrackerState::Idle),
+    m_estimatedWormSize(initialRoi.size().isValid() ? initialRoi.size() : QSizeF(20,5)), // Initial guess from selection ROI
+    m_minBlobArea(TrackingConstants::DEFAULT_MIN_WORM_AREA),
+    m_maxBlobArea(TrackingConstants::DEFAULT_MAX_WORM_AREA),
+    m_minAspectRatio(TrackingConstants::DEFAULT_MIN_ASPECT_RATIO),
+    m_maxAspectRatio(TrackingConstants::DEFAULT_MAX_ASPECT_RATIO)
 {
-    qDebug() << "WormTracker created for worm ID:" << m_wormId << "Direction:" << (direction == TrackingDirection::Forward ? "Forward" : "Backward");
+    qDebug() << "WormTracker (" << this << ") created for worm ID:" << m_wormId
+             << "Direction:" << (direction == TrackingDirection::Forward ? "Forward" : "Backward")
+             << "Initial ROI:" << initialRoi;
+    m_lastPrimaryBlob.isValid = false; // Initialize last tracked blob as invalid
 }
 
 WormTracker::~WormTracker() {
-    qDebug() << "WormTracker destroyed for worm ID:" << m_wormId;
+    qDebug() << "WormTracker (" << this << ") destroyed for worm ID:" << m_wormId;
 }
 
 void WormTracker::setFrames(const std::vector<cv::Mat>* frames) {
@@ -34,168 +47,227 @@ void WormTracker::setFrames(const std::vector<cv::Mat>* frames) {
 
 void WormTracker::startTracking() {
     if (!m_framesToProcess || m_framesToProcess->empty()) {
+        qWarning() << "WormTracker ID" << m_wormId << ": No frames provided to tracker.";
         emit errorOccurred(m_wormId, "No frames provided to tracker.");
         emit finished();
         return;
     }
 
     m_trackingActive = true;
-    qDebug() << "Worm ID" << m_wormId << "starting tracking. Frames:" << m_framesToProcess->size();
+    m_currentState = TrackerState::TrackingSingle; // Assume starting by tracking a single target
+    m_lastPrimaryBlob.isValid = false; // Reset for new tracking session
+    qDebug() << "WormTracker ID" << m_wormId << ": Starting tracking. Frames:" << m_framesToProcess->size()
+             << "Initial ROI:" << m_currentRoi;
 
     for (size_t i = 0; i < m_framesToProcess->size() && m_trackingActive; ++i) {
         if (QThread::currentThread()->isInterruptionRequested()) {
-            m_trackingActive = false;
+            qDebug() << "WormTracker ID" << m_wormId << ": Tracking interrupted by thread request.";
+            m_trackingActive = false; // Ensure loop terminates
             break;
         }
 
+        // If paused by split detection, loop here until resumed or stopped
+        while(m_currentState == TrackerState::PausedAwaitingSplitDecision && m_trackingActive) {
+            QThread::msleep(30); // Sleep briefly to yield execution
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                m_trackingActive = false; // Check interruption again
+            }
+        }
+        if (!m_trackingActive) break; // Exit outer loop if stopped during pause
+
+
         const cv::Mat& currentFrame = (*m_framesToProcess)[i];
         if (currentFrame.empty()) {
-            qWarning() << "Worm ID" << m_wormId << "encountered empty frame at sequence index" << i;
+            qWarning() << "WormTracker ID" << m_wormId << ": Encountered empty frame at sequence index" << i;
             continue;
         }
 
-        cv::Point2f foundPosition;
-        bool success = processSingleFrame(currentFrame, static_cast<int>(i), m_currentRoi, foundPosition);
+        cv::Point2f primaryTargetPosition;
+        // processSingleFrame handles internal state changes and signal emissions
+        bool foundTargetThisFrame = processSingleFrame(currentFrame, static_cast<int>(i), m_currentRoi, primaryTargetPosition);
 
-        int originalFrameNumber;
-        if (m_direction == TrackingDirection::Forward) {
-            originalFrameNumber = m_videoKeyFrameNum + static_cast<int>(i);
-        } else { // Backward
-            // For reversed frames, index 0 is keyframe-1, index 1 is keyframe-2, etc.
-            originalFrameNumber = m_videoKeyFrameNum - 1 - static_cast<int>(i);
+        // Note: positionUpdated and splitDetectedAndPaused are emitted from within processSingleFrame.
+        // State changes to WormObject (like Lost) are also signaled from there or by TrackingManager.
+
+        if (!foundTargetThisFrame && m_currentState != TrackerState::PausedAwaitingSplitDecision) {
+            // If no target was found and we are not paused waiting for a split decision
+            // (e.g., truly lost, not just ambiguous)
+            // The positionUpdated signal would have been emitted with 0 plausible blobs.
+            // TrackingManager can then decide if this means the WormObject state is "Lost".
+            qDebug() << "WormTracker ID" << m_wormId << ": Target lost at sequence index" << i;
+            // emit stateChanged(m_wormId, WormObject::TrackingState::Lost); // Let TrackingManager decide this based on patterns
         }
 
-        if (originalFrameNumber < 0) { // Should not happen if keyframe logic is correct
-            qWarning() << "Worm ID" << m_wormId << "calculated negative original frame number:" << originalFrameNumber;
-            // Potentially stop or handle this error
-        }
-
-
-        if (success) {
-            m_lastKnownPosition = foundPosition;
-            emit positionUpdated(m_wormId, originalFrameNumber, QPointF(foundPosition.x, foundPosition.y), m_currentRoi);
-            // Basic ROI adjustment - could be more sophisticated
-            m_currentRoi = adjustRoi(foundPosition, currentFrame.size(), m_estimatedWormSize);
-        } else {
-            // Lost track or other issue
-            emit stateChanged(m_wormId, WormObject::TrackingState::Lost);
-            // For now, we stop tracking this worm if lost. Could implement re-detection.
-            // m_trackingActive = false; // Option: stop if lost
-            // Or, keep the ROI large and hope it reappears
-            qDebug() << "Worm ID" << m_wormId << "lost track at original frame" << originalFrameNumber;
-        }
-
-        if (i % 10 == 0) { // Emit progress every 10 frames
+        // Emit progress
+        if (i % 10 == 0 || i == m_framesToProcess->size() - 1) {
             emit progress(m_wormId, static_cast<int>((static_cast<double>(i + 1) / m_framesToProcess->size()) * 100.0));
         }
-    }
+    } // End of frame processing loop
 
-    if (!m_trackingActive) {
-        qDebug() << "Worm ID" << m_wormId << "tracking was stopped or interrupted.";
-    } else {
-        qDebug() << "Worm ID" << m_wormId << "finished processing all frames.";
+    qDebug() << "WormTracker ID" << m_wormId << ": Finished processing loop. Final state:" << static_cast<int>(m_currentState)
+             << "TrackingActive:" << m_trackingActive;
+    if (m_trackingActive) { // If loop completed naturally
+        emit progress(m_wormId, 100);
     }
-    emit progress(m_wormId, 100);
-    emit finished();
+    emit finished(); // Signal that this tracker instance's work is done
 }
 
 void WormTracker::stopTracking() {
+    qDebug() << "WormTracker ID" << m_wormId << ": stopTracking() called. Current state:" << static_cast<int>(m_currentState);
     m_trackingActive = false;
+    // If paused, setting m_trackingActive to false will break the wait loop in startTracking()
 }
 
-/**
- * @brief Processes a single frame to find the worm.
- * @param frame The thresholded image (full frame, not ROI yet).
- * @param sequenceFrameIndex The index in the current (forward/reversed) sequence.
- * @param currentRoi The current ROI for this worm (input), will be updated if worm moves significantly.
- * @param foundPosition Output: The found position of the worm.
- * @return True if worm found, false otherwise.
- *
- * This is a placeholder implementation. You'll need to replace this with
- * your actual blob detection and tracking logic within the ROI.
- */
-bool WormTracker::processSingleFrame(const cv::Mat& fullFrame, int /*sequenceFrameIndex*/, QRectF& roiRectF, cv::Point2f& foundPosition) {
-    if (fullFrame.empty()) return false;
+void WormTracker::resumeTrackingWithNewTarget(const TrackingHelper::DetectedBlob& targetBlob) {
+    qDebug() << "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called. Centroid:" << targetBlob.centroid;
+    if (!targetBlob.isValid) {
+        qWarning() << "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called with invalid blob. May stop tracking.";
+        m_currentState = TrackerState::Idle; // Or some error state
+        m_trackingActive = false; // Stop if no valid target
+        return;
+    }
+    m_lastKnownPosition = cv::Point2f(static_cast<float>(targetBlob.centroid.x()), static_cast<float>(targetBlob.centroid.y()));
+    m_currentRoi = targetBlob.boundingBox; // Or adjustRoi based on it for next frame
+    m_estimatedWormSize = targetBlob.boundingBox.size().isValid() ? targetBlob.boundingBox.size() : QSizeF(20,5);
+    m_lastPrimaryBlob = targetBlob; // This is our new primary target
+    m_currentState = TrackerState::TrackingSingle; // Resume normal tracking state
+    qDebug() << "WormTracker ID" << m_wormId << ": Resumed. New ROI:" << m_currentRoi;
+    // m_trackingActive should already be true if we were paused; otherwise, startTracking loop handles it.
+}
 
-    // Ensure ROI is within frame boundaries
-    cv::Rect roiCv(static_cast<int>(roiRectF.x()), static_cast<int>(roiRectF.y()),
-                   static_cast<int>(roiRectF.width()), static_cast<int>(roiRectF.height()));
-    roiCv = roiCv & cv::Rect(0, 0, fullFrame.cols, fullFrame.rows);
+void WormTracker::confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoi) {
+    qDebug() << "WormTracker ID" << m_wormId << ": confirmTargetIsMerged. EntityID:" << mergedEntityID << "Centroid:" << mergedBlobCentroid;
+    m_currentState = TrackerState::TrackingMerged;
+    m_lastKnownPosition = cv::Point2f(static_cast<float>(mergedBlobCentroid.x()), static_cast<float>(mergedBlobCentroid.y()));
+    m_currentRoi = mergedBlobRoi; // Manager dictates the ROI for the merged blob
+    m_estimatedWormSize = mergedBlobRoi.size().isValid() ? mergedBlobRoi.size() : QSizeF(30,10); // Update estimated size
+    m_lastPrimaryBlob.isValid = true; // Assume the merged blob is now the primary
+    m_lastPrimaryBlob.centroid = mergedBlobCentroid;
+    m_lastPrimaryBlob.boundingBox = mergedBlobRoi;
+    // Area might be tricky here, could be passed or roughly estimated
+    m_lastPrimaryBlob.area = mergedBlobRoi.width() * mergedBlobRoi.height();
+}
 
-    if (roiCv.width <= 0 || roiCv.height <= 0) {
-        // ROI is invalid or outside frame, try to reset or use last known position
-        // For now, signal as lost.
-        qWarning() << "Worm ID" << m_wormId << "ROI is invalid:" << roiRectF.x() << roiRectF.y() << roiRectF.width() << roiRectF.height();
+
+QList<TrackingHelper::DetectedBlob> WormTracker::findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi) {
+    // This function now directly uses the TrackingHelper function
+    // It passes the tracker's specific plausibility parameters.
+    return TrackingHelper::findAllPlausibleBlobsInRoi(fullFrame, roi,
+                                                      m_minBlobArea, m_maxBlobArea,
+                                                      m_minAspectRatio, m_maxAspectRatio);
+}
+
+
+bool WormTracker::processSingleFrame(const cv::Mat& frame, int sequenceFrameIndex, QRectF& roiInOut, cv::Point2f& foundPositionOut) {
+    QList<TrackingHelper::DetectedBlob> blobs = findPlausibleBlobsInRoi(frame, roiInOut);
+    int plausibleBlobsFound = blobs.count();
+    TrackingHelper::DetectedBlob currentPrimaryTarget; // The blob we decide to follow this frame
+    currentPrimaryTarget.isValid = false;
+
+    int originalFrameNumber;
+    if (m_direction == TrackingDirection::Forward) {
+        originalFrameNumber = m_videoKeyFrameNum + sequenceFrameIndex;
+    } else {
+        originalFrameNumber = m_videoKeyFrameNum - 1 - sequenceFrameIndex;
+    }
+
+    if (plausibleBlobsFound == 0) {
+        // No plausible blobs found in the current ROI
+        if (m_currentState != TrackerState::TrackingMerged) { // If not expecting a large merged blob that might have temporarily vanished
+            m_currentState = TrackerState::TrackingSingle; // Revert to single, but it's effectively lost
+        }
+        m_lastPrimaryBlob.isValid = false;
+        emit positionUpdated(m_wormId, originalFrameNumber, QPointF(m_lastKnownPosition.x, m_lastKnownPosition.y), roiInOut, 0, 0.0);
+        // Try to expand ROI slightly to re-acquire next frame? For now, just report 0.
+        // roiInOut = adjustRoi(m_lastKnownPosition, frame.size(), m_estimatedWormSize * 1.5); // Example expansion
         return false;
     }
 
-    cv::Mat roiImage = fullFrame(roiCv);
-    if (roiImage.empty()) return false;
+    // Select the primary target from the plausible blobs
+    if (plausibleBlobsFound == 1) {
+        currentPrimaryTarget = blobs.first();
+        if (m_currentState == TrackerState::TrackingMerged && currentPrimaryTarget.area < m_maxBlobArea * 0.75) {
+            // Was tracking a merged blob, now see a single, smaller blob. Potential split.
+            qDebug() << "WormTracker ID" << m_wormId << ": Was TrackingMerged, now sees 1 smaller blob. Potential split.";
+            m_currentState = TrackerState::PausedAwaitingSplitDecision;
+            emit splitDetectedAndPaused(m_wormId, originalFrameNumber, blobs); // Send this single blob as a split candidate
+            m_lastPrimaryBlob.isValid = false;
+            return false; // Paused
+        }
+        m_currentState = TrackerState::TrackingSingle; // Confidently tracking one
+    } else { // plausibleBlobsFound > 1
+        if (m_currentState == TrackerState::TrackingMerged) {
+            // Was tracking a merged blob, now sees multiple smaller blobs. Clear split.
+            qDebug() << "WormTracker ID" << m_wormId << ": Was TrackingMerged, now sees" << plausibleBlobsFound << "blobs. Clear split.";
+            m_currentState = TrackerState::PausedAwaitingSplitDecision;
+            emit splitDetectedAndPaused(m_wormId, originalFrameNumber, blobs);
+            m_lastPrimaryBlob.isValid = false;
+            return false; // Paused
+        } else { // Not TrackingMerged, but seeing multiple blobs (TrackingSingle or PotentialMergeOrSplit)
+            // This could be a single worm fragmenting, or other worms entering ROI.
+            // Try to pick the "best" candidate to continue following.
+            // Heuristic: if a previous primary blob existed, pick the new blob closest to it.
+            // Otherwise, pick the largest or closest to ROI center.
+            double minDistanceSq = std::numeric_limits<double>::max();
+            QPointF referencePoint = m_lastPrimaryBlob.isValid ? m_lastPrimaryBlob.centroid : roiInOut.center();
 
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(roiImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    if (contours.empty()) {
-        return false; // No contours found in ROI
-    }
-
-    // Find the largest contour (simplistic approach, assumes worm is largest blob in ROI)
-    double maxArea = 0;
-    int largestContourIdx = -1;
-    for (size_t i = 0; i < contours.size(); i++) {
-        double area = cv::contourArea(contours[i]);
-        if (area > maxArea) {
-            maxArea = area;
-            largestContourIdx = static_cast<int>(i);
+            for (const auto& blob : blobs) {
+                double dx = blob.centroid.x() - referencePoint.x();
+                double dy = blob.centroid.y() - referencePoint.y();
+                double distSq = dx * dx + dy * dy;
+                if (distSq < minDistanceSq) {
+                    minDistanceSq = distSq;
+                    currentPrimaryTarget = blob;
+                }
+            }
+            // If the chosen primary target is significantly different from the last (e.g. much smaller, different position)
+            // AND there were other strong candidates, this could be a split of a single worm.
+            if (m_lastPrimaryBlob.isValid && currentPrimaryTarget.isValid &&
+                (currentPrimaryTarget.area < m_lastPrimaryBlob.area * 0.6 || QLineF(currentPrimaryTarget.centroid, m_lastPrimaryBlob.centroid).length() > qMax(m_estimatedWormSize.width(), m_estimatedWormSize.height())) &&
+                plausibleBlobsFound > 1) {
+                qDebug() << "WormTracker ID" << m_wormId << ": Single target may have split/fragmented. Pausing.";
+                m_currentState = TrackerState::PausedAwaitingSplitDecision;
+                emit splitDetectedAndPaused(m_wormId, originalFrameNumber, blobs);
+                m_lastPrimaryBlob.isValid = false;
+                return false; // Paused
+            }
+            m_currentState = TrackerState::PotentialMergeOrSplit; // Still ambiguous
         }
     }
 
-    if (largestContourIdx != -1 && maxArea > 5) { // Min area threshold
-        cv::Moments mu = cv::moments(contours[largestContourIdx]);
-        if (mu.m00 > 0) { // Avoid division by zero
-            // Position relative to ROI top-left
-            cv::Point2f roiRelativePosition(static_cast<float>(mu.m10 / mu.m00),
-                                            static_cast<float>(mu.m01 / mu.m00));
-            // Convert to full frame coordinates
-            foundPosition.x = static_cast<float>(roiCv.x + roiRelativePosition.x);
-            foundPosition.y = static_cast<float>(roiCv.y + roiRelativePosition.y);
+    // If a primary target was identified and we are not paused
+    if (currentPrimaryTarget.isValid) {
+        m_lastKnownPosition = cv::Point2f(static_cast<float>(currentPrimaryTarget.centroid.x()), static_cast<float>(currentPrimaryTarget.centroid.y()));
+        foundPositionOut = m_lastKnownPosition; // Output the found position
+        m_estimatedWormSize = currentPrimaryTarget.boundingBox.size().isValid() ? currentPrimaryTarget.boundingBox.size() : m_estimatedWormSize;
+        roiInOut = adjustRoi(m_lastKnownPosition, frame.size(), m_estimatedWormSize); // Adjust ROI for the next frame
+        m_lastPrimaryBlob = currentPrimaryTarget; // Update the last primary blob
 
-            // Basic update of estimated worm size from bounding box of contour
-            cv::Rect br = cv::boundingRect(contours[largestContourIdx]);
-            m_estimatedWormSize.setWidth(br.width);
-            m_estimatedWormSize.setHeight(br.height);
-
-            return true;
-        }
+        emit positionUpdated(m_wormId, originalFrameNumber, currentPrimaryTarget.centroid, roiInOut, plausibleBlobsFound, currentPrimaryTarget.area);
+        return true;
     }
+
+    // Fallback: if no valid primary target chosen (should be rare if blobs were found)
+    m_lastPrimaryBlob.isValid = false;
+    emit positionUpdated(m_wormId, originalFrameNumber, QPointF(m_lastKnownPosition.x, m_lastKnownPosition.y), roiInOut, plausibleBlobsFound, 0.0);
     return false;
 }
 
-/**
- * @brief Adjusts the ROI based on the worm's current position and estimated size.
- * @param wormCenter Center of the worm in full frame coordinates.
- * @param frameSize Size of the full video frame.
- * @param wormSizeGuess A QSizeF representing the estimated width and height of the worm.
- * @return A new QRectF for the ROI.
- */
-QRectF WormTracker::adjustRoi(const cv::Point2f& wormCenter, const cv::Size& frameSize, const QSizeF& wormSizeGuess) {
-    // Make ROI larger than the worm itself to allow for movement and prevent clipping
-    qreal roiWidth = qMax(MIN_ROI_SIZE.width(), wormSizeGuess.width() * DEFAULT_ROI_SIZE_MULTIPLIER.width());
-    qreal roiHeight = qMax(MIN_ROI_SIZE.height(), wormSizeGuess.height() * DEFAULT_ROI_SIZE_MULTIPLIER.height());
 
-    // Center the ROI around the worm
+QRectF WormTracker::adjustRoi(const cv::Point2f& wormCenter, const cv::Size& frameSize, const QSizeF& wormSizeGuess) {
+    QSizeF currentWormSize = wormSizeGuess.isValid() ? wormSizeGuess : QSizeF(20,5); // Use default if guess invalid
+
+    qreal roiWidth = qMax(MIN_ROI_SIZE_WORMTRACKER.width(), currentWormSize.width() * DEFAULT_ROI_SIZE_MULTIPLIER_WORMTRACKER.width());
+    qreal roiHeight = qMax(MIN_ROI_SIZE_WORMTRACKER.height(), currentWormSize.height() * DEFAULT_ROI_SIZE_MULTIPLIER_WORMTRACKER.height());
     qreal roiX = wormCenter.x - roiWidth / 2.0;
     qreal roiY = wormCenter.y - roiHeight / 2.0;
 
     // Clamp ROI to frame boundaries
     roiX = qMax(0.0, qMin(roiX, static_cast<qreal>(frameSize.width) - roiWidth));
     roiY = qMax(0.0, qMin(roiY, static_cast<qreal>(frameSize.height) - roiHeight));
-
-    // Ensure width/height are not extending beyond frame boundaries if clamped at 0,0
+    // Ensure width/height are also clamped if they were initially larger than the frame
     roiWidth = qMin(roiWidth, static_cast<qreal>(frameSize.width) - roiX);
     roiHeight = qMin(roiHeight, static_cast<qreal>(frameSize.height) - roiY);
 
-
     return QRectF(roiX, roiY, roiWidth, roiHeight);
 }
-

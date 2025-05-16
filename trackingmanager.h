@@ -1,4 +1,3 @@
-// TrackingManager.h
 #ifndef TRACKINGMANAGER_H
 #define TRACKINGMANAGER_H
 
@@ -9,11 +8,12 @@
 #include <QRectF>
 #include <QThread>
 #include <opencv2/core.hpp>
+#include <set> // For std::set in merge logic
 
-#include "trackingcommon.h" // For ThresholdSettings
-#include "wormobject.h"      // For WormObject
-#include "videoprocessor.h"
-#include "wormtracker.h"
+#include "trackingcommon.h" // For ThresholdSettings (ensure lowercase if filename is)
+#include "wormobject.h"      // For WormObject (ensure lowercase)
+#include "videoprocessor.h"  // Lowercase include
+#include "wormtracker.h"     // Lowercase include, for WormTracker class and its signals
 
 class TrackingManager : public QObject {
     Q_OBJECT
@@ -24,24 +24,38 @@ public:
 
 public slots:
     void startFullTrackingProcess(const QString& videoPath,
-                                  int keyFrameNum,
+                                  int keyFrameNum, // 0-indexed
                                   const std::vector<InitialWormInfo>& initialWorms,
                                   const ThresholdSettings& settings,
                                   int totalFramesInVideo);
     void cancelTracking();
 
 private slots:
+    // VideoProcessor signals
     void handleInitialProcessingComplete(const std::vector<cv::Mat>& forwardFrames,
                                          const std::vector<cv::Mat>& reversedFrames,
                                          double fps,
                                          cv::Size frameSize);
     void handleVideoProcessingError(const QString& errorMessage);
     void handleVideoProcessingProgress(int percentage);
-    void handleWormPositionUpdated(int wormId, int originalFrameNumber, QPointF newPosition, QRectF newRoi);
+
+    // WormTracker signals (Updated and New)
+    void handleWormPositionUpdated(int wormId,
+                                   int originalFrameNumber,
+                                   QPointF newPosition,
+                                   QRectF newRoi,
+                                   int plausibleBlobsFoundInRoi, // New param
+                                   double primaryBlobArea);      // New param
+
+    void handleWormSplitDetectedAndPaused(int wormId,
+                                          int originalFrameNumber,
+                                          const QList<TrackingHelper::DetectedBlob>& detectedBlobs); // New slot
+
     void handleWormStateChanged(int wormId, WormObject::TrackingState newState, int associatedWormId);
     void handleWormTrackerFinished();
     void handleWormTrackerError(int wormId, QString errorMessage);
-    //void handleWormTrackerProgress(int wormId, int percentDone);
+    void handleWormTrackerProgress(int wormId, int percentDone);
+
 
 signals:
     void overallTrackingProgress(int percentage);
@@ -52,6 +66,7 @@ signals:
     void trackingFailed(const QString& reason);
     void trackingCancelled();
 
+
 private:
     void cleanupThreadsAndObjects();
     void launchWormTrackers();
@@ -60,6 +75,29 @@ private:
     void outputTracksToDebug(const AllWormTracks& tracks) const;
     bool outputTracksToCsv(const AllWormTracks& tracks, const QString& outputFileName) const;
 
+    // --- Merge/Split Management ---
+    struct WormFrameInfo { // Renamed from WormFrameState for clarity
+        QPointF position;
+        QRectF roi;
+        int plausibleBlobsInRoi; // Number of blobs tracker saw in its ROI
+        double primaryBlobArea;   // Area of the blob it decided to follow
+        WormTracker* reportingTracker = nullptr;
+        bool isValid = true; // Was this info successfully reported?
+    };
+    // Key: frame number, Value: Map of wormID to its reported info in that frame
+    QMap<int, QMap<int, WormFrameInfo>> m_frameInfos;
+    int m_frameInfoHistorySize = 3; // How many recent frames of info to keep for context
+
+    // Represents a group of merged worms. Key: a representative worm ID from the group (e.g., lowest ID).
+    // Value: the set of all worm IDs currently considered part of that merge.
+    QMap<int, QSet<int>> m_mergedGroups;
+    // Tracks which merged group a worm currently belongs to. Key: wormId, Value: representative ID of its merge group.
+    QMap<int, int> m_wormToMergeGroupMap;
+
+    void processFrameDataForMergesAndSplits(int frameNumber);
+
+
+    // --- Configuration & State (as before) ---
     QString m_videoPath;
     int m_keyFrameNum;
     std::vector<InitialWormInfo> m_initialWormInfos;
@@ -68,23 +106,23 @@ private:
     bool m_isTrackingRunning;
     bool m_cancelRequested;
 
-    VideoProcessor* m_videoProcessor;       // Worker object
-    QThread* m_videoProcessorThread;        // Thread for VideoProcessor
+    VideoProcessor* m_videoProcessor;
+    QThread* m_videoProcessorThread;
     std::vector<cv::Mat> m_processedForwardFrames;
     std::vector<cv::Mat> m_processedReversedFrames;
     double m_videoFps;
     cv::Size m_videoFrameSize;
 
     QMap<int, WormObject*> m_wormObjectsMap;
-    QList<WormTracker*> m_wormTrackers;     // Pointers to worker objects
-    QList<QThread*> m_trackerThreads;       // Pointers to QThreads for WormTrackers
+    QList<WormTracker*> m_wormTrackers;
+    QList<QThread*> m_trackerThreads;
     int m_expectedTrackersToFinish;
     int m_finishedTrackersCount;
 
     int m_videoProcessingProgress;
     QMap<WormTracker*, int> m_individualTrackerProgress;
 
-    AllWormTracks m_finalTracks;
+    AllWormTracks m_finalTracks; // std::map
 };
 
 #endif // TRACKINGMANAGER_H
