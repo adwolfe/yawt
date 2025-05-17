@@ -8,10 +8,9 @@
 #include <QMetaEnum>
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
-#include <QColor>
+#include <QColor> // Added for TrackedItem color
 #include <QString> // For typeToString and stringToType
-#include <vector>
-#include <map>
+#include <map>     // For AllWormTracks
 
 
 // This header defines types and structures common to video loading,
@@ -44,6 +43,7 @@ typedef std::map<int, std::vector<WormTrackPoint>> AllWormTracks;
 struct InitialWormInfo {
     int id;
     QRectF initialRoi; // ROI on the keyframe in video coordinates
+    QColor color;      // Color associated with this worm
 };
 
 
@@ -79,20 +79,18 @@ inline ItemType stringToItemType(const QString& typeStr) {
 // Structure to hold data for each item in the table
 struct TrackedItem {
     int id;                         // Unique auto-generated ID
-    //QColor color;                   // Color for worm ROI
+    QColor color;                   // Color for worm ROI and track
     ItemType type;                  // Type of the item
     QPointF initialCentroid;        // Centroid in video coordinates at selection
     QRectF initialBoundingBox;      // Bounding box in video coordinates at selection
     int frameOfSelection;           // Frame number where this item was selected
-    // Add other relevant data as needed, e.g., color for display
+    // Add other relevant data as needed
 };
 
 
 /**
  * @brief Defines available thresholding algorithms.
- * (Moved from videoloader.h)
  */
-
 enum class ThresholdAlgorithm {
     Global,         // Simple global threshold
     Otsu,           // Otsu's binarization (auto global threshold)
@@ -103,7 +101,6 @@ enum class ThresholdAlgorithm {
 
 /**
  * @brief Structure to hold parameters for thresholding and pre-processing.
- * (Moved from TrackData.h, uses ThresholdAlgorithm defined above)
  */
 struct ThresholdSettings {
     // General setting for interpreting pixel values (background vs. foreground)

@@ -1,521 +1,460 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
+#include "blobtablemodel.h"
+#include "colordelegate.h"
 #include "itemtypedelegate.h"
-#include "trackingcommon.h"
-
-#include <QComboBox>
-#include <QItemDelegate>
-#include <QTableView>
+#include "trackingprogressdialog.h"
+#include "trackingmanager.h"
+// No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
+// #include "videoloader.h"
+// #include "trackingcommon.h"
 
 #include <QStandardPaths>
 #include <QFileDialog>
 #include <QIcon>
 #include <QMessageBox>
+#include <QDebug>
+#include <QButtonGroup> // For m_interactionModeButtonGroup
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
-    , ui(new Ui::MainWindow),m_trackingProgressDialog(nullptr), m_trackingManager(nullptr)
+    , ui(new Ui::MainWindow)
+    , m_blobTableModel(nullptr)
+    , m_colorDelegate(nullptr)
+    , m_itemTypeDelegate(nullptr)
+    , m_trackingProgressDialog(nullptr)
+    , m_trackingManager(nullptr)
+    , m_interactionModeButtonGroup(new QButtonGroup(this))
 {
     ui->setupUi(this);
-    QString initialDirectory = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-    ui->videoTreeView->setRootDirectory(initialDirectory);
-    ui->dirSelected->setText(initialDirectory);
-    ui->framePosition->setKeyboardTracking(0);
-    ui->frameSlider->setMinimum(0);
-    ui->frameSlider->setSingleStep(10);
-    ui->frameSlider->setPageStep(100);
-    ui->playPauseButton->setObjectName("playPauseButton"); // Crucial for QSS selector
-    ui->playPauseButton->setCheckable(true); // Make it toggle state
-    ui->playPauseButton->setChecked(false);
 
+    // Model and Delegates
+    m_blobTableModel = new BlobTableModel(this);
+    ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
 
-    // Slots that update main window
-    QObject::connect(ui->playPauseButton, &QToolButton::toggled, [&](bool checked) {
-        if (checked) {
-            qDebug() << "State changed to: Checked (Pause)";
-            ui->videoLoader->play();
-            ui->playPauseButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MediaPlaybackPause));
-        } else {
-            qDebug() << "State changed to: Unchecked (Play)";
-            ui->videoLoader->pause();
-            ui->playPauseButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MediaPlaybackStart));
-        }
-    });
+    m_itemTypeDelegate = new ItemTypeDelegate(this);
+    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
 
-    connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
-    connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
-    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
+    m_colorDelegate = new ColorDelegate(this);
+    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
 
-    //Threshold settings slots
-    connect(ui->globalRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdModeSettings);
-    connect(ui->adaptiveRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdModeSettings);
-    connect(ui->globalThreshAutoCheck, &QCheckBox::clicked, this, &MainWindow::setGlobalMode);
-    connect(ui->globalThreshSlider, &QAbstractSlider::valueChanged, this, &MainWindow::setGlobalThreshValue);
-    connect(ui->globalThreshValueSpin, &QSpinBox::valueChanged, this, &MainWindow::setGlobalThreshValue);
-    connect(ui->adaptiveTypeCombo, &QComboBox::currentIndexChanged, this, &MainWindow::setAdaptiveMode);
-    connect(ui->blockSizeSpin, &QSpinBox::valueChanged, this, &MainWindow::setBlockSize);
-    connect(ui->tuningDoubleSpin, &QDoubleSpinBox::valueChanged, this, &MainWindow::setTuning);
-    connect(ui->blurCheck, &QCheckBox::clicked, this, &MainWindow::setPreBlur);
-    connect(ui->blurKernelSpin, &QSpinBox::valueChanged, this, &MainWindow::setBlurKernel);
-    connect(ui->videoLoader, &VideoLoader::wormBlobSelected, this, &MainWindow::onWormBlobDetected);
-    connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
+    ui->wormTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    ui->wormTableView->horizontalHeader()->setStretchLastSection(true);
 
-
-
-
-    // Slots that update the video loader
-    connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
-    //connect(ui->playPauseButton, &QToolButton::clicked, ui->videoLoader, &VideoLoader::play);
-    connect(ui->framePosition, &QSpinBox::valueChanged, this, &MainWindow::seekFrame);
-    connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
-    connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeToggle);
-    connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeToggle);
-    connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeToggle);
-    connect(ui->showThreshButton, &QToolButton::clicked, this, &MainWindow::threshModeViewToggle);
-    connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::selectionModeToggle);
-    connect(ui->trackModeButton, &QToolButton::clicked, this, &MainWindow::trackModeToggle);
-    connect(ui->bgCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateBackgroundColor);
-    // Close out by updating threshold settings in videoLoader
-
-    ui->globalThreshSlider->setValue(50);
-    ui->globalThreshAutoCheck->setChecked(true);
-    setGlobalMode(true);
-    ui->adaptiveRadio->setChecked(true);
-    ui->adaptiveTypeCombo->setCurrentIndex(0);
-    ui->blockSizeSpin->setValue(5);
-    setBlockSize(ui->blockSizeSpin->value());
-    ui->tuningDoubleSpin->setValue(2.00);
-    setTuning(ui->blurKernelSpin->value());
-    ui->blurKernelSpin->setValue(5);
-    setBlurKernel(ui->blurKernelSpin->value());
-    ui->blurCheck->setChecked(true);
-    setPreBlur(ui->blurCheck->isChecked());
-    setAdaptiveMode(0);
-    ui->globalGroupBox->setEnabled(false);
-
-    m_wormTableModel = new WormTableModel(this);
-
-    ui->wormTableView->setModel(m_wormTableModel);
-
-    ItemTypeDelegate *typeDelegate = new ItemTypeDelegate(this);
-
-    ui->wormTableView->setItemDelegateForColumn(WormTableModel::Column::Type, typeDelegate);
-    ui->wormTableView->setSizeAdjustPolicy(QTableView::AdjustToContents);
+    // Tracking Manager
     m_trackingManager = new TrackingManager(this);
-    connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracks);
-    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &MainWindow::setVisibleTracks);
 
-    panModeToggle();
+    setupInteractionModeButtonGroup(); // Setup for exclusive interaction mode buttons
+    setupConnections();
+    initializeUIStates();
 
+    // Set initial modes in VideoLoader (after connections are set up)
+    // Interaction mode buttons will be synced by syncInteractionModeButtons via the signal
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
 
+    // View mode buttons will be synced by syncViewModeOptionButtons via the signal
+    // Set initial active view modes in VideoLoader if desired, e.g., show Blobs by default
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
+    // ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::None, true); // Or start with nothing
 }
-
-// SLOTS
-
-void MainWindow::chooseWorkingDirectory()
-// Selects the root directory for the Tree View structure.
-{
-    QString currDir = ui->dirSelected->text();
-    QString selectedDir = QFileDialog::getExistingDirectory(this, "Choose working directory", currDir,  QFileDialog::ShowDirsOnly );
-
-    if (!selectedDir.isEmpty()) {
-        QFileInfo fileInfo(selectedDir);
-        currDir = fileInfo.absoluteFilePath();
-    }
-
-    ui->dirSelected->setText(currDir);
-    ui->videoTreeView->setRootDirectory(currDir);
-
-}
-
-void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize)
-// Called upon loading a video
-{
-    ui->frameSlider->setMaximum(totalFrames);
-    ui->frameSlider->setValue(0);
-    ui->framePosition->setMaximum(totalFrames);
-    ui->framePosition->setValue(0);
-    ui->fpsLabel->setText(QString::number(fps)+" fps");
-}
-
-void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame)
-// When the video loader changes the frame (like, during playing)
-{
-    ui->framePosition->setValue(currentFrameNumber);
-    ui->frameSlider->setSliderPosition(currentFrameNumber);
-}
-
-void MainWindow::frameSliderMoved(int value)
-{
-    ui->videoLoader->seekToFrame(value, 1);
-    ui->framePosition->setValue(value);
-}
-
-
-void MainWindow::seekFrame(int frame)
-{
-    ui->videoLoader->seekToFrame(frame, 1);
-    ui->frameSlider->setSliderPosition(frame);
-}
-
-
-void MainWindow::panModeToggle()
-{
-    ui->videoLoader->setInteractionMode(InteractionMode::PanZoom);
-    ui->panModeButton->setChecked(true);
-    ui->roiModeButton->setChecked(false);
-    ui->selectionModeButton->setChecked(false);
-    ui->trackModeButton->setChecked(false);
-}
-void MainWindow::roiModeToggle()
-{
-    ui->videoLoader->setInteractionMode(InteractionMode::DrawROI);
-    ui->panModeButton->setChecked(false);
-    ui->roiModeButton->setChecked(true);
-    ui->selectionModeButton->setChecked(false);
-    ui->trackModeButton->setChecked(false);
-}
-void MainWindow::trackModeToggle()
-{
-    ui->videoLoader->setInteractionMode(InteractionMode::ViewEditTracks);
-    ui->panModeButton->setChecked(false);
-    ui->roiModeButton->setChecked(false);
-    ui->selectionModeButton->setChecked(false);
-    ui->trackModeButton->setChecked(true);
-}
-void MainWindow::selectionModeToggle()
-{
-    if(!m_threshModeToggle)
-    {
-        threshModeViewToggle();
-
-    }
-    ui->videoLoader->setInteractionMode(InteractionMode::SelectWorms);
-    ui->panModeButton->setChecked(false);
-    ui->roiModeButton->setChecked(false);
-    ui->selectionModeButton->setChecked(true);
-    ui->trackModeButton->setChecked(false);
-}
-void MainWindow::cropModeToggle()
-{
-    ui->videoLoader->setInteractionMode(InteractionMode::Crop);
-}
-
-void MainWindow::threshModeViewToggle()
-{
-    m_threshModeToggle = !m_threshModeToggle;
-    ui->videoLoader->toggleThresholdView(m_threshModeToggle);
-}
-
-
-
-void MainWindow::updateBackgroundColor(int index)
-{
-    ui->videoLoader->setAssumeLightBackground(index);
-}
-
-void MainWindow::updateThresholdModeSettings()
-{
-    auto senderObject = sender();
-    if (senderObject == ui->adaptiveRadio) {
-        ui->globalRadio->setChecked(false);
-        ui->adaptiveGroupBox->setEnabled(true);
-        ui->globalGroupBox->setEnabled(false);
-        if (ui->adaptiveTypeCombo->currentIndex() == 0)
-        {
-            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
-        } else
-            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
-    } else if (senderObject == ui->globalRadio){
-        ui->adaptiveRadio->setChecked(false);
-        ui->globalGroupBox->setEnabled(true);
-        ui->adaptiveGroupBox->setEnabled(false);
-        if(ui->globalThreshAutoCheck->isChecked())
-        {
-            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
-        } else
-            ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
-    }
-}
-
-void MainWindow::setGlobalThreshValue(int value)
-{
-    auto senderObject = sender();
-    if (senderObject == ui->globalThreshSlider)
-    {
-        ui->globalThreshValueSpin->setValue(value);
-    } else
-        ui->globalThreshSlider->setValue(value);
-    ui->videoLoader->setThresholdValue(value);
-}
-
-void MainWindow::setGlobalMode(bool checked)
-{
-    if (checked)
-    {
-        ui->globalThreshSlider->setDisabled(true);
-        ui->globalThreshValueSpin->setDisabled(true);
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
-    } else {
-        ui->globalThreshSlider->setEnabled(true);
-        ui->globalThreshValueSpin->setEnabled(true);
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
-    }
-}
-
-void MainWindow::setAdaptiveMode(int value)
-{
-    if (value == 0)
-    {
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
-    } else
-    {
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
-    }
-}
-
-void MainWindow::setBlockSize(int value)
-{
-    ui->videoLoader->setAdaptiveThresholdBlockSize(value);
-}
-void MainWindow::setTuning(double value)
-{
-    ui->videoLoader->setAdaptiveThresholdC(value);
-}
-void MainWindow::setPreBlur(bool checked)
-{
-    ui->videoLoader->setEnableBlur(checked);
-    if(checked)
-    {
-        ui->blurKernelSpin->setEnabled(true);
-    } else {
-        ui->blurKernelSpin->setDisabled(true);
-    }
-}
-void MainWindow::setBlurKernel(int value)
-{
-    ui->videoLoader->setBlurKernelSize(value);
-}
-
-void MainWindow::onWormBlobDetected(const QPointF& centroid, const QRectF& bbox) {
-    // Get current frame number from VideoLoader or store it when selection mode starts
-    int currentFrame = ui->videoLoader->getCurrentFrameNumber(); // Assuming videoLoader is your VideoLoader instance
-    m_wormTableModel->addItem(centroid, bbox, currentFrame, ItemType::Worm); // Default to "Worm"
-}
-
-
-void MainWindow::onStartTrackingActionTriggered() {
-
-
-    qDebug() << "Attempting to start tracking action...";
-
-    // 1. Check videoLoader instance
-    if (!ui->videoLoader) { // Assuming 'videoLoader' is your VideoLoader instance pointer
-        qCritical() << "FATAL: videoLoader is nullptr in onStartTrackingActionTriggered()!";
-        QMessageBox::critical(this, "Error", "VideoLoader is not available. Cannot start tracking.");
-        return;
-    }
-    qDebug() << "videoLoader instance seems valid.";
-
-    // 2. Check if a video is actually loaded
-    if (!ui->videoLoader->isVideoLoaded()) {
-        qWarning() << "WARNING: No video loaded in VideoLoader.";
-        QMessageBox::warning(this, "Tracking Setup", "No video is currently loaded. Please load a video first.");
-        return;
-    }
-    qDebug() << "VideoLoader reports video is loaded.";
-
-    // 3. Get the video path and THOROUGHLY check it
-    QString videoPath = ui->videoLoader->getCurrentVideoPath(); // You confirmed this getter exists
-    qDebug() << "Retrieved videoPath from videoLoader: \"" << videoPath << "\"";
-    qDebug() << "videoPath.isNull():" << videoPath.isNull() << "videoPath.isEmpty():" << videoPath.isEmpty();
-
-    // An empty string is usually fine for QString assignment, but a truly invalid one is not.
-    // If videoPath is coming from an uninitialized or corrupted source, it's bad.
-    if (videoPath.isNull()) { // isNull() is true for a default-constructed QString, which is fine.
-        // However, if it's null AND you expected a path, that's a logic error upstream.
-        qWarning() << "WARNING: videoPath is null. This might be okay if default, but check if a path was expected.";
-    }
-    if (videoPath.isEmpty() && ui->videoLoader->isVideoLoaded()) {
-        // This is a strange state: video is loaded, but path is empty.
-        qCritical() << "CRITICAL: Video is loaded, but videoPath is empty! Check VideoLoader::currentFilePath initialization and loadVideo logic.";
-        QMessageBox::critical(this, "Error", "Video path is empty despite video being loaded. Cannot start tracking.");
-        return;
-    }
-    // If after loading a video, videoPath is still empty, something is wrong in VideoLoader::loadVideo
-    // or how currentFilePath is managed.
-
-    // 4. Gather other parameters (and log them too for good measure)
-    int keyFrame = ui->videoLoader->getCurrentFrameNumber();
-    ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
-    int numWorms = m_wormTableModel->getAllItems().count(); // Example
-    int totalFrames = ui->videoLoader->getTotalFrames();
-
-    qDebug() << "Keyframe:" << keyFrame << "NumWorms:" << numWorms << "TotalFrames:" << totalFrames;
-    // You can even log parts of the 'settings' struct if you suspect it.
-
-    // 5. Ensure the dialog pointer is valid before use
-    if (!m_trackingProgressDialog) {
-        qDebug() << "Creating new TrackingProgressDialog instance.";
-        m_trackingProgressDialog = new TrackingProgressDialog(this);
-        // IMPORTANT: Connect signals only ONCE when the dialog is created.
-        connect(m_trackingProgressDialog, &TrackingProgressDialog::beginTrackingRequested,
-                this, &MainWindow::handleBeginTrackingFromDialog);
-        connect(m_trackingProgressDialog, &TrackingProgressDialog::cancelTrackingRequested,
-                this, &MainWindow::handleCancelTrackingFromDialog);
-        qDebug() << "Preparing to connect TrackingManager signals to TrackingProgressDialog slots.";
-        qDebug() << "MainWindow: m_trackingManager pointer is:" << m_trackingManager;
-        qDebug() << "MainWindow: m_trackingProgressDialog pointer is:" << m_trackingProgressDialog;
-
-        if (!m_trackingManager) {
-            qCritical() << "FATAL: m_trackingManager is nullptr right before connect() at mainwindow.cpp line ~340!";
-            QMessageBox::critical(this, "Critical Error", "TrackingManager is not initialized. Cannot proceed.");
-            return; // Or handle error appropriately
-        }
-
-        if (!m_trackingProgressDialog) {
-            qCritical() << "FATAL: m_trackingProgressDialog is nullptr right before connect() at mainwindow.cpp line ~340!";
-            // This might happen if the dialog creation logic (if (!m_trackingProgressDialog) { ... }) has an issue
-            // or if the dialog was unexpectedly deleted.
-            QMessageBox::critical(this, "Critical Error", "TrackingProgressDialog is not initialized. Cannot proceed.");
-            return; // Or handle error appropriately
-        }
-
-        qDebug() << "Both m_trackingManager and m_trackingProgressDialog appear to be non-null.";
-        qDebug() << "Attempting connect at mainwindow.cpp line ~340...";
-
-        if (m_trackingManager) { // Ensure trackingManager also exists
-            connect(m_trackingManager, &TrackingManager::trackingStatusUpdate,
-                    m_trackingProgressDialog, &TrackingProgressDialog::updateStatusMessage);
-            connect(m_trackingManager, &TrackingManager::overallTrackingProgress,
-                    m_trackingProgressDialog, &TrackingProgressDialog::updateOverallProgress);
-            connect(m_trackingManager, &TrackingManager::trackingFinishedSuccessfully,
-                    m_trackingProgressDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
-            connect(m_trackingManager, &TrackingManager::trackingFailed,
-                    m_trackingProgressDialog, &TrackingProgressDialog::onTrackingFailed);
-            connect(m_trackingManager, &TrackingManager::trackingCancelled,
-                    m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
-        } else {
-            qCritical() << "FATAL: m_trackingManager is nullptr! Cannot connect progress dialog signals.";
-            // Handle this error appropriately
-            return;
-        }
-    } else {
-        qDebug() << "Reusing existing TrackingProgressDialog instance.";
-    }
-    qDebug() << "m_trackingProgressDialog pointer:" << m_trackingProgressDialog;
-
-
-    qDebug() << "Attempting to call m_trackingProgressDialog->setTrackingParameters(...)";
-    // The actual call that leads to the crash
-    m_trackingProgressDialog->setTrackingParameters(videoPath, keyFrame, settings, numWorms, totalFrames);
-    qDebug() << "Successfully called setTrackingParameters. Showing dialog...";
-
-    m_trackingProgressDialog->exec();
-    qDebug() << "TrackingProgressDialog exec() finished.";
-}
-
-
-void MainWindow::handleBeginTrackingFromDialog() {
-    // This slot is called when "Begin" is clicked in the dialog
-    // Gather final parameters (especially InitialWormInfo from WormTableModel)
-    QString videoPath = ui->videoLoader->getCurrentVideoPath();
-    int keyFrame = ui->videoLoader->getCurrentFrameNumber(); // Or stored keyframe
-    ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
-    int totalFrames = ui->videoLoader->getTotalFrames();
-
-    std::vector<InitialWormInfo> initialWorms;
-    const QList<TrackedItem>& items = m_wormTableModel->getAllItems();
-    for(const TrackedItem& item : items) {
-        // For now, only consider items marked as "Worm" as starting points for tracking
-        if(item.type == ItemType::Worm) {
-            InitialWormInfo info;
-            info.id = item.id; // The model's auto-generated ID
-            // The initial ROI for tracking will be the bounding box from selection
-            info.initialRoi = item.initialBoundingBox;
-            initialWorms.push_back(info);
-        }
-    }
-
-    if (initialWorms.empty()) {
-        QMessageBox::warning(this, "Tracking Error", "No worms selected or marked for tracking.");
-        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("No worms to track.");
-        return;
-    }
-
-    // TODO: Get expected worm count from UI if you have that feature
-    // int expectedWormCount = ui->expectedWormsSpinBox->value();
-
-    m_trackingManager->startFullTrackingProcess(videoPath, keyFrame, initialWorms, settings, totalFrames);
-}
-
-void MainWindow::handleCancelTrackingFromDialog() {
-    // This slot is called when "Cancel" is clicked in the dialog WHILE tracking is active
-    if (m_trackingManager) { // And check if tracking is actually running
-        m_trackingManager->cancelTracking();
-    }
-}
-
-void MainWindow::acceptTracks(const AllWormTracks& tracks)
-{
-    qDebug() << "Tracks sent to videoLoader: " << tracks.size();
-    ui->videoLoader->setTracksToDisplay(tracks);
-}
-
-void MainWindow::setVisibleTracks(const QItemSelection &selected, const QItemSelection &deselected)
-{
-    // Presumed to be in a slot within your MainWindow class,
-    // connected to the selectionModel's selectionChanged signal,
-    // or called when you need to update visible tracks.
-
-    QSet<int> selectedWormIDs; // Member variable or local
-
-    if (ui->wormTableView && m_wormTableModel) { // Check if pointers are valid
-        QItemSelectionModel *selectionModel = ui->wormTableView->selectionModel();
-        if (selectionModel) {
-            QModelIndexList selectedRows = selectionModel->selectedRows();
-            // Clear previous selections if you're rebuilding the set each time
-            selectedWormIDs.clear();
-
-            for (const QModelIndex &rowIdx : selectedRows) {
-            // selectedRows() gives one index per selected row, typically from the first column.
-            // We use its row() to get the model row.
-                int row = rowIdx.row();
-
-                // Get the model index for the ID column
-                QModelIndex idModelIndex = m_wormTableModel->index(row, WormTableModel::Column::ID);
-
-                if (idModelIndex.isValid()) {
-                    bool conversionOk;
-                    // Assuming the ID is stored/displayed as an int or convertible string
-                    int wormId = m_wormTableModel->data(idModelIndex, Qt::DisplayRole).toInt(&conversionOk);
-
-                    if (conversionOk) {
-                        selectedWormIDs.insert(wormId);
-                    } else {
-                        qWarning() << "Could not convert worm ID to int for row" << row
-                                   << "at column" << WormTableModel::Column::ID;
-                    }
-                }
-            }
-        }
-    }
-
-    qDebug() << "Selected Worm IDs:" << selectedWormIDs;
-    ui->videoLoader->setVisibleTrackIDs(selectedWormIDs);
-}
-//void MainWindow::onDeleteSelectedWormClicked() {
-//    QModelIndexList selectedRows = ui->wormTableView->selectionModel()->selectedRows();
-//    // Sort rows in descending order to correctly remove multiple rows
-//    std::sort(selectedRows.begin(), selectedRows.end(), [](const QModelIndex& a, const QModelIndex& b){
-//        return a.row() > b.row();
-//    });
-//    for (const QModelIndex &index : selectedRows) {
-//        m_wormTableModel->removeRows(index.row(), 1);
-//    }
-//}
 
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+void MainWindow::setupInteractionModeButtonGroup() {
+    // Interaction Mode Buttons - These should be checkable QToolButtons
+    m_interactionModeButtonGroup->addButton(ui->panModeButton);
+    m_interactionModeButtonGroup->addButton(ui->roiModeButton);
+    m_interactionModeButtonGroup->addButton(ui->cropModeButton);
+    m_interactionModeButtonGroup->addButton(ui->selectionModeButton);  // Rename in UI to "Edit Blobs"
+    m_interactionModeButtonGroup->addButton(ui->trackModeButton);      // Rename in UI to "Edit Tracks"
+    m_interactionModeButtonGroup->setExclusive(true);
+    // No QButtonGroup for view modes as they are independent toggles now
+}
+
+
+void MainWindow::setupConnections() {
+    // File/Directory
+    connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
+
+    // VideoLoader basic signals
+    connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
+    connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
+    connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
+
+    // Playback controls
+    connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) {
+        if (checked) { ui->videoLoader->play(); ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-pause", QIcon(":/icons/pause.png"))); }
+        else { ui->videoLoader->pause(); ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png"))); }
+    });
+    connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
+    connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
+
+    // Interaction Mode Buttons -> VideoLoader (via slots that call VideoLoader)
+    connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeButtonClicked);
+    connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeButtonClicked);
+    connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeButtonClicked);
+    connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::editBlobsModeButtonClicked);
+    connect(ui->trackModeButton, &QToolButton::clicked, this, &MainWindow::editTracksModeButtonClicked);
+
+    // View Mode Option Buttons (Checkable QToolButtons or QCheckBoxes) -> VideoLoader
+    // Assuming ui->showThreshButton is checkable
+    connect(ui->viewThreshButton, &QToolButton::toggled, this, &MainWindow::onViewThresholdToggled);
+    // Add these connections once you have the buttons in your UI:
+    connect(ui->viewBlobsButton, &QToolButton::toggled, this, &MainWindow::onViewBlobsToggled);
+    connect(ui->viewTracksButton, &QToolButton::toggled, this, &MainWindow::onViewTracksToggled);
+
+
+    // Thresholding UI -> VideoLoader & MainWindow
+    connect(ui->globalRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdAlgorithmSettings);
+    connect(ui->adaptiveRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdAlgorithmSettings);
+    connect(ui->globalThreshAutoCheck, &QCheckBox::toggled, this, &MainWindow::setGlobalThresholdType);
+    connect(ui->globalThreshSlider, &QAbstractSlider::valueChanged, this, &MainWindow::setGlobalThresholdValue);
+    connect(ui->globalThreshValueSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::setGlobalThresholdValue);
+    connect(ui->adaptiveTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::setAdaptiveThresholdType);
+    connect(ui->blockSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::setAdaptiveBlockSize);
+    connect(ui->tuningDoubleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MainWindow::setAdaptiveCValue);
+    connect(ui->blurCheck, &QCheckBox::toggled, this, &MainWindow::setBlurEnabled);
+    connect(ui->blurKernelSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::setBlurKernel);
+    connect(ui->bgCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::setBackgroundAssumption);
+
+    // VideoLoader -> MainWindow (for adding blobs)
+    connect(ui->videoLoader, &VideoLoader::blobClickedForAddition, this, &MainWindow::handleBlobClickedForAddition);
+
+    // BlobTableModel -> VideoLoader
+    connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
+    connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
+
+    // Table View Selection -> VideoLoader
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, &MainWindow::updateVisibleTracksInVideoLoader);
+
+    // Video File Tree View -> VideoLoader
+    connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
+
+    // Tracking Process
+    connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
+    connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
+    // Connections for TrackingProgressDialog are made when it's created/shown
+}
+
+void MainWindow::initializeUIStates() {
+    QString initialDirectory = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    ui->videoTreeView->setRootDirectory(initialDirectory);
+    ui->dirSelected->setText(initialDirectory);
+
+    ui->framePosition->setKeyboardTracking(false);
+    ui->frameSlider->setMinimum(0);
+    ui->frameSlider->setSingleStep(10);
+    ui->frameSlider->setPageStep(100);
+    ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png")));
+
+
+    ui->globalThreshSlider->setValue(127);
+    ui->globalThreshAutoCheck->setChecked(false);
+    ui->adaptiveRadio->setChecked(true);
+    updateThresholdAlgorithmSettings();
+
+    ui->adaptiveTypeCombo->setCurrentIndex(0);
+    setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
+
+    ui->blockSizeSpin->setValue(11);
+    setAdaptiveBlockSize(ui->blockSizeSpin->value());
+
+    ui->tuningDoubleSpin->setValue(2.0);
+    setAdaptiveCValue(ui->tuningDoubleSpin->value());
+
+    ui->blurCheck->setChecked(false);
+    setBlurEnabled(ui->blurCheck->isChecked());
+    ui->blurKernelSpin->setValue(5);
+    setBlurKernel(ui->blurKernelSpin->value());
+
+    ui->bgCombo->setCurrentIndex(0);
+    setBackgroundAssumption(ui->bgCombo->currentIndex());
+
+    // Initial button states will be set by sync slots when VideoLoader emits initial modes
+}
+
+
+// --- Mode Toggling Slots ---
+void MainWindow::panModeButtonClicked() {
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
+}
+void MainWindow::roiModeButtonClicked() {
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::DrawROI);
+}
+void MainWindow::cropModeButtonClicked() {
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::Crop);
+}
+void MainWindow::editBlobsModeButtonClicked() {
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditBlobs);
+    // Ensure threshold view is active for blob editing if it's a prerequisite
+    if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Threshold)) {
+        ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, true);
+    }
+}
+void MainWindow::editTracksModeButtonClicked() {
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks);
+    // Ensure tracks view is active
+    if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Tracks)) {
+        ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
+    }
+}
+
+// --- View Mode Option Toggle Slots (New) ---
+void MainWindow::onViewThresholdToggled(bool checked) {
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, checked);
+}
+void MainWindow::onViewBlobsToggled(bool checked) {
+    // Assuming you have a ui->viewBlobsButton that is checkable
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, checked);
+}
+void MainWindow::onViewTracksToggled(bool checked) {
+    // Assuming you have a ui->viewTracksButton that is checkable
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, checked);
+}
+// Optional:
+// void MainWindow::onViewNoneClicked() {
+//     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, false);
+//     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, false);
+//     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, false);
+// }
+
+
+// --- Slots to sync UI buttons with VideoLoader's state ---
+void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode) {
+    // This will be handled by QButtonGroup if buttons are added to it correctly
+    // Or, if not using QButtonGroup for these specific buttons for some reason:
+    ui->panModeButton->setChecked(newMode == VideoLoader::InteractionMode::PanZoom);
+    ui->roiModeButton->setChecked(newMode == VideoLoader::InteractionMode::DrawROI);
+    ui->cropModeButton->setChecked(newMode == VideoLoader::InteractionMode::Crop);
+    ui->selectionModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditBlobs);
+    ui->trackModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditTracks);
+    qDebug() << "MainWindow: Interaction mode UI synced to" << static_cast<int>(newMode);
+}
+
+void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes) {
+    // Update the checked state of your independent view mode buttons
+    ui->viewThreshButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Threshold));
+    // Assuming you have ui->viewBlobsButton and ui->viewTracksButton:
+    ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
+    ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
+    qDebug() << "MainWindow: View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
+}
+
+
+// --- Thresholding Callbacks ---
+void MainWindow::updateThresholdAlgorithmSettings() {
+    bool isAdaptive = ui->adaptiveRadio->isChecked();
+    ui->globalRadio->setChecked(!isAdaptive);
+    ui->adaptiveGroupBox->setEnabled(isAdaptive);
+    ui->globalGroupBox->setEnabled(!isAdaptive);
+
+    if (isAdaptive) {
+        setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
+    } else {
+        setGlobalThresholdType(ui->globalThreshAutoCheck->isChecked());
+    }
+}
+
+void MainWindow::setGlobalThresholdType(bool isAuto) {
+    ui->globalThreshSlider->setDisabled(isAuto);
+    ui->globalThreshValueSpin->setDisabled(isAuto);
+    if (isAuto) {
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
+    } else {
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
+        ui->videoLoader->setThresholdValue(ui->globalThreshSlider->value());
+    }
+}
+
+void MainWindow::setAdaptiveThresholdType(int index) {
+    if (index == 0) {
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
+    } else {
+        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
+    }
+}
+void MainWindow::setGlobalThresholdValue(int value) {
+    if (sender() == ui->globalThreshSlider) ui->globalThreshValueSpin->setValue(value);
+    else if (sender() == ui->globalThreshValueSpin) ui->globalThreshSlider->setValue(value);
+    else { ui->globalThreshSlider->setValue(value); ui->globalThreshValueSpin->setValue(value); }
+    if (!ui->globalThreshAutoCheck->isChecked()) {
+        ui->videoLoader->setThresholdValue(value);
+    }
+}
+void MainWindow::setAdaptiveBlockSize(int value) {
+    int validValue = value; if (validValue < 3) validValue = 3; if (validValue % 2 == 0) validValue++;
+    if (ui->blockSizeSpin->value() != validValue) ui->blockSizeSpin->setValue(validValue);
+    ui->videoLoader->setAdaptiveThresholdBlockSize(validValue);
+}
+void MainWindow::setAdaptiveCValue(double value) {
+    ui->videoLoader->setAdaptiveThresholdC(value);
+}
+void MainWindow::setBlurEnabled(bool checked) {
+    ui->videoLoader->setEnableBlur(checked);
+    ui->blurKernelSpin->setEnabled(checked);
+}
+void MainWindow::setBlurKernel(int value) {
+    int validValue = value; if (validValue < 3) validValue = 3; if (validValue % 2 == 0) validValue++;
+    if (ui->blurKernelSpin->value() != validValue) ui->blurKernelSpin->setValue(validValue);
+    ui->videoLoader->setBlurKernelSize(validValue);
+}
+void MainWindow::setBackgroundAssumption(int index) {
+    ui->videoLoader->setAssumeLightBackground(index == 0);
+}
+
+// --- Blob Handling ---
+void MainWindow::handleBlobClickedForAddition(const TrackingHelper::DetectedBlob& blobData) {
+    if (!ui->videoLoader->isVideoLoaded()) return;
+    int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+    m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, ItemType::Worm);
+}
+
+
+// --- Video Playback and Frame Navigation ---
+void MainWindow::chooseWorkingDirectory() {
+    QString currDir = ui->dirSelected->text();
+    QString selectedDir = QFileDialog::getExistingDirectory(this, "Choose working directory", currDir,  QFileDialog::ShowDirsOnly );
+    if (!selectedDir.isEmpty()) {
+        ui->dirSelected->setText(QFileInfo(selectedDir).absoluteFilePath());
+        ui->videoTreeView->setRootDirectory(QFileInfo(selectedDir).absoluteFilePath());
+    }
+}
+
+void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize) {
+    ui->frameSlider->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+    ui->frameSlider->setValue(0);
+    ui->framePosition->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+    ui->framePosition->setValue(0);
+    ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
+    ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
+}
+
+void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {
+    Q_UNUSED(currentFrame);
+    if (!ui->frameSlider->isSliderDown()) {
+        ui->frameSlider->setValue(currentFrameNumber);
+    }
+    ui->framePosition->setValue(currentFrameNumber);
+}
+
+void MainWindow::frameSliderMoved(int value) {
+    ui->videoLoader->seekToFrame(value, false);
+    if (!ui->framePosition->hasFocus()) {
+        ui->framePosition->setValue(value);
+    }
+}
+
+void MainWindow::seekFrame(int frame) {
+    ui->videoLoader->seekToFrame(frame, false);
+    if (!ui->frameSlider->isSliderDown()) {
+        ui->frameSlider->setValue(frame);
+    }
+}
+
+// --- Tracking Process ---
+void MainWindow::onStartTrackingActionTriggered() {
+    if (!ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
+        QMessageBox::warning(this, "Tracking Setup", "No video loaded."); return;
+    }
+    QString videoPath = ui->videoLoader->getCurrentVideoPath();
+    if (videoPath.isEmpty()) {
+        QMessageBox::critical(this, "Error", "Video path is empty."); return;
+    }
+
+    std::vector<InitialWormInfo> initialWorms;
+    const QList<TrackedItem>& items = m_blobTableModel->getAllItems();
+    for(const TrackedItem& item : items) {
+        if(item.type == ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
+            InitialWormInfo info;
+            info.id = item.id;
+            info.initialRoi = item.initialBoundingBox;
+            info.color = item.color;
+            initialWorms.push_back(info);
+        }
+    }
+    if (initialWorms.empty()) {
+        QMessageBox::information(this, "Tracking", "No items marked as 'Worm' in the table to track."); return;
+    }
+
+    int keyFrame = ui->videoLoader->getCurrentFrameNumber();
+    ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
+    int totalFrames = ui->videoLoader->getTotalFrames();
+
+    if (!m_trackingProgressDialog) {
+        m_trackingProgressDialog = new TrackingProgressDialog(this);
+        connect(m_trackingProgressDialog, &TrackingProgressDialog::beginTrackingRequested, this, &MainWindow::handleBeginTrackingFromDialog);
+        connect(m_trackingProgressDialog, &TrackingProgressDialog::cancelTrackingRequested, this, &MainWindow::handleCancelTrackingFromDialog);
+        connect(m_trackingManager, &TrackingManager::trackingStatusUpdate, m_trackingProgressDialog, &TrackingProgressDialog::updateStatusMessage);
+        connect(m_trackingManager, &TrackingManager::overallTrackingProgress, m_trackingProgressDialog, &TrackingProgressDialog::updateOverallProgress);
+        connect(m_trackingManager, &TrackingManager::trackingFinishedSuccessfully, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
+        connect(m_trackingManager, &TrackingManager::trackingFailed, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingFailed);
+        connect(m_trackingManager, &TrackingManager::trackingCancelled, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
+    }
+    //m_trackingProgressDialog->resetDialog();
+    m_trackingProgressDialog->setTrackingParameters(videoPath, keyFrame, settings, initialWorms.size(), totalFrames);
+    m_trackingProgressDialog->exec();
+}
+
+void MainWindow::handleBeginTrackingFromDialog() {
+    if (!m_trackingManager || !ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
+        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("Internal error: Components missing.");
+        return;
+    }
+    QString videoPath = ui->videoLoader->getCurrentVideoPath();
+    int keyFrame = ui->videoLoader->getCurrentFrameNumber();
+    ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
+    int totalFrames = ui->videoLoader->getTotalFrames();
+
+    std::vector<InitialWormInfo> initialWorms;
+    const QList<TrackedItem>& items = m_blobTableModel->getAllItems();
+    for(const TrackedItem& item : items) {
+        if(item.type == ItemType::Worm) {
+            InitialWormInfo info; info.id = item.id; info.initialRoi = item.initialBoundingBox; info.color = item.color;
+            initialWorms.push_back(info);
+        }
+    }
+    if (initialWorms.empty()) {
+        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("No worms to track."); return;
+    }
+    m_trackingManager->startFullTrackingProcess(videoPath, keyFrame, initialWorms, settings, totalFrames);
+}
+
+void MainWindow::handleCancelTrackingFromDialog() {
+    if (m_trackingManager) m_trackingManager->cancelTracking();
+}
+
+void MainWindow::acceptTracksFromManager(const AllWormTracks& tracks) {
+    qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
+    ui->videoLoader->setTracksToDisplay(tracks);
+    if (!tracks.empty()) { // Optionally switch to tracks view
+        ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
+        // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
+    }
+}
+
+// --- Table View and VideoLoader Sync ---
+void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected) {
+    Q_UNUSED(deselected);
+    QSet<int> selectedItemIDs;
+    if (ui->wormTableView && m_blobTableModel) {
+        QItemSelectionModel *selectionModel = ui->wormTableView->selectionModel();
+        if (selectionModel) {
+            QModelIndexList selectedRowsIndexes = selectionModel->selectedRows();
+            for (const QModelIndex &rowIdx : selectedRowsIndexes) {
+                QModelIndex idModelIndex = m_blobTableModel->index(rowIdx.row(), BlobTableModel::Column::ID);
+                if (idModelIndex.isValid()) {
+                    bool conversionOk;
+                    int itemId = m_blobTableModel->data(idModelIndex, Qt::DisplayRole).toInt(&conversionOk);
+                    if (conversionOk) selectedItemIDs.insert(itemId);
+                }
+            }
+        }
+    }
+    qDebug() << "MainWindow: Setting visible track/item IDs in VideoLoader:" << selectedItemIDs;
+    ui->videoLoader->setVisibleTrackIDs(selectedItemIDs);
 }

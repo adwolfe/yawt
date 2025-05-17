@@ -1,17 +1,18 @@
-#ifndef WORMTABLEMODEL_H
-#define WORMTABLEMODEL_H
+#ifndef BLOBTABLEMODEL_H
+#define BLOBTABLEMODEL_H
 
 #include <QAbstractTableModel>
 #include <QList>
 #include <QPointF>
 #include <QRectF>
+#include <QColor>
 #include "trackingcommon.h" // Contains TrackedItem and ItemType
 
-class WormTableModel : public QAbstractTableModel {
+class BlobTableModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
-    explicit WormTableModel(QObject *parent = nullptr);
+    explicit BlobTableModel(QObject *parent = nullptr);
 
     // Header:
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
@@ -29,7 +30,7 @@ public:
 
     // Custom methods for model manipulation:
     /**
-     * @brief Adds a new item to the model.
+     * @brief Adds a new item to the model and assigns it a color.
      * @param centroid The centroid of the blob in video coordinates.
      * @param boundingBox The bounding box of the blob in video coordinates.
      * @param frameNumber The frame number on which the blob was selected.
@@ -63,19 +64,38 @@ public:
     // Enum for column indices for clarity
     enum Column {
         ID = 0,
-        //Color =
-        Type = 1,
-        //CentroidX = 2, // Optional: display centroid X
-        //CentroidY = 3, // Optional: display centroid Y
-        //Frame = 4      // Optional: display frame of selection
+        Color = 1,
+        Type = 2,
+        Frame = 3,      // Frame of selection
+        CentroidX = 4,  // Optional: display centroid X
+        CentroidY = 5   // Optional: display centroid Y
         // Add more columns if needed, e.g., for bounding box details
     };
+
+signals:
+    /**
+     * @brief Emitted when the list of items in the model changes (add, remove, data modification).
+     * @param allItems The complete current list of TrackedItems in the model.
+     */
+    void itemsChanged(const QList<TrackedItem>& allItems);
+
+    /**
+     * @brief Emitted specifically when a new item's color is first assigned or changed by user.
+     * Useful for components that only care about individual color updates without needing the whole list.
+     * @param id The ID of the item.
+     * @param color The new color of the item.
+     */
+    void itemColorChanged(int id, const QColor& color);
 
 
 private:
     QList<TrackedItem> m_items;
     int m_nextId; // For auto-generating IDs
+    QList<QColor> m_predefinedColors; // List of predefined colors
+    int m_currentColorIndex; // To cycle through predefined colors
+
+    QColor getNextColor();
+    void initializeColors();
 };
 
-#endif // WORMTABLEMODEL_H
-
+#endif // BLOBTABLEMODEL_H

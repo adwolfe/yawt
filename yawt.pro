@@ -12,6 +12,8 @@ INCLUDEPATH += /opt/homebrew/include/opencv4
 LIBS += -L/opt/homebrew/lib -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio
 
 SOURCES += \
+    blobtablemodel.cpp \
+    colordelegate.cpp \
     folderfirstsortproxymodel.cpp \
     itemtypedelegate.cpp \
     main.cpp \
@@ -22,11 +24,12 @@ SOURCES += \
     videofiletreeview.cpp \
     videoloader.cpp \
     videoprocessor.cpp \
-    #wormobject.cpp \
-    wormtablemodel.cpp \
+    wormobject.cpp \
     wormtracker.cpp
 
 HEADERS += \
+    blobtablemodel.h \
+    colordelegate.h \
     folderfirstsortproxymodel.h \
     itemtypedelegate.h \
     mainwindow.h \
@@ -36,8 +39,7 @@ HEADERS += \
     videofiletreeview.h \
     videoloader.h \
     videoprocessor.h \
-    #wormobject.h \
-    wormtablemodel.h \
+    wormobject.h \
     wormtracker.h
 
 FORMS += \
