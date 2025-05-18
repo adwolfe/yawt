@@ -110,7 +110,7 @@ struct ThresholdSettings {
     ThresholdAlgorithm algorithm = ThresholdAlgorithm::Global;
 
     // --- Parameters for Global Thresholding ---
-    int globalThresholdValue = 127;
+    int globalThresholdValue = 90;
 
     // --- Parameters for Adaptive Thresholding ---
     int adaptiveBlockSize = 3;    // Must be odd, >=3.

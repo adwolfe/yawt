@@ -45,7 +45,7 @@ void VideoProcessor::startInitialProcessing(const QString& videoPath, int keyFra
     }
 
     double fps = cap.get(cv::CAP_PROP_FPS);
-    if (fps <= 0) fps = 25.0; // Default FPS if not available
+    if (fps <= 0) fps = 7.5; // Default FPS if not available
 
     cv::Size frameSize(
         static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),
@@ -133,7 +133,9 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
     }
 
     // Optional: Apply Gaussian blur (consider making kernel size/sigma part of ThresholdSettings)
-    cv::GaussianBlur(grayFrame, grayFrame, cv::Size(5, 5), 0);
+    if(settings.enableBlur) {
+        cv::GaussianBlur(grayFrame, grayFrame, cv::Size(settings.blurKernelSize, settings.blurKernelSize), settings.blurSigmaX);
+    }
 
     int thresholdTypeOpenCV = settings.assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
 

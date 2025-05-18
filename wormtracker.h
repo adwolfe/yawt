@@ -33,7 +33,7 @@ public:
     enum class TrackerState {
         Idle,                   // Not yet started or stopped
         TrackingSingle,         // Confidently tracking one target
-        PotentialMergeOrSplit,  // Seeing multiple blobs, trying to resolve or follow primary
+        PotentialMergeOrSplit,  // Seeing multiple blobs, trying to resolve or follow primary (DEFUNCT?)
         TrackingMerged,         // Knows it's tracking an entity declared as merged by manager
         PausedAwaitingSplitDecision // Detected a split and is waiting for TrackingManager
     };
@@ -53,6 +53,7 @@ public:
 
 public slots:
     void startTracking(); // Main slot to begin the tracking loop
+    void continueTracking();
     void stopTracking();  // Slot to gracefully stop tracking (e.g., on cancellation)
 
     /**
@@ -95,6 +96,7 @@ signals:
 
 
 private:
+
     // Main processing logic for a single frame
     bool processSingleFrame(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoiInOut, cv::Point2f& foundPositionOut);
     // Adjusts ROI based on found position and estimated size
@@ -108,6 +110,7 @@ private:
     cv::Point2f m_lastKnownPosition; // Last confirmed position of the primary target
     TrackingDirection m_direction;
     int m_videoKeyFrameNum; // The original frame number of the keyframe
+    int m_currFrameNum = 0; // relative to list of frames delivered (frame 0 is keyframe or keyframe-1)
 
     const std::vector<cv::Mat>* m_framesToProcess; // Pointer to the sequence of frames
     bool m_trackingActive;      // Overall active state (true if tracking loop should run)

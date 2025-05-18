@@ -796,7 +796,7 @@ QToolButton#playPauseButton:checked:hover {
              </property>
             </widget>
            </item>
-           <item row="3" column="0">
+           <item row="3" column="0" colspan="2">
             <widget class="QLabel" name="videoNameLabel">
              <property name="text">
               <string>(pick a video...)</string>
@@ -835,7 +835,7 @@ QToolButton#playPauseButton:checked:hover {
      <x>0</x>
      <y>0</y>
      <width>1102</width>
-     <height>24</height>
+     <height>37</height>
     </rect>
    </property>
   </widget>

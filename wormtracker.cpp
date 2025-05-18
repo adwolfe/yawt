@@ -59,63 +59,67 @@ void WormTracker::startTracking() {
     qDebug() << "WormTracker ID" << m_wormId << ": Starting tracking. Frames:" << m_framesToProcess->size()
              << "Initial ROI:" << m_currentRoi;
 
-    for (size_t i = 0; i < m_framesToProcess->size() && m_trackingActive; ++i) {
-        if (QThread::currentThread()->isInterruptionRequested()) {
-            qDebug() << "WormTracker ID" << m_wormId << ": Tracking interrupted by thread request.";
-            m_trackingActive = false; // Ensure loop terminates
-            break;
-        }
+    continueTracking();
+}
 
-        // If paused by split detection, loop here until resumed or stopped
-        while(m_currentState == TrackerState::PausedAwaitingSplitDecision && m_trackingActive) {
-            QThread::msleep(30); // Sleep briefly to yield execution
-            if (QThread::currentThread()->isInterruptionRequested()) {
-                m_trackingActive = false; // Check interruption again
-            }
-        }
-        if (!m_trackingActive) break; // Exit outer loop if stopped during pause
-
-
-        const cv::Mat& currentFrame = (*m_framesToProcess)[i];
-        if (currentFrame.empty()) {
-            qWarning() << "WormTracker ID" << m_wormId << ": Encountered empty frame at sequence index" << i;
-            continue;
-        }
-
-        cv::Point2f primaryTargetPosition;
-        // processSingleFrame handles internal state changes and signal emissions
-        bool foundTargetThisFrame = processSingleFrame(currentFrame, static_cast<int>(i), m_currentRoi, primaryTargetPosition);
-
-        // Note: positionUpdated and splitDetectedAndPaused are emitted from within processSingleFrame.
-        // State changes to WormObject (like Lost) are also signaled from there or by TrackingManager.
-
-        if (!foundTargetThisFrame && m_currentState != TrackerState::PausedAwaitingSplitDecision) {
-            // If no target was found and we are not paused waiting for a split decision
-            // (e.g., truly lost, not just ambiguous)
-            // The positionUpdated signal would have been emitted with 0 plausible blobs.
-            // TrackingManager can then decide if this means the WormObject state is "Lost".
-            qDebug() << "WormTracker ID" << m_wormId << ": Target lost at sequence index" << i;
-            // emit stateChanged(m_wormId, WormObject::TrackingState::Lost); // Let TrackingManager decide this based on patterns
-        }
-
-        // Emit progress
-        if (i % 10 == 0 || i == m_framesToProcess->size() - 1) {
-            emit progress(m_wormId, static_cast<int>((static_cast<double>(i + 1) / m_framesToProcess->size()) * 100.0));
-        }
-    } // End of frame processing loop
-
-    qDebug() << "WormTracker ID" << m_wormId << ": Finished processing loop. Final state:" << static_cast<int>(m_currentState)
-             << "TrackingActive:" << m_trackingActive;
-    if (m_trackingActive) { // If loop completed naturally
-        emit progress(m_wormId, 100);
+void WormTracker::continueTracking() {
+    // STEP 1: check thread status
+    if (QThread::currentThread()->isInterruptionRequested()) {
+        qDebug() << "WormTracker ID" << m_wormId << ": Tracking interrupted by thread request.";
+        m_trackingActive = false; // We're done
     }
-    emit finished(); // Signal that this tracker instance's work is done
+    if (m_trackingActive && m_currFrameNum < m_framesToProcess->size()){
+        // if we're still tracking, next check tracker state
+        const cv::Mat& currentFrame = (*m_framesToProcess)[m_currFrameNum];  // get frame to process
+        if (currentFrame.empty()) {
+            // whoops, better not process an empty frame. skip the rest
+            qWarning() << "WormTracker ID" << m_wormId << ": Encountered empty frame at sequence index" << m_currFrameNum;
+        } else {
+            // process the frame, based on the state
+            if (m_currentState != TrackerState::PausedAwaitingSplitDecision)
+            {
+                // whether we're tracking a single worm or two that are merged doesn't matter; continue tracking
+                cv::Point2f primaryTargetPosition;
+                // processSingleFrame handles internal state changes and signal emissions
+                qDebug() << "WormTracker ID" << m_wormId << ": seeking blobs";
+                bool foundTargetThisFrame = processSingleFrame(currentFrame, m_currFrameNum, m_currentRoi, primaryTargetPosition);
+                if (!foundTargetThisFrame) {
+                    // If no target was found and we are not paused waiting for a split decision
+                    // (e.g., truly lost, not just ambiguous)
+                    // The positionUpdated signal would have been emitted with 0 plausible blobs.
+                    // This can happen with inconsistent video lighting.
+                    // Need to make sure trackingmanager handles this!
+                    // emit stateChanged(m_wormId, WormObject::TrackingState::Lost);
+                    qDebug() << "WormTracker ID" << m_wormId << ": Target lost at sequence index" << m_currFrameNum;
+                    // Currently continues, hoping the worm pops back in.
+                }
+                if (m_currFrameNum % 10 == 0 || m_currFrameNum == static_cast<int>(m_framesToProcess->size()) - 1) {
+                    emit progress(m_wormId, static_cast<int>((static_cast<double>(m_currFrameNum + 1) / m_framesToProcess->size()) * 100.0));
+                }
+                m_currFrameNum ++;
+                QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
+            } else // if m_currentState == TrackerState::PausedAwaitingSplitDecision
+            {
+                // We're still waiting for TrackManager to tell us what to do...
+            }
+
+        }
+    } else { // if tracking is done or canceled
+        if (m_trackingActive) { // If loop completed naturally
+            qDebug() << "WormTracker ID" << m_wormId << ": Loop completed naturally";
+            emit progress(m_wormId, 100);
+            m_trackingActive = false;
+        }
+        qDebug() << "WormTracker ID" << m_wormId << ": Finished processing loop. Final state:" << static_cast<int>(m_currentState);
+        emit finished(); // Signal that this tracker instance's work is done
+    }
 }
 
 void WormTracker::stopTracking() {
     qDebug() << "WormTracker ID" << m_wormId << ": stopTracking() called. Current state:" << static_cast<int>(m_currentState);
     m_trackingActive = false;
-    // If paused, setting m_trackingActive to false will break the wait loop in startTracking()
+    QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
+    // If paused, setting m_trackingActive to false will close out the "continueTracking" cycle
 }
 
 void WormTracker::resumeTrackingWithNewTarget(const TrackingHelper::DetectedBlob& targetBlob) {
@@ -132,6 +136,7 @@ void WormTracker::resumeTrackingWithNewTarget(const TrackingHelper::DetectedBlob
     m_lastPrimaryBlob = targetBlob; // This is our new primary target
     m_currentState = TrackerState::TrackingSingle; // Resume normal tracking state
     qDebug() << "WormTracker ID" << m_wormId << ": Resumed. New ROI:" << m_currentRoi;
+    QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
     // m_trackingActive should already be true if we were paused; otherwise, startTracking loop handles it.
 }
 
@@ -146,6 +151,7 @@ void WormTracker::confirmTargetIsMerged(int mergedEntityID, const QPointF& merge
     m_lastPrimaryBlob.boundingBox = mergedBlobRoi;
     // Area might be tricky here, could be passed or roughly estimated
     m_lastPrimaryBlob.area = mergedBlobRoi.width() * mergedBlobRoi.height();
+    QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
 }
 
 
@@ -231,7 +237,7 @@ bool WormTracker::processSingleFrame(const cv::Mat& frame, int sequenceFrameInde
                 m_lastPrimaryBlob.isValid = false;
                 return false; // Paused
             }
-            m_currentState = TrackerState::PotentialMergeOrSplit; // Still ambiguous
+           // m_currentState = TrackerState::PotentialMergeOrSplit; // Still ambiguous
         }
     }
 
