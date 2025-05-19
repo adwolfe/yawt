@@ -135,9 +135,10 @@ struct DetectedBlob {
     double area = 0.0;                    // Area of the blob
     std::vector<cv::Point> contourPoints; // Raw contour points (in video coordinates)
     bool isValid = false;                 // Flag indicating if this blob data is valid
+    bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
     // Default constructor
-    DetectedBlob() : area(0.0), isValid(false) {}
+    DetectedBlob() : area(0.0), isValid(false), touchesROIboundary(false) {}
 };
 
 /**

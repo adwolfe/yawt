@@ -151,9 +151,10 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             aspectRatio = 1.0 / aspectRatio; // Ensure aspect ratio is >= 1 for easier comparison
         }
 
-        if (aspectRatio < minAspectRatio || aspectRatio > maxAspectRatio) {
-            continue; // Filter by aspect ratio
-        }
+        // For now, I don't care what the aspect ratio is of these worms.
+        //if (aspectRatio < minAspectRatio || aspectRatio > maxAspectRatio) {
+        //    continue; // Filter by aspect ratio
+        //}
 
         cv::Moments mu = cv::moments(contourInRoi);
         if (mu.m00 > 0) { // Check for valid moments (non-zero area)
@@ -178,6 +179,9 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             plausibleBlobs.append(blob);
         }
     }
+    std::sort(plausibleBlobs.begin(), plausibleBlobs.end(), [](const DetectedBlob& a, const DetectedBlob& b) {
+        return a.area > b.area; // For descending order; largest blob first
+    });
     return plausibleBlobs;
 }
 

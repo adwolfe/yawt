@@ -563,7 +563,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             if (!m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
             QPainterPath path;
             QColor trackColor = getTrackColor(trackId);
-            QPen trackPen(trackColor, 2);
+            QPen trackPen(trackColor, 1);
             painter.setPen(trackPen);
             bool firstPoint = true;
             for (const WormTrackPoint& pt : trackPoints) {
@@ -572,9 +572,9 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                 if (currentPointWidget.x() < 0) continue;
                 if (firstPoint) { path.moveTo(currentPointWidget); firstPoint = false; }
                 else { path.lineTo(currentPointWidget); }
-                painter.setBrush(trackColor);
-                painter.drawEllipse(currentPointWidget, 2, 2);
-                painter.setBrush(Qt::NoBrush);
+                //painter.setBrush(trackColor);
+                //painter.drawEllipse(currentPointWidget, 1, 1);
+                //painter.setBrush(Qt::NoBrush);
             }
             if (!firstPoint) { painter.strokePath(path, trackPen); }
         }

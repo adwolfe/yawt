@@ -9,25 +9,21 @@ BlobTableModel::BlobTableModel(QObject *parent)
 }
 
 void BlobTableModel::initializeColors() {
-    m_predefinedColors << QColor(Qt::red).lighter(120)
-    << QColor(Qt::green).lighter(120)
-    << QColor(Qt::blue).lighter(120)
-    << QColor(Qt::cyan).lighter(120)
-    << QColor(Qt::magenta).lighter(120)
-    << QColor(Qt::yellow).lighter(120)
-    << QColor(Qt::gray).lighter(120)
-    << QColor(Qt::darkRed).lighter(130)
-    << QColor(Qt::darkGreen).lighter(130)
-    << QColor(Qt::darkBlue).lighter(130)
-    << QColor(Qt::darkCyan).lighter(130)
-    << QColor(Qt::darkMagenta).lighter(130)
-    << QColor(Qt::darkYellow).lighter(130);
+    m_predefinedColors
+        << QColor(0, 63, 92, 125)
+        << QColor(47, 75, 124, 125)
+        << QColor(102, 81, 145, 125)
+        << QColor(160, 81, 149, 125)
+        << QColor(212, 80, 135, 125)
+        << QColor(249, 93, 106, 125)
+        << QColor(255, 124, 67, 125)
+        << QColor(255, 166, 0, 125);
     // Add more distinct colors if needed
 }
 
 QColor BlobTableModel::getNextColor() {
     if (m_predefinedColors.isEmpty()) {
-        return QColor(Qt::black); // Fallback
+        return QColor(Qt::gray); // Fallback
     }
     QColor color = m_predefinedColors.at(m_currentColorIndex);
     m_currentColorIndex = (m_currentColorIndex + 1) % m_predefinedColors.count();

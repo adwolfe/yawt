@@ -511,7 +511,7 @@ void TrackingManager::handleWormTrackerProgress(int wormId, int percentDone) {
 
 
 void TrackingManager::checkForAllTrackersFinished() {
-    qDebug() << "TM: checkForAllTrackersFinished - START. Finished:" << m_finishedTrackersCount << "Expected:" << m_expectedTrackersToFinish; // DIAGNOSTIC
+    //qDebug() << "TM: checkForAllTrackersFinished - START. Finished:" << m_finishedTrackersCount << "Expected:" << m_expectedTrackersToFinish; // DIAGNOSTIC
     // ... (rest of the function is the same as the one in the context, including the fix for emitting tracks on cancel)
     if (m_isTrackingRunning && m_finishedTrackersCount >= m_expectedTrackersToFinish) {
         if (m_cancelRequested) {
@@ -525,7 +525,7 @@ void TrackingManager::checkForAllTrackersFinished() {
             if (!m_finalTracks.empty()) {
                 qDebug() << "TrackingManager: Emitting partial tracks due to cancellation. Count:" << m_finalTracks.size();
                 emit allTracksUpdated(m_finalTracks);
-                outputTracksToDebug(m_finalTracks);
+                //outputTracksToDebug(m_finalTracks);
             } else {
                 qDebug() << "TrackingManager: No tracks to emit upon cancellation.";
             }
@@ -541,7 +541,7 @@ void TrackingManager::checkForAllTrackersFinished() {
                 }
             }
             emit allTracksUpdated(m_finalTracks);
-            outputTracksToDebug(m_finalTracks);
+            //outputTracksToDebug(m_finalTracks);
 
             QString csvOutputPath;
             if (!m_videoPath.isEmpty()) {
@@ -572,10 +572,10 @@ void TrackingManager::checkForAllTrackersFinished() {
 }
 
 void TrackingManager::updateOverallProgress() {
-    qDebug() << "TM: updateOverallProgress - START"; // DIAGNOSTIC
+   // qDebug() << "TM: updateOverallProgress - START"; // DIAGNOSTIC
     if (m_cancelRequested && !m_isTrackingRunning) {
         emit overallTrackingProgress(0);
-        qDebug() << "TM: updateOverallProgress - END (cancelled and not running)"; // DIAGNOSTIC
+        //qDebug() << "TM: updateOverallProgress - END (cancelled and not running)"; // DIAGNOSTIC
         return;
     }
     if (!m_isTrackingRunning && m_finishedTrackersCount < m_expectedTrackersToFinish) {
@@ -617,7 +617,7 @@ void TrackingManager::updateOverallProgress() {
 
     int finalProgressPercentage = qBound(0, static_cast<int>(totalProgress * 100.0), 100);
     emit overallTrackingProgress(finalProgressPercentage);
-    qDebug() << "TM: updateOverallProgress - END. Emitted:" << finalProgressPercentage; // DIAGNOSTIC
+    //qDebug() << "TM: updateOverallProgress - END. Emitted:" << finalProgressPercentage; // DIAGNOSTIC
 }
 
 // ... (outputTracksToDebug and outputTracksToCsv remain the same)

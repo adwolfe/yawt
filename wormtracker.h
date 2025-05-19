@@ -28,6 +28,7 @@ public:
         Forward,
         Backward
     };
+    Q_ENUM(TrackingDirection)
 
     // Internal state for the tracker's understanding of its current situation
     enum class TrackerState {
@@ -103,6 +104,8 @@ private:
     QRectF adjustRoi(const cv::Point2f& wormCenter, const cv::Size& frameSize, const QSizeF& wormSizeGuess);
     // Finds all plausible blobs within the current ROI based on defined criteria
     QList<TrackingHelper::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
+    // For merge events: when look at the diff between this frame and previous frame; ignore small bits and pieces of the mask
+    TrackingHelper::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
 
 
     int m_wormId;
