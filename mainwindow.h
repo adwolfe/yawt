@@ -49,7 +49,6 @@ public slots:
     void onViewThresholdToggled(bool checked); // Connected to ui->showThreshButton's toggled()
     void onViewBlobsToggled(bool checked);     // Connected to a new ui->viewBlobsButton's toggled()
     void onViewTracksToggled(bool checked);    // Connected to a new ui->viewTracksButton's toggled()
-    // void onViewNoneClicked(); // Optional: A button to clear all view flags
 
     // Thresholding Parameter Updates
     void updateThresholdAlgorithmSettings();
@@ -93,6 +92,5 @@ private:
     TrackingManager *m_trackingManager;
 
     QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
-    // m_viewModeButtonGroup is removed as view options are independent toggles
 };
 #endif // MAINWINDOW_H

@@ -312,7 +312,7 @@ void TrackingManager::launchWormTrackers() {
         m_individualTrackerProgress[fwdTracker] = 0;
         fwdThread->start();
 
-        WormTracker* bwdTracker = new WormTracker(wormId, initialRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
+        WormTracker* bwdTracker = new WormTracker(-1*wormId, initialRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
         bwdTracker->setFrames(&m_processedReversedFrames);
         QThread* bwdThread = new QThread(this);
         bwdTracker->moveToThread(bwdThread);
@@ -344,7 +344,7 @@ void TrackingManager::handleWormPositionUpdated(
     WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender());
 
     if (wormObject && reportingTracker) {
-        if (reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedAwaitingSplitDecision) {
+        if (reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit) {
             if (!m_wormToMergeGroupMap.contains(wormId)) {
                 cv::Point2f cvPos(static_cast<float>(newPosition.x()), static_cast<float>(newPosition.y()));
                 wormObject->updateTrackPoint(originalFrameNumber, cvPos, newRoi);
@@ -387,7 +387,7 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
         return;
     }
 
-    if (reportingTracker->getWormId() != wormId || reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedAwaitingSplitDecision) {
+    if (reportingTracker->getWormId() != wormId || reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit) {
         qWarning() << "TrackingManager: Split/Paused signal from WormTracker (ID" << reportingTracker->getWormId()
         << ", State" << static_cast<int>(reportingTracker->getCurrentTrackerState())
         << ", Dir:" << reportingTracker->property("direction").toString()
@@ -441,13 +441,13 @@ void TrackingManager::processFrameDataForMergesAndSplits(int frameNumber) {
 }
 
 
-void TrackingManager::handleWormStateChanged(int wormId, WormObject::TrackingState newState, int associatedWormId) {
+void TrackingManager::handleWormStateChanged(int wormId, WormTracker::TrackerState newState) {
     if (m_cancelRequested) return;
     WormObject* worm = m_wormObjectsMap.value(wormId, nullptr);
     if (worm) {
-        if (newState == WormObject::TrackingState::Lost) {
+        if (newState == WormTracker::TrackerState::Idle) {
             emit trackingStatusUpdate(
-                QString("Worm %1 may be Lost (reported by tracker).").arg(wormId));
+                QString("Worm %1 may be Idle (reported by tracker).").arg(wormId));
         }
     }
 }

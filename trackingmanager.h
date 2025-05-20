@@ -51,7 +51,7 @@ private slots:
                                           int originalFrameNumber,
                                           const QList<TrackingHelper::DetectedBlob>& detectedBlobs); // New slot
 
-    void handleWormStateChanged(int wormId, WormObject::TrackingState newState, int associatedWormId);
+    void handleWormStateChanged(int wormId, WormTracker::TrackerState newState);
     void handleWormTrackerFinished();
     void handleWormTrackerError(int wormId, QString errorMessage);
     void handleWormTrackerProgress(int wormId, int percentDone);

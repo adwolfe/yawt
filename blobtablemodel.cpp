@@ -10,14 +10,14 @@ BlobTableModel::BlobTableModel(QObject *parent)
 
 void BlobTableModel::initializeColors() {
     m_predefinedColors
-        << QColor(0, 63, 92, 125)
-        << QColor(47, 75, 124, 125)
-        << QColor(102, 81, 145, 125)
-        << QColor(160, 81, 149, 125)
-        << QColor(212, 80, 135, 125)
-        << QColor(249, 93, 106, 125)
-        << QColor(255, 124, 67, 125)
-        << QColor(255, 166, 0, 125);
+        << QColor(0, 63, 92, 255).lighter(120)
+        << QColor(47, 75, 124, 255).lighter(120)
+        << QColor(102, 81, 145, 255).lighter(120)
+        << QColor(160, 81, 149, 255).lighter(120)
+        << QColor(212, 80, 135, 255).lighter(120)
+        << QColor(249, 93, 106, 255).lighter(120)
+        << QColor(255, 124, 67, 255).lighter(120)
+        << QColor(255, 166, 0, 255).lighter(120);
     // Add more distinct colors if needed
 }
 

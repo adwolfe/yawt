@@ -8,6 +8,7 @@
 #include <QResizeEvent>
 #include <QWheelEvent>
 #include <QtMath>
+#include <algorithm> // Required for std::find_if
 
 // Default crop parameters
 #define DEFAULT_CROP_EXTENSION ".mp4"
@@ -25,7 +26,7 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_isPlaying(false),
     m_playbackSpeedMultiplier(1.0),
     m_currentInteractionMode(InteractionMode::PanZoom),
-    m_activeViewModes(ViewModeOption::None), // Default to no specific view modes active
+    m_activeViewModes(ViewModeOption::None),
     m_isPanning(false),
     m_isDefiningRoi(false),
     m_zoomFactor(1.0),
@@ -229,7 +230,7 @@ void VideoLoader::setInteractionMode(InteractionMode mode) {
 void VideoLoader::setViewModeOption(VideoLoader::ViewModeOption option, bool active) {
     ViewModeOptions oldModes = m_activeViewModes;
 
-    m_activeViewModes.setFlag(option, active); // Corrected: Use QFlags::setFlag
+    m_activeViewModes.setFlag(option, active);
 
     if (oldModes == m_activeViewModes) {
         return;
@@ -393,7 +394,7 @@ void VideoLoader::updateItemsToDisplay(const QList<TrackedItem>& items) {
 
 void VideoLoader::setTracksToDisplay(const AllWormTracks& tracks) {
     m_allTracksToDisplay = tracks;
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks)) {
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs (as blobs now use track data)
         update();
     }
     qDebug() << "VideoLoader: Tracks set for display. Count:" << m_allTracksToDisplay.size();
@@ -402,7 +403,7 @@ void VideoLoader::setTracksToDisplay(const AllWormTracks& tracks) {
 void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
     if (m_visibleTrackIDs == visibleTrackIDs) return;
     m_visibleTrackIDs = visibleTrackIDs;
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks)) {
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs
         update();
     }
     qDebug() << "VideoLoader: Visible track IDs updated. Count:" << m_visibleTrackIDs.size();
@@ -411,7 +412,8 @@ void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
 void VideoLoader::clearDisplayedTracks() {
     m_allTracksToDisplay.clear();
     m_visibleTrackIDs.clear();
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks)) {
+    // m_trackColors is cleared on new video load.
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs
         update();
     }
     qDebug() << "VideoLoader: All displayed tracks (data) cleared.";
@@ -423,8 +425,18 @@ void VideoLoader::updateWormColor(int wormId, const QColor& color) {
         qDebug() << "VideoLoader: Updated color for worm ID" << wormId << "to" << color.name();
         bool needsRepaint = false;
         if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
-            for (const auto& item : qAsConst(m_itemsToDisplay)) {
-                if (item.id == wormId) { needsRepaint = true; break; }
+            // Check if this wormId is relevant for current frame blob display
+            if (!m_allTracksToDisplay.empty() && m_allTracksToDisplay.count(wormId)) {
+                const std::vector<WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(wormId);
+                auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
+                                       [this](const WormTrackPoint& pt) {
+                                           return pt.frameNumberOriginal == currentFrameIdx;
+                                       });
+                if (it != trackPoints.end()) needsRepaint = true;
+            } else { // Fallback to m_itemsToDisplay if no tracks
+                for (const auto& item : qAsConst(m_itemsToDisplay)) {
+                    if (item.id == wormId) { needsRepaint = true; break; }
+                }
             }
         }
         if (!needsRepaint && m_activeViewModes.testFlag(ViewModeOption::Tracks) && m_visibleTrackIDs.contains(wormId)) {
@@ -520,6 +532,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     QRectF targetRect = calculateTargetRect();
     painter.drawImage(targetRect, currentQImageFrame, currentQImageFrame.rect());
 
+    // Draw general purpose ROI if active
     if (!m_activeRoiRect.isNull() && m_activeRoiRect.isValid() &&
         (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop)) {
         QPointF roiTopLeftWidget = mapPointFromVideo(m_activeRoiRect.topLeft());
@@ -530,56 +543,129 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
     }
 
+    // Draw temporary ROI during definition
     if ((m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) && m_isDefiningRoi) {
         painter.setPen(QPen(Qt::cyan, 1, Qt::SolidLine));
         painter.drawRect(QRect(m_roiStartPointWidget, m_roiEndPointWidget).normalized());
     }
 
-    if (m_activeViewModes.testFlag(ViewModeOption::Blobs) && !m_itemsToDisplay.isEmpty()) {
-        for (const TrackedItem& item : qAsConst(m_itemsToDisplay)) {
-            QColor itemColor = m_trackColors.value(item.id, Qt::magenta);
-            QRectF bboxVideo = item.initialBoundingBox;
-            QPointF bbTopLeftWidget = mapPointFromVideo(bboxVideo.topLeft());
-            QPointF bbBottomRightWidget = mapPointFromVideo(bboxVideo.bottomRight());
-            if (bbTopLeftWidget.x() >= 0 && bbBottomRightWidget.x() >= 0) {
-                painter.setPen(QPen(itemColor, 1, Qt::DotLine));
-                painter.drawRect(QRectF(bbTopLeftWidget, bbBottomRightWidget).normalized());
+    // --- MODIFIED BLOB DRAWING LOGIC ---
+    if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
+        if (!m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
+            // Tracking has run, display current frame's blob positions from tracks
+            for (int trackId : qAsConst(m_visibleTrackIDs)) {
+                if (m_allTracksToDisplay.count(trackId)) {
+                    const std::vector<WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(trackId);
+
+                    // Find the track point for the current frame
+                    auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
+                                           [this](const WormTrackPoint& pt) {
+                                               return pt.frameNumberOriginal == currentFrameIdx;
+                                           });
+
+                    if (it != trackPoints.end()) { // Found track point for current frame
+                        const WormTrackPoint& currentFramePoint = *it;
+                        QColor itemColor = getTrackColor(trackId);
+
+                        // Draw Bounding Box for current frame from track data
+                        QRectF bboxVideo = currentFramePoint.roi;
+                        if (bboxVideo.isValid()) {
+                            QPointF bbTopLeftWidget = mapPointFromVideo(bboxVideo.topLeft());
+                            QPointF bbBottomRightWidget = mapPointFromVideo(bboxVideo.bottomRight());
+                            if (bbTopLeftWidget.x() >= 0 && bbBottomRightWidget.x() >= 0) { // Check if on screen
+                                QPen blobPen(itemColor); // Create a pen with the item's color
+                                blobPen.setStyle(Qt::DotLine); // Set style for bounding box
+                                blobPen.setWidth(1);          // Set width for bounding box
+                                painter.setPen(blobPen);
+                                painter.drawRect(QRectF(bbTopLeftWidget, bbBottomRightWidget).normalized());
+                            }
+                        }
+
+                        // Draw Centroid for current frame from track data
+                        QPointF centroidVideo = QPointF(currentFramePoint.position.x, currentFramePoint.position.y);
+                        QPointF centroidWidget = mapPointFromVideo(centroidVideo);
+                        if (centroidWidget.x() >= 0) { // Check if on screen
+                            painter.setPen(QPen(itemColor, 2)); // Outline for centroid
+                            painter.setBrush(itemColor);        // Fill for centroid
+                            painter.drawEllipse(centroidWidget, 3, 3); // Draw a small circle for the centroid
+                            painter.setBrush(Qt::NoBrush);      // Reset brush
+                        }
+                    }
+                }
             }
-            QPointF centroidVideo = item.initialCentroid;
-            QPointF centroidWidget = mapPointFromVideo(centroidVideo);
-            if (centroidWidget.x() >= 0) {
-                painter.setPen(QPen(itemColor, 2));
-                painter.setBrush(itemColor);
-                painter.drawEllipse(centroidWidget, 3, 3);
-                painter.setBrush(Qt::NoBrush);
+        } else if (!m_itemsToDisplay.isEmpty()) {
+            // Fallback: Tracking not run or no tracks, display initial blob selections from m_itemsToDisplay
+            for (const TrackedItem& item : qAsConst(m_itemsToDisplay)) {
+                // Optional: Filter by m_visibleTrackIDs if you want consistency with table selection
+                // if (!m_visibleTrackIDs.contains(item.id) && !m_visibleTrackIDs.isEmpty()) continue;
+
+                QColor itemColor = getTrackColor(item.id);
+
+                // Draw Initial Bounding Box
+                QRectF bboxVideo = item.initialBoundingBox;
+                QPointF bbTopLeftWidget = mapPointFromVideo(bboxVideo.topLeft());
+                QPointF bbBottomRightWidget = mapPointFromVideo(bboxVideo.bottomRight());
+                if (bbTopLeftWidget.x() >= 0 && bbBottomRightWidget.x() >= 0) {
+                    QPen blobPen(itemColor);
+                    blobPen.setStyle(Qt::SolidLine); // Solid line for initial selections
+                    blobPen.setWidth(1);
+                    painter.setPen(blobPen);
+                    painter.drawRect(QRectF(bbTopLeftWidget, bbBottomRightWidget).normalized());
+                }
+
+                // Draw Initial Centroid
+                QPointF centroidVideo = item.initialCentroid;
+                QPointF centroidWidget = mapPointFromVideo(centroidVideo);
+                if (centroidWidget.x() >= 0) {
+                    painter.setPen(QPen(itemColor, 2));
+                    painter.setBrush(itemColor);
+                    painter.drawEllipse(centroidWidget, 3, 3);
+                    painter.setBrush(Qt::NoBrush);
+                }
             }
         }
     }
+    // --- END OF MODIFIED BLOB DRAWING LOGIC ---
 
+
+    // Draw Tracks if ViewMode is Tracks
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty()) {
-        for (auto it = m_allTracksToDisplay.cbegin(); it != m_allTracksToDisplay.cend(); ++it) {
-            int trackId = it->first;
-            const std::vector<WormTrackPoint>& trackPoints = it->second;
+        for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
+            int trackId = it_map->first;
+            const std::vector<WormTrackPoint>& trackPoints = it_map->second;
             if (!m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
+
             QPainterPath path;
-            QColor trackColor = getTrackColor(trackId);
-            QPen trackPen(trackColor, 1);
+            QColor trackColorWithAlpha = getTrackColor(trackId); // Assuming getTrackColor provides color with desired alpha
+            // If getTrackColor returns opaque, set alpha here:
+            // trackColorWithAlpha.setAlphaF(0.5); // Example: 50% opacity for lines
+
+            QPen trackPen(trackColorWithAlpha, 2); // Pen width of 2
             painter.setPen(trackPen);
+
             bool firstPoint = true;
             for (const WormTrackPoint& pt : trackPoints) {
                 QPointF currentPointVideo(pt.position.x, pt.position.y);
                 QPointF currentPointWidget = mapPointFromVideo(currentPointVideo);
-                if (currentPointWidget.x() < 0) continue;
-                if (firstPoint) { path.moveTo(currentPointWidget); firstPoint = false; }
-                else { path.lineTo(currentPointWidget); }
-                //painter.setBrush(trackColor);
-                //painter.drawEllipse(currentPointWidget, 1, 1);
-                //painter.setBrush(Qt::NoBrush);
+                if (currentPointWidget.x() < 0) continue; // Skip points not visible on screen
+
+                if (firstPoint) {
+                    path.moveTo(currentPointWidget);
+                    firstPoint = false;
+                } else {
+                    path.lineTo(currentPointWidget);
+                }
+                // To make points less obtrusive if lines are the focus:
+                // painter.setBrush(trackColorWithAlpha);
+                // painter.drawEllipse(currentPointWidget, 1, 1); // Smaller points
+                // painter.setBrush(Qt::NoBrush);
             }
-            if (!firstPoint) { painter.strokePath(path, trackPen); }
+            if (!firstPoint) { // If path has content
+                painter.strokePath(path, trackPen); // Draw the continuous line
+            }
         }
     }
-}
+} // End of paintEvent
 
 void VideoLoader::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->position();
@@ -644,6 +730,8 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
     }
 }
 
+// ... (mouseMoveEvent, mouseReleaseEvent, wheelEvent, resizeEvent, and private helpers remain the same) ...
+// (Make sure to copy the full content of these functions from your previous complete version)
 void VideoLoader::mouseMoveEvent(QMouseEvent* event) {
     QPointF currentPos = event->position();
     QPointF delta = currentPos - m_lastMousePos;
