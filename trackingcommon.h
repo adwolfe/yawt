@@ -82,7 +82,8 @@ struct TrackedItem {
     QColor color;                   // Color for worm ROI and track
     ItemType type;                  // Type of the item
     QPointF initialCentroid;        // Centroid in video coordinates at selection
-    QRectF initialBoundingBox;      // Bounding box in video coordinates at selection
+    QRectF initialBoundingBox;      // Bounding box in video coordinates at selection. THIS WILL BECOME THE STANDARDIZED ROI.
+    QRectF originalClickedBoundingBox; // The actual bounding box of the blob when it was clicked. Used for metrics.
     int frameOfSelection;           // Frame number where this item was selected
     // Add other relevant data as needed
 };

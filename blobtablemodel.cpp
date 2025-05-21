@@ -1,11 +1,26 @@
 #include "blobtablemodel.h"
 #include <stdexcept> // For std::out_of_range
 #include <QDebug>
+#include <QtMath> // For qMax, qMin, qSqrt, etc.
+#include <limits> // For std::numeric_limits
+
+// Define a default small ROI size for when no worms are present or dimensions are zero
+const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0); // Example: 20x20 pixels
+const double ROI_SIZE_MULTIPLIER = 1.25;
 
 BlobTableModel::BlobTableModel(QObject *parent)
-    : QAbstractTableModel(parent), m_nextId(1), m_currentColorIndex(0)
+    : QAbstractTableModel(parent),
+    m_nextId(1),
+    m_currentColorIndex(0),
+    m_minObservedArea(std::numeric_limits<double>::max()),
+    m_maxObservedArea(0.0),
+    m_minObservedAspectRatio(std::numeric_limits<double>::max()),
+    m_maxObservedAspectRatio(0.0),
+    m_currentFixedRoiSize(DEFAULT_ROI_SIZE) // Initialize with a default
 {
     initializeColors();
+    // Initial call to set up ROI even if no items yet, or to reset if loading an empty state
+    // recalculateGlobalMetricsAndROIs(); // Not strictly needed here if no items, but good for consistency
 }
 
 void BlobTableModel::initializeColors() {
@@ -93,6 +108,7 @@ bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, in
 
     TrackedItem &item = m_items[index.row()];
     bool dataWasChanged = false;
+    bool typeChanged = false;
 
     switch (static_cast<Column>(index.column())) {
     case Column::Color:
@@ -101,32 +117,41 @@ bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, in
             if (item.color != newColor) {
                 item.color = newColor;
                 dataWasChanged = true;
-                emit itemColorChanged(item.id, newColor); // Emit specific color change
+                emit itemColorChanged(item.id, newColor);
             }
         }
         break;
     case Column::Type: {
-        // Assuming value is QString from ItemTypeDelegate or direct edit
         QString typeStr = value.toString();
-        ItemType newType = stringToItemType(typeStr); // Convert string from delegate to enum
+        ItemType newType = stringToItemType(typeStr);
         if (item.type != newType) {
             item.type = newType;
             dataWasChanged = true;
+            typeChanged = true; // Mark that type specifically changed for recalculation
         }
         break;
     }
-    // ID, Frame, CentroidX, CentroidY are not typically editable directly by user this way
     case Column::ID:
     case Column::Frame:
     case Column::CentroidX:
     case Column::CentroidY:
     default:
-        return false; // Not editable or unhandled column
+        return false;
     }
 
     if (dataWasChanged) {
         emit dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole, Qt::DecorationRole});
-        emit itemsChanged(m_items); // Emit that the full list might need refreshing elsewhere
+        // itemsChanged will be emitted by recalculateGlobalMetricsAndROIs if type changed
+        // or if other changes necessitate a full refresh.
+        // If only color changed, we don't need to recalculate global ROIs.
+        if (typeChanged) {
+            recalculateGlobalMetricsAndROIs();
+        } else {
+            // If only color changed, we still need to inform VideoLoader to update if it uses m_itemsToDisplay directly
+            // However, VideoLoader also connects to itemColorChanged.
+            // To be safe and ensure VideoLoader always has the latest full list if any part of an item changes:
+            emit itemsChanged(m_items);
+        }
         return true;
     }
     return false;
@@ -140,7 +165,7 @@ Qt::ItemFlags BlobTableModel::flags(const QModelIndex& index) const {
     if (static_cast<Column>(index.column()) == Column::Type || static_cast<Column>(index.column()) == Column::Color) {
         return defaultFlags | Qt::ItemIsEditable;
     }
-    return defaultFlags; // Other columns are not editable by default
+    return defaultFlags;
 }
 
 bool BlobTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, ItemType type) {
@@ -150,14 +175,17 @@ bool BlobTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox,
     newItem.color = getNextColor();
     newItem.type = type;
     newItem.initialCentroid = centroid;
-    newItem.initialBoundingBox = boundingBox;
+    newItem.originalClickedBoundingBox = boundingBox; // Store the original clicked bounding box
+    // newItem.initialBoundingBox will be set by recalculateGlobalMetricsAndROIs
     newItem.frameOfSelection = frameNumber;
     m_items.append(newItem);
     endInsertRows();
 
-    emit itemColorChanged(newItem.id, newItem.color); // For specific color update listeners
-    emit itemsChanged(m_items); // For listeners needing the whole list (like VideoLoader display)
-    qDebug() << "BlobTableModel: Added item ID" << newItem.id << "with color" << newItem.color.name();
+    // Recalculate global metrics and update all item ROIs
+    recalculateGlobalMetricsAndROIs();
+    // itemColorChanged and itemsChanged are emitted by recalculateGlobalMetricsAndROIs
+
+    qDebug() << "BlobTableModel: Added item ID" << newItem.id << "Original BBox:" << boundingBox;
     return true;
 }
 
@@ -171,7 +199,9 @@ bool BlobTableModel::removeRows(int position, int rows, const QModelIndex &paren
         m_items.removeAt(position);
     }
     endRemoveRows();
-    emit itemsChanged(m_items); // Update listeners
+
+    // Recalculate global metrics and update remaining item ROIs
+    recalculateGlobalMetricsAndROIs();
     return true;
 }
 
@@ -184,4 +214,135 @@ const TrackedItem& BlobTableModel::getItem(int row) const {
 
 const QList<TrackedItem>& BlobTableModel::getAllItems() const {
     return m_items;
+}
+
+// --- New Public Getters for Metrics ---
+double BlobTableModel::getMinObservedArea() const {
+    return m_minObservedArea;
+}
+
+double BlobTableModel::getMaxObservedArea() const {
+    return m_maxObservedArea;
+}
+
+double BlobTableModel::getMinObservedAspectRatio() const {
+    return m_minObservedAspectRatio;
+}
+
+double BlobTableModel::getMaxObservedAspectRatio() const {
+    return m_maxObservedAspectRatio;
+}
+
+QSizeF BlobTableModel::getCurrentFixedRoiSize() const {
+    return m_currentFixedRoiSize;
+}
+
+// --- Private Helper Methods ---
+void BlobTableModel::recalculateGlobalMetricsAndROIs() {
+    double newMinArea = std::numeric_limits<double>::max();
+    double newMaxArea = 0.0;
+    double newMinAspectRatio = std::numeric_limits<double>::max();
+    double newMaxAspectRatio = 0.0;
+    double maxObservedDimensionL = 0.0;
+    int wormCount = 0;
+
+    for (const TrackedItem &item : qAsConst(m_items)) {
+        if (item.type == ItemType::Worm) {
+            wormCount++;
+            const QRectF& originalBox = item.originalClickedBoundingBox;
+            if (originalBox.isValid() && originalBox.width() > 0 && originalBox.height() > 0) {
+                double area = originalBox.width() * originalBox.height();
+                newMinArea = qMin(newMinArea, area);
+                newMaxArea = qMax(newMaxArea, area);
+
+                double w = originalBox.width();
+                double h = originalBox.height();
+                double aspectRatio = (w > h) ? (w / h) : (h / w); // Ensure aspect ratio >= 1
+                if (h == 0 && w == 0) aspectRatio = 1.0; // Avoid division by zero for zero-size box
+                else if (h == 0 || w == 0) aspectRatio = std::numeric_limits<double>::max(); // Or some large number for degenerate cases
+
+                newMinAspectRatio = qMin(newMinAspectRatio, aspectRatio);
+                newMaxAspectRatio = qMax(newMaxAspectRatio, aspectRatio);
+
+                maxObservedDimensionL = qMax(maxObservedDimensionL, qMax(w, h));
+            }
+        }
+    }
+
+    // If no worms, reset metrics to defaults
+    if (wormCount == 0) {
+        newMinArea = 0.0; // Or some other sensible default
+        newMaxArea = 0.0;
+        newMinAspectRatio = 1.0; // Aspect ratio of 1 for a square
+        newMaxAspectRatio = 1.0;
+        maxObservedDimensionL = 0.0; // This will lead to DEFAULT_ROI_SIZE
+    }
+
+
+    // Update stored metrics if they changed
+    bool metricsChanged = false;
+    if (!qFuzzyCompare(m_minObservedArea, newMinArea) ||
+        !qFuzzyCompare(m_maxObservedArea, newMaxArea) ||
+        !qFuzzyCompare(m_minObservedAspectRatio, newMinAspectRatio) ||
+        !qFuzzyCompare(m_maxObservedAspectRatio, newMaxAspectRatio)) {
+        metricsChanged = true;
+    }
+
+    m_minObservedArea = newMinArea;
+    m_maxObservedArea = newMaxArea;
+    m_minObservedAspectRatio = newMinAspectRatio;
+    m_maxObservedAspectRatio = newMaxAspectRatio;
+
+    QSizeF newFixedRoiSize;
+    if (maxObservedDimensionL > 0) {
+        double sideLength = maxObservedDimensionL * ROI_SIZE_MULTIPLIER;
+        newFixedRoiSize = QSizeF(sideLength, sideLength);
+    } else {
+        newFixedRoiSize = DEFAULT_ROI_SIZE;
+    }
+
+    if (m_currentFixedRoiSize != newFixedRoiSize) {
+        metricsChanged = true; // Also consider ROI size change as a metric change
+        m_currentFixedRoiSize = newFixedRoiSize;
+    }
+
+    // Update initialBoundingBox for all items
+    bool itemROIsChanged = false;
+    for (TrackedItem &item : m_items) {
+        QRectF oldItemRoi = item.initialBoundingBox;
+        QPointF center = item.initialCentroid;
+        double w = m_currentFixedRoiSize.width();
+        double h = m_currentFixedRoiSize.height();
+        item.initialBoundingBox = QRectF(center.x() - w / 2.0,
+                                         center.y() - h / 2.0,
+                                         w, h);
+        if (item.initialBoundingBox != oldItemRoi) {
+            itemROIsChanged = true;
+        }
+    }
+
+    // Emit signals
+    if (metricsChanged) {
+        qDebug() << "BlobTableModel: Global metrics updated."
+                 << "Area (min/max):" << m_minObservedArea << "/" << m_maxObservedArea
+                 << "Aspect (min/max):" << m_minObservedAspectRatio << "/" << m_maxObservedAspectRatio
+                 << "Fixed ROI Size:" << m_currentFixedRoiSize;
+        emit globalMetricsUpdated(m_minObservedArea, m_maxObservedArea,
+                                  m_minObservedAspectRatio, m_maxObservedAspectRatio,
+                                  m_currentFixedRoiSize);
+    }
+
+    // Always emit itemsChanged if ROIs were updated, or if items were added/removed (covered by caller)
+    // or if metrics that affect display (like ROI size) changed.
+    // The initial add/remove calls will trigger this function, and it will emit itemsChanged.
+    // If called from setData (type change), this ensures the update.
+    if (itemROIsChanged || metricsChanged) { // If ROIs changed OR other metrics changed (which implies ROI might have changed)
+        emit itemsChanged(m_items);
+        qDebug() << "BlobTableModel: itemsChanged emitted due to ROI or metric updates.";
+    }
+    // If an item was just added or removed, the model's structure changed,
+    // so itemsChanged should definitely be emitted.
+    // The beginInsertRows/endInsertRows and beginRemoveRows/endRemoveRows
+    // handle the basic model update notifications. This itemsChanged(m_items)
+    // is for the VideoLoader to get the *full list* with potentially updated ROIs.
 }

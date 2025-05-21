@@ -312,7 +312,7 @@ void TrackingManager::launchWormTrackers() {
         m_individualTrackerProgress[fwdTracker] = 0;
         fwdThread->start();
 
-        WormTracker* bwdTracker = new WormTracker(-1*wormId, initialRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
+        WormTracker* bwdTracker = new WormTracker(wormId, initialRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
         bwdTracker->setFrames(&m_processedReversedFrames);
         QThread* bwdThread = new QThread(this);
         bwdTracker->moveToThread(bwdThread);
@@ -369,7 +369,7 @@ void TrackingManager::handleWormPositionUpdated(
             m_frameInfos.remove(m_frameInfos.firstKey());
         }
         // ***** Temporarily COMMENTED OUT for diagnostics *****
-        // processFrameDataForMergesAndSplits(originalFrameNumber);
+        processFrameDataForMergesAndSplits(originalFrameNumber);
     } else {
         qWarning() << "TrackingManager: handleWormPositionUpdated from unknown source or null object. WormID:" << wormId;
     }
