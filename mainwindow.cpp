@@ -127,6 +127,7 @@ void MainWindow::setupConnections() {
     // BlobTableModel -> VideoLoader
     connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
     connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
+    connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
 
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -314,6 +315,9 @@ void MainWindow::handleBlobClickedForAddition(const TrackingHelper::DetectedBlob
     m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, ItemType::Worm);
 }
 
+void MainWindow::handleRemoveBlobsClicked() {
+    m_blobTableModel->removeRows(0, m_blobTableModel->getAllItems().length());
+}
 
 // --- Video Playback and Frame Navigation ---
 void MainWindow::chooseWorkingDirectory() {

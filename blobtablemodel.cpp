@@ -6,7 +6,7 @@
 
 // Define a default small ROI size for when no worms are present or dimensions are zero
 const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0); // Example: 20x20 pixels
-const double ROI_SIZE_MULTIPLIER = 1.25;
+const double ROI_SIZE_MULTIPLIER = 1.5;
 
 BlobTableModel::BlobTableModel(QObject *parent)
     : QAbstractTableModel(parent),

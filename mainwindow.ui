@@ -75,7 +75,7 @@
         <item>
          <widget class="QPushButton" name="clearAllButton">
           <property name="enabled">
-           <bool>false</bool>
+           <bool>true</bool>
           </property>
           <property name="text">
            <string>Clear all</string>
@@ -335,6 +335,9 @@ QToolButton#playPauseButton:checked:hover {
           </property>
           <property name="icon">
            <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
+          </property>
+          <property name="checkable">
+           <bool>true</bool>
           </property>
          </widget>
         </item>
@@ -850,7 +853,7 @@ QToolButton#playPauseButton:checked:hover {
      <x>0</x>
      <y>0</y>
      <width>1102</width>
-     <height>37</height>
+     <height>24</height>
     </rect>
    </property>
   </widget>

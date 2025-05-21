@@ -63,6 +63,7 @@ public slots:
 
     // Blob/Item Handling
     void handleBlobClickedForAddition(const TrackingHelper::DetectedBlob& blobData);
+    void handleRemoveBlobsClicked();
 
     // Tracking Process
     void onStartTrackingActionTriggered();

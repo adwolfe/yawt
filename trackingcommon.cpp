@@ -1,6 +1,7 @@
 
 #include "trackingcommon.h" // Lowercase include
 #include <QtMath>       // For qSqrt, qPow
+#include <QDebug>       // For qWarning/qDebug
 
 
 namespace TrackingHelper {
@@ -97,6 +98,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
             result.area = cv::contourArea(bestContour); // Already calculated, but store it
             result.contourPoints = bestContour; // These points are relative to binaryImage origin
             result.isValid = true;
+            // touchesROIboundary is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
         }
     }
 
@@ -105,7 +107,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
 
 
 QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
-                                               const QRectF& roiToSearch,
+                                               const QRectF& roiToSearch, // This is in full image coordinates
                                                double minArea,
                                                double maxArea,
                                                double minAspectRatio,
@@ -117,65 +119,91 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
         return plausibleBlobs;
     }
 
-    // Define the OpenCV ROI from QRectF
-    cv::Rect roiCv(static_cast<int>(roiToSearch.x()),
-                   static_cast<int>(roiToSearch.y()),
-                   static_cast<int>(roiToSearch.width()),
-                   static_cast<int>(roiToSearch.height()));
+    // Define the OpenCV ROI from QRectF (roiToSearch is in full image coordinates)
+    cv::Rect roiCv(static_cast<int>(qRound(roiToSearch.x())),
+                   static_cast<int>(qRound(roiToSearch.y())),
+                   static_cast<int>(qRound(roiToSearch.width())),
+                   static_cast<int>(qRound(roiToSearch.height())));
 
     // Ensure ROI is within the image boundaries
-    roiCv &= cv::Rect(0, 0, binaryImage.cols, binaryImage.rows);
+    // This creates the actual ROI that will be used on binaryImage
+    cv::Rect actualRoiCv = roiCv & cv::Rect(0, 0, binaryImage.cols, binaryImage.rows);
 
-    if (roiCv.width <= 0 || roiCv.height <= 0) {
-        // qDebug() << "findAllPlausibleBlobsInRoi: ROI after clamping is invalid.";
+    if (actualRoiCv.width <= 0 || actualRoiCv.height <= 0) {
+        // qDebug() << "findAllPlausibleBlobsInRoi: ROI after clamping is invalid or outside image.";
         return plausibleBlobs; // ROI is outside image or has no area
     }
 
-    cv::Mat roiImage = binaryImage(roiCv); // Extract the ROI
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(roiImage.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE); // Use clone as findContours can modify
+    cv::Mat roiImage = binaryImage(actualRoiCv); // Extract the sub-image for contour finding
+    std::vector<std::vector<cv::Point>> contoursInSubImage;
+    // Find contours within the sub-image (roiImage). Coordinates will be relative to roiImage.
+    cv::findContours(roiImage.clone(), contoursInSubImage, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    for (const auto& contourInRoi : contours) {
-        double area = cv::contourArea(contourInRoi);
+    for (const auto& contourInSub : contoursInSubImage) {
+        double area = cv::contourArea(contourInSub);
         if (area < minArea || area > maxArea) {
             continue; // Filter by area
         }
 
-        cv::Rect brInRoi = cv::boundingRect(contourInRoi);
-        if (brInRoi.width == 0 || brInRoi.height == 0) {
+        // Bounding box of the contour, relative to roiImage (the sub-image)
+        cv::Rect brInSub = cv::boundingRect(contourInSub);
+        if (brInSub.width == 0 || brInSub.height == 0) {
             continue; // Skip zero-dimension bounding boxes
         }
 
-        double aspectRatio = static_cast<double>(brInRoi.width) / static_cast<double>(brInRoi.height);
-        if (aspectRatio < 1.0) {
-            aspectRatio = 1.0 / aspectRatio; // Ensure aspect ratio is >= 1 for easier comparison
+        // Aspect ratio (using dimensions from brInSub)
+        double currentAspectRatio = static_cast<double>(brInSub.width) / static_cast<double>(brInSub.height);
+        if (currentAspectRatio < 1.0) {
+            currentAspectRatio = 1.0 / currentAspectRatio; // Ensure aspect ratio is >= 1
         }
 
-        // For now, I don't care what the aspect ratio is of these worms.
-        //if (aspectRatio < minAspectRatio || aspectRatio > maxAspectRatio) {
-        //    continue; // Filter by aspect ratio
-        //}
+        // Aspect ratio filter (currently commented out in your provided code)
+        // if (currentAspectRatio < minAspectRatio || currentAspectRatio > maxAspectRatio) {
+        //     continue;
+        // }
 
-        cv::Moments mu = cv::moments(contourInRoi);
+        cv::Moments mu = cv::moments(contourInSub);
         if (mu.m00 > 0) { // Check for valid moments (non-zero area)
             DetectedBlob blob;
-            // Centroid and bounding box need to be offset by the ROI's top-left corner
-            // to be in the coordinate system of the original binaryImage.
-            blob.centroid = QPointF(roiCv.x + (mu.m10 / mu.m00),
-                                    roiCv.y + (mu.m01 / mu.m00));
-            blob.boundingBox = QRectF(roiCv.x + brInRoi.x,
-                                      roiCv.y + brInRoi.y,
-                                      brInRoi.width,
-                                      brInRoi.height);
+            blob.isValid = true;
             blob.area = area;
 
+            // Convert centroid and bounding box to full image coordinates
+            // Centroid in sub-image: (mu.m10 / mu.m00), (mu.m01 / mu.m00)
+            // Add actualRoiCv.x and actualRoiCv.y to convert to full image coordinates
+            blob.centroid = QPointF(actualRoiCv.x + (mu.m10 / mu.m00),
+                                    actualRoiCv.y + (mu.m01 / mu.m00));
+
+            // Bounding box in sub-image: brInSub
+            // Add actualRoiCv.x and actualRoiCv.y to convert to full image coordinates
+            blob.boundingBox = QRectF(actualRoiCv.x + brInSub.x,
+                                      actualRoiCv.y + brInSub.y,
+                                      brInSub.width,
+                                      brInSub.height);
+
             // Offset contour points to be in full frame coordinates
-            blob.contourPoints.reserve(contourInRoi.size());
-            for(const cv::Point& ptInRoi : contourInRoi) {
-                blob.contourPoints.push_back(cv::Point(ptInRoi.x + roiCv.x, ptInRoi.y + roiCv.y));
+            blob.contourPoints.reserve(contourInSub.size());
+            for(const cv::Point& ptInSub : contourInSub) {
+                blob.contourPoints.push_back(cv::Point(ptInSub.x + actualRoiCv.x, ptInSub.y + actualRoiCv.y));
             }
 
-            blob.isValid = true;
+            // --- Set touchesROIboundary flag ---
+            // Check if the bounding box of the contour (brInSub, which is relative to roiImage)
+            // touches the edges of roiImage.
+            // roiImage has dimensions actualRoiCv.width and actualRoiCv.height.
+            // Note: actualRoiCv.width and actualRoiCv.height are the dimensions of roiImage.
+            if (brInSub.x <= 0 ||
+                brInSub.y <= 0 ||
+                (brInSub.x + brInSub.width) >= actualRoiCv.width ||
+                (brInSub.y + brInSub.height) >= actualRoiCv.height) {
+                blob.touchesROIboundary = true;
+            } else {
+                blob.touchesROIboundary = false;
+            }
+            // A more precise check could iterate over contour points if needed, but bounding box is usually sufficient.
+            // For example, if any point in contourInSub has x=0, y=0, x=actualRoiCv.width-1, or y=actualRoiCv.height-1.
+            // However, the bounding box check is simpler and often what's implied.
+
             plausibleBlobs.append(blob);
         }
     }
