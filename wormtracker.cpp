@@ -228,7 +228,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
         !currentFixedSearchRoiRef.contains(currentFrameBestBlob.boundingBox.center()) || // Check if center is contained
         !currentFixedSearchRoiRef.contains(currentFrameBestBlob.boundingBox) // Check if whole bbox is contained
         ) {
-        qDebug() << "WormTracker ID" << m_wormId << "Frame" << originalFrameNumber
+        qDebug() << "WormTracker ID" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber
                  << ": Largest blob touches boundary or not fully contained in fixed search ROI:" << currentFixedSearchRoiRef
                  << "Blob BBox:" << currentFrameBestBlob.boundingBox;
 
@@ -239,7 +239,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
             TrackingHelper::DetectedBlob persistentPart = findPersistingComponent(m_lastPrimaryBlob, currentFrameBestBlob, frame.size(), originalFrameNumber);
             if (persistentPart.isValid) {
                 currentFrameBestBlob = persistentPart; // Use the resolved component
-                qDebug() << "WormTracker ID" << m_wormId << "Frame" << originalFrameNumber
+                qDebug() << "WormTracker ID" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber
                          << ": Used persisting component. New best blob centroid:" << currentFrameBestBlob.centroid;
             } else {
                 qDebug() << "WormTracker ID" << m_wormId << "Frame" << originalFrameNumber
