@@ -795,30 +795,93 @@ void VideoLoader::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
     }
 }
+
+
 void VideoLoader::wheelEvent(QWheelEvent* event) {
     if (!isVideoLoaded()) {
         event->ignore();
         return;
     }
-    int deg = 0;
+
     int steps = 0;
-    if (event->device()->type() == QInputDevice::DeviceType::TouchPad) {
-        qDebug() << "Trackpad event" << event->position() << event->angleDelta() << event->pixelDelta();
-        deg = event->pixelDelta().y();
-        steps = deg;
+    double zs_for_this_event; // Zoom speed factor (e.g., 0.15 for 15%)
+    QPointF zoomAtPos = event->position();
+
+    bool isTouchpad = (event->device()->type() == QInputDevice::DeviceType::TouchPad);
+    bool hasPixelDelta = !event->pixelDelta().isNull() && event->pixelDelta().y() != 0;
+    bool hasAngleDelta = !event->angleDelta().isNull() && event->angleDelta().y() != 0;
+
+    if (isTouchpad && hasPixelDelta) {
+        // SCENARIO: Touchpad, pixelDelta().y() is small (e.g., +/-1), events are frequent.
+        //qDebug() << "Trackpad event (using pixelDelta):" << event->pixelDelta().y();
+
+        // Directly use the small delta as steps.
+        // If pixelDelta().y() is indeed +/-1, then steps will be +/-1.
+        steps = event->pixelDelta().y();
+
+        // *** KEY ADJUSTMENT: Use a much smaller zoom factor for these events. ***
+        // Instead of 0.15 (15%), try something like 0.01 to 0.03 (1% to 3%).
+        // This means each of the many small scroll events contributes a tiny zoom.
+        zs_for_this_event = 0.02; // TUNABLE: Start with 2%. Adjust as needed (e.g., 0.01, 0.015, 0.025, 0.03)
+
+    } else if (hasAngleDelta) {
+        // STANDARD MOUSE WHEEL or other devices primarily using angleDelta.
+        // This also catches touchpads that might only provide angleDelta.
+        qDebug() << "Mouse Wheel/Other (using angleDelta):" << event->angleDelta().y();
+        int angleY = event->angleDelta().y();
+
+        // angleDelta() is typically in 1/8ths of a degree.
+        // A standard mouse wheel "notch" or "tick" is 15 degrees (15 * 8 = 120 delta units).
+        // This calculation results in steps = +/-1 for each physical notch of the mouse wheel.
+        steps = angleY / 120;
+
+        // Use the original, larger zoom factor for these less frequent, distinct "notch" events.
+        zs_for_this_event = 0.15; // 15% zoom per notch.
+
+        // Special consideration if it's a touchpad using angleDelta:
+        if (isTouchpad) {
+            qDebug() << "Touchpad is using angleDelta. Steps:" << steps << "with zs:" << zs_for_this_event;
+            // If this still feels too fast/slow for a touchpad using angleDelta,
+            // you might need to adjust 'steps' or 'zs_for_this_event' specifically here.
+            // For example, if touchpad angleDelta is also small and frequent:
+            // steps = angleY / 60; // Make steps more sensitive
+            // zs_for_this_event = 0.05; // Use a smaller zoom factor
+        }
+
+    } else if (hasPixelDelta) {
+        // For non-touchpad devices that might provide pixelDelta (e.g., some high-resolution mice)
+        // but were not caught by the (isTouchpad && hasPixelDelta) condition.
+        qDebug() << "High-resolution Mouse/Other (using pixelDelta):" << event->pixelDelta().y();
+        int pixelY = event->pixelDelta().y();
+
+        // These pixel values might be larger than the touchpad's +/-1.
+        // Normalize them to small step counts (e.g. by dividing).
+        int divisor = 20; // TUNABLE: How many pixels for one logical "step".
+        steps = pixelY / divisor;
+        if (pixelY != 0 && steps == 0) { // Ensure at least one step for small movements
+            steps = (pixelY > 0) ? 1 : -1;
+        }
+        // Use the standard zoom factor if steps are now normalized to +/-1, +/-2, etc.
+        zs_for_this_event = 0.15;
+
     } else {
-        deg = event->angleDelta().y() / 8;
-        steps = deg / 15;
-    }
-    if (deg == 0) {
+        // No recognized scroll delta information in the event.
         event->ignore();
         return;
     }
 
-    double zs = 0.15, mult = qPow(1.0 + zs, steps);
-    setZoomFactorAtPoint(m_zoomFactor * mult, event->position());
+    if (steps == 0) {
+        // If, after processing, there are no effective steps to take, ignore the event.
+        event->ignore();
+        return;
+    }
+
+    double mult = qPow(1.0 + zs_for_this_event, steps);
+    setZoomFactorAtPoint(m_zoomFactor * mult, zoomAtPos);
     event->accept();
 }
+
+
 void VideoLoader::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     if (isVideoLoaded()) {
