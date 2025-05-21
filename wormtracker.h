@@ -103,7 +103,7 @@ signals:
 private:
     // Main processing logic for a frame
     bool processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoiInOut);    // Single worm, though other worms may be near
-    bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoiInOut, cv::Point2f& foundPositionOut);   // When merged, may split or have a NEW worm join the party
+    bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoiInOut);   // When merged, may split or have a NEW worm join the party
 
     // Helper functions
     QRectF adjustRoiSize(const QRectF roiInOut, const cv::Size& frameSize);                                                                 // For ROI expansion

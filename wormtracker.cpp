@@ -82,18 +82,17 @@ void WormTracker::continueTracking()
 
         else
         {   // process the frame, based on the state
-            cv::Point2f primaryTargetPosition;
             bool foundTargetThisFrame = false;  // Unless a split is inferred, this should come back true
 
             if (m_currentState == TrackerState::TrackingSingle || m_currentState == TrackerState::AmbiguouslySingle)
             {   // The simplest scenario. Worms should all be starting as single worms; at the very least, every track starts with this function
                 // We might know the tracker has detected a second ROI but it hasn't affected us yet
-                foundTargetThisFrame = processFrameAsSingleWorm(currentFrame, m_currFrameNum, m_currentRoi, primaryTargetPosition);
+                foundTargetThisFrame = processFrameAsSingleWorm(currentFrame, m_currFrameNum, m_currentRoi);
             }
 
             else if (m_currentState == TrackerState::TrackingMerged || m_currentState == TrackerState::AmbiguouslyMerged)
             {   // Wormtracker knows it is tracking two blobs that merged (confirmed by TrackingManager)
-                foundTargetThisFrame = processFrameAsMergedWorms(currentFrame, m_currFrameNum, m_currentRoi, primaryTargetPosition);
+                foundTargetThisFrame = processFrameAsMergedWorms(currentFrame, m_currFrameNum, m_currentRoi);
             }
             // At this point if we haven't found a blob, we're either waiting or it's missing
             if (!foundTargetThisFrame) qDebug() << "WormTracker ID" << m_wormId << ": Target search at sequence index" << m_currFrameNum << "was skipped or unsuccessful; continuing";
@@ -131,7 +130,7 @@ void WormTracker::stopTracking() {
 }
 
 
-bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFrameIndex, QRectF& roiIn, cv::Point2f& foundPositionOut)
+bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFrameIndex, QRectF& roiIn)
 {
     // This is where the magic happens. This function detects blobs within a fixed ROI of the last known worm position. If the largest blob fits within the ROI,
     // it assumes we're still seeing our worm and continues tracking that. If that blob no longer fits within the ROI, then it assumes we're in a merging state
@@ -164,7 +163,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
     {   // Whether we have 1 or more blobs, so long as our biggest blob is valid and contained within the ROI, we should be fine.
         currentPrimaryTarget = blobs.first();
         if (currentPrimaryTarget.touchesROIboundary)
-        {   // This shouldn't happen if you have set your ROI size properly! It depends upon speed and FPS.
+        {   // This shouldn't happen if you have set your ROI size properly! It depends upon speed and FPS too.
             qDebug() << "WormTracker ID" << m_wormId << "Frame" << originalFrameNumber
                      << ": Single blob found touches ROI boundary. Initial ROI:" << roiIn
                      << "Blob BBox:" << currentPrimaryTarget.boundingBox;
@@ -203,14 +202,28 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
             if (m_currentState != TrackerState::TrackingSingle) emit stateChanged(m_wormId, TrackerState::TrackingSingle);
             m_currentState = TrackerState::TrackingSingle;
         }
-        // if we made it here we found something and progressed the ROI so lets tell the continueTracking as such
+        // if we made it here we found something and progressed the ROI so lets tell continueTracking as such
         return true;
     }
 }
 
-bool WormTracker::processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& roiIn, cv::Point2f& foundPositionOut)
+bool WormTracker::processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& roiIn)
 {
-    return false;
+    int originalFrameNumber;
+    if (m_direction == TrackingDirection::Forward) {
+        originalFrameNumber = m_videoKeyFrameNum + sequenceFrameIndex;
+    } else { // Backwards movement
+        originalFrameNumber = m_videoKeyFrameNum - 1 - sequenceFrameIndex;
+    }
+    // First, gather all the blobs in our fixed ROI
+    QList<TrackingHelper::DetectedBlob> blobs = findPlausibleBlobsInRoi(frame, roiIn);
+    int plausibleBlobsFound = blobs.count();
+    TrackingHelper::DetectedBlob currentPrimaryTarget;
+    currentPrimaryTarget.isValid = false;
+
+    qDebug() << "WormTracker ID" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd")
+             << "Frame" << originalFrameNumber << "(Seq:" << sequenceFrameIndex << "): Initial search in ROI" << roiIn
+             << "found" << plausibleBlobsFound << "blobs.";
 }
 
 /*
