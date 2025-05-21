@@ -16,8 +16,8 @@
 //#include "wormobject.h"
 #include "trackingcommon.h"
 
-static const double EXPANSION_FACTOR = 1.25;               //
-static const int MAX_EXPANSION_ITERATIONS = 3;
+// static const double EXPANSION_FACTOR = 1.25; // Defunct if not used for temporary analysis ROI
+// static const int MAX_EXPANSION_ITERATIONS = 3; // Defunct if not used
 
 // Forward declaration
 //class WormObject;
@@ -45,98 +45,91 @@ public:
     Q_ENUM(TrackerState)
 
     explicit WormTracker(int wormId,
-                         QRectF initialRoi,
+                         QRectF initialRoi, // This is the fixed-size ROI
                          TrackingDirection direction,
                          int videoKeyFrameNum, // Original video keyframe number
                          QObject *parent = nullptr);
     ~WormTracker();
 
     void setFrames(const std::vector<cv::Mat>* frames); // Pointer to avoid copying large data
-    int getWormId() const { return m_wormId; }          // Getter for ID
-    TrackerState getCurrentTrackerState() const { return m_currentState; } // Getter for state
+    int getWormId() const { return m_wormId; }
+    TrackingDirection getDirection() const { return m_direction; } // Getter for direction
+    TrackerState getCurrentTrackerState() const { return m_currentState; }
 
 
 public slots:
-    void startTracking();           // Main slot to begin the tracking loop
-    void continueTracking();        // Recursive, called per frame
-    void stopTracking();            // Slot to gracefully stop tracking (e.g., on cancellation)
-
-    /**
-     * @brief Instructs the tracker to resume tracking a specific new target.
-     * Called by TrackingManager after a split has been resolved.
-     * @param targetBlob The specific blob (with centroid, ROI) to start tracking.
-     */
+    void startTracking();
+    void continueTracking();
+    void stopTracking();
     void resumeTrackingWithNewTarget(const TrackingHelper::DetectedBlob& targetBlob);
-
-
-    // MARKED FOR DELETION
-    /**
-     * @brief Instructs the tracker that its current target is now considered part of a merged entity.
-     * @param mergedEntityID A representative ID for the merge (optional, for logging).
-     * @param mergedBlobCentroid The centroid of the merged blob it should now follow.
-     * @param mergedBlobRoi The ROI encompassing the merged blob.
-     */
     void confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoi);
 
 
 signals:
-    void finished();                                    // Emitted when tracking for this instance is done (normally or due to stop)
-    void progress(int wormId, int percentDone);         // Percent of its assigned frames processed
-    void positionUpdated(int wormId,                    // Worm ID
-                         int originalFrameNumber,       // Absolute frame ID
-                         QPointF newPosition,           // Centroid of the primary blob it's tracking
-                         QRectF newRoi,                 // Its new adjusted ROI
-                         int plausibleBlobsFoundInRoi,  // How many "worm-like" blobs it saw
-                         double primaryBlobArea);       // Area of the blob at newPosition
-
-    // New: Emitted when a tracker, previously tracking one merged entity, now sees multiple distinct entities
-    // and is pausing to await instructions from TrackingManager. (I.e., is it a split? or a NEW worm?)
+    void finished();
+    void progress(int wormId, int percentDone);
+    void positionUpdated(int wormId,
+                         int originalFrameNumber,
+                         QPointF newPosition,
+                         QRectF newRoi, // This should be the fixed-size tracking ROI
+                         int plausibleBlobsFoundInRoi,
+                         double primaryBlobArea);
     void splitDetectedAndPaused(int wormId,
                                 int originalFrameNumber,
                                 const QList<TrackingHelper::DetectedBlob>& detectedBlobs);
-
-    // This signal reports changes to the WormObject's state, which might be influenced by TrackingManager
     void stateChanged(int wormId, TrackerState newState, int associatedWormId = -1);
     void errorOccurred(int wormId, QString errorMessage);
 
 
 private:
     // Main processing logic for a frame
-    bool processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoiInOut);    // Single worm, though other worms may be near
-    bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoiInOut);   // When merged, may split or have a NEW worm join the party
+    bool processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
+    bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
 
     // Helper functions
-    QRectF adjustRoiSize(const QRectF roiInOut, const cv::Size& frameSize);                                                                 // For ROI expansion
-    QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize);                                                          // For ROI position adjustment over time. Fixed size.
-    //QRectF adjustRoi(const cv::Point2f& wormCenter, const cv::Size& frameSize, const QSizeF& wormSizeGuess);                                // Adjusts ROI based on found position
-    QList<TrackingHelper::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);                               // Finds all plausible blobs within the current ROI based on defined criteria
-    TrackingHelper::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);                      // For merge events: ignore small bits and pieces of the mask
+    QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
+    QList<TrackingHelper::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
+    TrackingHelper::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
+
+    /**
+     * @brief Analyzes the overlap and new growth between a blob from the previous frame
+     * and a (potentially larger/merged) blob in the current frame.
+     * @param previousFrameBlob The DetectedBlob of the worm from the previous frame.
+     * @param currentFrameBlob The DetectedBlob from the current frame (could be a merged entity).
+     * @param frameSize The size of the current video frame (for creating masks).
+     * @param originalFrameNumberForDebug Optional: Frame number for debug logging.
+     * @return A DetectedBlob representing the most likely continuation of previousFrameBlob
+     * within currentFrameBlob. Returns an invalid DetectedBlob if analysis is inconclusive.
+     */
+    TrackingHelper::DetectedBlob findPersistingComponent(
+        const TrackingHelper::DetectedBlob& previousFrameBlob,
+        const TrackingHelper::DetectedBlob& currentFrameBlob,
+        const cv::Size& frameSize,
+        int originalFrameNumberForDebug = -1);
+
 
     // Permanent values
-    int m_wormId;                                       // Doesn't change. Identifies the worm we are tracking
-    TrackingDirection m_direction;                      // Doesn't change. Identifies the direction we go.
-    const std::vector<cv::Mat>* m_framesToProcess;      // Pointer to the sequence of frames
-    qreal m_initialRoiEdge;                             // The fixed ROI size provided by the user
-                //
+    int m_wormId;
+    TrackingDirection m_direction;
+    const std::vector<cv::Mat>* m_framesToProcess;
+    qreal m_initialRoiEdge; // The edge length of the fixed square ROI
 
-    double m_minBlobArea;                               // Parameters for what constitutes a "plausible worm blob"
-    double m_maxBlobArea;                               // Will be made configurable
+    double m_minBlobArea; // Plausibility parameters
+    double m_maxBlobArea;
 
     // Transient values
-    QRectF m_currentRoi;                                // Current ROI in video coordinates for the frame
-    cv::Point2f m_lastKnownPosition;                    // Last confirmed position of the primary target
-    int m_videoKeyFrameNum;                             // The original frame number of the keyframe
-    int m_currFrameNum = 0;                             // relative to list of frames delivered (frame 0 is keyframe or keyframe-1)
-    bool m_trackingActive;                              // Overall active state (true if tracking loop should run)
-    TrackerState m_currentState;                        // Internal state of the tracker
-    TrackingHelper::DetectedBlob m_lastPrimaryBlob;     // Stores the last primary blob this tracker was focused on. Useful for split detection.
+    QRectF m_currentSearchRoi; // Current fixed-size ROI for searching in the frame
+    cv::Point2f m_lastKnownPosition;
+    int m_videoKeyFrameNum;
+    int m_currFrameNum = 0;
+    bool m_trackingActive;
+    TrackerState m_currentState;
+    TrackingHelper::DetectedBlob m_lastPrimaryBlob; // Last successfully tracked blob characteristics
 
-    // [DEFUNCT]
-    double m_minAspectRatio; // width/height or height/width, always >= 1
-    double m_maxAspectRatio;
-    QSizeF m_estimatedWormSize;                         // Estimated size of the worm, used for ROI adjustment
-
-
+    // Defunct or to be re-evaluated:
+    // double m_minAspectRatio; // Not currently used by findPlausibleBlobsInRoi directly
+    // double m_maxAspectRatio; // Not currently used
+    // QSizeF m_estimatedWormSize; // The fixed ROI m_initialRoiEdge replaces this for ROI definition
 };
 
 #endif // WORMTRACKER_H

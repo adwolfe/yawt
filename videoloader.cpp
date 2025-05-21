@@ -800,12 +800,21 @@ void VideoLoader::wheelEvent(QWheelEvent* event) {
         event->ignore();
         return;
     }
-    int deg = event->angleDelta().y() / 8;
+    int deg = 0;
+    int steps = 0;
+    if (event->device()->type() == QInputDevice::DeviceType::TouchPad) {
+        qDebug() << "Trackpad event" << event->position() << event->angleDelta() << event->pixelDelta();
+        deg = event->pixelDelta().y();
+        steps = deg;
+    } else {
+        deg = event->angleDelta().y() / 8;
+        steps = deg / 15;
+    }
     if (deg == 0) {
         event->ignore();
         return;
     }
-    int steps = deg / 15;
+
     double zs = 0.15, mult = qPow(1.0 + zs, steps);
     setZoomFactorAtPoint(m_zoomFactor * mult, event->position());
     event->accept();
