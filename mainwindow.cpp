@@ -265,18 +265,18 @@ void MainWindow::setGlobalThresholdType(bool isAuto) {
     ui->globalThreshSlider->setDisabled(isAuto);
     ui->globalThreshValueSpin->setDisabled(isAuto);
     if (isAuto) {
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Otsu);
+        ui->videoLoader->setThresholdAlgorithm(Thresholding::ThresholdAlgorithm::Otsu);
     } else {
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::Global);
+        ui->videoLoader->setThresholdAlgorithm(Thresholding::ThresholdAlgorithm::Global);
         ui->videoLoader->setThresholdValue(ui->globalThreshSlider->value());
     }
 }
 
 void MainWindow::setAdaptiveThresholdType(int index) {
     if (index == 0) {
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveGaussian);
+        ui->videoLoader->setThresholdAlgorithm(Thresholding::ThresholdAlgorithm::AdaptiveGaussian);
     } else {
-        ui->videoLoader->setThresholdAlgorithm(ThresholdAlgorithm::AdaptiveMean);
+        ui->videoLoader->setThresholdAlgorithm(Thresholding::ThresholdAlgorithm::AdaptiveMean);
     }
 }
 void MainWindow::setGlobalThresholdValue(int value) {
@@ -309,7 +309,7 @@ void MainWindow::setBackgroundAssumption(int index) {
 }
 
 // --- Blob Handling ---
-void MainWindow::handleBlobClickedForAddition(const TrackingHelper::DetectedBlob& blobData) {
+void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
     m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, TableItems::ItemType::Worm);
@@ -370,11 +370,11 @@ void MainWindow::onStartTrackingActionTriggered() {
         QMessageBox::critical(this, "Error", "Video path is empty."); return;
     }
 
-    std::vector<InitialWormInfo> initialWorms;
+    std::vector<Tracking::InitialWormInfo> initialWorms;
     const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
     for(const TableItems::ClickedItem& item : items) {
         if(item.type == TableItems::ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
-            InitialWormInfo info;
+            Tracking::InitialWormInfo info;
             info.id = item.id;
             info.initialRoi = item.initialBoundingBox;
             info.color = item.color;
@@ -386,7 +386,7 @@ void MainWindow::onStartTrackingActionTriggered() {
     }
 
     int keyFrame = ui->videoLoader->getCurrentFrameNumber();
-    ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
+    Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
     if (!m_trackingProgressDialog) {
@@ -411,14 +411,14 @@ void MainWindow::handleBeginTrackingFromDialog() {
     }
     QString videoPath = ui->videoLoader->getCurrentVideoPath();
     int keyFrame = ui->videoLoader->getCurrentFrameNumber();
-    ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
+    Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
-    std::vector<InitialWormInfo> initialWorms;
+    std::vector<Tracking::InitialWormInfo> initialWorms;
     const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
     for(const TableItems::ClickedItem& item : items) {
         if(item.type == TableItems::ItemType::Worm) {
-            InitialWormInfo info; info.id = item.id; info.initialRoi = item.initialBoundingBox; info.color = item.color;
+            Tracking::InitialWormInfo info; info.id = item.id; info.initialRoi = item.initialBoundingBox; info.color = item.color;
             initialWorms.push_back(info);
         }
     }
@@ -432,7 +432,7 @@ void MainWindow::handleCancelTrackingFromDialog() {
     if (m_trackingManager) m_trackingManager->cancelTracking();
 }
 
-void MainWindow::acceptTracksFromManager(const AllWormTracks& tracks) {
+void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {
     qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
     ui->videoLoader->setTracksToDisplay(tracks);
     if (!tracks.empty()) { // Optionally switch to tracks view

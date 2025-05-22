@@ -17,7 +17,7 @@ public:
     ~VideoProcessor();
 
 public slots:
-    void startInitialProcessing(const QString& videoPath, int keyFrameNum, const ThresholdSettings& settings, int totalFramesHint);
+    void startInitialProcessing(const QString& videoPath, int keyFrameNum, const Thresholding::ThresholdSettings& settings, int totalFramesHint);
 
 signals:
     void processingStarted();
@@ -30,11 +30,11 @@ signals:
     void processingError(const QString& errorMessage);
 
 private:
-    void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const ThresholdSettings& settings);
+    void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const Thresholding::ThresholdSettings& settings);
 
     QString m_videoPath;
     int m_keyFrameNum; // 0-indexed
-    ThresholdSettings m_thresholdSettings;
+    Thresholding::ThresholdSettings m_thresholdSettings;
     int m_totalFramesHint; // For progress calculation
     bool m_processingActive;
 };

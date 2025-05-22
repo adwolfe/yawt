@@ -134,13 +134,13 @@ void WormTracker::stopTracking() {
     QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
 }
 
-TrackingHelper::DetectedBlob WormTracker::findPersistingComponent(
-    const TrackingHelper::DetectedBlob& previousFrameBlob,
-    const TrackingHelper::DetectedBlob& currentFrameBlob,
+Tracking::DetectedBlob WormTracker::findPersistingComponent(
+    const Tracking::DetectedBlob& previousFrameBlob,
+    const Tracking::DetectedBlob& currentFrameBlob,
     const cv::Size& frameSize,
     int originalFrameNumberForDebug)
 {
-    TrackingHelper::DetectedBlob persistingComponent; // Default invalid
+    Tracking::DetectedBlob persistingComponent; // Default invalid
     persistingComponent.isValid = false;
 
     if (!previousFrameBlob.isValid || previousFrameBlob.contourPoints.empty() ||
@@ -164,8 +164,8 @@ TrackingHelper::DetectedBlob WormTracker::findPersistingComponent(
     cv::bitwise_and(currBlobMask, prevBlobMaskNot, newGrowthMask);    // Component in current not in previous
     cv::bitwise_and(currBlobMask, prevBlobMask, oldOverlapMask);      // Component in current AND in previous
 
-    TrackingHelper::DetectedBlob newGrowthComponentDetails = findLargestBlobComponentInMask(newGrowthMask, "NewGrowthAnalysis");
-    TrackingHelper::DetectedBlob oldOverlapComponentDetails = findLargestBlobComponentInMask(oldOverlapMask, "OldOverlapAnalysis");
+    Tracking::DetectedBlob newGrowthComponentDetails = findLargestBlobComponentInMask(newGrowthMask, "NewGrowthAnalysis");
+    Tracking::DetectedBlob oldOverlapComponentDetails = findLargestBlobComponentInMask(oldOverlapMask, "OldOverlapAnalysis");
 
     // Heuristic to decide: Prioritize the overlapping part if it's substantial.
     // The 0.3 factor is a threshold to consider a component "significant" relative to min worm area.
@@ -212,10 +212,10 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
     qDebug() << "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd")
              << "Frame" << originalFrameNumber << "(Seq:" << sequenceFrameIndex << "): STATE_SINGLE|AMBIGUOUS - Searching in fixed ROI" << currentFixedSearchRoiRef;
 
-    QList<TrackingHelper::DetectedBlob> blobsInFixedRoi = findPlausibleBlobsInRoi(frame, currentFixedSearchRoiRef);
+    QList<Tracking::DetectedBlob> blobsInFixedRoi = findPlausibleBlobsInRoi(frame, currentFixedSearchRoiRef);
     int plausibleBlobsInFixedRoi = blobsInFixedRoi.count();
 
-    TrackingHelper::DetectedBlob bestBlobForThisFrame;
+    Tracking::DetectedBlob bestBlobForThisFrame;
     bestBlobForThisFrame.isValid = false;
     TrackerState nextState = m_currentState; // Start with current state, modify as needed
 
@@ -230,7 +230,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
 
     // --- Case 2: One blob found in the fixed ROI ---
     if (plausibleBlobsInFixedRoi == 1) {
-        TrackingHelper::DetectedBlob singleBlob = blobsInFixedRoi.first();
+        Tracking::DetectedBlob singleBlob = blobsInFixedRoi.first();
         qDebug() << "  "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Found 1 plausible blob in fixed ROI. BBox:" << singleBlob.boundingBox << "Area:" << singleBlob.area;
 
         // Check if it touches the boundary or is not fully contained
@@ -244,7 +244,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
         } else {
             qDebug() << "  "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Single blob touches ROI boundary. Initiating expansion analysis.";
             QRectF analysisRoi = currentFixedSearchRoiRef;
-            TrackingHelper::DetectedBlob candidateBlobAfterExpansion = singleBlob; // Start with the blob we found
+            Tracking::DetectedBlob candidateBlobAfterExpansion = singleBlob; // Start with the blob we found
 
             for (int i = 0; i < MAX_EXPANSION_ITERATIONS_BOUNDARY; ++i) {
                 qDebug() << "    "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Expansion iter #" << i + 1 << "/" << MAX_EXPANSION_ITERATIONS_BOUNDARY
@@ -268,7 +268,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
                 analysisRoi.setHeight(qMin(analysisRoi.height(), static_cast<qreal>(frame.rows)));
 
 
-                QList<TrackingHelper::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, analysisRoi);
+                QList<Tracking::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, analysisRoi);
                 qDebug() << "    "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Found" << blobsInExpanded.count() << "blobs in expanded ROI:" << analysisRoi;
 
                 if (blobsInExpanded.isEmpty()) {
@@ -277,10 +277,10 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
                     break;
                 }
 
-                TrackingHelper::DetectedBlob largestInExpanded = blobsInExpanded.first();
+                Tracking::DetectedBlob largestInExpanded = blobsInExpanded.first();
 
                 if (m_lastPrimaryBlob.isValid) {
-                    TrackingHelper::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, largestInExpanded, frame.size(), originalFrameNumber);
+                    Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, largestInExpanded, frame.size(), originalFrameNumber);
                     if (persisted.isValid) {
                         candidateBlobAfterExpansion = persisted;
                     } else {
@@ -337,7 +337,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
     }
     // --- Case 3: More than one blob found in the fixed ROI ---
     else { // plausibleBlobsInFixedRoi > 1
-        TrackingHelper::DetectedBlob largestInFixedRoi = blobsInFixedRoi.first();
+        Tracking::DetectedBlob largestInFixedRoi = blobsInFixedRoi.first();
         qDebug() << "  "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Found >1 (" << plausibleBlobsInFixedRoi << ") plausible blobs in fixed ROI. Largest BBox:" << largestInFixedRoi.boundingBox;
 
         bool largestTouchesBoundary = largestInFixedRoi.touchesROIboundary ||
@@ -352,7 +352,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
             // This is similar to the "single blob touches boundary" case, but we start knowing there were others.
             // The goal is to get the best representation of *our* worm, even if it's touching.
             QRectF analysisRoi = currentFixedSearchRoiRef;
-            TrackingHelper::DetectedBlob candidateBlobAfterExpansion = largestInFixedRoi;
+            Tracking::DetectedBlob candidateBlobAfterExpansion = largestInFixedRoi;
 
             for (int i = 0; i < MAX_EXPANSION_ITERATIONS_BOUNDARY; ++i) {
                 qDebug() << "    "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Expansion iter (case >1 blobs) #" << i + 1 << "/" << MAX_EXPANSION_ITERATIONS_BOUNDARY
@@ -372,7 +372,7 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
                 analysisRoi.setWidth(qMin(analysisRoi.width(), static_cast<qreal>(frame.cols)));
                 analysisRoi.setHeight(qMin(analysisRoi.height(), static_cast<qreal>(frame.rows)));
 
-                QList<TrackingHelper::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, analysisRoi);
+                QList<Tracking::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, analysisRoi);
                 qDebug() << "    "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"Found" << blobsInExpanded.count() << "blobs in expanded ROI:" << analysisRoi;
 
 
@@ -380,10 +380,10 @@ bool WormTracker::processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFra
                     qDebug() << "    "<< "WT" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd") << "Frame" << originalFrameNumber <<"No blobs in expanded ROI. Aborting expansion.";
                     break;
                 }
-                TrackingHelper::DetectedBlob currentLargestInExpanded = blobsInExpanded.first();
+                Tracking::DetectedBlob currentLargestInExpanded = blobsInExpanded.first();
 
                 if (m_lastPrimaryBlob.isValid) {
-                    TrackingHelper::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, currentLargestInExpanded, frame.size(), originalFrameNumber);
+                    Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, currentLargestInExpanded, frame.size(), originalFrameNumber);
                     if (persisted.isValid) {
                         candidateBlobAfterExpansion = persisted;
                     } else {
@@ -503,7 +503,7 @@ bool WormTracker::processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFr
     qDebug() << "WormTracker ID" << m_wormId << (m_direction == TrackingDirection::Forward ? "Fwd" : "Bwd")
              << "Frame" << originalFrameNumber << "(Seq:" << sequenceFrameIndex << "): In processFrameAsMergedWorms. ROI:" << currentFixedSearchRoiRef;
 
-    QList<TrackingHelper::DetectedBlob> blobsInRoi = findPlausibleBlobsInRoi(frame, currentFixedSearchRoiRef);
+    QList<Tracking::DetectedBlob> blobsInRoi = findPlausibleBlobsInRoi(frame, currentFixedSearchRoiRef);
     int plausibleBlobsFound = blobsInRoi.count();
 
     if (plausibleBlobsFound == 0) {
@@ -514,10 +514,10 @@ bool WormTracker::processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFr
 
     // Assuming currentFixedSearchRoiRef is large enough to contain the merged entity.
     // We need to find *our* worm within it.
-    TrackingHelper::DetectedBlob currentMergedMass = blobsInRoi.first(); // The largest blob is likely the merged mass.
+    Tracking::DetectedBlob currentMergedMass = blobsInRoi.first(); // The largest blob is likely the merged mass.
 
     if (m_lastPrimaryBlob.isValid) {
-        TrackingHelper::DetectedBlob ourComponent = findPersistingComponent(m_lastPrimaryBlob, currentMergedMass, frame.size(), originalFrameNumber);
+        Tracking::DetectedBlob ourComponent = findPersistingComponent(m_lastPrimaryBlob, currentMergedMass, frame.size(), originalFrameNumber);
 
         if (ourComponent.isValid) {
             m_lastKnownPosition = cv::Point2f(static_cast<float>(ourComponent.centroid.x()), static_cast<float>(ourComponent.centroid.y()));
@@ -574,7 +574,7 @@ bool WormTracker::processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFr
 }
 
 
-void WormTracker::resumeTrackingWithNewTarget(const TrackingHelper::DetectedBlob& targetBlob) {
+void WormTracker::resumeTrackingWithNewTarget(const Tracking::DetectedBlob& targetBlob) {
     qDebug() << "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called. Centroid:" << targetBlob.centroid;
     if (!targetBlob.isValid) {
         qWarning() << "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called with invalid blob. May stop tracking.";
@@ -618,8 +618,8 @@ void WormTracker::confirmTargetIsMerged(int mergedEntityID, const QPointF& merge
 }
 
 
-TrackingHelper::DetectedBlob WormTracker::findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName) {
-    TrackingHelper::DetectedBlob resultBlob;
+Tracking::DetectedBlob WormTracker::findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName) {
+    Tracking::DetectedBlob resultBlob;
     resultBlob.isValid = false;
     if (mask.empty() || cv::countNonZero(mask) == 0) {
         return resultBlob;
@@ -667,14 +667,14 @@ TrackingHelper::DetectedBlob WormTracker::findLargestBlobComponentInMask(const c
 }
 
 
-QList<TrackingHelper::DetectedBlob> WormTracker::findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi) {
+QList<Tracking::DetectedBlob> WormTracker::findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi) {
     // This function now directly uses the TrackingHelper function
     // It passes the tracker's specific plausibility parameters.
     // Note: m_minAspectRatio and m_maxAspectRatio are currently defunct in WormTracker.
-    // TrackingHelper::findAllPlausibleBlobsInRoi uses its own defaults or passed-in values.
+    // Tracking::findAllPlausibleBlobsInRoi uses its own defaults or passed-in values.
     // If WormTracker needs to enforce specific aspect ratios, these members should be revived
     // and passed to the TrackingHelper function.
-    return TrackingHelper::findAllPlausibleBlobsInRoi(fullFrame, roi,
+    return Tracking::findAllPlausibleBlobsInRoi(fullFrame, roi,
                                                       m_minBlobArea, m_maxBlobArea,
                                                       TrackingConstants::DEFAULT_MIN_ASPECT_RATIO, // Using defaults from common
                                                       TrackingConstants::DEFAULT_MAX_ASPECT_RATIO);

@@ -61,7 +61,7 @@ public slots:
     void startTracking();
     void continueTracking();
     void stopTracking();
-    void resumeTrackingWithNewTarget(const TrackingHelper::DetectedBlob& targetBlob);
+    void resumeTrackingWithNewTarget(const Tracking::DetectedBlob& targetBlob);
     void confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoi);
 
 
@@ -76,7 +76,7 @@ signals:
                          double primaryBlobArea);
     void splitDetectedAndPaused(int wormId,
                                 int originalFrameNumber,
-                                const QList<TrackingHelper::DetectedBlob>& detectedBlobs);
+                                const QList<Tracking::DetectedBlob>& detectedBlobs);
     void stateChanged(int wormId, TrackerState newState, int associatedWormId = -1);
     void errorOccurred(int wormId, QString errorMessage);
 
@@ -88,8 +88,8 @@ private:
 
     // Helper functions
     QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
-    QList<TrackingHelper::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
-    TrackingHelper::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
+    QList<Tracking::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
+    Tracking::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
 
     /**
      * @brief Analyzes the overlap and new growth between a blob from the previous frame
@@ -101,9 +101,9 @@ private:
      * @return A DetectedBlob representing the most likely continuation of previousFrameBlob
      * within currentFrameBlob. Returns an invalid DetectedBlob if analysis is inconclusive.
      */
-    TrackingHelper::DetectedBlob findPersistingComponent(
-        const TrackingHelper::DetectedBlob& previousFrameBlob,
-        const TrackingHelper::DetectedBlob& currentFrameBlob,
+    Tracking::DetectedBlob findPersistingComponent(
+        const Tracking::DetectedBlob& previousFrameBlob,
+        const Tracking::DetectedBlob& currentFrameBlob,
         const cv::Size& frameSize,
         int originalFrameNumberForDebug = -1);
 
@@ -124,7 +124,7 @@ private:
     int m_currFrameNum = 0;
     bool m_trackingActive;
     TrackerState m_currentState;
-    TrackingHelper::DetectedBlob m_lastPrimaryBlob; // Last successfully tracked blob characteristics
+    Tracking::DetectedBlob m_lastPrimaryBlob; // Last successfully tracked blob characteristics
 
     // Defunct or to be re-evaluated:
     // double m_minAspectRatio; // Not currently used by findPlausibleBlobsInRoi directly

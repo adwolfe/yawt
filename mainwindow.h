@@ -15,7 +15,7 @@ class TrackingManager;
 
 // Include VideoLoader header for enums and QFlags type
 #include "videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
-#include "trackingcommon.h" // For AllWormTracks and TrackingHelper::DetectedBlob
+#include "trackingcommon.h" // For AllWormTracks and Tracking::DetectedBlob
 
 QT_BEGIN_NAMESPACE
 QT_END_NAMESPACE
@@ -62,14 +62,14 @@ public slots:
     void setBackgroundAssumption(int index);
 
     // Blob/Item Handling
-    void handleBlobClickedForAddition(const TrackingHelper::DetectedBlob& blobData);
+    void handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData);
     void handleRemoveBlobsClicked();
 
     // Tracking Process
     void onStartTrackingActionTriggered();
     void handleBeginTrackingFromDialog();
     void handleCancelTrackingFromDialog();
-    void acceptTracksFromManager(const AllWormTracks& tracks);
+    void acceptTracksFromManager(const Tracking::AllWormTracks& tracks);
 
     // Table View and VideoLoader Sync
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);

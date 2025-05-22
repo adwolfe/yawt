@@ -6,7 +6,7 @@
 #include <QRectF>
 #include <QPointF>
 #include <vector>
-#include "trackingcommon.h" // For WormTrackPoint
+#include "trackingcommon.h"
 
 class WormObject {
 public:
@@ -23,7 +23,7 @@ public:
     cv::Point2f getCurrentPosition() const;
     QRectF getCurrentRoi() const;
     TrackingState getCurrentState() const;
-    const std::vector<WormTrackPoint>& getTrackHistory() const;
+    const std::vector<Tracking::WormTrackPoint>& getTrackHistory() const;
 
     void updateTrackPoint(int originalFrameNum, const cv::Point2f& position, const QRectF& roi);
     void setState(TrackingState state, int mergedWithId = -1);
@@ -41,8 +41,8 @@ private:
     // Stores the history of positions.
     // The key (int) will be the original frame number to allow sparse updates
     // from forward and backward tracking and easier merging.
-    std::map<int, WormTrackPoint> m_trackHistoryMap;
-    std::vector<WormTrackPoint> m_trackHistoryVector; // For ordered access if needed, can be rebuilt from map
+    std::map<int, Tracking::WormTrackPoint> m_trackHistoryMap;
+    std::vector<Tracking::WormTrackPoint> m_trackHistoryVector; // For ordered access if needed, can be rebuilt from map
 
     void rebuildTrackHistoryVector(); // Helper to keep vector sorted by frame number
 };

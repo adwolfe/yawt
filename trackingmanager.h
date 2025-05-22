@@ -10,7 +10,7 @@
 #include <opencv2/core.hpp>
 #include <set> // For std::set in merge logic
 
-#include "trackingcommon.h" // For ThresholdSettings (ensure lowercase if filename is)
+#include "trackingcommon.h" // For Thresholding::ThresholdSettings (ensure lowercase if filename is)
 #include "wormobject.h"      // For WormObject (ensure lowercase)
 #include "videoprocessor.h"  // Lowercase include
 #include "wormtracker.h"     // Lowercase include, for WormTracker class and its signals
@@ -25,8 +25,8 @@ public:
 public slots:
     void startFullTrackingProcess(const QString& videoPath,
                                   int keyFrameNum, // 0-indexed
-                                  const std::vector<InitialWormInfo>& initialWorms,
-                                  const ThresholdSettings& settings,
+                                  const std::vector<Tracking::InitialWormInfo>& initialWorms,
+                                  const Thresholding::ThresholdSettings& settings,
                                   int totalFramesInVideo);
     void cancelTracking();
 
@@ -49,7 +49,7 @@ private slots:
 
     void handleWormSplitDetectedAndPaused(int wormId,
                                           int originalFrameNumber,
-                                          const QList<TrackingHelper::DetectedBlob>& detectedBlobs); // New slot
+                                          const QList<Tracking::DetectedBlob>& detectedBlobs); // New slot
 
     void handleWormStateChanged(int wormId, WormTracker::TrackerState newState);
     void handleWormTrackerFinished();
@@ -60,8 +60,8 @@ private slots:
 signals:
     void overallTrackingProgress(int percentage);
     void trackingStatusUpdate(const QString& statusMessage);
-    void individualWormTrackUpdated(int wormId, const WormTrackPoint& lastPoint);
-    void allTracksUpdated(const AllWormTracks& tracks);
+    void individualWormTrackUpdated(int wormId, const Tracking::WormTrackPoint& lastPoint);
+    void allTracksUpdated(const Tracking::AllWormTracks& tracks);
     void trackingFinishedSuccessfully(const QString& outputPath);
     void trackingFailed(const QString& reason);
     void trackingCancelled();
@@ -72,8 +72,8 @@ private:
     void launchWormTrackers();
     void updateOverallProgress();
     void checkForAllTrackersFinished();
-    void outputTracksToDebug(const AllWormTracks& tracks) const;
-    bool outputTracksToCsv(const AllWormTracks& tracks, const QString& outputFileName) const;
+    void outputTracksToDebug(const Tracking::AllWormTracks& tracks) const;
+    bool outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     QList<WormTracker*> findTrackersForWorm(int conceptualWormId);
 
     // --- Merge/Split Management ---
@@ -101,8 +101,8 @@ private:
     // --- Configuration & State (as before) ---
     QString m_videoPath;
     int m_keyFrameNum;
-    std::vector<InitialWormInfo> m_initialWormInfos;
-    ThresholdSettings m_thresholdSettings;
+    std::vector<Tracking::InitialWormInfo> m_initialWormInfos;
+    Thresholding::ThresholdSettings m_thresholdSettings;
     int m_totalFramesInVideo;
     bool m_isTrackingRunning;
     bool m_cancelRequested;
@@ -123,7 +123,7 @@ private:
     int m_videoProcessingProgress;
     QMap<WormTracker*, int> m_individualTrackerProgress;
 
-    AllWormTracks m_finalTracks; // std::map
+    Tracking::AllWormTracks m_finalTracks; // std::map
 };
 
 #endif // TRACKINGMANAGER_H

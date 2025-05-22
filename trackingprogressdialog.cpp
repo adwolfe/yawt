@@ -56,7 +56,7 @@ TrackingProgressDialog::~TrackingProgressDialog() {
 
 void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
                                                    int keyFrame,
-                                                   const ThresholdSettings& settings,
+                                                   const Thresholding::ThresholdSettings& settings,
                                                    int numberOfWorms,
                                                    int totalFramesInVideo) {
     m_videoPath = videoPath;
@@ -96,7 +96,7 @@ void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
     }
 }
 
-QString TrackingProgressDialog::formatThresholdSettings(const ThresholdSettings& s) const {
+QString TrackingProgressDialog::formatThresholdSettings(const Thresholding::ThresholdSettings& s) const {
     QString details;
 
     // Get the QMetaEnum for ThresholdAlgorithm using the meta-object of this class
@@ -106,26 +106,26 @@ QString TrackingProgressDialog::formatThresholdSettings(const ThresholdSettings&
 
     QString algorithmStr = metaEnum.valueToKey(static_cast<int>(s.algorithm));
     if (algorithmStr.isEmpty()) { // Fallback if the key is not found
-        algorithmStr = "Unknown Algorithm";
+        algorithmStr = Thresholding::algoToString(s.algorithm);
     }
 
     details += QString("  Background: %1\n").arg(s.assumeLightBackground ? "Light (Dark Worms)" : "Dark (Light Worms)");
     details += QString("  Algorithm: %1\n").arg(algorithmStr);
 
     switch (s.algorithm) {
-    case ThresholdAlgorithm::Global:
+    case Thresholding::ThresholdAlgorithm::Global:
         details += QString("    Value: %1\n").arg(s.globalThresholdValue);
         break;
-    case ThresholdAlgorithm::Otsu:
+    case Thresholding::ThresholdAlgorithm::Otsu:
         // Otsu is a type of global thresholding, value is automatic
         details += "    Value: Automatic (Otsu)\n";
         break;
-    case ThresholdAlgorithm::AdaptiveMean:
+    case Thresholding::ThresholdAlgorithm::AdaptiveMean:
         // details += "    Method: Adaptive Mean\n"; // Redundant if algorithmStr is "AdaptiveMean"
         details += QString("    Block Size: %1\n").arg(s.adaptiveBlockSize);
         details += QString("    C Value: %1\n").arg(s.adaptiveCValue);
         break;
-    case ThresholdAlgorithm::AdaptiveGaussian:
+    case Thresholding::ThresholdAlgorithm::AdaptiveGaussian:
         // details += "    Method: Adaptive Gaussian\n"; // Redundant
         details += QString("    Block Size: %1\n").arg(s.adaptiveBlockSize);
         details += QString("    C Value: %1\n").arg(s.adaptiveCValue);

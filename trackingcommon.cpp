@@ -4,7 +4,7 @@
 #include <QDebug>       // For qWarning/qDebug
 
 
-namespace TrackingHelper {
+namespace Tracking {
 
 DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
                              const QPointF& clickPointVideoCoords,

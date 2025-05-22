@@ -5,7 +5,7 @@
 #include <QDialog>
 #include <QString>
 #include <vector>
-#include "trackingcommon.h" // Contains ThresholdAlgorithm definition
+#include "trackingcommon.h" // Contains Thresholding::ThresholdAlgorithm definition
 
 // Forward declarations
 namespace Ui {
@@ -17,9 +17,9 @@ class QPushButton;
 
 class TrackingProgressDialog : public QDialog {
     Q_OBJECT
-    // Make the globally defined ThresholdAlgorithm known to this class's meta-object system
+    // Make the globally defined Thresholding::ThresholdAlgorithm known to this class's meta-object system
     // This allows us to use QMetaEnum to get string representations.
-    Q_ENUM(ThresholdAlgorithm)
+    //Q_ENUM(Thresholding::ThresholdAlgorithm)
 
 public:
     explicit TrackingProgressDialog(QWidget *parent = nullptr);
@@ -27,7 +27,7 @@ public:
 
     void setTrackingParameters(const QString& videoPath,
                                int keyFrame,
-                               const ThresholdSettings& settings,
+                               const Thresholding::ThresholdSettings& settings,
                                int numberOfWorms,
                                int totalFramesInVideo);
 
@@ -51,12 +51,12 @@ private:
 
     QString m_videoPath;
     int m_keyFrame;
-    ThresholdSettings m_thresholdSettings;
+    Thresholding::ThresholdSettings m_thresholdSettings;
     int m_numberOfWorms;
     int m_totalFramesInVideo;
     bool m_isTrackingRunning;
 
-    QString formatThresholdSettings(const ThresholdSettings& settings) const;
+    QString formatThresholdSettings(const Thresholding::ThresholdSettings& settings) const;
 };
 
 #endif // TRACKINGPROGRESSDIALOG_H

@@ -80,8 +80,8 @@ public:
 
     // --- Thresholding and Pre-processing Status Getters ---
     // bool isThresholdViewEnabled() const; // This will be controlled by ViewMode::Threshold
-    ThresholdSettings getCurrentThresholdSettings() const;
-    ThresholdAlgorithm getCurrentThresholdAlgorithm() const;
+    Thresholding::ThresholdSettings getCurrentThresholdSettings() const;
+    Thresholding::ThresholdAlgorithm getCurrentThresholdAlgorithm() const;
     int getThresholdValue() const;
     bool getAssumeLightBackground() const;
     int getAdaptiveBlockSize() const;
@@ -111,7 +111,7 @@ public slots:
 
     // --- Thresholding & Pre-processing Control Slots ---
     // void toggleThresholdView(bool enabled); // Replaced by setViewMode(ViewMode::Threshold)
-    void setThresholdAlgorithm(ThresholdAlgorithm algorithm);
+    void setThresholdAlgorithm(Thresholding::ThresholdAlgorithm algorithm);
     void setThresholdValue(int value);
     void setAssumeLightBackground(bool isLight);
     void setAdaptiveThresholdBlockSize(int blockSize);
@@ -132,7 +132,7 @@ public slots:
      * @brief Sets the tracks to be displayed.
      * @param tracks The map of track ID to track points.
      */
-    void setTracksToDisplay(const AllWormTracks& tracks);
+    void setTracksToDisplay(const Tracking::AllWormTracks& tracks);
 
     /**
      * @brief Sets which track IDs should be visible.
@@ -160,7 +160,7 @@ signals:
     void interactionModeChanged(InteractionMode newMode);
     void activeViewModesChanged(VideoLoader::ViewModeOptions newModes);
 
-    void thresholdParametersChanged(const ThresholdSettings& newSettings);
+    void thresholdParametersChanged(const Thresholding::ThresholdSettings& newSettings);
     void playbackSpeedChanged(double newSpeedMultiplier);
 
     /**
@@ -168,7 +168,7 @@ signals:
      * suggesting it should be added to the BlobTableModel.
      * @param blobData The data of the clicked blob (centroid, bounding box in video coordinates).
      */
-    void blobClickedForAddition(const TrackingHelper::DetectedBlob& blobData);
+    void blobClickedForAddition(const Tracking::DetectedBlob& blobData);
 
     void trackPointClicked(int wormId, int frameNumber, QPointF videoPoint); // For interaction in EditTracks mode
 
@@ -237,7 +237,7 @@ private:
 
     // --- Data for Display (received from models) ---
     QList<TableItems::ClickedItem> m_itemsToDisplay; // List of blobs/worms to display (from BlobTableModel)
-    AllWormTracks m_allTracksToDisplay;  // All tracks data
+    Tracking::AllWormTracks m_allTracksToDisplay;  // All tracks data
     QSet<int> m_visibleTrackIDs;         // IDs of tracks that should be currently rendered
     mutable QMap<int, QColor> m_trackColors; // Cache for track/item colors
 
@@ -247,7 +247,7 @@ private:
 
     // --- Thresholding & Pre-processing Members ---
     // bool m_showThresholdMask; // This state is now part of m_currentViewMode (ViewMode::Threshold)
-    ThresholdAlgorithm m_thresholdAlgorithm;
+    Thresholding::ThresholdAlgorithm m_thresholdAlgorithm;
     int m_thresholdValue;
     bool m_assumeLightBackground;
     int m_adaptiveBlockSize;

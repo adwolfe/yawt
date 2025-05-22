@@ -31,7 +31,7 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_isDefiningRoi(false),
     m_zoomFactor(1.0),
     m_panOffset(0.0, 0.0),
-    m_thresholdAlgorithm(ThresholdAlgorithm::Global),
+    m_thresholdAlgorithm(Thresholding::ThresholdAlgorithm::Global),
     m_thresholdValue(127),
     m_assumeLightBackground(true),
     m_adaptiveBlockSize(11),
@@ -76,8 +76,8 @@ double VideoLoader::getPlaybackSpeed() const {
 }
 QString VideoLoader::getCurrentVideoPath() const { return currentFilePath; }
 
-ThresholdSettings VideoLoader::getCurrentThresholdSettings() const {
-    ThresholdSettings settings;
+Thresholding::ThresholdSettings VideoLoader::getCurrentThresholdSettings() const {
+    Thresholding::ThresholdSettings settings;
     settings.assumeLightBackground = m_assumeLightBackground;
     settings.algorithm = m_thresholdAlgorithm;
     settings.globalThresholdValue = m_thresholdValue;
@@ -88,7 +88,7 @@ ThresholdSettings VideoLoader::getCurrentThresholdSettings() const {
     settings.blurSigmaX = m_blurSigmaX;
     return settings;
 }
-ThresholdAlgorithm VideoLoader::getCurrentThresholdAlgorithm() const {
+Thresholding::ThresholdAlgorithm VideoLoader::getCurrentThresholdAlgorithm() const {
     return m_thresholdAlgorithm;
 }
 int VideoLoader::getThresholdValue() const { return m_thresholdValue; }
@@ -271,7 +271,7 @@ void VideoLoader::setPlaybackSpeed(double multiplier) {
 }
 
 // --- Thresholding & Pre-processing Control Slots ---
-void VideoLoader::setThresholdAlgorithm(ThresholdAlgorithm algorithm) {
+void VideoLoader::setThresholdAlgorithm(Thresholding::ThresholdAlgorithm algorithm) {
     if (m_thresholdAlgorithm == algorithm) return;
     m_thresholdAlgorithm = algorithm;
     if (isVideoLoaded() && currentFrameIdx >= 0) {
@@ -287,7 +287,7 @@ void VideoLoader::setThresholdValue(int value) {
     value = qBound(0, value, 255);
     if (m_thresholdValue == value) return;
     m_thresholdValue = value;
-    if (isVideoLoaded() && currentFrameIdx >= 0 && m_thresholdAlgorithm == ThresholdAlgorithm::Global) {
+    if (isVideoLoaded() && currentFrameIdx >= 0 && m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::Global) {
         applyThresholding();
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
@@ -314,8 +314,8 @@ void VideoLoader::setAdaptiveThresholdBlockSize(int blockSize) {
     if (m_adaptiveBlockSize == blockSize) return;
     m_adaptiveBlockSize = blockSize;
     if (isVideoLoaded() && currentFrameIdx >= 0 &&
-        (m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveMean ||
-         m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveGaussian)) {
+        (m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveMean ||
+         m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveGaussian)) {
         applyThresholding();
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
@@ -329,8 +329,8 @@ void VideoLoader::setAdaptiveThresholdC(double cValue) {
     if (qFuzzyCompare(m_adaptiveC, cValue)) return;
     m_adaptiveC = cValue;
     if (isVideoLoaded() && currentFrameIdx >= 0 &&
-        (m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveMean ||
-         m_thresholdAlgorithm == ThresholdAlgorithm::AdaptiveGaussian)) {
+        (m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveMean ||
+         m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveGaussian)) {
         applyThresholding();
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
@@ -392,7 +392,7 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
     qDebug() << "VideoLoader: Items to display updated. Count:" << m_itemsToDisplay.size();
 }
 
-void VideoLoader::setTracksToDisplay(const AllWormTracks& tracks) {
+void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
     m_allTracksToDisplay = tracks;
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs (as blobs now use track data)
         update();
@@ -427,9 +427,9 @@ void VideoLoader::updateWormColor(int wormId, const QColor& color) {
         if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
             // Check if this wormId is relevant for current frame blob display
             if (!m_allTracksToDisplay.empty() && m_allTracksToDisplay.count(wormId)) {
-                const std::vector<WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(wormId);
+                const std::vector<Tracking::WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(wormId);
                 auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
-                                       [this](const WormTrackPoint& pt) {
+                                       [this](const Tracking::WormTrackPoint& pt) {
                                            return pt.frameNumberOriginal == currentFrameIdx;
                                        });
                 if (it != trackPoints.end()) needsRepaint = true;
@@ -555,16 +555,16 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             // Tracking has run, display current frame's blob positions from tracks
             for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 if (m_allTracksToDisplay.count(trackId)) {
-                    const std::vector<WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(trackId);
+                    const std::vector<Tracking::WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(trackId);
 
                     // Find the track point for the current frame
                     auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
-                                           [this](const WormTrackPoint& pt) {
+                                           [this](const Tracking::WormTrackPoint& pt) {
                                                return pt.frameNumberOriginal == currentFrameIdx;
                                            });
 
                     if (it != trackPoints.end()) { // Found track point for current frame
-                        const WormTrackPoint& currentFramePoint = *it;
+                        const Tracking::WormTrackPoint& currentFramePoint = *it;
                         QColor itemColor = getTrackColor(trackId);
 
                         // Draw Bounding Box for current frame from track data
@@ -632,7 +632,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty()) {
         for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
             int trackId = it_map->first;
-            const std::vector<WormTrackPoint>& trackPoints = it_map->second;
+            const std::vector<Tracking::WormTrackPoint>& trackPoints = it_map->second;
             if (!m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
 
             QPainterPath path;
@@ -644,7 +644,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             painter.setPen(trackPen);
 
             bool firstPoint = true;
-            for (const WormTrackPoint& pt : trackPoints) {
+            for (const Tracking::WormTrackPoint& pt : trackPoints) {
                 QPointF currentPointVideo(pt.position.x, pt.position.y);
                 QPointF currentPointWidget = mapPointFromVideo(currentPointVideo);
                 if (currentPointWidget.x() < 0) continue; // Skip points not visible on screen
@@ -684,7 +684,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             if (!m_thresholdedFrame_mono.empty()) {
                 QPointF clickVideoPoint = mapPointToVideo(event->position());
                 if (clickVideoPoint.x() >= 0) {
-                    TrackingHelper::DetectedBlob blobData = TrackingHelper::findClickedBlob(m_thresholdedFrame_mono, clickVideoPoint);
+                    Tracking::DetectedBlob blobData = Tracking::findClickedBlob(m_thresholdedFrame_mono, clickVideoPoint);
                     if (blobData.isValid) {
                         qDebug() << "VideoLoader: Blob clicked for addition. Centroid:" << blobData.centroid;
                         emit blobClickedForAddition(blobData);
@@ -1082,15 +1082,15 @@ void VideoLoader::applyThresholding() {
         m_assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
     try {
         switch (m_thresholdAlgorithm) {
-        case ThresholdAlgorithm::Global:
+        case Thresholding::ThresholdAlgorithm::Global:
             cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255,
                           type);
             break;
-        case ThresholdAlgorithm::Otsu:
+        case Thresholding::ThresholdAlgorithm::Otsu:
             cv::threshold(grayFrame, m_thresholdedFrame_mono, 0, 255,
                           type | cv::THRESH_OTSU);
             break;
-        case ThresholdAlgorithm::AdaptiveMean:
+        case Thresholding::ThresholdAlgorithm::AdaptiveMean:
             if (m_adaptiveBlockSize >= 3)
                 cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
                                       cv::ADAPTIVE_THRESH_MEAN_C, type,
@@ -1098,7 +1098,7 @@ void VideoLoader::applyThresholding() {
             else
                 m_thresholdedFrame_mono = cv::Mat();
             break;
-        case ThresholdAlgorithm::AdaptiveGaussian:
+        case Thresholding::ThresholdAlgorithm::AdaptiveGaussian:
             if (m_adaptiveBlockSize >= 3)
                 cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
                                       cv::ADAPTIVE_THRESH_GAUSSIAN_C, type,

@@ -34,10 +34,10 @@ TrackingManager::TrackingManager(QObject* parent)
     qRegisterMetaType<std::vector<cv::Mat>>("std::vector<cv::Mat>");
     qRegisterMetaType<cv::Size>("cv::Size");
     qRegisterMetaType<WormObject::TrackingState>("WormObject::TrackingState");
-    qRegisterMetaType<AllWormTracks>("AllWormTracks");
-    qRegisterMetaType<QList<TrackingHelper::DetectedBlob>>(
-        "QList<TrackingHelper::DetectedBlob>");
-    qRegisterMetaType<TrackingHelper::DetectedBlob>("TrackingHelper::DetectedBlob"); // For Q_ARG
+    qRegisterMetaType<Tracking::AllWormTracks>("AllWormTracks");
+    qRegisterMetaType<QList<Tracking::DetectedBlob>>(
+        "QList<Tracking::DetectedBlob>");
+    qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob"); // For Q_ARG
 }
 
 TrackingManager::~TrackingManager() {
@@ -58,8 +58,8 @@ TrackingManager::~TrackingManager() {
 
 void TrackingManager::startFullTrackingProcess(
     const QString& videoPath, int keyFrameNum,
-    const std::vector<InitialWormInfo>& initialWorms,
-    const ThresholdSettings& settings, int totalFramesInVideo) {
+    const std::vector<Tracking::InitialWormInfo>& initialWorms,
+    const Thresholding::ThresholdSettings& settings, int totalFramesInVideo) {
     qDebug() << "TrackingManager (" << this
              << "): startFullTrackingProcess called.";
     if (m_isTrackingRunning) {
@@ -234,7 +234,7 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
 QList<WormTracker*> TrackingManager::findTrackersForWorm(int conceptualWormId) {
     QList<WormTracker*> foundTrackers;
-    for (WormTracker* tracker : qAsConst(m_wormTrackers)) { // Iterate over current live trackers
+    for (WormTracker* tracker : std::as_const(m_wormTrackers)) { // Iterate over current live trackers
         if (tracker && tracker->getWormId() == conceptualWormId) {
             foundTrackers.append(tracker);
         }
@@ -416,7 +416,7 @@ void TrackingManager::handleWormPositionUpdated(
             // For now, WormTracker::positionUpdated sends its fixed search ROI as newRoi.
             // If WormTracker could send the actual detected blob's boundingBox, that would be better here.
             wormObject->updateTrackPoint(originalFrameNumber, cvPos, newRoi); // Storing the search ROI for now
-            WormTrackPoint lastPt;
+            Tracking::WormTrackPoint lastPt;
             lastPt.frameNumberOriginal = originalFrameNumber;
             lastPt.position = cvPos;
             lastPt.roi = newRoi; // This is the search ROI
@@ -447,7 +447,7 @@ void TrackingManager::handleWormPositionUpdated(
 void TrackingManager::handleWormSplitDetectedAndPaused(
     int reportingWormId,
     int originalFrameNumber,
-    const QList<TrackingHelper::DetectedBlob>& detectedBlobs) {
+    const QList<Tracking::DetectedBlob>& detectedBlobs) {
 
     if (m_cancelRequested || !m_isTrackingRunning) return;
 
@@ -514,7 +514,7 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
     }
     // If for the pausedTracker's worm, its WormObject position isn't good, try tracker's last known blob.
     if (lastPositions.value(reportingWormId, QPointF(-1,-1)).x() < 0 && pausedTracker->property("lastPrimaryBlob").isValid()) {
-        TrackingHelper::DetectedBlob lastBlob = pausedTracker->property("lastPrimaryBlob").value<TrackingHelper::DetectedBlob>();
+        Tracking::DetectedBlob lastBlob = pausedTracker->property("lastPrimaryBlob").value<Tracking::DetectedBlob>();
         if (lastBlob.isValid) lastPositions[reportingWormId] = lastBlob.centroid;
     }
 
@@ -537,8 +537,8 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
         return;
     }
 
-    QList<TrackingHelper::DetectedBlob> availableBlobs = detectedBlobs;
-    QMap<int, TrackingHelper::DetectedBlob> assignments;
+    QList<Tracking::DetectedBlob> availableBlobs = detectedBlobs;
+    QMap<int, Tracking::DetectedBlob> assignments;
     QSet<int> assignedBlobIndices;
 
     // Create a list of worm IDs that need assignment and have a last position
@@ -581,7 +581,7 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
     }
 
     for (int assignedWormId : assignments.keys()) {
-        TrackingHelper::DetectedBlob assignedBlob = assignments.value(assignedWormId);
+        Tracking::DetectedBlob assignedBlob = assignments.value(assignedWormId);
         QList<WormTracker*> trackersForThisWorm = findTrackersForWorm(assignedWormId);
 
         for (WormTracker* trackerInstance : trackersForThisWorm) {
@@ -592,14 +592,14 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
                 << "(Dir:" << trackerInstance->getDirection()
                 << ", Ptr:" << trackerInstance << ") to resume with blob at" << assignedBlob.centroid;
                 QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithNewTarget", Qt::QueuedConnection,
-                                          Q_ARG(TrackingHelper::DetectedBlob, assignedBlob));
+                                          Q_ARG(Tracking::DetectedBlob, assignedBlob));
             } else if (trackerInstance->getCurrentTrackerState() == WormTracker::TrackerState::PausedForSplit && trackerInstance != pausedTracker) {
                 // Another tracker for the same conceptual worm also paused, instruct it too.
                 qDebug() << "  Instructing other paused Tracker for worm" << trackerInstance->getWormId()
                          << "(Dir:" << trackerInstance->getDirection()
                          << ", Ptr:" << trackerInstance << ") to resume with blob at" << assignedBlob.centroid;
                 QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithNewTarget", Qt::QueuedConnection,
-                                          Q_ARG(TrackingHelper::DetectedBlob, assignedBlob));
+                                          Q_ARG(Tracking::DetectedBlob, assignedBlob));
             }
         }
         WormObject* wo = m_wormObjectsMap.value(assignedWormId, nullptr);
@@ -835,7 +835,7 @@ void TrackingManager::checkForAllTrackersFinished() {
             qDebug() << "TrackingManager: All trackers accounted for after CANCELLATION request.";
             // Consolidate whatever tracks were gathered
             m_finalTracks.clear();
-            for (WormObject* worm : qAsConst(m_wormObjectsMap)) {
+            for (WormObject* worm : std::as_const(m_wormObjectsMap)) {
                 if (worm) {
                     m_finalTracks[worm->getId()] = worm->getTrackHistory();
                 }
@@ -853,7 +853,7 @@ void TrackingManager::checkForAllTrackersFinished() {
             qDebug() << "TrackingManager: All trackers accounted for NORMALLY.";
             emit trackingStatusUpdate("All worm trackers completed. Consolidating and saving tracks...");
             m_finalTracks.clear();
-            for (WormObject* worm : qAsConst(m_wormObjectsMap)) {
+            for (WormObject* worm : std::as_const(m_wormObjectsMap)) {
                 if (worm) {
                     m_finalTracks[worm->getId()] = worm->getTrackHistory();
                 }
@@ -928,14 +928,14 @@ void TrackingManager::updateOverallProgress() {
     emit overallTrackingProgress(finalProgressPercentage);
 }
 
-void TrackingManager::outputTracksToDebug(const AllWormTracks& tracks) const {
+void TrackingManager::outputTracksToDebug(const Tracking::AllWormTracks& tracks) const {
     qDebug() << "--- Begin Track Output (" << this << ") ---";
     if (tracks.empty()) {
         qDebug() << "No tracks to output.";
     }
     for (auto const& [wormId, points] : tracks) {
         qDebug() << "Worm ID:" << wormId << "Number of points:" << points.size();
-        for (const WormTrackPoint& point : points) {
+        for (const Tracking::WormTrackPoint& point : points) {
             qDebug() << "  Frame:" << point.frameNumberOriginal
                      << "X:" << QString::number(point.position.x, 'f', 2)
                      << "Y:" << QString::number(point.position.y, 'f', 2)
@@ -948,7 +948,7 @@ void TrackingManager::outputTracksToDebug(const AllWormTracks& tracks) const {
     qDebug() << "--- End Track Output ---";
 }
 
-bool TrackingManager::outputTracksToCsv(const AllWormTracks& tracks, const QString& outputFilePath) const {
+bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const {
     if (outputFilePath.isEmpty()) {
         qWarning() << "outputTracksToCsv: No output file path provided.";
         return false;
@@ -961,7 +961,7 @@ bool TrackingManager::outputTracksToCsv(const AllWormTracks& tracks, const QStri
     QTextStream outStream(&csvFile);
     outStream << "WormID,Frame,PositionX,PositionY,RoiX,RoiY,RoiWidth,RoiHeight\n";
     for (auto const& [wormId, points] : tracks) { // C++17 structured binding
-        for (const WormTrackPoint& point : points) {
+        for (const Tracking::WormTrackPoint& point : points) {
             outStream << wormId << ","
                       << point.frameNumberOriginal << ","
                       << QString::number(point.position.x, 'f', 4) << ","

@@ -13,7 +13,7 @@ VideoProcessor::~VideoProcessor() {
     qDebug() << "VideoProcessor destroyed.";
 }
 
-void VideoProcessor::startInitialProcessing(const QString& videoPath, int keyFrameNum, const ThresholdSettings& settings, int totalFramesHint) {
+void VideoProcessor::startInitialProcessing(const QString& videoPath, int keyFrameNum, const Thresholding::ThresholdSettings& settings, int totalFramesHint) {
     m_videoPath = videoPath;
     m_keyFrameNum = keyFrameNum;
     m_thresholdSettings = settings;
@@ -119,7 +119,7 @@ void VideoProcessor::startInitialProcessing(const QString& videoPath, int keyFra
     emit initialProcessingComplete(forwardFrames, reversedFrames, fps, frameSize);
 }
 
-void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const ThresholdSettings& settings) {
+void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const Thresholding::ThresholdSettings& settings) {
     if (inputFrame.empty()) {
         outputFrame = cv::Mat();
         return;
@@ -132,7 +132,7 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
         grayFrame = inputFrame.clone(); // Already grayscale or single channel
     }
 
-    // Optional: Apply Gaussian blur (consider making kernel size/sigma part of ThresholdSettings)
+    // Optional: Apply Gaussian blur (consider making kernel size/sigma part of Thresholding::ThresholdSettings)
     if(settings.enableBlur) {
         cv::GaussianBlur(grayFrame, grayFrame, cv::Size(settings.blurKernelSize, settings.blurKernelSize), settings.blurSigmaX);
     }
@@ -140,18 +140,18 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
     int thresholdTypeOpenCV = settings.assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
 
     switch (settings.algorithm) {
-    case ThresholdAlgorithm::Global:
+    case Thresholding::ThresholdAlgorithm::Global:
         cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
         break;
-    case ThresholdAlgorithm::Otsu:
+    case Thresholding::ThresholdAlgorithm::Otsu:
         cv::threshold(grayFrame, outputFrame, 0, 255, thresholdTypeOpenCV | cv::THRESH_OTSU);
         break;
-    case ThresholdAlgorithm::AdaptiveMean:
+    case Thresholding::ThresholdAlgorithm::AdaptiveMean:
         cv::adaptiveThreshold(grayFrame, outputFrame, 255,
                               cv::ADAPTIVE_THRESH_MEAN_C, thresholdTypeOpenCV,
                               settings.adaptiveBlockSize, settings.adaptiveCValue);
         break;
-    case ThresholdAlgorithm::AdaptiveGaussian:
+    case Thresholding::ThresholdAlgorithm::AdaptiveGaussian:
         cv::adaptiveThreshold(grayFrame, outputFrame, 255,
                               cv::ADAPTIVE_THRESH_GAUSSIAN_C, thresholdTypeOpenCV,
                               settings.adaptiveBlockSize, settings.adaptiveCValue);

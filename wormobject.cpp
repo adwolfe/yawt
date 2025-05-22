@@ -26,7 +26,7 @@ WormObject::TrackingState WormObject::getCurrentState() const {
     return m_currentState;
 }
 
-const std::vector<WormTrackPoint>& WormObject::getTrackHistory() const {
+const std::vector<Tracking::WormTrackPoint>& WormObject::getTrackHistory() const {
     // Ensure vector is up-to-date if it's used frequently.
     // For now, it's rebuilt on demand or after updates.
     // If direct access to the vector is primary, update it in updateTrackPoint.
@@ -38,7 +38,7 @@ void WormObject::updateTrackPoint(int originalFrameNum, const cv::Point2f& posit
     m_currentRoi = roi;
     m_currentState = TrackingState::Tracking; // Assume tracking if position is updated
 
-    WormTrackPoint point;
+    Tracking::WormTrackPoint point;
     point.frameNumberOriginal = originalFrameNum;
     point.position = position;
     point.roi = roi;
@@ -72,7 +72,7 @@ void WormObject::rebuildTrackHistoryVector() {
     }
     // Sort by frame number
     std::sort(m_trackHistoryVector.begin(), m_trackHistoryVector.end(),
-              [](const WormTrackPoint& a, const WormTrackPoint& b) {
+              [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
                   return a.frameNumberOriginal < b.frameNumberOriginal;
               });
 }

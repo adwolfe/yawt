@@ -17,40 +17,8 @@
 // processing, and tracking to avoid circular dependencies.
 
 // Forward declaration
-class WormObject; // If WormObject needs to be referenced here, though likely not for these structs
+//class WormObject; // If WormObject needs to be referenced here, though likely not for these structs
 
-enum class TrackPointAnnotation {
-    Confident,
-    Ambiguous
-
-};
-
-/**
- * @brief Represents a single point in a worm's track.
- */
-struct WormTrackPoint {
-    int frameNumberOriginal; // Frame number in the original video
-    cv::Point2f position;    // Position (centroid) in video coordinates
-    QRectF roi;              // ROI used for this worm at this frame (in video coordinates)
-    TrackPointAnnotation state;
-    // Potentially add confidence, state (e.g. merged) if needed per point
-};
-
-/**
- * @brief Typedef for storing all tracks.
- * Maps a unique worm ID to its sequence of track points.
- */
-typedef std::map<int, std::vector<WormTrackPoint>> AllWormTracks;
-
-
-/**
- * @brief Structure to pass initial information about a worm to be tracked.
- */
-struct InitialWormInfo {
-    int id;
-    QRectF initialRoi; // ROI on the keyframe in video coordinates
-    QColor color;      // Color associated with this worm
-};
 
 namespace TableItems {
 // These are used within the BlobTableModel, for user interaction with blobs prior to tracking.
@@ -96,18 +64,29 @@ struct ClickedItem {
     // Add other relevant data as needed
 };
 
-}
+} // namespace TableItems
+
+namespace Thresholding {
 
 /**
  * @brief Defines available thresholding algorithms.
  */
 enum class ThresholdAlgorithm {
-    Global,         // Simple global threshold
-    Otsu,           // Otsu's binarization (auto global threshold)
-    AdaptiveMean,   // Adaptive threshold using mean of neighborhood
-    AdaptiveGaussian // Adaptive threshold using Gaussian weighted sum of neighborhood
+    Global,             // Simple global threshold
+    Otsu,               // Otsu's binarization (auto global threshold)
+    AdaptiveMean,       // Adaptive threshold using mean of neighborhood
+    AdaptiveGaussian     // Adaptive threshold using Gaussian weighted sum of neighborhood
 };
 
+inline QString algoToString(ThresholdAlgorithm algo) {
+    switch (algo) {
+    case ThresholdAlgorithm::Global: return "Global threshold [static]";
+    case ThresholdAlgorithm::Otsu: return "Global threshold [automatic]";
+    case ThresholdAlgorithm::AdaptiveMean: return "Adaptive threshold [Mean-weighted]";
+    case ThresholdAlgorithm::AdaptiveGaussian: return "Adaptive threshold [Gaussian-weighted]";
+    default: return "Unknown";
+    }
+}
 
 /**
  * @brief Structure to hold parameters for thresholding and pre-processing.
@@ -132,12 +111,13 @@ struct ThresholdSettings {
     double blurSigmaX = 0.0;       // 0 for auto calculation from kernel size.
 };
 
+} // namespace Thresholding
 
+namespace Tracking {
 
-namespace TrackingHelper {
 
 /**
-     * @brief Structure to hold information about a detected blob.
+     * @brief Structure to hold information about a detected blob during tracking.
      */
 struct DetectedBlob {
     QPointF centroid;                     // Centroid of the blob in video coordinates
@@ -150,6 +130,40 @@ struct DetectedBlob {
     // Default constructor
     DetectedBlob() : area(0.0), isValid(false), touchesROIboundary(false) {}
 };
+
+enum class TrackPointAnnotation {
+    Confident,
+    Ambiguous
+
+};
+
+/**
+ * @brief Represents a single point in a worm's track.
+ */
+struct WormTrackPoint {
+    int frameNumberOriginal;        // Frame number in the original video
+    cv::Point2f position;           // Position (centroid) in video coordinates
+    QRectF roi;                     // ROI used for this worm at this frame (in video coordinates)
+    TrackPointAnnotation state;
+
+};
+
+/**
+ * @brief Typedef for storing all tracks.
+ * Maps a unique worm ID to its sequence of track points.
+ */
+typedef std::map<int, std::vector<WormTrackPoint>> AllWormTracks;
+
+
+/**
+ * @brief Structure to pass initial information about a worm to be tracked.
+ */
+struct InitialWormInfo {
+    int id;
+    QRectF initialRoi; // ROI on the keyframe in video coordinates
+    QColor color;      // Color associated with this worm
+};
+
 
 /**
      * @brief Finds the blob in a binary image closest to a click point, or the one containing the click.
