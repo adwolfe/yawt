@@ -578,43 +578,89 @@ void WormTracker::resumeTrackingWithNewTarget(const Tracking::DetectedBlob& targ
 }
 
 void WormTracker::confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoiFromManager) {
-    Q_UNUSED(mergedEntityID); // mergedEntityID is for manager's context, tracker uses its own m_wormId
-    qDebug() << "WormTracker ID" << m_wormId << ": confirmTargetIsMerged by TrackingManager. New Centroid (approx):" << mergedBlobCentroid
-             << "New Search ROI for merged mass:" << mergedBlobRoiFromManager;
+    // mergedEntityID is the representative ID of the merge group from TrackingManager.
+    // mergedBlobCentroid is TrackingManager's best estimate of the new merged entity's center.
+    // mergedBlobRoiFromManager is TrackingManager's calculated ROI that encompasses the whole merged entity.
 
-    m_currentState = TrackerState::TrackingMerged;
-    emit stateChanged(m_wormId, m_currentState, mergedEntityID); // Pass manager's representative ID
+    qDebug() << "WormTracker ID" << m_wormId << "(Dir:" << m_direction << "): confirmTargetIsMerged by TrackingManager."
+             << "Associated MergeID:" << mergedEntityID
+             << "Merged Centroid (approx from TM):" << mergedBlobCentroid
+             << "Merged ROI (from TM):" << mergedBlobRoiFromManager;
 
+    // Update tracker state
+    if (m_currentState != TrackerState::TrackingMerged) {
+        m_currentState = TrackerState::TrackingMerged;
+        emit stateChanged(m_wormId, m_currentState, mergedEntityID); // Pass manager's representative ID
+    }
+
+    // Update last known position to the centroid of the merged entity
     m_lastKnownPosition = cv::Point2f(static_cast<float>(mergedBlobCentroid.x()), static_cast<float>(mergedBlobCentroid.y()));
 
-    // When TrackingManager confirms a merge, it might provide a larger ROI that encompasses the whole merged entity.
-    // The WormTracker should use this manager-provided ROI for its searches while in the merged state.
-    if (mergedBlobRoiFromManager.isValid()) {
-        m_currentSearchRoi = mergedBlobRoiFromManager;
-    } else {
-        qWarning() << "WormTracker ID" << m_wormId << ": TrackingManager provided invalid ROI for merge. Using self-adjusted ROI.";
-        // Fallback: center its own fixed-size ROI on the provided centroid.
-        // This might be too small if the merged entity is large.
-        // It's better if TM always provides a valid, encompassing ROI.
-        if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >= 0) {
-            m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, m_framesToProcess->at(m_currFrameNum).size());
+    // Set the m_currentSearchRoi for the *next* frame to be this tracker's standard
+    // fixed-size ROI, centered on the new mergedBlobCentroid.
+    cv::Size currentFrameCvSize;
+    if (m_framesToProcess && m_currFrameNum >= 0 && m_currFrameNum < static_cast<int>(m_framesToProcess->size())) {
+        if (!m_framesToProcess->at(m_currFrameNum).empty()) {
+            currentFrameCvSize = m_framesToProcess->at(m_currFrameNum).size();
         } else {
-            qWarning() << "WormTracker ID" << m_wormId << ": Cannot adjust ROI in confirmTargetIsMerged due to invalid frame data.";
+            qWarning() << "WormTracker ID" << m_wormId << ": Current frame is empty in confirmTargetIsMerged. Cannot get valid frame size.";
+            // Attempt to use a previous valid frame size or a default if absolutely necessary
+            if (m_framesToProcess && !m_framesToProcess->empty() && !m_framesToProcess->at(0).empty()) {
+                currentFrameCvSize = m_framesToProcess->at(0).size();
+                qWarning() << "WormTracker ID" << m_wormId << ": Using first frame's size as fallback.";
+            } else {
+                currentFrameCvSize = cv::Size(640, 480); // Last resort default
+                qWarning() << "WormTracker ID" << m_wormId << ": Using arbitrary default frame size (640x480) for ROI adjustment.";
+            }
+        }
+    } else {
+        qWarning() << "WormTracker ID" << m_wormId << ": Frame data or m_currFrameNum is invalid in confirmTargetIsMerged. Cannot accurately set ROI size.";
+        // Fallback to a default size or handle error more gracefully
+        if (m_framesToProcess && !m_framesToProcess->empty() && !m_framesToProcess->at(0).empty()) {
+            currentFrameCvSize = m_framesToProcess->at(0).size(); // Fallback to first frame size
+        } else {
+            currentFrameCvSize = cv::Size(640,480); // Arbitrary fallback
+            qWarning() << "WormTracker ID" << m_wormId << ": Using arbitrary default frame size (640x480) for ROI adjustment.";
         }
     }
 
+    m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrameCvSize);
+    qDebug() << "  WormTracker ID" << m_wormId << ": Next search ROI (fixed-size, recentered on merged centroid):" << m_currentSearchRoi;
 
-    // Update m_lastPrimaryBlob to represent the (approximate) merged entity.
-    // This is tricky because we don't have the *exact* contour of our part yet.
-    // We use the manager-provided info as the best guess for the overall merged blob.
+    // Update m_lastPrimaryBlob to represent this tracker's new understanding of its target.
+    // Since it's merged, the "primary blob" for this tracker is now effectively the merged entity,
+    // or its best guess of its component within it.
+    // For m_lastPrimaryBlob, we use the manager-provided centroid and the manager's encompassing ROI
+    // as the best available description of the *entire* merged entity.
+    // The tracker's own findPersistingComponent will try to pick out its part in the next frame.
     m_lastPrimaryBlob.isValid = true;
-    m_lastPrimaryBlob.centroid = mergedBlobCentroid;
-    m_lastPrimaryBlob.boundingBox = mergedBlobRoiFromManager.isValid() ? mergedBlobRoiFromManager : m_currentSearchRoi; // Use the ROI as bbox
-    m_lastPrimaryBlob.area = m_lastPrimaryBlob.boundingBox.width() * m_lastPrimaryBlob.boundingBox.height(); // Approximate area
-    m_lastPrimaryBlob.contourPoints.clear(); // Contour is unknown for the whole merge from tracker's perspective
+    m_lastPrimaryBlob.centroid = mergedBlobCentroid; // Centroid of the whole merged mass (from TM)
+    if (mergedBlobRoiFromManager.isValid()) {
+        m_lastPrimaryBlob.boundingBox = mergedBlobRoiFromManager; // BBox of the whole merged mass (from TM)
+        m_lastPrimaryBlob.area = mergedBlobRoiFromManager.width() * mergedBlobRoiFromManager.height(); // Approx area of whole merge
+    } else {
+        // If TM didn't provide a valid ROI, use our (less ideal) fixed-size search ROI as a proxy for the bbox
+        m_lastPrimaryBlob.boundingBox = m_currentSearchRoi;
+        m_lastPrimaryBlob.area = m_currentSearchRoi.width() * m_currentSearchRoi.height();
+        qWarning() << "  WormTracker ID" << m_wormId << ": TrackingManager provided invalid mergedBlobRoi. Using self-generated search ROI for m_lastPrimaryBlob.bbox.";
+    }
+    m_lastPrimaryBlob.contourPoints.clear(); // The exact contour of our part within the merge is unknown at this point.
 
-    // Don't advance frame counter here. The continueTracking loop will process the current m_currFrameNum
-    // with the new TrackingMerged state and the updated m_currentSearchRoi.
+    // The tracking loop (continueTracking) will proceed with the current m_currFrameNum,
+    // but now in the TrackingMerged state and using the updated m_currentSearchRoi.
+    // No need to explicitly call QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
+    // if this slot is called from the TrackingManager (different thread) and the tracker's event loop is running.
+    // However, if there's a chance this is called from the tracker's own thread synchronously in a way that
+    // would prevent the event loop from continuing, a queued call might be safer.
+    // Given it's a slot called by TrackingManager (likely from TM's thread or main thread),
+    // the tracker's own event loop should pick up `continueTracking` if it was already queued or if
+    // this slot call doesn't block its next scheduled invocation.
+    // For safety and to ensure the loop continues if it was waiting for this state change:
+    if (m_trackingActive && m_currentState != TrackerState::PausedForSplit) { // Ensure not paused for other reasons
+        // QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
+        // Usually, the existing continueTracking loop mechanism will handle this state transition.
+        // If this slot is called, the tracker is not in its own processing loop for this frame yet.
+    }
 }
 
 
