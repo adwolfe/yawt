@@ -10,10 +10,10 @@
 #include <opencv2/core.hpp>
 #include <set> // For std::set in merge logic
 
-#include "trackingcommon.h" // For Thresholding::ThresholdSettings (ensure lowercase if filename is)
-#include "wormobject.h"      // For WormObject (ensure lowercase)
-#include "videoprocessor.h"  // Lowercase include
-#include "wormtracker.h"     // Lowercase include, for WormTracker class and its signals
+#include "trackingcommon.h"
+#include "wormobject.h"
+#include "videoprocessor.h"
+#include "wormtracker.h"
 
 class TrackingManager : public QObject {
     Q_OBJECT
