@@ -1,22 +1,28 @@
 // trackingmanager.cpp
+#include "trackingmanager.h"
+
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
-#include <algorithm>  // For std::min, std::sort, std::transform etc.
-#include <numeric>    // For std::iota if used for assignments
-#include <QLineF>
-#include <set>        // For QSet operations if needed beyond QSet directly
+#include <QPointer> // For QPointer in PausedTrackerInfo if we make that change later
 
-#include "trackingmanager.h"
-#include "wormtracker.h" // For WormTracker class and its enums
+#include <algorithm> // For std::min, std::sort, std::transform etc.
+#include <numeric>   // For std::iota if used for assignments
+#include <limits>    // For std::numeric_limits
 
 // Helper function to calculate squared Euclidean distance
-double squaredDistance(const QPointF& p1, const QPointF& p2) {
+// (Consider moving to a common utility header if used elsewhere extensively)
+static double squaredDistance(const QPointF& p1, const QPointF& p2) {
     QPointF diff = p1 - p2;
     return QPointF::dotProduct(diff, diff);
 }
+
+// Define a threshold for considering blobs from different trackers as potentially interacting/merged.
+// This is a placeholder; actual value might depend on worm size, resolution, etc.
+const double MERGE_INTERACTION_DISTANCE_THRESHOLD_SQ = 100.0; // e.g., (10 pixels)^2
+const double MIN_OVERLAP_AREA_FOR_MERGE_RATIO = 0.1; // Minimum overlap relative to smaller blob's area
 
 
 TrackingManager::TrackingManager(QObject* parent)
@@ -30,49 +36,46 @@ TrackingManager::TrackingManager(QObject* parent)
     m_videoFps(0.0),
     m_expectedTrackersToFinish(0),
     m_finishedTrackersCount(0),
-    m_videoProcessingProgress(0) {
+    m_videoProcessingProgress(0),
+    m_frameInfoHistorySize(5) // Initialize history size (e.g., 5 frames)
+{
+    // Register meta types for signals/slots
     qRegisterMetaType<std::vector<cv::Mat>>("std::vector<cv::Mat>");
     qRegisterMetaType<cv::Size>("cv::Size");
     qRegisterMetaType<WormObject::TrackingState>("WormObject::TrackingState");
-    qRegisterMetaType<Tracking::AllWormTracks>("AllWormTracks");
-    qRegisterMetaType<QList<Tracking::DetectedBlob>>(
-        "QList<Tracking::DetectedBlob>");
-    qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob"); // For Q_ARG
+    qRegisterMetaType<Tracking::AllWormTracks>("Tracking::AllWormTracks");
+    qRegisterMetaType<QList<Tracking::DetectedBlob>>("QList<Tracking::DetectedBlob>");
+    qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob");
+    qRegisterMetaType<WormTracker::TrackerState>("WormTracker::TrackerState");
+    // qRegisterMetaType<WormTracker::TrackingDirection>("WormTracker::TrackingDirection"); // Already Q_ENUM
+
+    qDebug() << "TrackingManager (" << this << ") created.";
 }
 
 TrackingManager::~TrackingManager() {
-    qDebug() << "TrackingManager (" << this
-             << ") DESTRUCTOR - START cleaning up...";
+    qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
     if (m_isTrackingRunning) {
-        qDebug() << "TrackingManager Destructor: Tracking was running, requesting "
-                    "cancel.";
+        qDebug() << "TrackingManager Destructor: Tracking was running, requesting cancel.";
         cancelTracking(); // This sets m_cancelRequested = true
         // Give some time for threads to respond to cancellation.
-        // The main cleanup of threads happens in cleanupThreadsAndObjects.
-        QThread::msleep(200);
+        QThread::msleep(200); // Consider if this is the best approach or if wait() in cleanup is enough
     }
-    cleanupThreadsAndObjects(); // This will handle stopping and deleting threads.
-    qDebug() << "TrackingManager (" << this
-             << ") DESTRUCTOR - FINISHED cleaning up.";
+    cleanupThreadsAndObjects();
+    qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
 }
 
 void TrackingManager::startFullTrackingProcess(
     const QString& videoPath, int keyFrameNum,
     const std::vector<Tracking::InitialWormInfo>& initialWorms,
     const Thresholding::ThresholdSettings& settings, int totalFramesInVideo) {
-    qDebug() << "TrackingManager (" << this
-             << "): startFullTrackingProcess called.";
+    qDebug() << "TrackingManager (" << this << "): startFullTrackingProcess called.";
     if (m_isTrackingRunning) {
-        qWarning() << "TrackingManager: Attempted to start tracking while already "
-                      "running.";
+        qWarning() << "TrackingManager: Attempted to start tracking while already running.";
         emit trackingFailed("Another tracking process is already running.");
         return;
     }
+
     cleanupThreadsAndObjects(); // Ensure clean state before starting
-    qDebug() << "TrackingManager (" << this
-             << "): Post-cleanup in start, m_videoProcessor is"
-             << m_videoProcessor << "m_videoProcessorThread is"
-             << m_videoProcessorThread;
 
     m_videoPath = videoPath;
     m_keyFrameNum = keyFrameNum;
@@ -80,215 +83,209 @@ void TrackingManager::startFullTrackingProcess(
     m_thresholdSettings = settings;
     m_totalFramesInVideo = totalFramesInVideo;
     m_isTrackingRunning = true;
-    m_cancelRequested = false; // Reset cancel flag for new run
+    m_cancelRequested = false;
     m_videoProcessingProgress = 0;
     m_finishedTrackersCount = 0;
-    m_expectedTrackersToFinish = 0; // Will be set in launchWormTrackers
+    m_expectedTrackersToFinish = 0;
+
+    // Clear all data structures for the new run
     m_finalTracks.clear();
     m_individualTrackerProgress.clear();
     m_frameInfos.clear();
-    m_mergedGroups.clear();
-    m_wormToMergeGroupMap.clear();
+
+    m_forwardMergedGroups.clear();
+    m_forwardWormToMergeGroupMap.clear();
+    m_reverseMergedGroups.clear();
+    m_reverseWormToMergeGroupMap.clear();
+    m_pausedTrackerCache.clear();
+
+    // Clear WormObjects from previous runs if any
+    qDeleteAll(m_wormObjectsMap);
+    m_wormObjectsMap.clear();
+
+    // Create WormObjects for this run
+    for (const auto& info : m_initialWormInfos) {
+        if (!m_wormObjectsMap.contains(info.id)) { // Should always be true after clear
+            m_wormObjectsMap[info.id] = new WormObject(info.id, info.initialRoi);
+        }
+    }
 
     emit trackingStatusUpdate("Starting video processing...");
     emit overallTrackingProgress(0);
 
     m_videoProcessor = new VideoProcessor();
-    m_videoProcessorThread = new QThread(this);
+    m_videoProcessorThread = new QThread(this); // Parent to this TrackingManager
     m_videoProcessor->moveToThread(m_videoProcessorThread);
-    qDebug() << "TrackingManager: Created new VideoProcessor ("
-             << m_videoProcessor << ") and QThread (" << m_videoProcessorThread
-             << ")";
 
-    connect(
-        m_videoProcessorThread, &QThread::started, m_videoProcessor, [this]() {
-            if (m_videoProcessor) {
-                m_videoProcessor->startInitialProcessing(m_videoPath, m_keyFrameNum,
-                                                         m_thresholdSettings,
-                                                         m_totalFramesInVideo);
-            }
-        });
-    connect(m_videoProcessor, &VideoProcessor::initialProcessingComplete, this,
-            &TrackingManager::handleInitialProcessingComplete);
-    connect(m_videoProcessor, &VideoProcessor::processingError, this,
-            &TrackingManager::handleVideoProcessingError);
-    connect(m_videoProcessor, &VideoProcessor::initialProcessingProgress, this,
-            &TrackingManager::handleVideoProcessingProgress);
+    connect(m_videoProcessorThread, &QThread::started, m_videoProcessor, [this]() {
+        if (m_videoProcessor) { // Check if still valid
+            m_videoProcessor->startInitialProcessing(m_videoPath, m_keyFrameNum,
+                                                     m_thresholdSettings, m_totalFramesInVideo);
+        }
+    });
+    connect(m_videoProcessor, &VideoProcessor::initialProcessingComplete, this, &TrackingManager::handleInitialProcessingComplete);
+    connect(m_videoProcessor, &VideoProcessor::processingError, this, &TrackingManager::handleVideoProcessingError);
+    connect(m_videoProcessor, &VideoProcessor::initialProcessingProgress, this, &TrackingManager::handleVideoProcessingProgress);
     connect(m_videoProcessor, &VideoProcessor::processingStarted, this, [this]() {
         emit trackingStatusUpdate("Video processing started in thread.");
     });
-    connect(m_videoProcessorThread, &QThread::finished, m_videoProcessor,
-            &QObject::deleteLater, Qt::UniqueConnection);
+
+    // Ensure VideoProcessor is deleted when its thread finishes
+    connect(m_videoProcessorThread, &QThread::finished, m_videoProcessor, &QObject::deleteLater);
+    // Ensure m_videoProcessor pointer is nulled after its thread finishes and it's deleted.
     connect(m_videoProcessorThread, &QThread::finished, this, [this]() {
-        qDebug() << "VideoProcessorThread (" << QObject::sender()
-        << ") finished. m_videoProcessor (" << m_videoProcessor
-        << ") was scheduled for deleteLater.";
-        m_videoProcessor = nullptr;
-    }, Qt::DirectConnection);
+        qDebug() << "VideoProcessorThread (" << QObject::sender() << ") finished. m_videoProcessor (" << m_videoProcessor << ") was scheduled for deleteLater.";
+        m_videoProcessor = nullptr; // Nullify after deleteLater is scheduled
+        // m_videoProcessorThread itself will be deleted in cleanupThreadsAndObjects
+    });
+
 
     m_videoProcessorThread->start();
 }
 
 void TrackingManager::cancelTracking() {
-    qDebug() << "TrackingManager (" << this
-             << "): cancelTracking called. IsRunning:" << m_isTrackingRunning
-             << "CancelRequested:" << m_cancelRequested;
-
-    if (m_cancelRequested) { // Already cancelling
+    qDebug() << "TrackingManager (" << this << "): cancelTracking called. IsRunning:" << m_isTrackingRunning << "CancelRequested:" << m_cancelRequested;
+    if (m_cancelRequested) {
         qDebug() << "TM: Cancellation already in progress.";
         return;
     }
-    m_cancelRequested = true; // Set the flag first
+    m_cancelRequested = true;
     emit trackingStatusUpdate("Cancellation requested...");
-    qDebug() << "TM: Cancellation flag set to true.";
 
     if (m_videoProcessorThread && m_videoProcessorThread->isRunning()) {
-        qDebug() << "TM: Requesting video processor thread ("
-                 << m_videoProcessorThread << ") interruption.";
+        qDebug() << "TM: Requesting video processor thread (" << m_videoProcessorThread << ") interruption.";
         m_videoProcessorThread->requestInterruption();
+        // VideoProcessor should handle interruption and stop.
     }
 
-    // Use a copy of the list for iteration if trackers might be removed during this process
+    // Iterate over a copy for safety if m_wormTrackers can be modified during stopTracking
     QList<WormTracker*> trackersToStop = m_wormTrackers;
     for (WormTracker* tracker : trackersToStop) {
         if (tracker) {
+            // stopTracking will eventually lead to the tracker's thread finishing
             QMetaObject::invokeMethod(tracker, "stopTracking", Qt::QueuedConnection);
         }
     }
-    // Threads will be requested to interrupt by their WormTracker's stopTracking, or when they finish.
-    // If a tracker is already finished, its thread might be gone.
-    // The checkForAllTrackersFinished will handle emitting trackingCancelled.
+    // Actual thread cleanup happens in handleWormTrackerFinished or final cleanup.
+    // checkForAllTrackersFinished will eventually be called, which handles emitting trackingCancelled.
 }
 
 void TrackingManager::cleanupThreadsAndObjects() {
-    qDebug() << "TrackingManager (" << this
-             << "): cleanupThreadsAndObjects - START";
+    qDebug() << "TrackingManager (" << this << "): cleanupThreadsAndObjects - START";
+
     if (m_videoProcessorThread) {
-        qDebug() << "  Cleaning up video processor thread:"
-                 << m_videoProcessorThread;
+        qDebug() << "  Cleaning up video processor thread:" << m_videoProcessorThread;
         if (m_videoProcessorThread->isRunning()) {
             m_videoProcessorThread->requestInterruption();
             m_videoProcessorThread->quit();
-            if (!m_videoProcessorThread->wait(1000)) {
-                qWarning() << "  VideoProcessor thread (" << m_videoProcessorThread
-                           << ") did not finish gracefully. Forcing termination.";
+            if (!m_videoProcessorThread->wait(1000)) { // Wait for graceful exit
+                qWarning() << "  VideoProcessor thread (" << m_videoProcessorThread << ") did not finish gracefully. Forcing termination.";
                 m_videoProcessorThread->terminate(); // Last resort
-                m_videoProcessorThread->wait();      // Wait for termination
-            } else {
-                qDebug() << "  Video processor thread (" << m_videoProcessorThread
-                         << ") finished gracefully.";
+                m_videoProcessorThread->wait();      // Wait for termination to complete
             }
         }
-        // m_videoProcessor is deleted via deleteLater connected to thread's finished signal
-        // We just delete the thread object itself.
+        // m_videoProcessor is connected to deleteLater with thread's finished signal.
+        // The thread object itself needs to be deleted.
         delete m_videoProcessorThread;
         m_videoProcessorThread = nullptr;
-        m_videoProcessor = nullptr; // Ensure it's null after thread is gone
+        m_videoProcessor = nullptr; // Ensure pointer is null
     }
 
-
-    // Make a copy for safe iteration as trackers/threads might be removed
+    // Stop and delete tracker threads
+    // Iterate over a copy because m_trackerThreads might be modified by finished signals
     QList<QThread*> threadsToClean = m_trackerThreads;
     for (QThread* thread : threadsToClean) {
         if (thread) {
             qDebug() << "  Cleaning up tracker thread:" << thread;
             if (thread->isRunning()) {
-                thread->requestInterruption();
+                thread->requestInterruption(); // WormTracker::stopTracking should handle this
                 thread->quit();
                 if (!thread->wait(500)) {
-                    qWarning() << "  A WormTracker thread (" << thread
-                               << ") did not finish gracefully. Forcing termination.";
+                    qWarning() << "  A WormTracker thread (" << thread << ") did not finish gracefully. Forcing termination.";
                     thread->terminate();
                     thread->wait();
-                } else {
-                    qDebug() << "  Tracker thread (" << thread
-                             << ") finished gracefully.";
                 }
             }
-            delete thread;
+            delete thread; // Delete the QThread object
         }
     }
     m_trackerThreads.clear();
     // WormTracker objects are set to deleteLater when their threads finish.
-    m_wormTrackers.clear(); // Clear the list of pointers.
+    // We just clear our list of pointers.
+    m_wormTrackers.clear();
 
+    // Delete WormObject instances
     qDeleteAll(m_wormObjectsMap);
     m_wormObjectsMap.clear();
 
+    // Clear frame data
     m_processedForwardFrames.clear();
-    std::vector<cv::Mat>().swap(m_processedForwardFrames);
+    std::vector<cv::Mat>().swap(m_processedForwardFrames); // Ensure memory is released
     m_processedReversedFrames.clear();
     std::vector<cv::Mat>().swap(m_processedReversedFrames);
 
+    // Clear tracking data structures
     m_finalTracks.clear();
     m_individualTrackerProgress.clear();
     m_frameInfos.clear();
-    m_mergedGroups.clear();
-    m_wormToMergeGroupMap.clear();
+    m_forwardMergedGroups.clear();
+    m_forwardWormToMergeGroupMap.clear();
+    m_reverseMergedGroups.clear();
+    m_reverseWormToMergeGroupMap.clear();
+    m_pausedTrackerCache.clear();
 
     m_isTrackingRunning = false;
-    // m_cancelRequested = false; // Reset for next run, handled in startFullTrackingProcess
-    qDebug() << "TrackingManager (" << this
-             << "): cleanupThreadsAndObjects - FINISHED";
+    // m_cancelRequested is reset in startFullTrackingProcess
+    qDebug() << "TrackingManager (" << this << "): cleanupThreadsAndObjects - FINISHED";
 }
 
-QList<WormTracker*> TrackingManager::findTrackersForWorm(int conceptualWormId) {
-    QList<WormTracker*> foundTrackers;
-    for (WormTracker* tracker : std::as_const(m_wormTrackers)) { // Iterate over current live trackers
-        if (tracker && tracker->getWormId() == conceptualWormId) {
-            foundTrackers.append(tracker);
-        }
+
+TrackingManager::MergeMapsContext TrackingManager::getMergeMapsForFrame(int originalFrameNumber) {
+    if (originalFrameNumber >= m_keyFrameNum) { // Forward context
+        return {m_forwardMergedGroups, m_forwardWormToMergeGroupMap};
+    } else { // Reverse context
+        return {m_reverseMergedGroups, m_reverseWormToMergeGroupMap};
     }
-    return foundTrackers;
 }
 
-
+// --- VideoProcessor Signal Handlers ---
 void TrackingManager::handleInitialProcessingComplete(
     const std::vector<cv::Mat>& forwardFrames,
     const std::vector<cv::Mat>& reversedFrames, double fps,
     cv::Size frameSize) {
-    qDebug() << "TrackingManager (" << this
-             << "): handleInitialProcessingComplete received.";
-
+    qDebug() << "TrackingManager (" << this << "): handleInitialProcessingComplete received.";
     if (m_cancelRequested) {
         qDebug() << "TM: Video processing complete but cancellation requested. Not launching trackers.";
-        cleanupThreadsAndObjects();
-        emit trackingCancelled();
-        m_isTrackingRunning = false;
+        // cleanupThreadsAndObjects(); // Already called by cancel or will be by checkForAllTrackersFinished
+        emit trackingCancelled(); // Ensure this is emitted if VP finishes during cancel
+        m_isTrackingRunning = false; // Ensure state is correct
         return;
     }
-    if (!m_isTrackingRunning) { // Could have been stopped by an error during video processing
+    if (!m_isTrackingRunning) {
         qWarning() << "TM: handleInitialProcessingComplete, but tracking is not marked as running. Aborting tracker launch.";
-        cleanupThreadsAndObjects();
+        // This might happen if an error occurred just before this signal.
+        // cleanupThreadsAndObjects(); // Avoid redundant cleanup if error path already did it.
         return;
     }
 
-
-    qDebug() << "TM: Initial video processing complete. Fwd:"
-             << forwardFrames.size() << "Rev:" << reversedFrames.size();
+    qDebug() << "TM: Initial video processing complete. Fwd:" << forwardFrames.size() << "Rev:" << reversedFrames.size() << "FPS:" << fps;
     emit trackingStatusUpdate("Video processing finished. Preparing trackers...");
-    m_videoProcessingProgress = 100;
+    m_videoProcessingProgress = 100; // Mark video processing as fully complete
     m_processedForwardFrames = forwardFrames;
     m_processedReversedFrames = reversedFrames;
     m_videoFps = fps;
     m_videoFrameSize = frameSize;
 
-    for (const auto& info : m_initialWormInfos) {
-        if (m_wormObjectsMap.contains(info.id)) continue;
-        m_wormObjectsMap[info.id] = new WormObject(info.id, info.initialRoi);
-    }
+    // WormObjects are already created in startFullTrackingProcess
     launchWormTrackers();
-    updateOverallProgress();
+    updateOverallProgress(); // Reflects that video processing part is done
 }
 
 void TrackingManager::handleVideoProcessingError(const QString& errorMessage) {
-    qDebug() << "TrackingManager (" << this
-             << "): handleVideoProcessingError: " << errorMessage;
+    qDebug() << "TrackingManager (" << this << "): handleVideoProcessingError: " << errorMessage;
     if (m_cancelRequested) {
         qDebug() << "TM: Video processing error (" << errorMessage << ") received during/after cancellation. Letting cancel flow proceed.";
-        // Don't emit trackingFailed if a cancel was already in progress, let cancel flow dominate.
-        // cleanupThreadsAndObjects will be called by the cancel flow or final check.
-        return;
+        return; // Cancel flow will handle cleanup and final signals
     }
     if (!m_isTrackingRunning) {
         qWarning() << "TM: Video processing error (" << errorMessage << ") but tracking not marked as running.";
@@ -297,8 +294,9 @@ void TrackingManager::handleVideoProcessingError(const QString& errorMessage) {
 
     qWarning() << "TM: Video processing error:" << errorMessage;
     emit trackingFailed("Video processing failed: " + errorMessage);
-    m_isTrackingRunning = false;
-    cleanupThreadsAndObjects();
+    m_isTrackingRunning = false; // Stop tracking
+    // cleanupThreadsAndObjects(); // Let checkForAllTrackersFinished or destructor handle full cleanup
+    // No trackers are running yet, so main cleanup is for VideoProcessor thread which is handled.
 }
 
 void TrackingManager::handleVideoProcessingProgress(int percentage) {
@@ -307,142 +305,86 @@ void TrackingManager::handleVideoProcessingProgress(int percentage) {
     updateOverallProgress();
 }
 
-void TrackingManager::launchWormTrackers() {
-    if (m_initialWormInfos.empty()) {
-        emit trackingStatusUpdate("No worms selected for tracking.");
-        emit trackingFinishedSuccessfully("");
-        m_isTrackingRunning = false;
-        return;
-    }
 
-    m_expectedTrackersToFinish = static_cast<int>(m_initialWormInfos.size() * 2);
-    m_finishedTrackersCount = 0;
-    m_individualTrackerProgress.clear();
-    emit trackingStatusUpdate(
-        QString("Launching %1 worm trackers...").arg(m_expectedTrackersToFinish));
-
-    for (const auto& info : m_initialWormInfos) {
-        int wormId = info.id;
-        QRectF initialRoi = info.initialRoi;
-
-        // Forward Tracker
-        if (!m_processedForwardFrames.empty() || m_keyFrameNum == m_totalFramesInVideo -1) { // Launch if frames exist or keyframe is last
-            WormTracker* fwdTracker = new WormTracker(wormId, initialRoi, WormTracker::TrackingDirection::Forward, m_keyFrameNum);
-            fwdTracker->setFrames(&m_processedForwardFrames);
-            QThread* fwdThread = new QThread(this);
-            fwdTracker->moveToThread(fwdThread);
-            fwdTracker->setProperty("wormId", wormId);
-            fwdTracker->setProperty("direction", "Forward");
-
-            connect(fwdThread, &QThread::started, fwdTracker, &WormTracker::startTracking, Qt::QueuedConnection);
-            connect(fwdTracker, &WormTracker::finished, this, &TrackingManager::handleWormTrackerFinished, Qt::QueuedConnection);
-            connect(fwdThread, &QThread::finished, fwdTracker, &QObject::deleteLater, Qt::UniqueConnection);
-            connect(fwdThread, &QThread::finished, this, [this, fwdThread, wormId](){ // Capture wormId for debug
-                m_trackerThreads.removeOne(fwdThread);
-                qDebug() << "Forward Tracker Thread for worm" << wormId << "finished and removed from list.";
-            }, Qt::DirectConnection);
-
-            connect(fwdTracker, &WormTracker::positionUpdated, this, &TrackingManager::handleWormPositionUpdated);
-            connect(fwdTracker, &WormTracker::splitDetectedAndPaused, this, &TrackingManager::handleWormSplitDetectedAndPaused);
-            connect(fwdTracker, &WormTracker::stateChanged, this, &TrackingManager::handleWormStateChanged);
-            connect(fwdTracker, &WormTracker::errorOccurred, this, &TrackingManager::handleWormTrackerError);
-            connect(fwdTracker, &WormTracker::progress, this, &TrackingManager::handleWormTrackerProgress);
-            m_wormTrackers.append(fwdTracker);
-            m_trackerThreads.append(fwdThread);
-            m_individualTrackerProgress[fwdTracker] = 0;
-            fwdThread->start();
-        } else {
-            m_expectedTrackersToFinish--; // Decrement if not launched
-            qDebug() << "TM: Skipping Forward Tracker for worm" << wormId << "due to no forward frames.";
-        }
-
-
-        // Backward Tracker
-        if (!m_processedReversedFrames.empty() || m_keyFrameNum == 0) { // Launch if frames exist or keyframe is first
-            WormTracker* bwdTracker = new WormTracker(wormId, initialRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
-            bwdTracker->setFrames(&m_processedReversedFrames);
-            QThread* bwdThread = new QThread(this);
-            bwdTracker->moveToThread(bwdThread);
-            bwdTracker->setProperty("wormId", wormId);
-            bwdTracker->setProperty("direction", "Backward");
-
-            connect(bwdThread, &QThread::started, bwdTracker, &WormTracker::startTracking, Qt::QueuedConnection);
-            connect(bwdTracker, &WormTracker::finished, this, &TrackingManager::handleWormTrackerFinished, Qt::QueuedConnection);
-            connect(bwdThread, &QThread::finished, bwdTracker, &QObject::deleteLater, Qt::UniqueConnection);
-            connect(bwdThread, &QThread::finished, this, [this, bwdThread, wormId](){ // Capture wormId
-                m_trackerThreads.removeOne(bwdThread);
-                qDebug() << "Backward Tracker Thread for worm" << wormId << "finished and removed from list.";
-            }, Qt::DirectConnection);
-
-            connect(bwdTracker, &WormTracker::positionUpdated, this, &TrackingManager::handleWormPositionUpdated);
-            connect(bwdTracker, &WormTracker::splitDetectedAndPaused, this, &TrackingManager::handleWormSplitDetectedAndPaused);
-            connect(bwdTracker, &WormTracker::stateChanged, this, &TrackingManager::handleWormStateChanged);
-            connect(bwdTracker, &WormTracker::errorOccurred, this, &TrackingManager::handleWormTrackerError);
-            connect(bwdTracker, &WormTracker::progress, this, &TrackingManager::handleWormTrackerProgress);
-            m_wormTrackers.append(bwdTracker);
-            m_trackerThreads.append(bwdThread);
-            m_individualTrackerProgress[bwdTracker] = 0;
-            bwdThread->start();
-        } else {
-            m_expectedTrackersToFinish--; // Decrement if not launched
-            qDebug() << "TM: Skipping Backward Tracker for worm" << wormId << "due to no backward frames.";
-        }
-    }
-    if(m_expectedTrackersToFinish == 0 && !m_initialWormInfos.empty()){
-        qWarning() << "TM: No trackers were launched. Check keyframe position and frame processing.";
-        emit trackingFailed("No trackers could be launched. Video might be too short or keyframe at an extreme end.");
-        m_isTrackingRunning = false;
-        cleanupThreadsAndObjects();
-    } else if (m_expectedTrackersToFinish == 0 && m_initialWormInfos.empty()){
-        // This case is handled at the start of the function.
-    }
-}
-
+// --- WormTracker Signal Handlers ---
 void TrackingManager::handleWormPositionUpdated(
     int reportingWormId,
-    int originalFrameNumber, QPointF newPosition, QRectF newRoi, // newRoi is the fixed search ROI used by tracker
-    int plausibleBlobsFoundInRoi, double primaryBlobArea) {
+    int originalFrameNumber,
+    const Tracking::DetectedBlob& primaryBlob, // The actual blob tracked
+    QRectF searchRoiUsed,                      // The search ROI used for detection
+    int plausibleBlobsFoundInSearchRoi) {
+
     if (m_cancelRequested || !m_isTrackingRunning) return;
 
     WormObject* wormObject = m_wormObjectsMap.value(reportingWormId, nullptr);
-    WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender());
+    WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender()); // Useful for debug or getting tracker-specific props
 
-    if (wormObject && reportingTracker) {
-        if (reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit &&
-            !m_wormToMergeGroupMap.contains(reportingWormId)) {
-            cv::Point2f cvPos(static_cast<float>(newPosition.x()), static_cast<float>(newPosition.y()));
-            // The ROI stored in WormObject should be the actual blob's ROI if available,
-            // or the tracker's fixed search ROI if that's all we have.
-            // For now, WormTracker::positionUpdated sends its fixed search ROI as newRoi.
-            // If WormTracker could send the actual detected blob's boundingBox, that would be better here.
-            wormObject->updateTrackPoint(originalFrameNumber, cvPos, newRoi); // Storing the search ROI for now
-            Tracking::WormTrackPoint lastPt;
-            lastPt.frameNumberOriginal = originalFrameNumber;
-            lastPt.position = cvPos;
-            lastPt.roi = newRoi; // This is the search ROI
-            emit individualWormTrackUpdated(reportingWormId, lastPt);
-        }
+    if (!wormObject) {
+        qWarning() << "TrackingManager: handleWormPositionUpdated for unknown worm ID:" << reportingWormId;
+        return;
+    }
+    if (!reportingTracker) {
+        qWarning() << "TrackingManager: handleWormPositionUpdated from non-WormTracker sender for worm ID:" << reportingWormId;
+        // We can still proceed with wormObject if conceptual ID is known.
+    }
 
-        WormFrameInfo info;
-        info.position = newPosition; // Centroid of the primary blob
-        info.roi = newRoi;           // The fixed search ROI used by the tracker for this frame
-        info.plausibleBlobsInRoi = plausibleBlobsFoundInRoi;
-        info.primaryBlobArea = primaryBlobArea;
-        info.reportingTracker = reportingWormId;
-        info.isValid = true;
-        // It would be ideal if info also contained the actual boundingBox of the primaryBlob.
-        // This would require WormTracker to emit it.
+    // Update WormObject's track history if the blob is valid and not part of an unresolved merge by this tracker
+    // (i.e., tracker is not PausedForSplit and not in a merge group that TM is actively managing for split)
+    auto maps = getMergeMapsForFrame(originalFrameNumber);
+    bool isWormInActiveMergeGroup = maps.wormToMergeGroupMap.contains(reportingWormId);
 
-        m_frameInfos[originalFrameNumber][reportingWormId] = info;
+    if (primaryBlob.isValid && reportingTracker && reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit && !isWormInActiveMergeGroup) {
+        Tracking::WormTrackPoint point;
+        point.frameNumberOriginal = originalFrameNumber;
+        point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
+        // Store the actual bounding box of the tracked blob as the ROI for this point, if valid.
+        // Otherwise, could fall back to searchRoiUsed, but primaryBlob.boundingBox is preferred.
+        point.roi = primaryBlob.boundingBox.isValid() ? primaryBlob.boundingBox : searchRoiUsed;
+        // point.state = ...; // TODO: Determine annotation based on tracker state or other factors
 
-        while (m_frameInfos.size() > m_frameInfoHistorySize && !m_frameInfos.isEmpty()) {
-            m_frameInfos.remove(m_frameInfos.firstKey());
-        }
-        processFrameDataForMergesAndSplits(originalFrameNumber);
-    } else {
-        qWarning() << "TrackingManager: handleWormPositionUpdated from unknown tracker or for unknown worm ID:" << reportingWormId;
+        wormObject->updateTrackPoint(originalFrameNumber, point.position, point.roi);
+        emit individualWormTrackUpdated(reportingWormId, point);
+    } else if (!primaryBlob.isValid) {
+        // If blob is invalid, we might still want to record a "miss" or "lost" point.
+        // For now, WormObject is only updated with valid points.
+        // We could emit an invalid point to UI if needed:
+        // Tracking::WormTrackPoint lostPoint;
+        // lostPoint.frameNumberOriginal = originalFrameNumber;
+        // lostPoint.position = cv::Point2f(-1,-1); // Indicate invalid
+        // lostPoint.roi = searchRoiUsed; // ROI where it was lost
+        // emit individualWormTrackUpdated(reportingWormId, lostPoint);
+    }
+
+
+    // Store frame info for merge/split detection
+    WormFrameInfo info;
+    info.primaryBlob = primaryBlob;
+    info.searchRoiUsed = searchRoiUsed;
+    info.plausibleBlobsInSearchRoi = plausibleBlobsFoundInSearchRoi;
+    info.reportingTrackerWormId = reportingWormId;
+
+    m_frameInfos[originalFrameNumber][reportingWormId] = info;
+
+    // Limit history size of m_frameInfos
+    while (m_frameInfos.size() > m_frameInfoHistorySize && !m_frameInfos.isEmpty()) {
+        m_frameInfos.remove(m_frameInfos.firstKey());
+    }
+
+    // Process this new frame's data for potential merges or to inform split resolutions
+    // This needs to be intelligent about when it's called.
+    // If multiple trackers report for the same frame, call it after all have reported,
+    // or use a slight delay / queued call. For now, direct call.
+    processFrameDataForMergesAndSplits(originalFrameNumber);
+
+    // Potentially trigger resolution of paused trackers if this update is relevant
+    if (m_pausedTrackerCache.contains(originalFrameNumber)) {
+        // Using QMetaObject::invokeMethod to ensure it runs after current slot execution
+        QMetaObject::invokeMethod(this, [this, originalFrameNumber](){
+            resolvePausedTrackersForFrame(originalFrameNumber);
+        }, Qt::QueuedConnection);
     }
 }
+
 
 void TrackingManager::handleWormSplitDetectedAndPaused(
     int reportingWormId,
@@ -456,6 +398,7 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
         qWarning() << "TM: Split detected, but sender is not a WormTracker. WormID from signal:" << reportingWormId;
         return;
     }
+    // Basic validation
     if (pausedTracker->getWormId() != reportingWormId) {
         qWarning() << "TM: Split detected, sender WormTracker ID" << pausedTracker->getWormId()
         << "does not match signal's reportingWormId" << reportingWormId << ". Ignoring.";
@@ -472,290 +415,488 @@ void TrackingManager::handleWormSplitDetectedAndPaused(
             .arg(pausedTracker->getDirection() == WormTracker::TrackingDirection::Forward ? "Fwd" : "Bwd")
             .arg(originalFrameNumber));
 
-    QSet<int> idsInMergeGroup;
-    int representativeId = m_wormToMergeGroupMap.value(reportingWormId, -1);
+    PausedTrackerInfo info;
+    info.wormId = reportingWormId;
+    info.originalFrameNumber = originalFrameNumber;
+    info.trackerInstance = pausedTracker; // Store raw pointer for now. QPointer is safer.
+    info.reportedBlobs = detectedBlobs;
 
-    if (representativeId != -1 && m_mergedGroups.contains(representativeId)) {
-        idsInMergeGroup = m_mergedGroups.value(representativeId);
-        qDebug() << "  Split involves merge group represented by" << representativeId << "with worms:" << idsInMergeGroup;
-    } else {
-        qWarning() << "TM: Paused tracker for worm" << reportingWormId << "was not in a formal merge group. Assuming it was tracking solo.";
-        idsInMergeGroup.insert(reportingWormId); // The worm itself
-    }
+    m_pausedTrackerCache[originalFrameNumber].append(info);
+    qDebug() << "TM: Added tracker" << pausedTracker << "for worm" << reportingWormId << "to paused cache for frame" << originalFrameNumber;
 
-    if (detectedBlobs.isEmpty()) {
-        qWarning() << "TM: Split detected for worms" << idsInMergeGroup << "but no blobs provided. Trackers may be lost.";
-        // Mark worms as lost or allow trackers to finish without resuming.
-        for (int idInGroup : idsInMergeGroup) {
-            WormObject* wo = m_wormObjectsMap.value(idInGroup, nullptr);
-            if (wo) wo->setState(WormObject::TrackingState::Lost);
-            QList<WormTracker*> trackersToStop = findTrackersForWorm(idInGroup);
-            for(WormTracker* tr : trackersToStop) {
-                if(tr == pausedTracker || tr->getCurrentTrackerState() == WormTracker::TrackerState::TrackingMerged) { // Stop relevant trackers
-                    QMetaObject::invokeMethod(tr, "stopTracking", Qt::QueuedConnection);
-                }
-            }
-        }
-        // Update merge state: dissolve the group
-        if (representativeId != -1) m_mergedGroups.remove(representativeId);
-        for (int idInGroup : idsInMergeGroup) m_wormToMergeGroupMap.remove(idInGroup);
-        return;
-    }
-
-    QMap<int, QPointF> lastPositions;
-    for (int idInGroup : idsInMergeGroup) {
-        WormObject* wo = m_wormObjectsMap.value(idInGroup, nullptr);
-        if (wo) {
-            // Use the last known position from WormObject
-            lastPositions[idInGroup] = QPointF(wo->getCurrentPosition().x, wo->getCurrentPosition().y);
-        } else {
-            qWarning() << "TM: WormObject not found for ID" << idInGroup << "during split. Cannot get last position.";
-        }
-    }
-    // If for the pausedTracker's worm, its WormObject position isn't good, try tracker's last known blob.
-    if (lastPositions.value(reportingWormId, QPointF(-1,-1)).x() < 0 && pausedTracker->property("lastPrimaryBlob").isValid()) {
-        Tracking::DetectedBlob lastBlob = pausedTracker->property("lastPrimaryBlob").value<Tracking::DetectedBlob>();
-        if (lastBlob.isValid) lastPositions[reportingWormId] = lastBlob.centroid;
-    }
-
-
-    if (lastPositions.isEmpty() && !idsInMergeGroup.isEmpty()) {
-        qWarning() << "TM: Could not retrieve any last known positions for worms in the split group:" << idsInMergeGroup << ". Cannot assign blobs.";
-        // Similar to no detected blobs, mark as lost.
-        for (int idInGroup : idsInMergeGroup) {
-            WormObject* wo = m_wormObjectsMap.value(idInGroup, nullptr);
-            if (wo) wo->setState(WormObject::TrackingState::Lost);
-            QList<WormTracker*> trackersToStop = findTrackersForWorm(idInGroup);
-            for(WormTracker* tr : trackersToStop) {
-                if(tr == pausedTracker || tr->getCurrentTrackerState() == WormTracker::TrackerState::TrackingMerged) {
-                    QMetaObject::invokeMethod(tr, "stopTracking", Qt::QueuedConnection);
-                }
-            }
-        }
-        if (representativeId != -1) m_mergedGroups.remove(representativeId);
-        for (int idInGroup : idsInMergeGroup) m_wormToMergeGroupMap.remove(idInGroup);
-        return;
-    }
-
-    QList<Tracking::DetectedBlob> availableBlobs = detectedBlobs;
-    QMap<int, Tracking::DetectedBlob> assignments;
-    QSet<int> assignedBlobIndices;
-
-    // Create a list of worm IDs that need assignment and have a last position
-    QList<int> wormsToAssignSorted;
-    for(int id : idsInMergeGroup) {
-        if(lastPositions.contains(id)) wormsToAssignSorted.append(id);
-    }
-    // Sort by ID to make assignment deterministic if distances are equal (optional)
-    std::sort(wormsToAssignSorted.begin(), wormsToAssignSorted.end());
-
-
-    for (int wormIdToAssign : wormsToAssignSorted) {
-        QPointF lastPos = lastPositions.value(wormIdToAssign);
-        double minSqDist = std::numeric_limits<double>::max();
-        int bestBlobIdx = -1;
-
-        for (int i = 0; i < availableBlobs.size(); ++i) {
-            if (assignedBlobIndices.contains(i)) continue;
-            double sqDist = squaredDistance(lastPos, availableBlobs.at(i).centroid);
-            if (sqDist < minSqDist) {
-                minSqDist = sqDist;
-                bestBlobIdx = i;
-            }
-        }
-
-        if (bestBlobIdx != -1) {
-            assignments[wormIdToAssign] = availableBlobs.at(bestBlobIdx);
-            assignedBlobIndices.insert(bestBlobIdx);
-            qDebug() << "  Assigning blob" << bestBlobIdx << "(Centroid:" << availableBlobs.at(bestBlobIdx).centroid << ") to worm" << wormIdToAssign;
-        } else {
-            qDebug() << "  Could not find an unassigned blob for worm" << wormIdToAssign << ". It might be lost.";
-            WormObject* wo = m_wormObjectsMap.value(wormIdToAssign, nullptr);
-            if (wo) wo->setState(WormObject::TrackingState::Lost);
-            // Stop trackers for this worm if no blob assigned
-            QList<WormTracker*> trackersForLostWorm = findTrackersForWorm(wormIdToAssign);
-            for(WormTracker* tr : trackersForLostWorm) {
-                QMetaObject::invokeMethod(tr, "stopTracking", Qt::QueuedConnection);
-            }
-        }
-    }
-
-    for (int assignedWormId : assignments.keys()) {
-        Tracking::DetectedBlob assignedBlob = assignments.value(assignedWormId);
-        QList<WormTracker*> trackersForThisWorm = findTrackersForWorm(assignedWormId);
-
-        for (WormTracker* trackerInstance : trackersForThisWorm) {
-            // Only instruct trackers that were part of the merge or the one that paused.
-            // A simple check: if it's the paused one, or if its current state implies it was merged.
-            if (trackerInstance == pausedTracker || trackerInstance->getCurrentTrackerState() == WormTracker::TrackerState::TrackingMerged) {
-                qDebug() << "  Instructing Tracker for worm" << trackerInstance->getWormId()
-                << "(Dir:" << trackerInstance->getDirection()
-                << ", Ptr:" << trackerInstance << ") to resume with blob at" << assignedBlob.centroid;
-                QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithNewTarget", Qt::QueuedConnection,
-                                          Q_ARG(Tracking::DetectedBlob, assignedBlob));
-            } else if (trackerInstance->getCurrentTrackerState() == WormTracker::TrackerState::PausedForSplit && trackerInstance != pausedTracker) {
-                // Another tracker for the same conceptual worm also paused, instruct it too.
-                qDebug() << "  Instructing other paused Tracker for worm" << trackerInstance->getWormId()
-                         << "(Dir:" << trackerInstance->getDirection()
-                         << ", Ptr:" << trackerInstance << ") to resume with blob at" << assignedBlob.centroid;
-                QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithNewTarget", Qt::QueuedConnection,
-                                          Q_ARG(Tracking::DetectedBlob, assignedBlob));
-            }
-        }
-        WormObject* wo = m_wormObjectsMap.value(assignedWormId, nullptr);
-        if (wo) wo->setState(WormObject::TrackingState::Tracking);
-    }
-
-    if (representativeId != -1) {
-        m_mergedGroups.remove(representativeId);
-    }
-    for (int idInGroup : idsInMergeGroup) {
-        m_wormToMergeGroupMap.remove(idInGroup);
-        qDebug() << "  Worm" << idInGroup << "removed from merge group tracking.";
-    }
-    emit trackingStatusUpdate(QString("Split resolved for worms. Resuming individual tracking."));
+    // Schedule resolution for this frame. Using QueuedConnection to allow all signals for this frame
+    // (e.g., from other trackers also pausing) to be processed before resolution.
+    QMetaObject::invokeMethod(this, [this, originalFrameNumber](){
+        resolvePausedTrackersForFrame(originalFrameNumber);
+    }, Qt::QueuedConnection);
 }
-
 
 void TrackingManager::processFrameDataForMergesAndSplits(int frameNumber) {
-/*    if (m_cancelRequested || !m_isTrackingRunning) return;
-    if (!m_frameInfos.contains(frameNumber)) return;
+    if (m_cancelRequested || !m_isTrackingRunning || !m_frameInfos.contains(frameNumber)) {
+        return;
+    }
 
-    const QMap<int, WormFrameInfo>& currentFrameTrackerData = m_frameInfos.value(frameNumber);
-    QList<int> activeTrackersInFrame = currentFrameTrackerData.keys();
+    // Check if there's enough data to compare (at least two worms reported for this frame)
+    if (m_frameInfos.value(frameNumber).size() < 2) {
+        return;
+    }
 
-    for (int i = 0; i < activeTrackersInFrame.size(); ++i) {
-        WormTracker* trackerA = activeTrackersInFrame.at(i);
-        if (!trackerA) continue;
-        const WormFrameInfo& infoA = currentFrameTrackerData.value(trackerA);
-        int idA = trackerA->getWormId();
+    qDebug() << "TM: Processing frame" << frameNumber << "for potential new merges.";
 
-        if (m_wormToMergeGroupMap.contains(idA) || trackerA->getCurrentTrackerState() == WormTracker::TrackerState::PausedForSplit) {
-            continue; // Already in a merge or paused, skip for new merge detection
+    const QMap<int, WormFrameInfo>& currentFrameData = m_frameInfos.value(frameNumber);
+    auto maps = getMergeMapsForFrame(frameNumber); // Get context-specific merge maps
+
+    QList<int> activeWormIdsInFrame = currentFrameData.keys();
+    bool isForwardContext = (frameNumber >= m_keyFrameNum);
+
+    for (int i = 0; i < activeWormIdsInFrame.size(); ++i) {
+        int idA = activeWormIdsInFrame.at(i);
+        const WormFrameInfo& infoA = currentFrameData.value(idA);
+
+        // Ensure worm A's data is valid for merge consideration
+        if (!infoA.primaryBlob.isValid || infoA.primaryBlob.boundingBox.isEmpty()) {
+            continue;
         }
 
-        for (int j = i + 1; j < activeTrackersInFrame.size(); ++j) {
-            WormTracker* trackerB = activeTrackersInFrame.at(j);
-            if (!trackerB) continue;
-            const WormFrameInfo& infoB = currentFrameTrackerData.value(trackerB);
-            int idB = trackerB->getWormId();
-
-            if (idA == idB) continue; // Same conceptual worm (fwd vs bwd tracker)
-            if (m_wormToMergeGroupMap.contains(idB) || trackerB->getCurrentTrackerState() == WormTracker::TrackerState::PausedForSplit) {
-                continue; // Already in a merge or paused
+        // Find tracker A for state checking
+        WormTracker* trackerA = nullptr;
+        QList<WormTracker*> trackersForA = findTrackersForWorm(idA);
+        for(WormTracker* tr : trackersForA) {
+            if(tr && ((isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Forward) ||
+                       (!isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Backward))) {
+                trackerA = tr;
+                break;
             }
-
-            // Use actual blob bounding boxes for intersection if WormFrameInfo contains them.
-            // For now, using search ROIs as a proxy.
-            // Ideally: QRectF actualBboxA = infoA.primaryBlobBoundingBox;
-            QRectF searchRoiA = infoA.roi;
-            QRectF searchRoiB = infoB.roi;
-
-            // A more robust check would be intersection of actual detected blob bounding boxes.
-            // For now, if their fixed search ROIs intersect AND they both found substantial blobs.
-            if (searchRoiA.intersects(searchRoiB)) {
-                // Check if both trackers found something significant.
-                // Need a way to get minBlobArea for each tracker, or use a global one.
-                // Assuming WormTracker has a getMinBlobArea() or we use TrackingConstants
-                double minAreaThresholdA = trackerA->property("minBlobArea").isValid() ? trackerA->property("minBlobArea").toDouble() : TrackingConstants::DEFAULT_MIN_WORM_AREA;
-                double minAreaThresholdB = trackerB->property("minBlobArea").isValid() ? trackerB->property("minBlobArea").toDouble() : TrackingConstants::DEFAULT_MIN_WORM_AREA;
-
-                if (infoA.primaryBlobArea > minAreaThresholdA * 0.8 && infoB.primaryBlobArea > minAreaThresholdB * 0.8) {
-                    qDebug() << "TM: Potential MERGE detected at frame" << frameNumber << "between worm" << idA << "(tracker" << trackerA << ")"
-                             << "and worm" << idB << "(tracker" << trackerB << ") based on ROI intersection and blob presence.";
-                    emit trackingStatusUpdate(QString("Merge detected: %1 and %2").arg(idA).arg(idB));
-
-                    int repA = m_wormToMergeGroupMap.value(idA, idA);
-                    int repB = m_wormToMergeGroupMap.value(idB, idB);
-                    int finalRep = qMin(repA, repB); // Choose one representative (e.g., smallest ID)
-
-                    QSet<int> groupA_members = m_mergedGroups.value(repA, QSet<int>() << idA);
-                    QSet<int> groupB_members = m_mergedGroups.value(repB, QSet<int>() << idB);
-                    QSet<int> newMergedGroupMembers = groupA_members + groupB_members;
-
-                    // Update maps
-                    if (repA != finalRep && m_mergedGroups.contains(repA)) m_mergedGroups.remove(repA);
-                    if (repB != finalRep && m_mergedGroups.contains(repB)) m_mergedGroups.remove(repB);
-                    m_mergedGroups[finalRep] = newMergedGroupMembers;
-
-                    for (int memberId : newMergedGroupMembers) {
-                        m_wormToMergeGroupMap[memberId] = finalRep;
-                        WormObject* wo = m_wormObjectsMap.value(memberId, nullptr);
-                        if (wo) wo->setState(WormObject::TrackingState::Merged, finalRep);
-                    }
-                    qDebug() << "  Updated merge group. Representative:" << finalRep << "Members:" << newMergedGroupMembers;
-
-                    // Calculate encompassing ROI for the new merged group
-                    QRectF encompassingRoi;
-                    for (int memberId : newMergedGroupMembers) {
-                        // Find trackers for this member in the current frame
-                        for(WormTracker* memberTracker : activeTrackersInFrame) {
-                            if(memberTracker && memberTracker->getWormId() == memberId) {
-                                const WormFrameInfo& memberInfo = currentFrameTrackerData.value(memberTracker);
-                                // Ideally use actual blob bbox from memberInfo if it had it.
-                                // For now, using the search ROI.
-                                if (encompassingRoi.isNull()) {
-                                    encompassingRoi = memberInfo.roi; // Or actual blob BBox
-                                } else {
-                                    encompassingRoi = encompassingRoi.united(memberInfo.roi); // Or actual blob BBox
-                                }
-                                break; // Found one tracker for this member
-                            }
-                        }
-                    }
-                    // Add some padding to the encompassing ROI
-                    if (!encompassingRoi.isNull()) {
-                        encompassingRoi.adjust(-5, -5, 5, 5); // Example padding
-                        // Clamp to frame
-                        encompassingRoi.setX(qMax(0.0, encompassingRoi.x()));
-                        encompassingRoi.setY(qMax(0.0, encompassingRoi.y()));
-                        if(encompassingRoi.right() > m_videoFrameSize.width) encompassingRoi.setRight(m_videoFrameSize.width);
-                        if(encompassingRoi.bottom() > m_videoFrameSize.height) encompassingRoi.setBottom(m_videoFrameSize.height);
-                    } else {
-                        qWarning() << "TM: Could not determine encompassing ROI for merge group" << finalRep;
-                        // Fallback: could use union of their last known search ROIs.
-                        // For now, trackers will use their existing logic if ROI is null.
-                    }
+        }
+        // If trackerA is paused, it cannot initiate or be part of a new merge detection here.
+        // Its situation will be handled by resolvePausedTrackersForFrame.
+        if (trackerA && trackerA->getCurrentTrackerState() == WormTracker::TrackerState::PausedForSplit) {
+            continue;
+        }
+        // If trackerA is already in a TrackingMerged state confirmed by the manager for this context,
+        // it means its merge group is already defined. We shouldn't try to re-merge it here
+        // unless we are refining groups, which is more complex. For now, if it's in a map, assume it's handled.
+        if (maps.wormToMergeGroupMap.contains(idA) && trackerA && trackerA->getCurrentTrackerState() == WormTracker::TrackerState::TrackingMerged) {
+            // It's already in a known merge group for this context.
+            // We might still want to check if this group should merge with *another* group/worm.
+            // This is handled by repA_current logic below.
+        }
 
 
-                    // Instruct all involved trackers
-                    for (int memberId : newMergedGroupMembers) {
-                        QList<WormTracker*> trackersToNotify = findTrackersForWorm(memberId);
-                        for (WormTracker* trackerInstance : trackersToNotify) {
-                            if (trackerInstance && trackerInstance->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit) {
-                                // Provide centroid of the whole merge (approximate for now)
-                                // and the encompassing ROI.
-                                QPointF mergedCentroid = encompassingRoi.isValid() ? encompassingRoi.center() : QPointF(infoA.position + infoB.position)/2.0; // very rough
-                                QMetaObject::invokeMethod(trackerInstance, "confirmTargetIsMerged", Qt::QueuedConnection,
-                                                          Q_ARG(int, finalRep),
-                                                          Q_ARG(QPointF, mergedCentroid),
-                                                          Q_ARG(QRectF, encompassingRoi.isValid() ? encompassingRoi : searchRoiA.united(searchRoiB) ));
-                            }
-                        }
-                    }
-                    // Important: after processing a pair and merging, we might need to restart or be careful,
-                    // as trackerA and trackerB are now in a merged group.
-                    // The 'continue' for already merged trackers at the start of the loops helps.
-                    // This simple pairwise check might lead to cascading merges in one frame.
+        for (int j = i + 1; j < activeWormIdsInFrame.size(); ++j) {
+            int idB = activeWormIdsInFrame.at(j);
+            const WormFrameInfo& infoB = currentFrameData.value(idB);
+
+            // Ensure worm B's data is valid
+            if (!infoB.primaryBlob.isValid || infoB.primaryBlob.boundingBox.isEmpty()) {
+                continue;
+            }
+            // idA == idB check is implicitly handled by conceptual IDs if m_frameInfos is keyed correctly.
+
+            // Find tracker B for state checking
+            WormTracker* trackerB = nullptr;
+            QList<WormTracker*> trackersForB = findTrackersForWorm(idB);
+            for(WormTracker* tr : trackersForB) {
+                if(tr && ((isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Forward) ||
+                           (!isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Backward))) {
+                    trackerB = tr;
+                    break;
                 }
             }
+            if (trackerB && trackerB->getCurrentTrackerState() == WormTracker::TrackerState::PausedForSplit) {
+                continue;
+            }
+
+            // --- Proactive Merge Detection Logic ---
+
+            // Get current representative IDs for A and B. If not in a map, they represent themselves.
+            int repA_current = maps.wormToMergeGroupMap.value(idA, idA);
+            int repB_current = maps.wormToMergeGroupMap.value(idB, idB);
+
+            // If they are already part of the *same* merge group, skip.
+            if (repA_current == repB_current) {
+                continue;
+            }
+
+            // Check for significant overlap of their primary blobs' bounding boxes
+            QRectF bboxA = infoA.primaryBlob.boundingBox;
+            QRectF bboxB = infoB.primaryBlob.boundingBox;
+            QRectF intersection = bboxA.intersected(bboxB);
+
+            if (intersection.isEmpty() || intersection.width() <= 0 || intersection.height() <=0 ) {
+                continue; // No overlap
+            }
+
+            double overlapArea = intersection.width() * intersection.height();
+            // Consider the smaller of the two primary blob areas for the ratio,
+            // or ensure both blobs are substantial.
+            double areaA = infoA.primaryBlob.area;
+            double areaB = infoB.primaryBlob.area;
+            double minRelevantBlobArea = qMin(areaA, areaB);
+
+            // Ensure blobs are somewhat substantial before considering merge based on overlap
+            // Using TrackingConstants::DEFAULT_MIN_WORM_AREA as a baseline.
+            if (areaA < TrackingConstants::DEFAULT_MIN_WORM_AREA * 0.5 || areaB < TrackingConstants::DEFAULT_MIN_WORM_AREA * 0.5) {
+                // One of the blobs is too small to be a reliable partner in a new merge, might be noise.
+                // This threshold is arbitrary and might need tuning.
+                continue;
+            }
+
+
+            if (minRelevantBlobArea > 0 && (overlapArea / minRelevantBlobArea) > MIN_OVERLAP_AREA_FOR_MERGE_RATIO) {
+                // Significant overlap detected! This is a new merge or a merge of existing groups.
+                qDebug() << "TM: Frame" << frameNumber << (isForwardContext ? "[Fwd]" : "[Rev]")
+                         << "- MERGE DETECTED between conceptual worm/group" << repA_current << "(orig ID A:" << idA << ")"
+                         << "and worm/group" << repB_current << "(orig ID B:" << idB << ")"
+                         << "based on blob overlap. Overlap area:" << overlapArea;
+                emit trackingStatusUpdate(QString("Merge detected: %1 & %2 at frame %3").arg(repA_current).arg(repB_current).arg(frameNumber));
+
+                int finalRep = qMin(repA_current, repB_current); // New representative for the combined group
+
+                // Get all members of the existing groups (or just the individuals if they weren't in groups)
+                QSet<int> groupA_members = maps.mergedGroups.value(repA_current, QSet<int>() << idA);
+                QSet<int> groupB_members = maps.mergedGroups.value(repB_current, QSet<int>() << idB);
+                QSet<int> newMergedGroupMembers = groupA_members + groupB_members;
+
+                // Update maps: remove old group entries if they are different from finalRep
+                if (repA_current != finalRep && maps.mergedGroups.contains(repA_current)) {
+                    maps.mergedGroups.remove(repA_current);
+                }
+                if (repB_current != finalRep && maps.mergedGroups.contains(repB_current)) {
+                    maps.mergedGroups.remove(repB_current);
+                }
+                maps.mergedGroups[finalRep] = newMergedGroupMembers; // Store the new combined group
+
+                // Calculate an encompassing ROI for the new merged group
+                // Start with the union of the two interacting primary blobs
+                QRectF encompassingRoi = bboxA.united(bboxB);
+                // If the groups were larger, unite with their previous encompassing ROIs (not easily available here)
+                // For now, just use the interacting blobs' union and add padding.
+                encompassingRoi.adjust(-10, -10, 10, 10); // Add padding (e.g., 10 pixels)
+
+                // Clamp to frame boundaries (m_videoFrameSize should be valid here)
+                if(m_videoFrameSize.width > 0 && m_videoFrameSize.height > 0) {
+                    encompassingRoi.setX(qMax(0.0, encompassingRoi.x()));
+                    encompassingRoi.setY(qMax(0.0, encompassingRoi.y()));
+                    if(encompassingRoi.right() > m_videoFrameSize.width) encompassingRoi.setRight(m_videoFrameSize.width);
+                    if(encompassingRoi.bottom() > m_videoFrameSize.height) encompassingRoi.setBottom(m_videoFrameSize.height);
+                    // Ensure width/height are also clamped if they were initially larger than the frame
+                    encompassingRoi.setWidth(qMin(encompassingRoi.width(), static_cast<qreal>(m_videoFrameSize.width)));
+                    encompassingRoi.setHeight(qMin(encompassingRoi.height(), static_cast<qreal>(m_videoFrameSize.height)));
+                }
+
+
+                for (int memberId : newMergedGroupMembers) {
+                    maps.wormToMergeGroupMap[memberId] = finalRep; // Update each member's mapping to the new representative
+                    WormObject* wo = m_wormObjectsMap.value(memberId, nullptr);
+                    if (wo) {
+                        wo->setState(WormObject::TrackingState::Merged, finalRep);
+                    }
+
+                    // Instruct the relevant tracker instances for this memberId
+                    QList<WormTracker*> trackersToNotify = findTrackersForWorm(memberId);
+                    for (WormTracker* trackerInstance : trackersToNotify) {
+                        if (trackerInstance) {
+                            // Check direction matches current frame context
+                            if (((isForwardContext && trackerInstance->getDirection() == WormTracker::TrackingDirection::Forward) ||
+                                 (!isForwardContext && trackerInstance->getDirection() == WormTracker::TrackingDirection::Backward))) {
+                                // Only instruct if not already paused (paused trackers handle their state separately)
+                                if (trackerInstance->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit) {
+                                    qDebug() << "  Instructing Tracker for worm" << memberId << "(Dir:" << trackerInstance->getDirection()
+                                    << ", Ptr:" << trackerInstance << ") to CONFIRM MERGE with group" << finalRep << ", ROI:" << encompassingRoi;
+                                    QMetaObject::invokeMethod(trackerInstance, "confirmTargetIsMerged", Qt::QueuedConnection,
+                                                              Q_ARG(int, finalRep),
+                                                              Q_ARG(QPointF, encompassingRoi.center()), // Approx centroid of the new merged ROI
+                                                              Q_ARG(QRectF, encompassingRoi));
+                                }
+                            }
+                        }
+                    }
+                }
+                qDebug() << "  Frame" << frameNumber << (isForwardContext ? "[Fwd]" : "[Rev]")
+                         << "- Updated merge group. Representative:" << finalRep << "Members:" << newMergedGroupMembers;
+                // After merging A and B (or their groups), their new representative 'finalRep' is now set.
+                // The outer loop for 'i' will continue. If 'finalRep' (now representing idA's group)
+                // encounters another worm/group 'idC', the logic repA_current = maps.wormToMergeGroupMap.value(idA, idA)
+                // will correctly pick up 'finalRep' if idA was part of that merge.
+            }
         }
-    }*/
+    }
 }
 
 
-void TrackingManager::handleWormStateChanged(int wormId, WormTracker::TrackerState newState) {
+void TrackingManager::resolvePausedTrackersForFrame(int frameNumber) {
+    if (m_cancelRequested || !m_isTrackingRunning) {
+        return;
+    }
+    if (!m_pausedTrackerCache.contains(frameNumber) || m_pausedTrackerCache.value(frameNumber).isEmpty()) {
+        // qDebug() << "TM: No paused trackers in cache for frame" << frameNumber << "to resolve.";
+        return;
+    }
+
+    qDebug() << "TM: Resolving paused trackers for frame" << frameNumber;
+    QList<PausedTrackerInfo> pausedThisFrame = m_pausedTrackerCache.take(frameNumber); // Process and remove from cache
+
+    auto maps = getMergeMapsForFrame(frameNumber); // Context-specific merge maps
+    bool isForwardContext = (frameNumber >= m_keyFrameNum);
+
+    // Group PausedTrackerInfo items by their original merge group representative ID.
+    // Key: representativeId (or wormId if solo), Value: List of PausedTrackerInfo from that group.
+    QMap<int, QList<PausedTrackerInfo>> groupedPausedTrackers;
+    for (const PausedTrackerInfo& pInfo : pausedThisFrame) {
+        if (!pInfo.trackerInstance) { // Check if tracker pointer is valid
+            qWarning() << "TM: Stale PausedTrackerInfo for worm" << pInfo.wormId << "(tracker deleted). Skipping.";
+            continue;
+        }
+        // Ensure the tracker is actually still paused. It might have been stopped by another mechanism.
+        if (pInfo.trackerInstance->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit) {
+            qDebug() << "TM: Tracker for worm" << pInfo.wormId << "(Ptr:" << pInfo.trackerInstance
+                     << ") is no longer in PausedForSplit state. Current state:"
+                     << static_cast<int>(pInfo.trackerInstance->getCurrentTrackerState()) << ". Skipping its resolution here.";
+            continue;
+        }
+
+        int representativeId = maps.wormToMergeGroupMap.value(pInfo.wormId, pInfo.wormId); // Default to self if not in a map
+        groupedPausedTrackers[representativeId].append(pInfo);
+    }
+
+
+    for (int repId : groupedPausedTrackers.keys()) {
+        const QList<PausedTrackerInfo>& groupPausedList = groupedPausedTrackers.value(repId);
+        if (groupPausedList.isEmpty()) continue;
+
+        qDebug() << "  Processing paused group with representative ID:" << repId << "for frame" << frameNumber;
+
+        QSet<int> idsInOriginalMergeGroup;
+        if (maps.mergedGroups.contains(repId)) {
+            idsInOriginalMergeGroup = maps.mergedGroups.value(repId);
+        } else {
+            // This repId represents a single worm that was likely merged with an untracked entity.
+            // The group only contains this one worm.
+            for(const PausedTrackerInfo& pInfo : groupPausedList) { // Should typically be one pInfo if repId was pInfo.wormId
+                idsInOriginalMergeGroup.insert(pInfo.wormId);
+            }
+        }
+        if(idsInOriginalMergeGroup.isEmpty()){
+            qWarning() << "  Rep ID" << repId << "has no members in mergedGroups map. This is unexpected if it's from wormToMergeGroupMap. Skipping.";
+            continue;
+        }
+
+
+        qDebug() << "    Original merge group members for rep ID" << repId << ":" << idsInOriginalMergeGroup;
+
+        // Collect all unique reported blobs from all trackers in this paused group
+        QList<Tracking::DetectedBlob> allReportedBlobsForGroup;
+        QSet<QPair<qreal, qreal>> seenBlobCentroids; // To crudely deduplicate blobs by centroid
+
+        for (const PausedTrackerInfo& pInfo : groupPausedList) {
+            for (const Tracking::DetectedBlob& blob : pInfo.reportedBlobs) {
+                QPair<qreal, qreal> centroidPair(blob.centroid.x(), blob.centroid.y());
+                if (blob.isValid && !seenBlobCentroids.contains(centroidPair)) {
+                    allReportedBlobsForGroup.append(blob);
+                    seenBlobCentroids.insert(centroidPair);
+                }
+            }
+        }
+
+        if (allReportedBlobsForGroup.isEmpty()) {
+            qWarning() << "    Group" << repId << "paused but collectively reported no valid blobs. Stopping involved trackers.";
+            for (int wormIdInGroup : idsInOriginalMergeGroup) {
+                if (m_wormObjectsMap.contains(wormIdInGroup)) {
+                    m_wormObjectsMap[wormIdInGroup]->setState(WormObject::TrackingState::Lost);
+                }
+                QList<WormTracker*> trackersToStop = findTrackersForWorm(wormIdInGroup);
+                for (WormTracker* tr : trackersToStop) {
+                    if (tr && ((isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Forward) ||
+                               (!isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Backward))) {
+                        // Stop if it's one of the paused trackers or was part of this merge context
+                        bool partOfThisPausedEvent = false;
+                        for(const PausedTrackerInfo& pInfoCheck : groupPausedList) { if(pInfoCheck.trackerInstance == tr) { partOfThisPausedEvent = true; break;} }
+
+                        if(partOfThisPausedEvent || (maps.wormToMergeGroupMap.value(tr->getWormId(), -1) == repId) ) {
+                            qDebug() << "      Stopping tracker" << tr << "for worm" << tr->getWormId() << "due to no blobs from split.";
+                            QMetaObject::invokeMethod(tr, "stopTracking", Qt::QueuedConnection);
+                        }
+                    }
+                }
+            }
+            // Dissolve the merge group from maps
+            if (maps.mergedGroups.contains(repId)) maps.mergedGroups.remove(repId);
+            for (int wormIdInGroup : idsInOriginalMergeGroup) maps.wormToMergeGroupMap.remove(wormIdInGroup);
+            qDebug() << "    Dissolved merge group" << repId << " (no blobs from split).";
+            continue; // Next group
+        }
+
+        qDebug() << "    Group" << repId << "collectively reported" << allReportedBlobsForGroup.size() << "unique blobs.";
+
+        // --- Assignment Logic ---
+        QMap<int, Tracking::DetectedBlob> assignments; // wormId -> assignedBlob
+        QList<Tracking::DetectedBlob> availableBlobs = allReportedBlobsForGroup;
+        QList<int> assignedBlobIndicesInAvailableList; // Indices into 'availableBlobs'
+
+        // Create a list of (wormId, lastKnownPosition) for worms in this specific original merge group
+        QList<QPair<int, QPointF>> wormsToAssign;
+        for (int wormId : idsInOriginalMergeGroup) {
+            WormObject* wo = m_wormObjectsMap.value(wormId, nullptr);
+            if (wo) {
+                wormsToAssign.append({wormId, QPointF(wo->getCurrentPosition().x, wo->getCurrentPosition().y)});
+            } else {
+                qWarning() << "    WormObject not found for ID" << wormId << "in group" << repId << ". Cannot get last position.";
+            }
+        }
+        // Optional: Sort wormsToAssign (e.g., by ID, or by some priority if applicable)
+        std::sort(wormsToAssign.begin(), wormsToAssign.end(), [](const QPair<int, QPointF>& a, const QPair<int, QPointF>& b){
+            return a.first < b.first; // Sort by worm ID for deterministic assignment in ties
+        });
+
+
+        for (const auto& wormEntry : wormsToAssign) {
+            int wormIdToAssign = wormEntry.first;
+            QPointF lastPos = wormEntry.second;
+            double minSqDist = std::numeric_limits<double>::max();
+            int bestBlobListIdx = -1; // Index in 'availableBlobs'
+
+            for (int i = 0; i < availableBlobs.size(); ++i) {
+                if (assignedBlobIndicesInAvailableList.contains(i)) continue; // Blob already assigned
+
+                const Tracking::DetectedBlob& currentBlob = availableBlobs.at(i);
+                if (!currentBlob.isValid) continue;
+
+                double sqDist = squaredDistance(lastPos, currentBlob.centroid);
+                if (sqDist < minSqDist) {
+                    minSqDist = sqDist;
+                    bestBlobListIdx = i;
+                }
+            }
+
+            if (bestBlobListIdx != -1) {
+                // Check if this distance is reasonable (e.g. not excessively far)
+                // double MAX_ASSIGNMENT_DISTANCE_SQ = 200.0 * 200.0; // Example: 200 pixels
+                // if (minSqDist > MAX_ASSIGNMENT_DISTANCE_SQ) {
+                //     qDebug() << "    Best blob for worm" << wormIdToAssign << "is too far (dist_sq:" << minSqDist << "). Marking as lost.";
+                //     // Fall through to "not assigned" logic
+                // } else {
+                assignments[wormIdToAssign] = availableBlobs.at(bestBlobListIdx);
+                assignedBlobIndicesInAvailableList.append(bestBlobListIdx); // Mark this index as used
+                qDebug() << "      Assigned blob (Centroid:" << availableBlobs.at(bestBlobListIdx).centroid
+                         << ", Area:" << availableBlobs.at(bestBlobListIdx).area
+                         << ") to worm" << wormIdToAssign << "from group" << repId;
+                // }
+            }
+            // If bestBlobListIdx remains -1, this worm won't get an assignment in this pass.
+        }
+
+
+        // --- Instruct Trackers and Update States ---
+        bool allOriginalMembersAccountedFor = true;
+        for (int wormIdInGroup : idsInOriginalMergeGroup) {
+            WormObject* wo = m_wormObjectsMap.value(wormIdInGroup, nullptr);
+            if (!wo) continue;
+
+            if (assignments.contains(wormIdInGroup)) {
+                Tracking::DetectedBlob assignedBlob = assignments.value(wormIdInGroup);
+                wo->setState(WormObject::TrackingState::Tracking);
+
+                // Find the specific tracker instances that were paused for this wormId in this group
+                bool resumedRelevantTracker = false;
+                for (const PausedTrackerInfo& pInfo : groupPausedList) {
+                    if (pInfo.trackerInstance && pInfo.wormId == wormIdInGroup) {
+                        qDebug() << "      Instructing Tracker" << pInfo.trackerInstance << "for worm" << wormIdInGroup
+                                 << "(Dir:" << pInfo.trackerInstance->getDirection() << ") to RESUME with blob at" << assignedBlob.centroid;
+                        QMetaObject::invokeMethod(pInfo.trackerInstance, "resumeTrackingWithNewTarget", Qt::QueuedConnection,
+                                                  Q_ARG(Tracking::DetectedBlob, assignedBlob));
+                        resumedRelevantTracker = true;
+                        // break; // Assuming only one tracker per wormId per direction would be in groupPausedList
+                    }
+                }
+                if (!resumedRelevantTracker) {
+                    qDebug() << "      Worm" << wormIdInGroup << "was assigned a blob, but its paused tracker instance was not found in the groupPausedList to resume. This is unexpected.";
+                    allOriginalMembersAccountedFor = false; // Or handle as an error
+                }
+
+            } else { // Worm from original group was not assigned a blob
+                qDebug() << "    Worm" << wormIdInGroup << "from group" << repId << "was not assigned a blob from the split. Marking as lost.";
+                wo->setState(WormObject::TrackingState::Lost);
+                allOriginalMembersAccountedFor = false; // Not all original members got a new target
+
+                // Stop any of its trackers that were part of this paused event or still associated with this merge group
+                for (const PausedTrackerInfo& pInfo : groupPausedList) {
+                    if (pInfo.trackerInstance && pInfo.wormId == wormIdInGroup) {
+                        qDebug() << "      Stopping (unassigned) paused tracker" << pInfo.trackerInstance << "for worm" << wormIdInGroup;
+                        QMetaObject::invokeMethod(pInfo.trackerInstance, "stopTracking", Qt::QueuedConnection);
+                    }
+                }
+                // Also stop any other relevant trackers for this wormId that might still think they are in this merge
+                QList<WormTracker*> otherTrackers = findTrackersForWorm(wormIdInGroup);
+                for(WormTracker* tr : otherTrackers) {
+                    bool wasThisPausedInstance = false;
+                    for(const PausedTrackerInfo& pInfoCheck : groupPausedList) { if(pInfoCheck.trackerInstance == tr && pInfoCheck.wormId == wormIdInGroup) { wasThisPausedInstance = true; break;} }
+                    if(tr && !wasThisPausedInstance && maps.wormToMergeGroupMap.value(tr->getWormId(), -1) == repId &&
+                        ((isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Forward) ||
+                         (!isForwardContext && tr->getDirection() == WormTracker::TrackingDirection::Backward))) {
+                        qDebug() << "      Stopping (unassigned) associated tracker" << tr << "for worm" << wormIdInGroup;
+                        QMetaObject::invokeMethod(tr, "stopTracking", Qt::QueuedConnection);
+                    }
+                }
+            }
+        }
+
+        // Dissolve the merge group from maps if all original members were accounted for (resumed or lost explicitly by this process)
+        // This means the specific merge event represented by 'repId' has been fully resolved.
+        if (allOriginalMembersAccountedFor || idsInOriginalMergeGroup.size() == assignments.size()) { // Simpler check for now
+            if (maps.mergedGroups.contains(repId)) {
+                maps.mergedGroups.remove(repId);
+            }
+            for (int idInGroup : idsInOriginalMergeGroup) {
+                maps.wormToMergeGroupMap.remove(idInGroup);
+            }
+            qDebug() << "    Dissolved merge group" << repId << "after processing split.";
+        } else {
+            qDebug() << "    Merge group" << repId << "not fully dissolved. Some members may need further attention or were not assigned.";
+            // This case needs careful thought: if some worms from the original group were not assigned
+            // and their trackers weren't in the pausedThisFrame list, the group might persist partially.
+            // The current logic tries to stop trackers for unassigned worms from the original group.
+        }
+    } // End loop over groupedPausedTrackers
+
+    if (!m_pausedTrackerCache.contains(frameNumber) || m_pausedTrackerCache.value(frameNumber).isEmpty()) {
+        qDebug() << "TM: Paused tracker cache for frame" << frameNumber << "is now empty after resolution.";
+    } else {
+        // This should not happen if we .take() the list and process all groups.
+        qWarning() << "TM: Paused tracker cache for frame" << frameNumber << "still has"
+                   << m_pausedTrackerCache.value(frameNumber).count() << "items after resolution. This is unexpected.";
+    }
+}
+
+
+
+void TrackingManager::handleWormStateChanged(int reportingWormId, WormTracker::TrackerState newState, int associatedEntityId) {
     if (m_cancelRequested || !m_isTrackingRunning) return;
-    WormObject* worm = m_wormObjectsMap.value(wormId, nullptr);
+
+    WormObject* wormObject = m_wormObjectsMap.value(reportingWormId, nullptr);
     WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender());
 
-    if (worm && reportingTracker) {
-        qDebug() << "TM: Worm ID" << wormId << "(Tracker:" << reportingTracker << ", Dir:" << reportingTracker->getDirection()
-        << ") State CHANGED to" << static_cast<int>(newState);
+    if (reportingTracker) {
+        qDebug() << "TM: Worm ID" << reportingWormId
+                 << "(Tracker:" << reportingTracker << ", Dir:" << reportingTracker->getDirection()
+                 << ") State CHANGED to" << static_cast<int>(newState)
+                 << (associatedEntityId != -1 ? QString(" (Assoc. ID: %1)").arg(associatedEntityId) : QString(""));
 
-        // Potentially update WormObject's high-level state if needed,
-        // though WormTracker::TrackerState is more detailed.
-        // Example: if newState is TrackingLost, update wormObject.
+        if (wormObject) {
+            // Update WormObject's high-level state based on tracker's more detailed state
+            if (newState == WormTracker::TrackerState::Idle && wormObject->getCurrentState() != WormObject::TrackingState::Lost) { // e.g. tracker stopped before starting well
+                // Could mark as Inactive or Lost depending on context
+            } else if (newState == WormTracker::TrackerState::TrackingMerged) {
+                // WormObject state is likely already Merged due to processFrameDataForMergesAndSplits
+                // but ensure associatedEntityId is updated if provided.
+                if (associatedEntityId != -1 && wormObject->getCurrentState() == WormObject::TrackingState::Merged) {
+                    // wormObject->setMergedWithId(associatedEntityId); // Already done by processFrameData...
+                }
+            }
+            // Add more mappings if necessary
+        }
+    } else {
+        qWarning() << "TM: handleWormStateChanged from non-WormTracker sender for worm ID:" << reportingWormId;
     }
 }
 
@@ -763,79 +904,248 @@ void TrackingManager::handleWormTrackerFinished() {
     WormTracker* finishedTracker = qobject_cast<WormTracker*>(sender());
     if (!finishedTracker) {
         qWarning() << "TrackingManager: handleWormTrackerFinished called by non-WormTracker sender.";
-        // Potentially decrement m_expectedTrackersToFinish if this is an unaccounted finish.
-        // However, this path should ideally not be hit if connections are set up correctly.
+        // This could potentially lead to m_finishedTrackersCount not matching m_expectedTrackersToFinish
+        // if a tracker finishes without being in m_wormTrackers.
+        // However, normal flow should have it in m_wormTrackers.
+        m_finishedTrackersCount++; // Increment defensively
+        checkForAllTrackersFinished();
         return;
     }
 
     int wormId = finishedTracker->getWormId();
-    QString direction = finishedTracker->property("direction").toString();
+    QString direction = (finishedTracker->getDirection() == WormTracker::TrackingDirection::Forward ? "Fwd" : "Bwd");
     qDebug() << "TrackingManager: WormTracker for worm ID" << wormId
              << "(Dir:" << direction << ", Ptr: " << finishedTracker << ") reported finished.";
 
-    // Remove from active lists. It will be deleteLater'd by its thread.
+    // Remove from active lists. It will be deleteLater'd by its thread's finished signal.
     m_wormTrackers.removeOne(finishedTracker);
     m_individualTrackerProgress.remove(finishedTracker);
 
     m_finishedTrackersCount++;
-    qDebug() << "TrackingManager: Total finished trackers:"
-             << m_finishedTrackersCount << "/" << m_expectedTrackersToFinish;
+    qDebug() << "TrackingManager: Total finished trackers:" << m_finishedTrackersCount << "/" << m_expectedTrackersToFinish;
 
     updateOverallProgress();
     checkForAllTrackersFinished();
 }
 
-void TrackingManager::handleWormTrackerError(int wormId, QString errorMessage) {
-    if (m_cancelRequested && !m_isTrackingRunning) { // If already cancelling or stopped, log but don't re-trigger failure
-        qDebug() << "TrackingManager: Error from tracker for worm ID" << wormId << "during/after cancel/stop:" << errorMessage;
-        // Tracker will finish, let normal flow handle it.
+void TrackingManager::handleWormTrackerError(int reportingWormId, QString errorMessage) {
+    WormTracker* errorTracker = qobject_cast<WormTracker*>(sender());
+    QString trackerInfo = errorTracker ? QString("(Ptr: %1, Dir: %2)").arg(reinterpret_cast<quintptr>(errorTracker)).arg(errorTracker->getDirection() == WormTracker::TrackingDirection::Forward ? "Fwd" : "Bwd") : "";
+
+    if (m_cancelRequested) {
+        qDebug() << "TrackingManager: Error from tracker for worm ID" << reportingWormId << trackerInfo << "during/after cancel/stop:" << errorMessage;
+        // Tracker will finish, let normal flow handle it. If it's not already counted, count it.
+        if (errorTracker && m_wormTrackers.contains(errorTracker)) { // Only if it was an active tracker
+            m_wormTrackers.removeOne(errorTracker);
+            m_individualTrackerProgress.remove(errorTracker);
+            m_finishedTrackersCount++;
+        } else if (!errorTracker && !m_wormTrackers.isEmpty()){ // Sender unknown, but trackers might be running
+            // This case is problematic.
+        } else if (!errorTracker && m_wormTrackers.isEmpty() && m_finishedTrackersCount < m_expectedTrackersToFinish) {
+            // If sender is null and no active trackers, but not all expected are finished, increment count.
+            // m_finishedTrackersCount++; // This might be risky if errors come from other sources
+        }
+        updateOverallProgress();
+        checkForAllTrackersFinished();
         return;
     }
     if (!m_isTrackingRunning) {
-        qDebug() << "TrackingManager: Error from tracker for worm ID" << wormId << "but tracking not running:" << errorMessage;
+        qDebug() << "TrackingManager: Error from tracker for worm ID" << reportingWormId << trackerInfo << "but tracking not running:" << errorMessage;
         return;
     }
 
+    qWarning() << "TrackingManager: Error from tracker for worm ID" << reportingWormId << trackerInfo << ":" << errorMessage;
 
-    qWarning() << "TrackingManager: Error from tracker for worm ID" << wormId
-               << ":" << errorMessage;
-    WormTracker* errorTracker = qobject_cast<WormTracker*>(sender());
-    if (errorTracker) {
+    if (errorTracker && m_wormTrackers.contains(errorTracker)) {
         m_wormTrackers.removeOne(errorTracker);
         m_individualTrackerProgress.remove(errorTracker);
-        // The tracker's thread will delete it.
+        m_finishedTrackersCount++; // Count it as "finished" (with error)
+    } else if (!errorTracker && m_expectedTrackersToFinish > m_finishedTrackersCount) {
+        // If sender is null but we expect more trackers, this is an issue.
+        // We might increment finished count to avoid stalling, but it's a guess.
+        // m_finishedTrackersCount++;
+        qWarning() << "  Error from unknown sender, but trackers still expected. Process might stall.";
     }
-    m_finishedTrackersCount++; // Count it as "finished" to not stall the process
-    emit trackingStatusUpdate(
-        QString("Error with tracker for worm %1: %2. Trying to continue...")
-            .arg(wormId).arg(errorMessage.left(50)));
 
+
+    emit trackingStatusUpdate(QString("Error with tracker for worm %1: %2. Trying to continue...").arg(reportingWormId).arg(errorMessage.left(50)));
     updateOverallProgress();
-    checkForAllTrackersFinished(); // Check if this error means all are now done or failed
+    checkForAllTrackersFinished();
 }
 
 void TrackingManager::handleWormTrackerProgress(int wormId, int percentDone) {
     if (m_cancelRequested || !m_isTrackingRunning) return;
     WormTracker* tracker = qobject_cast<WormTracker*>(sender());
     if (tracker) {
-        // Check if tracker is still in our active list (it might have finished right after sending progress)
-        if (m_individualTrackerProgress.contains(tracker)) {
+        if (m_individualTrackerProgress.contains(tracker)) { // Check if still active
             m_individualTrackerProgress[tracker] = percentDone;
             updateOverallProgress();
         }
     }
 }
 
+// --- Private Helper Methods ---
+void TrackingManager::launchWormTrackers() {
+    if (m_initialWormInfos.empty()) {
+        emit trackingStatusUpdate("No worms selected for tracking.");
+        // cleanupThreadsAndObjects(); // No threads to clean yet
+        emit trackingFinishedSuccessfully(""); // Or trackingFailed if this is an error condition
+        m_isTrackingRunning = false;
+        return;
+    }
+
+    m_expectedTrackersToFinish = 0; // Recalculate based on actual launches
+    m_finishedTrackersCount = 0;
+    m_individualTrackerProgress.clear();
+
+
+    for (const auto& info : m_initialWormInfos) {
+        int wormId = info.id;
+        QRectF initialRoi = info.initialRoi;
+
+        // Forward Tracker
+        // Launch if there are forward frames OR if the keyframe is the very last frame (no fwd frames, but tracker should "finish" immediately)
+        if (!m_processedForwardFrames.empty() || m_keyFrameNum == m_totalFramesInVideo - 1) {
+            WormTracker* fwdTracker = new WormTracker(wormId, initialRoi, WormTracker::TrackingDirection::Forward, m_keyFrameNum);
+            fwdTracker->setFrames(&m_processedForwardFrames); // Pass pointer to frames
+            QThread* fwdThread = new QThread(this); // Parent to TrackingManager
+            fwdTracker->moveToThread(fwdThread);
+            // Set properties for easier debugging/identification if needed
+            fwdTracker->setProperty("wormId", wormId);
+            fwdTracker->setProperty("direction", "Forward");
+
+            connect(fwdThread, &QThread::started, fwdTracker, &WormTracker::startTracking);
+            connect(fwdTracker, &WormTracker::finished, this, &TrackingManager::handleWormTrackerFinished);
+            connect(fwdThread, &QThread::finished, fwdTracker, &QObject::deleteLater); // Delete tracker when thread done
+            connect(fwdThread, &QThread::finished, this, [this, fwdThread, wormId](){
+                m_trackerThreads.removeOne(fwdThread); // Remove from our list
+                // fwdThread itself is deleted in cleanupThreadsAndObjects or if this is the last one
+                qDebug() << "Forward Tracker Thread for worm" << wormId << "finished and removed from list. Remaining tracker threads:" << m_trackerThreads.count();
+            });
+
+            connect(fwdTracker, &WormTracker::positionUpdated, this, &TrackingManager::handleWormPositionUpdated);
+            connect(fwdTracker, &WormTracker::splitDetectedAndPaused, this, &TrackingManager::handleWormSplitDetectedAndPaused);
+            connect(fwdTracker, &WormTracker::stateChanged, this, &TrackingManager::handleWormStateChanged);
+            connect(fwdTracker, &WormTracker::errorOccurred, this, &TrackingManager::handleWormTrackerError);
+            connect(fwdTracker, &WormTracker::progress, this, &TrackingManager::handleWormTrackerProgress);
+
+            m_wormTrackers.append(fwdTracker);
+            m_trackerThreads.append(fwdThread);
+            m_individualTrackerProgress[fwdTracker] = 0;
+            fwdThread->start();
+            m_expectedTrackersToFinish++;
+        } else {
+            qDebug() << "TM: Skipping Forward Tracker for worm" << wormId << "due to no forward frames and keyframe not being the last frame.";
+        }
+
+        // Backward Tracker
+        // Launch if there are reverse frames OR if the keyframe is the very first frame
+        if (!m_processedReversedFrames.empty() || m_keyFrameNum == 0) {
+            WormTracker* bwdTracker = new WormTracker(wormId, initialRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
+            bwdTracker->setFrames(&m_processedReversedFrames);
+            QThread* bwdThread = new QThread(this);
+            bwdTracker->moveToThread(bwdThread);
+            bwdTracker->setProperty("wormId", wormId);
+            bwdTracker->setProperty("direction", "Backward");
+
+            connect(bwdThread, &QThread::started, bwdTracker, &WormTracker::startTracking);
+            connect(bwdTracker, &WormTracker::finished, this, &TrackingManager::handleWormTrackerFinished);
+            connect(bwdThread, &QThread::finished, bwdTracker, &QObject::deleteLater);
+            connect(bwdThread, &QThread::finished, this, [this, bwdThread, wormId](){
+                m_trackerThreads.removeOne(bwdThread);
+                qDebug() << "Backward Tracker Thread for worm" << wormId << "finished and removed from list. Remaining tracker threads:" << m_trackerThreads.count();
+            });
+
+            connect(bwdTracker, &WormTracker::positionUpdated, this, &TrackingManager::handleWormPositionUpdated);
+            connect(bwdTracker, &WormTracker::splitDetectedAndPaused, this, &TrackingManager::handleWormSplitDetectedAndPaused);
+            connect(bwdTracker, &WormTracker::stateChanged, this, &TrackingManager::handleWormStateChanged);
+            connect(bwdTracker, &WormTracker::errorOccurred, this, &TrackingManager::handleWormTrackerError);
+            connect(bwdTracker, &WormTracker::progress, this, &TrackingManager::handleWormTrackerProgress);
+
+            m_wormTrackers.append(bwdTracker);
+            m_trackerThreads.append(bwdThread);
+            m_individualTrackerProgress[bwdTracker] = 0;
+            bwdThread->start();
+            m_expectedTrackersToFinish++;
+        } else {
+            qDebug() << "TM: Skipping Backward Tracker for worm" << wormId << "due to no backward frames and keyframe not being the first frame.";
+        }
+    }
+
+    if (m_expectedTrackersToFinish == 0 && !m_initialWormInfos.empty()) {
+        qWarning() << "TM: No trackers were launched despite having initial worm infos. Check keyframe position and frame processing.";
+        emit trackingFailed("No trackers could be launched. Video might be too short or keyframe at an extreme end where no tracking frames are available.");
+        m_isTrackingRunning = false;
+        // cleanupThreadsAndObjects(); // No threads to clean
+    } else if (m_expectedTrackersToFinish > 0) {
+        emit trackingStatusUpdate(QString("Launching %1 worm trackers...").arg(m_expectedTrackersToFinish));
+    }
+    // If m_initialWormInfos is empty, it's handled at the start of the function.
+}
+
+
+QList<WormTracker*> TrackingManager::findTrackersForWorm(int conceptualWormId) {
+    QList<WormTracker*> foundTrackers;
+    // Iterate over a const copy or use a mutex if m_wormTrackers can be modified concurrently
+    // For now, assuming modifications happen on the main thread or are synchronized.
+    for (WormTracker* tracker : std::as_const(m_wormTrackers)) {
+        if (tracker && tracker->getWormId() == conceptualWormId) {
+            foundTrackers.append(tracker);
+        }
+    }
+    return foundTrackers;
+}
+
+void TrackingManager::updateOverallProgress() {
+    if (!m_isTrackingRunning && !m_cancelRequested) {
+        emit overallTrackingProgress(0); // Reset if not running and not in a final cancel stage
+        return;
+    }
+
+    double totalProgressValue = 0.0;
+    double videoProcWeight = 0.10; // Video processing is 10%
+    double trackersWeight = 0.90;  // Trackers are 90%
+
+    totalProgressValue += (static_cast<double>(m_videoProcessingProgress) / 100.0) * videoProcWeight;
+
+    if (m_expectedTrackersToFinish > 0) {
+        double sumOfIndividualProgress = 0;
+        // Sum progress of trackers still in m_individualTrackerProgress (i.e., active)
+        for (int progress : m_individualTrackerProgress.values()) {
+            sumOfIndividualProgress += progress;
+        }
+        // Add 100% for each tracker that has already finished
+        double finishedContribution = static_cast<double>(m_finishedTrackersCount) * 100.0;
+        // Total points achieved by trackers so far
+        double currentTrackerPoints = sumOfIndividualProgress + finishedContribution;
+        // Maximum possible points from all expected trackers
+        double maxTrackerPoints = static_cast<double>(m_expectedTrackersToFinish) * 100.0;
+
+        double overallTrackerPercentage = (maxTrackerPoints > 0) ? (currentTrackerPoints / maxTrackerPoints) : 0.0;
+        overallTrackerPercentage = qBound(0.0, overallTrackerPercentage, 1.0); // Normalize to 0-1 range
+
+        totalProgressValue += overallTrackerPercentage * trackersWeight;
+    } else if (m_videoProcessingProgress == 100) { // No trackers expected, video processing is 100% of task if it's done
+        totalProgressValue = 1.0; // Full progress
+    }
+
+    int finalProgressPercentage = qBound(0, static_cast<int>(totalProgressValue * 100.0), 100);
+    emit overallTrackingProgress(finalProgressPercentage);
+}
+
 
 void TrackingManager::checkForAllTrackersFinished() {
-    qDebug() << "TM: Checking if all trackers finished. Finished:" << m_finishedTrackersCount << "Expected:" << m_expectedTrackersToFinish << "Running:" << m_isTrackingRunning;
+    qDebug() << "TM: Checking if all trackers finished. Finished:" << m_finishedTrackersCount
+             << "Expected:" << m_expectedTrackersToFinish << "Running:" << m_isTrackingRunning
+             << "Trackers in list:" << m_wormTrackers.count();
 
-    if (m_isTrackingRunning && (m_finishedTrackersCount >= m_expectedTrackersToFinish || m_wormTrackers.isEmpty()) ) {
+    // Condition: Tracking is marked as running AND (either all expected trackers have signaled finished OR the list of active trackers is empty)
+    if (m_isTrackingRunning && (m_finishedTrackersCount >= m_expectedTrackersToFinish || (m_expectedTrackersToFinish > 0 && m_wormTrackers.isEmpty()))) {
         if (m_cancelRequested) {
             qDebug() << "TrackingManager: All trackers accounted for after CANCELLATION request.";
             // Consolidate whatever tracks were gathered
             m_finalTracks.clear();
-            for (WormObject* worm : std::as_const(m_wormObjectsMap)) {
+            for (WormObject* worm : m_wormObjectsMap.values()) { // Iterate values
                 if (worm) {
                     m_finalTracks[worm->getId()] = worm->getTrackHistory();
                 }
@@ -843,110 +1153,52 @@ void TrackingManager::checkForAllTrackersFinished() {
             if (!m_finalTracks.empty()) {
                 qDebug() << "TrackingManager: Emitting partial tracks due to cancellation. Count:" << m_finalTracks.size();
                 emit allTracksUpdated(m_finalTracks);
-                // outputTracksToDebug(m_finalTracks); // Optional
             } else {
                 qDebug() << "TrackingManager: No tracks to emit upon cancellation.";
             }
             emit trackingStatusUpdate("Tracking cancelled by user. Partial tracks (if any) processed.");
-            emit trackingCancelled(); // Signal that cancellation is complete
-        } else {
+            emit trackingCancelled();
+        } else { // Normal finish
             qDebug() << "TrackingManager: All trackers accounted for NORMALLY.";
             emit trackingStatusUpdate("All worm trackers completed. Consolidating and saving tracks...");
             m_finalTracks.clear();
-            for (WormObject* worm : std::as_const(m_wormObjectsMap)) {
+            for (WormObject* worm : m_wormObjectsMap.values()) {
                 if (worm) {
                     m_finalTracks[worm->getId()] = worm->getTrackHistory();
                 }
             }
             emit allTracksUpdated(m_finalTracks);
-            // outputTracksToDebug(m_finalTracks); // Optional
 
             QString csvOutputPath;
             if (!m_videoPath.isEmpty()) {
                 QFileInfo videoInfo(m_videoPath);
-                QString baseName = videoInfo.completeBaseName();
-                QString outputDir = videoInfo.absolutePath();
-                csvOutputPath = QDir(outputDir).filePath(baseName + "_tracks.csv");
+                csvOutputPath = QDir(videoInfo.absolutePath()).filePath(videoInfo.completeBaseName() + "_tracks.csv");
             } else {
-                csvOutputPath = "worm_tracks.csv"; // Default if no video path
+                csvOutputPath = "worm_tracks.csv"; // Default
             }
 
-            bool csvSaved = outputTracksToCsv(m_finalTracks, csvOutputPath);
-            if (csvSaved) {
+            if (outputTracksToCsv(m_finalTracks, csvOutputPath)) {
                 emit trackingStatusUpdate("Tracking finished. Tracks saved to: " + csvOutputPath);
                 emit trackingFinishedSuccessfully(csvOutputPath);
             } else {
-                emit trackingStatusUpdate("Tracking finished, but failed to save CSV output.");
-                emit trackingFailed("Failed to save CSV output."); // Use trackingFailed for this
+                emit trackingStatusUpdate("Tracking finished, but failed to save CSV output to: " + csvOutputPath);
+                emit trackingFailed("Failed to save CSV output to: " + csvOutputPath);
             }
         }
         m_isTrackingRunning = false; // Mark tracking as no longer running
-        // cleanupThreadsAndObjects(); // Perform final cleanup after all logic is done for this run
+        // cleanupThreadsAndObjects(); // Call cleanup explicitly here to ensure all resources are released promptly.
+        // This is important if TM instance is long-lived.
+        // However, if TM is destroyed soon after, destructor handles it.
+        // For now, let destructor or next start handle it to avoid issues if signals are still pending.
     } else if (!m_isTrackingRunning) {
-        qDebug() << "TM: checkForAllTrackersFinished - Tracking was already stopped (e.g. by error or earlier cancel).";
-        // If cancel was requested and we are here, it means it's the final part of cancel flow
-        if(m_cancelRequested) {
+        qDebug() << "TM: checkForAllTrackersFinished - Tracking was already stopped (e.g., by error or earlier cancel).";
+        if (m_cancelRequested) { // If a cancel was requested and tracking is now stopped
             emit trackingCancelled(); // Ensure this is emitted if not already
         }
     }
     // If m_isTrackingRunning is true but not all trackers are finished, do nothing yet.
 }
 
-void TrackingManager::updateOverallProgress() {
-    if (!m_isTrackingRunning && !m_cancelRequested) { // If not running and not in a cancel flow that needs final progress
-        emit overallTrackingProgress(0);
-        return;
-    }
-
-    double totalProgressValue = 0.0;
-    // Weighting: e.g., video processing 10%, trackers 90%
-    double videoProcWeight = 0.10;
-    double trackersWeight = 0.90;
-
-    totalProgressValue += static_cast<double>(m_videoProcessingProgress) * videoProcWeight / 100.0;
-
-    if (m_expectedTrackersToFinish > 0) {
-        double sumOfIndividualProgress = 0;
-        for (int progress : m_individualTrackerProgress.values()) {
-            sumOfIndividualProgress += progress;
-        }
-        // Average progress of trackers that are still in m_individualTrackerProgress (i.e. not yet fully finished and removed)
-        // Plus contribution from already finished trackers
-        double finishedContribution = static_cast<double>(m_finishedTrackersCount) * 100.0;
-        double totalTrackerPoints = sumOfIndividualProgress + finishedContribution;
-
-        double overallTrackerPercentage = (totalTrackerPoints / (static_cast<double>(m_expectedTrackersToFinish) * 100.0)) * 100.0;
-        overallTrackerPercentage = qBound(0.0, overallTrackerPercentage, 100.0);
-
-        totalProgressValue += overallTrackerPercentage * trackersWeight / 100.0;
-    } else if (m_videoProcessingProgress == 100) { // No trackers expected, video processing is 100% of the task
-        totalProgressValue = 1.0; // Full progress
-    }
-
-
-    int finalProgressPercentage = qBound(0, static_cast<int>(totalProgressValue * 100.0), 100);
-    emit overallTrackingProgress(finalProgressPercentage);
-}
-
-void TrackingManager::outputTracksToDebug(const Tracking::AllWormTracks& tracks) const {
-    qDebug() << "--- Begin Track Output (" << this << ") ---";
-    if (tracks.empty()) {
-        qDebug() << "No tracks to output.";
-    }
-    for (auto const& [wormId, points] : tracks) {
-        qDebug() << "Worm ID:" << wormId << "Number of points:" << points.size();
-        for (const Tracking::WormTrackPoint& point : points) {
-            qDebug() << "  Frame:" << point.frameNumberOriginal
-                     << "X:" << QString::number(point.position.x, 'f', 2)
-                     << "Y:" << QString::number(point.position.y, 'f', 2)
-                     << "ROI: [x:" << QString::number(point.roi.x(), 'f', 1)
-                     << "y:" << QString::number(point.roi.y(), 'f', 1)
-                     << "w:" << QString::number(point.roi.width(), 'f', 1)
-                     << "h:" << QString::number(point.roi.height(), 'f', 1) << "]";
-        }
-    }
-    qDebug() << "--- End Track Output ---";
-}
 
 bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const {
     if (outputFilePath.isEmpty()) {
@@ -959,9 +1211,9 @@ bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, c
         return false;
     }
     QTextStream outStream(&csvFile);
-    outStream << "WormID,Frame,PositionX,PositionY,RoiX,RoiY,RoiWidth,RoiHeight\n";
-    for (auto const& [wormId, points] : tracks) { // C++17 structured binding
-        for (const Tracking::WormTrackPoint& point : points) {
+    outStream << "WormID,Frame,PositionX,PositionY,RoiX,RoiY,RoiWidth,RoiHeight\n"; // Header
+    for (auto const& [wormId, trackPoints] : tracks) { // C++17 structured binding
+        for (const Tracking::WormTrackPoint& point : trackPoints) {
             outStream << wormId << ","
                       << point.frameNumberOriginal << ","
                       << QString::number(point.position.x, 'f', 4) << ","
@@ -973,7 +1225,7 @@ bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, c
         }
     }
     csvFile.close();
-    if (csvFile.error() != QFile::NoError) {
+    if (csvFile.error() != QFile::NoError) { // Check error after closing
         qWarning() << "Error writing to CSV file:" << outputFilePath << csvFile.errorString();
         return false;
     }
