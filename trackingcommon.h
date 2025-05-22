@@ -19,6 +19,11 @@
 // Forward declaration
 class WormObject; // If WormObject needs to be referenced here, though likely not for these structs
 
+enum class TrackPointAnnotation {
+    Confident,
+    Ambiguous
+
+};
 
 /**
  * @brief Represents a single point in a worm's track.
@@ -27,6 +32,7 @@ struct WormTrackPoint {
     int frameNumberOriginal; // Frame number in the original video
     cv::Point2f position;    // Position (centroid) in video coordinates
     QRectF roi;              // ROI used for this worm at this frame (in video coordinates)
+    TrackPointAnnotation state;
     // Potentially add confidence, state (e.g. merged) if needed per point
 };
 
@@ -46,6 +52,8 @@ struct InitialWormInfo {
     QColor color;      // Color associated with this worm
 };
 
+namespace TableItems {
+// These are used within the BlobTableModel, for user interaction with blobs prior to tracking.
 
 // Enum for the type of tracked item
 enum class ItemType {
@@ -77,7 +85,7 @@ inline ItemType stringToItemType(const QString& typeStr) {
 }
 
 // Structure to hold data for each item in the table
-struct TrackedItem {
+struct ClickedItem {
     int id;                         // Unique auto-generated ID
     QColor color;                   // Color for worm ROI and track
     ItemType type;                  // Type of the item
@@ -88,6 +96,7 @@ struct TrackedItem {
     // Add other relevant data as needed
 };
 
+}
 
 /**
  * @brief Defines available thresholding algorithms.

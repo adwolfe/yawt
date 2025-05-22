@@ -379,9 +379,9 @@ void VideoLoader::setBlurSigmaX(double sigmaX) {
 }
 
 // --- Slots for Data Display from Models ---
-void VideoLoader::updateItemsToDisplay(const QList<TrackedItem>& items) {
+void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& items) {
     m_itemsToDisplay = items;
-    for (const TrackedItem& item : items) {
+    for (const TableItems::ClickedItem& item : items) {
         if (item.color.isValid()) {
             m_trackColors[item.id] = item.color;
         }
@@ -434,7 +434,7 @@ void VideoLoader::updateWormColor(int wormId, const QColor& color) {
                                        });
                 if (it != trackPoints.end()) needsRepaint = true;
             } else { // Fallback to m_itemsToDisplay if no tracks
-                for (const auto& item : qAsConst(m_itemsToDisplay)) {
+                for (const auto& item : std::as_const(m_itemsToDisplay)) {
                     if (item.id == wormId) { needsRepaint = true; break; }
                 }
             }
@@ -553,7 +553,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
         if (!m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
             // Tracking has run, display current frame's blob positions from tracks
-            for (int trackId : qAsConst(m_visibleTrackIDs)) {
+            for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 if (m_allTracksToDisplay.count(trackId)) {
                     const std::vector<WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(trackId);
 
@@ -595,7 +595,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             }
         } else if (!m_itemsToDisplay.isEmpty()) {
             // Fallback: Tracking not run or no tracks, display initial blob selections from m_itemsToDisplay
-            for (const TrackedItem& item : qAsConst(m_itemsToDisplay)) {
+            for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
                 // Optional: Filter by m_visibleTrackIDs if you want consistency with table selection
                 // if (!m_visibleTrackIDs.contains(item.id) && !m_visibleTrackIDs.isEmpty()) continue;
 
@@ -702,7 +702,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             QPointF clickWidgetPoint = event->position();
             int bestTrackId = -1; int bestFrameNum = -1; QPointF bestVideoPoint;
             double minDistanceSq = TRACK_POINT_CLICK_TOLERANCE * TRACK_POINT_CLICK_TOLERANCE;
-            for (int trackId : qAsConst(m_visibleTrackIDs)) {
+            for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 if (m_allTracksToDisplay.count(trackId)) {
                     const auto& trackPoints = m_allTracksToDisplay.at(trackId);
                     for (const auto& pt : trackPoints) {

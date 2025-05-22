@@ -74,7 +74,7 @@ QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
         return QVariant();
     }
 
-    const TrackedItem &item = m_items.at(index.row());
+    const TableItems::ClickedItem &item = m_items.at(index.row());
 
     if (role == Qt::DisplayRole || role == Qt::EditRole) {
         switch (static_cast<Column>(index.column())) {
@@ -106,7 +106,7 @@ bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, in
         return false;
     }
 
-    TrackedItem &item = m_items[index.row()];
+    TableItems::ClickedItem &item = m_items[index.row()];
     bool dataWasChanged = false;
     bool typeChanged = false;
 
@@ -123,7 +123,7 @@ bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, in
         break;
     case Column::Type: {
         QString typeStr = value.toString();
-        ItemType newType = stringToItemType(typeStr);
+        TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
         if (item.type != newType) {
             item.type = newType;
             dataWasChanged = true;
@@ -168,9 +168,9 @@ Qt::ItemFlags BlobTableModel::flags(const QModelIndex& index) const {
     return defaultFlags;
 }
 
-bool BlobTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, ItemType type) {
+bool BlobTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type) {
     beginInsertRows(QModelIndex(), rowCount(), rowCount());
-    TrackedItem newItem;
+    TableItems::ClickedItem newItem;
     newItem.id = m_nextId++;
     newItem.color = getNextColor();
     newItem.type = type;
@@ -205,14 +205,14 @@ bool BlobTableModel::removeRows(int position, int rows, const QModelIndex &paren
     return true;
 }
 
-const TrackedItem& BlobTableModel::getItem(int row) const {
+const TableItems::ClickedItem& BlobTableModel::getItem(int row) const {
     if (row < 0 || row >= m_items.count()) {
         throw std::out_of_range("Row index out of range in BlobTableModel::getItem");
     }
     return m_items.at(row);
 }
 
-const QList<TrackedItem>& BlobTableModel::getAllItems() const {
+const QList<TableItems::ClickedItem>& BlobTableModel::getAllItems() const {
     return m_items;
 }
 
@@ -246,8 +246,8 @@ void BlobTableModel::recalculateGlobalMetricsAndROIs() {
     double maxObservedDimensionL = 0.0;
     int wormCount = 0;
 
-    for (const TrackedItem &item : qAsConst(m_items)) {
-        if (item.type == ItemType::Worm) {
+    for (const TableItems::ClickedItem &item : qAsConst(m_items)) {
+        if (item.type == TableItems::ItemType::Worm) {
             wormCount++;
             const QRectF& originalBox = item.originalClickedBoundingBox;
             if (originalBox.isValid() && originalBox.width() > 0 && originalBox.height() > 0) {
@@ -308,7 +308,7 @@ void BlobTableModel::recalculateGlobalMetricsAndROIs() {
 
     // Update initialBoundingBox for all items
     bool itemROIsChanged = false;
-    for (TrackedItem &item : m_items) {
+    for (TableItems::ClickedItem &item : m_items) {
         QRectF oldItemRoi = item.initialBoundingBox;
         QPointF center = item.initialCentroid;
         double w = m_currentFixedRoiSize.width();

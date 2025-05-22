@@ -312,7 +312,7 @@ void MainWindow::setBackgroundAssumption(int index) {
 void MainWindow::handleBlobClickedForAddition(const TrackingHelper::DetectedBlob& blobData) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
-    m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, ItemType::Worm);
+    m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, TableItems::ItemType::Worm);
 }
 
 void MainWindow::handleRemoveBlobsClicked() {
@@ -371,9 +371,9 @@ void MainWindow::onStartTrackingActionTriggered() {
     }
 
     std::vector<InitialWormInfo> initialWorms;
-    const QList<TrackedItem>& items = m_blobTableModel->getAllItems();
-    for(const TrackedItem& item : items) {
-        if(item.type == ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
+    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
+    for(const TableItems::ClickedItem& item : items) {
+        if(item.type == TableItems::ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
             InitialWormInfo info;
             info.id = item.id;
             info.initialRoi = item.initialBoundingBox;
@@ -415,9 +415,9 @@ void MainWindow::handleBeginTrackingFromDialog() {
     int totalFrames = ui->videoLoader->getTotalFrames();
 
     std::vector<InitialWormInfo> initialWorms;
-    const QList<TrackedItem>& items = m_blobTableModel->getAllItems();
-    for(const TrackedItem& item : items) {
-        if(item.type == ItemType::Worm) {
+    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
+    for(const TableItems::ClickedItem& item : items) {
+        if(item.type == TableItems::ItemType::Worm) {
             InitialWormInfo info; info.id = item.id; info.initialRoi = item.initialBoundingBox; info.color = item.color;
             initialWorms.push_back(info);
         }

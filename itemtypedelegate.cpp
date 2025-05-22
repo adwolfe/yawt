@@ -17,11 +17,11 @@ QWidget *ItemTypeDelegate::createEditor(QWidget *parent,
     // Populate the QComboBox with the string representations of ItemType
     // The order here should match the ItemType enum if possible, or be user-friendly
     QStringList types;
-    types << itemTypeToString(ItemType::Worm)
-          << itemTypeToString(ItemType::StartPoint)
-          << itemTypeToString(ItemType::EndPoint)
-          << itemTypeToString(ItemType::ControlPoint)
-          << itemTypeToString(ItemType::Undefined);
+    types << itemTypeToString(TableItems::ItemType::Worm)
+          << itemTypeToString(TableItems::ItemType::StartPoint)
+          << itemTypeToString(TableItems::ItemType::EndPoint)
+          << itemTypeToString(TableItems::ItemType::ControlPoint)
+          << itemTypeToString(TableItems::ItemType::Undefined);
     editor->addItems(types);
 
     return editor;
@@ -41,7 +41,7 @@ void ItemTypeDelegate::setEditorData(QWidget *editor,
         } else {
             // Fallback if the string is not found (e.g., "Unknown" or corrupted data)
             // You might want to set it to a default, like "Undefined"
-            int undefinedIndex = comboBox->findText(itemTypeToString(ItemType::Undefined));
+            int undefinedIndex = comboBox->findText(itemTypeToString(TableItems::ItemType::Undefined));
             if (undefinedIndex >=0) {
                 comboBox->setCurrentIndex(undefinedIndex);
             }

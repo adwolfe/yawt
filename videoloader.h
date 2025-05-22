@@ -126,7 +126,7 @@ public slots:
      * Called by MainWindow when the BlobTableModel changes.
      * @param items The list of items to display.
      */
-    void updateItemsToDisplay(const QList<TrackedItem>& items);
+    void updateItemsToDisplay(const QList<TableItems::ClickedItem>& items);
 
     /**
      * @brief Sets the tracks to be displayed.
@@ -236,7 +236,7 @@ private:
     bool m_isDefiningRoi;           // True when user is dragging to define an ROI
 
     // --- Data for Display (received from models) ---
-    QList<TrackedItem> m_itemsToDisplay; // List of blobs/worms to display (from BlobTableModel)
+    QList<TableItems::ClickedItem> m_itemsToDisplay; // List of blobs/worms to display (from BlobTableModel)
     AllWormTracks m_allTracksToDisplay;  // All tracks data
     QSet<int> m_visibleTrackIDs;         // IDs of tracks that should be currently rendered
     mutable QMap<int, QColor> m_trackColors; // Cache for track/item colors

@@ -10,6 +10,7 @@
 #include "trackingcommon.h" // Contains TrackedItem and ItemType
 #include <limits> // For std::numeric_limits, good to have explicitly
 
+
 class BlobTableModel : public QAbstractTableModel {
     Q_OBJECT
 
@@ -40,7 +41,7 @@ public:
      * @param type The initial type of the item (defaults to Worm).
      * @return True if added successfully, false otherwise.
      */
-    bool addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, ItemType type = ItemType::Worm);
+    bool addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type = TableItems::ItemType::Worm);
 
     /**
      * @brief Removes rows from the model.
@@ -55,13 +56,13 @@ public:
      * @param row The row index.
      * @return Const reference to TrackedItem. Throws std::out_of_range if row is invalid.
      */
-    const TrackedItem& getItem(int row) const;
+    const TableItems::ClickedItem& getItem(int row) const;
 
     /**
      * @brief Gets a list of all TrackedItems.
      * @return Const reference to the internal list of items.
      */
-    const QList<TrackedItem>& getAllItems() const;
+    const QList<TableItems::ClickedItem>& getAllItems() const;
 
     // --- New Public Getters for Metrics ---
     double getMinObservedArea() const;
@@ -88,7 +89,7 @@ signals:
      * This is the primary signal VideoLoader should connect to for display updates.
      * @param allItems The complete current list of TrackedItems in the model.
      */
-    void itemsChanged(const QList<TrackedItem>& allItems);
+    void itemsChanged(const QList<TableItems::ClickedItem>& allItems);
 
     /**
      * @brief Emitted specifically when a new item's color is first assigned or changed by user.
@@ -113,7 +114,7 @@ signals:
 
 
 private:
-    QList<TrackedItem> m_items;
+    QList<TableItems::ClickedItem> m_items;
     int m_nextId; // For auto-generating IDs
     QList<QColor> m_predefinedColors; // List of predefined colors
     int m_currentColorIndex; // To cycle through predefined colors
