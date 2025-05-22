@@ -8,15 +8,12 @@
 #include <QRectF>
 #include <QThread>
 #include <opencv2/core.hpp>
-#include <QSet> // Changed from <set> for QSet<WormTracker*>
+#include <set> // For std::set in merge logic
 
-#include "trackingcommon.h" // For ThresholdSettings
-#include "wormobject.h"      // For WormObject
-#include "videoprocessor.h"
-#include "wormtracker.h"     // For WormTracker class and its signals
-
-// Forward declare WormFrameInfo if its definition remains in .cpp
-struct WormFrameInfo;
+#include "trackingcommon.h" // For ThresholdSettings (ensure lowercase if filename is)
+#include "wormobject.h"      // For WormObject (ensure lowercase)
+#include "videoprocessor.h"  // Lowercase include
+#include "wormtracker.h"     // Lowercase include, for WormTracker class and its signals
 
 class TrackingManager : public QObject {
     Q_OBJECT
@@ -42,32 +39,29 @@ private slots:
     void handleVideoProcessingError(const QString& errorMessage);
     void handleVideoProcessingProgress(int percentage);
 
-    // WormTracker signals
-    void handleWormPositionUpdated(WormTracker* reportingTrackerInstance, // Changed: Pass tracker instance
-                                   int conceptualWormId,
+    // WormTracker signals (Updated and New)
+    void handleWormPositionUpdated(int wormId,
                                    int originalFrameNumber,
                                    QPointF newPosition,
                                    QRectF newRoi,
-                                   int plausibleBlobsFoundInRoi,
-                                   double primaryBlobArea);
+                                   int plausibleBlobsFoundInRoi, // New param
+                                   double primaryBlobArea);      // New param
 
-    void handleWormSplitDetectedAndPaused(WormTracker* reportingTrackerInstance, // Changed: Pass tracker instance
-                                          int conceptualWormId,
+    void handleWormSplitDetectedAndPaused(int wormId,
                                           int originalFrameNumber,
-                                          const QList<TrackingHelper::DetectedBlob>& detectedBlobs);
+                                          const QList<TrackingHelper::DetectedBlob>& detectedBlobs); // New slot
 
-    // Slot to handle state changes, sender() can be used to get WormTracker*
-    void handleWormStateChanged(int conceptualWormId, WormTracker::TrackerState newState);
-    void handleWormTrackerFinished(); // Sender is the WormTracker*
-    void handleWormTrackerError(int conceptualWormId, QString errorMessage); // Sender is the WormTracker*
-    void handleWormTrackerProgress(int conceptualWormId, int percentDone); // Sender is the WormTracker*
+    void handleWormStateChanged(int wormId, WormTracker::TrackerState newState);
+    void handleWormTrackerFinished();
+    void handleWormTrackerError(int wormId, QString errorMessage);
+    void handleWormTrackerProgress(int wormId, int percentDone);
 
 
 signals:
     void overallTrackingProgress(int percentage);
     void trackingStatusUpdate(const QString& statusMessage);
-    void individualWormTrackUpdated(int wormId, const WormTrackPoint& lastPoint); // wormId is conceptualWormId
-    void allTracksUpdated(const AllWormTracks& tracks); // Key is conceptualWormId
+    void individualWormTrackUpdated(int wormId, const WormTrackPoint& lastPoint);
+    void allTracksUpdated(const AllWormTracks& tracks);
     void trackingFinishedSuccessfully(const QString& outputPath);
     void trackingFailed(const QString& reason);
     void trackingCancelled();
@@ -82,19 +76,29 @@ private:
     bool outputTracksToCsv(const AllWormTracks& tracks, const QString& outputFileName) const;
     QList<WormTracker*> findTrackersForWorm(int conceptualWormId);
 
-
     // --- Merge/Split Management ---
-    // Key: frame number, Value: Map of specific WormTracker instance to its reported info in that frame
-    QMap<int, QMap<WormTracker*, WormFrameInfo>> m_frameInfos;
-    int m_frameInfoHistorySize = 3;
+    struct WormFrameInfo { // Renamed from WormFrameState for clarity
+        QPointF position;
+        QRectF roi;
+        int plausibleBlobsInRoi; // Number of blobs tracker saw in its ROI
+        double primaryBlobArea;   // Area of the blob it decided to follow
+        int reportingTracker = 0;
+        bool isValid = true; // Was this info successfully reported?
+    };
+    // Key: frame number, Value: Map of wormID to its reported info in that frame
+    QMap<int, QMap<int, WormFrameInfo>> m_frameInfos;
+    int m_frameInfoHistorySize = 3; // How many recent frames of info to keep for context
 
-    QMap<WormTracker*, QSet<WormTracker*>> m_mergedTrackerGroups;
-    QMap<WormTracker*, WormTracker*> m_trackerToMergeGroupMap;
+    // Represents a group of merged worms. Key: a representative worm ID from the group (e.g., lowest ID).
+    // Value: the set of all worm IDs currently considered part of that merge.
+    QMap<int, QSet<int>> m_mergedGroups;
+    // Tracks which merged group a worm currently belongs to. Key: wormId, Value: representative ID of its merge group.
+    QMap<int, int> m_wormToMergeGroupMap;
 
     void processFrameDataForMergesAndSplits(int frameNumber);
 
 
-    // --- Configuration & State ---
+    // --- Configuration & State (as before) ---
     QString m_videoPath;
     int m_keyFrameNum;
     std::vector<InitialWormInfo> m_initialWormInfos;
@@ -110,16 +114,16 @@ private:
     double m_videoFps;
     cv::Size m_videoFrameSize;
 
-    QMap<int, WormObject*> m_wormObjectsMap; // Key is conceptualWormId
-    QList<WormTracker*> m_wormTrackers;      // List of all *active* tracker instances
+    QMap<int, WormObject*> m_wormObjectsMap;
+    QList<WormTracker*> m_wormTrackers;
     QList<QThread*> m_trackerThreads;
     int m_expectedTrackersToFinish;
     int m_finishedTrackersCount;
 
     int m_videoProcessingProgress;
-    QMap<WormTracker*, int> m_individualTrackerProgress; // Progress per tracker instance
+    QMap<WormTracker*, int> m_individualTrackerProgress;
 
-    AllWormTracks m_finalTracks; // Key is conceptualWormId
+    AllWormTracks m_finalTracks; // std::map
 };
 
 #endif // TRACKINGMANAGER_H
