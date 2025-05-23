@@ -32,9 +32,9 @@ public:
     enum class TrackerState {
         Idle,                           // Not yet started or stopped
         TrackingSingle,                 // Confidently tracking one target
-        AmbiguouslySingle,              // More than one plausible blob in ROI, but one is primary
+        //AmbiguouslySingle,              // More than one plausible blob in ROI, but one is primary
         TrackingMerged,                 // Believed to be tracking our worm as part of a merged entity
-        AmbiguouslyMerged,              // Multiple blobs in ROI, and primary blob is large/complex, potentially merged
+        //AmbiguouslyMerged,              // Multiple blobs in ROI, and primary blob is large/complex, potentially merged
         PausedForSplit,                 // Detected a split from a merged state and is waiting for TrackingManager
         // TrackingLost                 // Optional: If tracking is definitively lost and cannot recover
     };

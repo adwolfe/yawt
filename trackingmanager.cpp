@@ -332,7 +332,7 @@ void TrackingManager::handleWormPositionUpdated(
     auto maps = getMergeMapsForFrame(originalFrameNumber);
     bool isWormInActiveMergeGroup = maps.wormToMergeGroupMap.contains(reportingWormId);
 
-    if (primaryBlob.isValid && reportingTracker && reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit && !isWormInActiveMergeGroup) {
+    if (primaryBlob.isValid) {// && reportingTracker && reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit && !isWormInActiveMergeGroup) {
         Tracking::WormTrackPoint point;
         point.frameNumberOriginal = originalFrameNumber;
         point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
