@@ -347,6 +347,7 @@ void TrackingManager::handleWormPositionUpdated(
 
             wormObject->updateTrackPoint(originalFrameNumber, point.position, point.roi);
             emit individualWormTrackUpdated(reportingWormId, point);
+        }
     }
 
 
