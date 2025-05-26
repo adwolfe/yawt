@@ -115,6 +115,13 @@ struct ThresholdSettings {
 
 namespace Tracking {
 
+// Helper function to calculate squared Euclidean distance
+// (Consider moving to a common utility header if used elsewhere extensively)
+static double sqDistance(const QPointF& p1, const QPointF& p2) {
+    QPointF diff = p1 - p2;
+    return QPointF::dotProduct(diff, diff);
+}
+
 
 /**
      * @brief Structure to hold information about a detected blob during tracking.

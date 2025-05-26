@@ -54,6 +54,7 @@ private slots:
                                    int originalFrameNumber,
                                    const Tracking::DetectedBlob& primaryBlob,
                                    QRectF searchRoiUsed,
+                                   WormTracker::TrackerState currentState,
                                    int plausibleBlobsFoundInSearchRoi);
 
     void handleWormSplitDetectedAndPaused(int reportingWormId,

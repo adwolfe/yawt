@@ -13,12 +13,7 @@
 #include <numeric>   // For std::iota if used for assignments
 #include <limits>    // For std::numeric_limits
 
-// Helper function to calculate squared Euclidean distance
-// (Consider moving to a common utility header if used elsewhere extensively)
-static double squaredDistance(const QPointF& p1, const QPointF& p2) {
-    QPointF diff = p1 - p2;
-    return QPointF::dotProduct(diff, diff);
-}
+
 
 // Define a threshold for considering blobs from different trackers as potentially interacting/merged.
 // This is a placeholder; actual value might depend on worm size, resolution, etc.
@@ -311,14 +306,20 @@ void TrackingManager::handleVideoProcessingProgress(int percentage) {
 void TrackingManager::handleWormPositionUpdated(
     int reportingWormId,
     int originalFrameNumber,
-    const Tracking::DetectedBlob& primaryBlob, // The actual blob tracked
-    QRectF searchRoiUsed,                      // The search ROI used for detection
+    const Tracking::DetectedBlob& primaryBlob, //
+    QRectF searchRoiUsed,
+    WormTracker::TrackerState currentState,
     int plausibleBlobsFoundInSearchRoi) {
 
     if (m_cancelRequested || !m_isTrackingRunning) return;
 
     WormObject* wormObject = m_wormObjectsMap.value(reportingWormId, nullptr);
     WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender()); // Useful for debug or getting tracker-specific props
+    int tmID = reportingWormId;
+    if (reportingTracker->getDirection() == WormTracker::TrackingDirection::Backward) tmID = tmID * -1; // debug
+
+    QString dmsg = QString("TM: WT ")+ QString::number(tmID) +QString(" :");
+    qDebug().noquote() << dmsg << "Received update -- tracker state is " << currentState;
 
     if (!wormObject) {
         qWarning() << "TrackingManager: handleWormPositionUpdated for unknown worm ID:" << reportingWormId;
@@ -332,14 +333,29 @@ void TrackingManager::handleWormPositionUpdated(
     auto maps = getMergeMapsForFrame(originalFrameNumber);
     bool isWormInActiveMergeGroup = maps.wormToMergeGroupMap.contains(reportingWormId);
 
+    if (currentState != WormTracker::TrackerState::PausedForSplit)
+        // a separate alert will come if tracker is paused
+    {
+
+
+        if (primaryBlob.isValid) {// && reportingTracker && reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit && !isWormInActiveMergeGroup) {
+            Tracking::WormTrackPoint point;
+            point.frameNumberOriginal = originalFrameNumber;
+            point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
+            point.roi = searchRoiUsed;
+            //point.state =
+
+            wormObject->updateTrackPoint(originalFrameNumber, point.position, point.roi);
+            emit individualWormTrackUpdated(reportingWormId, point);
+    }
+
+
     if (primaryBlob.isValid) {// && reportingTracker && reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit && !isWormInActiveMergeGroup) {
         Tracking::WormTrackPoint point;
         point.frameNumberOriginal = originalFrameNumber;
         point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
-
-        // **MODIFICATION**: Always store the fixed-size searchRoiUsed in the WormTrackPoint
         point.roi = searchRoiUsed;
-        // point.state = ...; // TODO: Determine annotation based on tracker state or other factors
+        //point.state =
 
         wormObject->updateTrackPoint(originalFrameNumber, point.position, point.roi);
         emit individualWormTrackUpdated(reportingWormId, point);

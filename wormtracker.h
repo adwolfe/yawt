@@ -36,7 +36,7 @@ public:
         TrackingMerged,                 // Believed to be tracking our worm as part of a merged entity
         //AmbiguouslyMerged,              // Multiple blobs in ROI, and primary blob is large/complex, potentially merged
         PausedForSplit,                 // Detected a split from a merged state and is waiting for TrackingManager
-        // TrackingLost                 // Optional: If tracking is definitively lost and cannot recover
+        TrackingLost                 // Optional: If tracking is definitively lost and cannot recover
     };
     Q_ENUM(TrackerState)
 
@@ -78,6 +78,7 @@ signals:
                          int originalFrameNumber,
                          const Tracking::DetectedBlob& primaryBlob,
                          QRectF searchRoiUsed,
+                         TrackerState currentState,
                          int plausibleBlobsFoundInSearchRoi);
 
     /**
@@ -105,8 +106,8 @@ signals:
 
 private:
     // Main processing logic for a frame
-    bool processFrameAsSingleWorm(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
-    bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
+    bool processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
+    //bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
 
     // Helper functions
     QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
