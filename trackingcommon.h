@@ -134,6 +134,7 @@ Q_ENUM_NS(TrackerState)
 /**
      * @brief Structure to hold information about a detected blob during tracking.
      */
+
 struct DetectedBlob {
     QPointF centroid;                     // Centroid of the blob in video coordinates
     QRectF boundingBox;                   // Bounding box of the blob in video coordinates
