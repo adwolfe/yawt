@@ -6,6 +6,12 @@
 
 namespace Tracking {
 
+static double sqDistance(const QPointF& p1, const QPointF& p2) {
+    QPointF diff = p1 - p2;
+    return QPointF::dotProduct(diff, diff);
+}
+
+// Uses thresholded mat to find the nearest blob to a click and selects it.
 DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
                              const QPointF& clickPointVideoCoords,
                              double minArea,
@@ -214,4 +220,4 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
 }
 
 
-} // namespace TrackingHelper
+} // namespace Tracking

@@ -27,18 +27,8 @@ public:
         Backward
     };
     Q_ENUM(TrackingDirection)
-
     // Internal state for the tracker
-    enum class TrackerState {
-        Idle,                           // Not yet started or stopped
-        TrackingSingle,                 // Confidently tracking one target
-        //AmbiguouslySingle,              // More than one plausible blob in ROI, but one is primary
-        TrackingMerged,                 // Believed to be tracking our worm as part of a merged entity
-        //AmbiguouslyMerged,              // Multiple blobs in ROI, and primary blob is large/complex, potentially merged
-        PausedForSplit,                 // Detected a split from a merged state and is waiting for TrackingManager
-        TrackingLost                 // Optional: If tracking is definitively lost and cannot recover
-    };
-    Q_ENUM(TrackerState)
+
 
     explicit WormTracker(int wormId,
                          QRectF initialRoi, // This is the fixed-size ROI
@@ -50,8 +40,8 @@ public:
     void setFrames(const std::vector<cv::Mat>* frames); // Pointer to avoid copying large data
     int getWormId() const { return m_wormId; }
     TrackingDirection getDirection() const { return m_direction; }
-    TrackerState getCurrentTrackerState() const { return m_currentState; }
-    Tracking::DetectedBlob getLastPrimaryBlob() const { return m_lastPrimaryBlob; } // Getter for the last tracked blob
+    Tracking::TrackerState getCurrentTrackerState() const { return m_currentState; }
+    //Tracking::DetectedBlob getLastPrimaryBlob() const { return m_lastPrimaryBlob; } // Getter for the last tracked blob
 
 
 public slots:
@@ -78,7 +68,7 @@ signals:
                          int originalFrameNumber,
                          const Tracking::DetectedBlob& primaryBlob,
                          QRectF searchRoiUsed,
-                         TrackerState currentState,
+                         Tracking::TrackerState currentState,
                          int plausibleBlobsFoundInSearchRoi);
 
     /**
@@ -99,7 +89,7 @@ signals:
      * @param associatedEntityId Optional: If merged, the ID of the entity it's merged with (e.g. representative ID from TrackingManager).
      * If split, could be an ID related to the split event.
      */
-    void stateChanged(int wormId, TrackerState newState, int associatedEntityId = -1);
+    void stateChanged(int wormId, Tracking::TrackerState newState, int associatedEntityId = -1);
 
     void errorOccurred(int wormId, QString errorMessage); // If an unrecoverable error happens
 
@@ -145,7 +135,7 @@ private:
     cv::Point2f m_lastKnownPosition;        // Last known centroid of the tracked blob (used as fallback)
     int m_currFrameNum;                     // Index in m_framesToProcess (0 to N-1)
     bool m_trackingActive;                  // Flag to control the tracking loop
-    TrackerState m_currentState;            // Current operational state of this tracker
+    Tracking::TrackerState m_currentState;            // Current operational state of this tracker
     Tracking::DetectedBlob m_lastPrimaryBlob; // Characteristics of the blob successfully tracked in the *previous* frame
         // This is updated *after* processing a frame and choosing a target.
 };

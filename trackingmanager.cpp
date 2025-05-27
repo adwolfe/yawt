@@ -303,41 +303,40 @@ void TrackingManager::handleVideoProcessingProgress(int percentage) {
 
 
 // --- WormTracker Signal Handlers ---
+
+
 void TrackingManager::handleWormPositionUpdated(
     int reportingWormId,
     int originalFrameNumber,
     const Tracking::DetectedBlob& primaryBlob, //
     QRectF searchRoiUsed,
-    WormTracker::TrackerState currentState,
+    Tracking::TrackerState currentState,
     int plausibleBlobsFoundInSearchRoi) {
 
     if (m_cancelRequested || !m_isTrackingRunning) return;
 
     WormObject* wormObject = m_wormObjectsMap.value(reportingWormId, nullptr);
-    WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender()); // Useful for debug or getting tracker-specific props
+    WormTracker* reportingTracker = qobject_cast<WormTracker*>(sender());
     int tmID = reportingWormId;
-    if (reportingTracker->getDirection() == WormTracker::TrackingDirection::Backward) tmID = tmID * -1; // debug
+    if (reportingTracker->getDirection() == WormTracker::TrackingDirection::Backward) tmID = tmID * -1;
 
     QString dmsg = QString("TM: WT ")+ QString::number(tmID) +QString(" :");
-    qDebug().noquote() << dmsg << "Received update -- tracker state is " << currentState;
+    qDebug().noquote() << dmsg << "Received update -- tracker state is now" << currentState;
 
     if (!wormObject) {
-        qWarning() << "TrackingManager: handleWormPositionUpdated for unknown worm ID:" << reportingWormId;
+        qWarning() << "TrackingManager: handleWormPositionUpdated for unknown worm ID:" << tmID;
         return;
     }
     if (!reportingTracker) {
-        qWarning() << "TrackingManager: handleWormPositionUpdated from non-WormTracker sender for worm ID:" << reportingWormId;
+        qWarning() << "TrackingManager: handleWormPositionUpdated from non-WormTracker sender for worm ID:" << tmID;
         // We can still proceed with wormObject if conceptual ID is known.
     }
 
     auto maps = getMergeMapsForFrame(originalFrameNumber);
-    bool isWormInActiveMergeGroup = maps.wormToMergeGroupMap.contains(reportingWormId);
+    bool isWormInActiveMergeGroup = maps.wormToMergeGroupMap.contains(tmID);
 
     if (currentState != WormTracker::TrackerState::PausedForSplit)
-        // a separate alert will come if tracker is paused
     {
-
-
         if (primaryBlob.isValid) {// && reportingTracker && reportingTracker->getCurrentTrackerState() != WormTracker::TrackerState::PausedForSplit && !isWormInActiveMergeGroup) {
             Tracking::WormTrackPoint point;
             point.frameNumberOriginal = originalFrameNumber;

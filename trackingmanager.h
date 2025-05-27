@@ -46,22 +46,20 @@ private slots:
      * @brief Handles position updates from WormTrackers.
      * @param reportingWormId The conceptual ID of the worm.
      * @param originalFrameNumber The frame number in the original video.
-     * @param primaryBlob The main blob identified by the tracker.
+     * @param primaryBlob The best target blob identified by the tracker. May be a merged blob.
      * @param searchRoiUsed The search ROI used by the tracker in this frame.
-     * @param plausibleBlobsFoundInSearchRoi Count of plausible blobs in the search ROI.
      */
-    void handleWormPositionUpdated(int reportingWormId,
-                                   int originalFrameNumber,
-                                   const Tracking::DetectedBlob& primaryBlob,
-                                   QRectF searchRoiUsed,
-                                   WormTracker::TrackerState currentState,
-                                   int plausibleBlobsFoundInSearchRoi);
+    void handleFrameUpdate(int reportingWormId,
+                           int originalFrameNumber,
+                           const Tracking::DetectedBlob& primaryBlob,
+                           QRectF searchRoiUsed,
+                           Tracking::TrackerState currentState);
 
-    void handleWormSplitDetectedAndPaused(int reportingWormId,
-                                          int originalFrameNumber,
-                                          const QList<Tracking::DetectedBlob>& detectedBlobs);
+    //void handleWormSplitDetectedAndPaused(int reportingWormId,
+    //                                      int originalFrameNumber,
+    //                                      const QList<Tracking::DetectedBlob>& detectedBlobs);
 
-    void handleWormStateChanged(int reportingWormId, WormTracker::TrackerState newState, int associatedEntityId);
+    //void handleWormStateChanged(int reportingWormId, Tracking::TrackerState newState, int associatedEntityId);
     void handleWormTrackerFinished();
     void handleWormTrackerError(int reportingWormId, QString errorMessage);
     void handleWormTrackerProgress(int reportingWormId, int percentDone);

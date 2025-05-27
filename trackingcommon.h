@@ -115,12 +115,20 @@ struct ThresholdSettings {
 
 namespace Tracking {
 
+Q_NAMESPACE
+
 // Helper function to calculate squared Euclidean distance
-// (Consider moving to a common utility header if used elsewhere extensively)
-static double sqDistance(const QPointF& p1, const QPointF& p2) {
-    QPointF diff = p1 - p2;
-    return QPointF::dotProduct(diff, diff);
-}
+static double sqDistance(const QPointF& p1, const QPointF& p2);
+
+enum TrackerState {
+    Idle,                           // Not yet started or stopped
+    TrackingSingle,                 // Confidently tracking one target
+    TrackingMerged,                 // Believed to be tracking our worm as part of a merged entity
+    PausedForSplit,                 // Detected a split from a merged state and is waiting for TrackingManager
+    TrackingLost                    // Optional: If tracking is definitively lost and cannot recover
+};
+Q_ENUM_NS(TrackerState)
+
 
 
 /**
@@ -210,6 +218,8 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                                                double maxAspectRatio);
 
 } // namespace TrackingHelper
+
+
 
 namespace TrackingConstants {
 constexpr double DEFAULT_MIN_WORM_AREA = 10.0;
