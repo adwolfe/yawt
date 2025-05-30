@@ -50,7 +50,7 @@ public slots:
     void stopTracking();     // Request to stop the tracking loop
     //void resumeTrackingWithNewTarget(int targetId, const Tracking::DetectedBlob& targetBlob); // Called by TrackingManager after a split
     void resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob& targetBlob);
-    void confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoi); // Called by TrackingManager
+    //void confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoi); // Called by TrackingManager
 
 
 signals:
@@ -67,6 +67,7 @@ signals:
      */
     void positionUpdated(int wormId,
                          int originalFrameNumber,
+                         const Tracking::DetectedBlob& fullBlob,
                          const Tracking::DetectedBlob& primaryBlob,
                          QRectF searchRoiUsed,
                          Tracking::TrackerState currentState,
@@ -138,6 +139,7 @@ private:
     bool m_trackingActive;                  // Flag to control the tracking loop
     Tracking::TrackerState m_currentState;            // Current operational state of this tracker
     Tracking::DetectedBlob m_lastPrimaryBlob; // Characteristics of the blob successfully tracked in the *previous* frame
+    Tracking::DetectedBlob m_lastFullBlob;  // basically a state descriptor
         // This is updated *after* processing a frame and choosing a target.
 };
 

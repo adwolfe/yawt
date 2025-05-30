@@ -634,6 +634,7 @@ void TrackingManager::assembleProcessedFrames() {
 void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
                                         int originalFrameNumber,
                                         const Tracking::DetectedBlob& primaryBlob,
+                                        const Tracking::DetectedBlob& fullBlob,
                                         QRectF searchRoiUsed,
                                         Tracking::TrackerState currentState)
 {
@@ -692,15 +693,15 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
             qDebug() << "TM: Worm" << reportingConceptualWormId << "removed from pause queue due to state" << static_cast<int>(currentState);
         }
     } else if (currentState == Tracking::TrackerState::TrackingMerged) {
-        if (primaryBlob.isValid) {
-            processMergedState(reportingConceptualWormId, originalFrameNumber, primaryBlob, reportingTrackerInstance);
+        if (fullBlob.isValid) {
+            processMergedState(reportingConceptualWormId, originalFrameNumber, fullBlob, reportingTrackerInstance);
         }
     } else if (currentState == Tracking::TrackerState::PausedForSplit) {
-        if (primaryBlob.isValid && reportingTrackerInstance) { // Need tracker instance to resume it
-            processPausedForSplitState(reportingConceptualWormId, originalFrameNumber, primaryBlob, reportingTrackerInstance);
+        if (fullBlob.isValid && reportingTrackerInstance) { // Need tracker instance to resume it
+            processPausedForSplitState(reportingConceptualWormId, originalFrameNumber, fullBlob, reportingTrackerInstance);
         } else {
             qWarning() << "TM: Worm" << reportingConceptualWormId
-                       << "reported PausedForSplit without a valid primaryBlob or tracker instance. Forcing to lost.";
+                       << "reported PausedForSplit without a valid fullBlob or tracker instance. Forcing to lost.";
             if (m_pausedWorms.contains(reportingConceptualWormId)) { // Clean up if it was somehow added
                 m_pausedWorms.remove(reportingConceptualWormId);
             }

@@ -88,6 +88,7 @@ private slots:
     void handleFrameUpdate(int reportingWormId,
                            int originalFrameNumber,
                            const Tracking::DetectedBlob& primaryBlob,
+                           const Tracking::DetectedBlob& fullBlob,
                            QRectF searchRoiUsed,
                            Tracking::TrackerState currentState);
 
