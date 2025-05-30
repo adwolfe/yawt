@@ -118,7 +118,22 @@ namespace Tracking {
 Q_NAMESPACE
 
 // Helper function to calculate squared Euclidean distance
-static double sqDistance(const QPointF& p1, const QPointF& p2);
+static double sqDistance(const QPointF& p1, const QPointF& p2) {
+    QPointF diff = p1 - p2;
+    return QPointF::dotProduct(diff, diff);
+}
+
+// Overload for cv::Point2f
+static double sqDistance(const cv::Point2f& p1, const cv::Point2f& p2) {
+    cv::Point2f diff = p1 - p2;
+    return diff.dot(diff); // cv::Point2f::dot returns float, implicitly convertible to double
+}
+
+// You could add one for cv::Point2d as well if needed
+static double sqDistance(const cv::Point2d& p1, const cv::Point2d& p2) {
+    cv::Point2d diff = p1 - p2;
+    return diff.dot(diff); // cv::Point2d::dot returns double
+}
 
 enum TrackerState {
     Idle,                           // Not yet started or stopped
@@ -147,11 +162,12 @@ struct DetectedBlob {
     DetectedBlob() : area(0.0), isValid(false), touchesROIboundary(false) {}
 };
 
-enum class TrackPointAnnotation {
+enum class TrackPointQuality {
     Confident,
     Ambiguous
 
 };
+Q_ENUM_NS(TrackPointQuality)
 
 /**
  * @brief Represents a single point in a worm's track.
@@ -160,8 +176,8 @@ struct WormTrackPoint {
     int frameNumberOriginal;        // Frame number in the original video
     cv::Point2f position;           // Position (centroid) in video coordinates
     QRectF roi;                     // ROI used for this worm at this frame (in video coordinates)
-    TrackPointAnnotation state;
-
+    TrackPointQuality quality;      // Single is confident, merged is ambiguous. For visualization later.
+    // Can add behavior annotations later.
 };
 
 /**

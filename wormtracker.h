@@ -48,7 +48,8 @@ public slots:
     void startTracking();
     void continueTracking(); // Internal slot for loop progression
     void stopTracking();     // Request to stop the tracking loop
-    void resumeTrackingWithNewTarget(const Tracking::DetectedBlob& targetBlob); // Called by TrackingManager after a split
+    //void resumeTrackingWithNewTarget(int targetId, const Tracking::DetectedBlob& targetBlob); // Called by TrackingManager after a split
+    void resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob& targetBlob);
     void confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoi); // Called by TrackingManager
 
 

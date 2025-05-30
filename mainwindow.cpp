@@ -56,6 +56,8 @@ MainWindow::MainWindow(QWidget *parent)
     // Set initial active view modes in VideoLoader if desired, e.g., show Blobs by default
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     // ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::None, true); // Or start with nothing
+
+    qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
 }
 
 MainWindow::~MainWindow()
@@ -154,10 +156,7 @@ void MainWindow::initializeUIStates() {
     ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png")));
 
 
-    ui->globalThreshSlider->setValue(127);
-    ui->globalThreshAutoCheck->setChecked(false);
-    ui->adaptiveRadio->setChecked(true);
-    updateThresholdAlgorithmSettings();
+
 
     ui->adaptiveTypeCombo->setCurrentIndex(0);
     setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
@@ -175,6 +174,11 @@ void MainWindow::initializeUIStates() {
 
     ui->bgCombo->setCurrentIndex(0);
     setBackgroundAssumption(ui->bgCombo->currentIndex());
+    ui->globalRadio->setChecked(true);
+    ui->globalThreshSlider->setValue(100);
+    ui->globalThreshAutoCheck->setChecked(false);
+    qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
+    updateThresholdAlgorithmSettings();
 
     // Initial button states will be set by sync slots when VideoLoader emits initial modes
 }
@@ -195,6 +199,9 @@ void MainWindow::editBlobsModeButtonClicked() {
     // Ensure threshold view is active for blob editing if it's a prerequisite
     if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Threshold)) {
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, true);
+    }
+    if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Blobs)) {
+        ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     }
 }
 void MainWindow::editTracksModeButtonClicked() {
@@ -437,6 +444,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     ui->videoLoader->setTracksToDisplay(tracks);
     if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
+        ui->wormTableView->selectAll();
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
 }

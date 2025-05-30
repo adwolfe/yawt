@@ -13,23 +13,21 @@ public:
     WormObject(int id, const QRectF& initialRoi);
 
     int getId() const;
-    cv::Point2f getCurrentPosition() const;
-    QRectF getCurrentRoi() const;
-    Tracking::TrackerState getCurrentState() const;
     const std::vector<Tracking::WormTrackPoint>& getTrackHistory() const;
+    void updateTrackPoint(Tracking::WormTrackPoint point); //const cv::Point2f& position, const QRectF& roi);
+    //cv::Point2f getCurrentPosition() const;
+    //QRectF getCurrentRoi() const;
+    //Tracking::TrackerState getCurrentState() const;
 
-    void updateTrackPoint(int originalFrameNum, const cv::Point2f& position, const QRectF& roi);
-    void setState(Tracking::TrackerState state, int mergedWithId = -1);
-    void setMergedWithId(int id);
-    int getMergedWithId() const;
+    //void setState(Tracking::TrackerState state, int mergedWithId = -1);
+    //void setMergedWithId(int id);
+    //int getMergedWithId() const;
 
 
 private:
     int m_id;
     cv::Point2f m_currentPosition; // Current position in video coordinates
     QRectF m_currentRoi;           // Current ROI in video coordinates
-    Tracking::TrackerState m_currentState;
-    int m_mergedWithId; // ID of the worm it's merged with, if any (-1 otherwise)
 
     // Stores the history of positions.
     // The key (int) will be the original frame number to allow sparse updates

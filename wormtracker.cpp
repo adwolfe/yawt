@@ -96,14 +96,10 @@ void WormTracker::continueTracking()
             }
 
             // Process based on state
-            if (m_currentState == Tracking::TrackerState::TrackingSingle ) //|| m_currentState == TrackerState::AmbiguouslySingle)
+            if (m_currentState == Tracking::TrackerState::TrackingSingle || m_currentState == Tracking::TrackerState::TrackingMerged)
             {
                 // Pass searchRoiForThisFrame by reference to be updated for the *next* frame's search
-                foundTargetThisFrame = processFrameAsSingleWorm(currentFrame, m_currFrameNum, m_currentSearchRoi);
-            }
-            else if (m_currentState == Tracking::TrackerState::TrackingMerged ) //|| m_currentState == TrackerState::AmbiguouslyMerged)
-            {
-                foundTargetThisFrame = processFrameAsMergedWorms(currentFrame, m_currFrameNum, m_currentSearchRoi);
+                foundTargetThisFrame = processFrame(currentFrame, m_currFrameNum, m_currentSearchRoi);
             }
             // If PausedForSplit, foundTargetThisFrame will remain false, and we don't advance m_currFrameNum below
 
@@ -315,7 +311,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
                     continue;
                 }
                 // Unreachable due to break/continue above, but if logic changes, ensure break is hit.
-                // break; // Break after decision or max iterations
+                break; // Break after decision or max iterations
             }
 
             // Now that we've got our blob, figure out whether it is a merge
@@ -329,6 +325,10 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
                 bestBlobForThisFrame = candidateBlobAfterExpansion;
             }
             bool confirmedMerge = false;
+
+
+
+            // NOTE -- THIS NEEDS TO TAKE INTO ACCOUNT IF MERGED PREVIOUSLY BECAUSE IF SO THE COMPARISON IS NOT EFFECTIVE
             qDebug().noquote()<< dmsg << "Checking if merged..." << m_lastPrimaryBlob.isValid << bestBlobForThisFrame.isValid << candidateBlobAfterExpansion.area << m_lastPrimaryBlob.area;
 
 
@@ -603,52 +603,111 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
     }
 }
 
+void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob& targetBlob) {
+    // No 'targetId' parameter, no 'if (m_wormId == targetId)' check needed.
+    // If this slot is called, it's meant for this instance.
 
-
-void WormTracker::resumeTrackingWithNewTarget(const Tracking::DetectedBlob& targetBlob) {
-    qDebug().noquote()<< "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called. Blob Centroid:" << targetBlob.centroid << "Area:" << targetBlob.area;
-    if (!targetBlob.isValid) {
-        qWarning() << "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called with invalid blob. Stopping tracking.";
-        m_currentState = Tracking::TrackerState::Idle; // Or a 'Lost' state
-        m_trackingActive = false;
-        // No queued call to continueTracking here, as m_trackingActive = false will terminate the loop via stopTracking's invoke.
-        // Or, directly emit finished if appropriate.
-        // Let stopTracking handle the proper shutdown.
-        QMetaObject::invokeMethod(this, &WormTracker::stopTracking, Qt::QueuedConnection);
+    if (m_currentState != Tracking::TrackerState::PausedForSplit) {
+        qWarning() << "WormTracker ID" << m_wormId << getDirection() // Helper to get "(Fwd)" or "(Bwd)"
+                   << ": resumeTrackingWithAssignedTarget called but not in PausedForSplit state. Current state:"
+                   << static_cast<int>(m_currentState) << ". Ignoring.";
         return;
     }
 
-    m_lastKnownPosition = cv::Point2f(static_cast<float>(targetBlob.centroid.x()), static_cast<float>(targetBlob.centroid.y()));
-    // The ROI for the next search should be our standard fixed-size ROI, centered on the new target.
-    // Ensure m_framesToProcess is valid and m_currFrameNum is within bounds before accessing.
-    cv::Size currentFrameSize;
-    if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0 ) {
-        currentFrameSize = m_framesToProcess->at(m_currFrameNum).size();
-    } else if (m_framesToProcess && !m_framesToProcess->empty()) {
-        currentFrameSize = m_framesToProcess->at(0).size(); // Fallback to first frame size
-        qWarning() << "WormTracker ID" << m_wormId << ": m_currFrameNum invalid in resume. Using first frame size for ROI.";
-    } else {
-        qWarning() << "WormTracker ID" << m_wormId << ": No frames available in resume. Cannot set ROI size. Tracking may fail.";
-        // Default to a reasonable size if frame info is totally missing, though this is bad.
-        currentFrameSize = cv::Size(640,480); // Arbitrary fallback
+    qDebug().noquote() << "WormTracker ID" << m_wormId << getDirection()
+                       << ": resumeTrackingWithAssignedTarget received. Blob Centroid:"
+                       << targetBlob.centroid.x() << "," << targetBlob.centroid.y() << "Area:" << targetBlob.area;
+
+    if (!targetBlob.isValid) {
+        qWarning() << "WormTracker ID" << m_wormId << getDirection()
+        << ": resumeTrackingWithAssignedTarget called with invalid blob. Forcing stop.";
+        // Transition to a lost/idle state and stop the tracking loop
+        m_currentState = Tracking::TrackerState::TrackingLost; // Or Idle
+        m_trackingActive = false; // This will cause continueTracking to stop
+        emit stateChanged(m_wormId, m_currentState); // Notify TM of state change
+        emit finished(); // Signal that this tracker's work is done
+        return;
     }
 
-    m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrameSize);
-    m_lastPrimaryBlob = targetBlob; // This is now the confirmed target
-    m_currentState = Tracking::TrackerState::TrackingSingle; // Resume as tracking a single, confirmed target
-    emit stateChanged(m_wormId, m_currentState);
+    // Your existing logic for resuming:
+    m_lastKnownPosition = cv::Point2f(static_cast<float>(targetBlob.centroid.x()), static_cast<float>(targetBlob.centroid.y()));
 
-    qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Resumed. New Search ROI:" << m_currentSearchRoi << "State:" << static_cast<int>(m_currentState);
+    cv::Size currentFrameSize;
+    // Robustly get frame size (your existing logic is good here)
+    if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >= 0) {
+        currentFrameSize = m_framesToProcess->at(m_currFrameNum).size();
+    } else if (m_framesToProcess && !m_framesToProcess->empty()) {
+        currentFrameSize = m_framesToProcess->at(0).size();
+        qWarning() << "WormTracker ID" << m_wormId << getDirection() << ": m_currFrameNum invalid in resume. Using first frame size for ROI.";
+    } else {
+        qWarning() << "WormTracker ID" << m_wormId << getDirection() << ": No frames available in resume. Cannot set ROI size.";
+        currentFrameSize = cv::Size(640, 480); // Fallback
+    }
 
-    // Important: The tracker was paused at m_currFrameNum because a split was detected *in that frame*.
-    // Now that it's resuming, it should process the *next* frame.
+    m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrameSize); // adjustRoiPos needs to be defined/accessible
+    m_lastPrimaryBlob = targetBlob;
+    m_currentState = Tracking::TrackerState::TrackingSingle;
+    // emit stateChanged(m_wormId, m_currentState); // TM will know from subsequent positionUpdated
+
+    qDebug().noquote() << "WormTracker ID" << m_wormId << getDirection()
+                       << ": Resumed. New Search ROI:" << m_currentSearchRoi
+                       << "State:" << static_cast<int>(m_currentState);
+
+    // The tracker was paused at m_currFrameNum. It has now been assigned a target *for that frame*.
+    // It should process the *next* frame with this new information.
     m_currFrameNum++;
 
-    // Re-activate the tracking loop
-    if (m_trackingActive) { // Only if stopTracking wasn't called due to invalid blob
+    if (m_trackingActive) { // Check if not already stopped by invalid blob logic
         QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
     }
 }
+
+/*void WormTracker::resumeTrackingWithNewTarget(int targetId, const Tracking::DetectedBlob& targetBlob) {
+    if (m_currentState == Tracking::TrackerState::PausedForSplit && m_wormId == targetId) {
+        qDebug().noquote()<< "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called. Blob Centroid:" << targetBlob.centroid << "Area:" << targetBlob.area;
+        if (!targetBlob.isValid) {
+            qWarning() << "WormTracker ID" << m_wormId << ": resumeTrackingWithNewTarget called with invalid blob. Stopping tracking.";
+            m_currentState = Tracking::TrackerState::Idle; // Or a 'Lost' state
+            m_trackingActive = false;
+            // No queued call to continueTracking here, as m_trackingActive = false will terminate the loop via stopTracking's invoke.
+            // Or, directly emit finished if appropriate.
+            // Let stopTracking handle the proper shutdown.
+            QMetaObject::invokeMethod(this, &WormTracker::stopTracking, Qt::QueuedConnection);
+            return;
+        }
+
+        m_lastKnownPosition = cv::Point2f(static_cast<float>(targetBlob.centroid.x()), static_cast<float>(targetBlob.centroid.y()));
+        // The ROI for the next search should be our standard fixed-size ROI, centered on the new target.
+        // Ensure m_framesToProcess is valid and m_currFrameNum is within bounds before accessing.
+        cv::Size currentFrameSize;
+        if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0 ) {
+            currentFrameSize = m_framesToProcess->at(m_currFrameNum).size();
+        } else if (m_framesToProcess && !m_framesToProcess->empty()) {
+            currentFrameSize = m_framesToProcess->at(0).size(); // Fallback to first frame size
+            qWarning() << "WormTracker ID" << m_wormId << ": m_currFrameNum invalid in resume. Using first frame size for ROI.";
+        } else {
+            qWarning() << "WormTracker ID" << m_wormId << ": No frames available in resume. Cannot set ROI size. Tracking may fail.";
+            // Default to a reasonable size if frame info is totally missing, though this is bad.
+            currentFrameSize = cv::Size(640,480); // Arbitrary fallback
+        }
+
+        m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrameSize);
+        m_lastPrimaryBlob = targetBlob; // This is now the confirmed target
+        m_currentState = Tracking::TrackerState::TrackingSingle; // Resume as tracking a single, confirmed target
+        //emit stateChanged(m_wormId, m_currentState);
+
+        qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Resumed. New Search ROI:" << m_currentSearchRoi << "State:" << static_cast<int>(m_currentState);
+
+        // Important: The tracker was paused at m_currFrameNum because a split was detected *in that frame*.
+        // Now that it's resuming, it should process the *next* frame.
+        m_currFrameNum++;
+
+        // Re-activate the tracking loop
+        if (m_trackingActive) { // Only if stopTracking wasn't called due to invalid blob
+            QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
+        }
+    }
+}*/
 
 void WormTracker::confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoiFromManager) {
     // mergedEntityID is the representative ID of the merge group from TrackingManager.

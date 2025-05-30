@@ -32,7 +32,7 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_zoomFactor(1.0),
     m_panOffset(0.0, 0.0),
     m_thresholdAlgorithm(Thresholding::ThresholdAlgorithm::Global),
-    m_thresholdValue(127),
+    m_thresholdValue(100),
     m_assumeLightBackground(true),
     m_adaptiveBlockSize(11),
     m_adaptiveC(2.0),

@@ -20,6 +20,7 @@ SOURCES += \
     mainwindow.cpp \
     trackingcommon.cpp \
     trackingmanager.cpp \
+    #trackingmanager_copy.cpp \
     trackingprogressdialog.cpp \
     videofiletreeview.cpp \
     videoloader.cpp \
@@ -35,6 +36,7 @@ HEADERS += \
     mainwindow.h \
     trackingcommon.h \
     trackingmanager.h \
+    #trackingmanager_copy.h \
     trackingprogressdialog.h \
     videofiletreeview.h \
     videoloader.h \
