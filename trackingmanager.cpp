@@ -58,12 +58,12 @@ TrackingManager::TrackingManager(QObject* parent)
     m_pauseResolutionTimer = new QTimer(this);
     connect(m_pauseResolutionTimer, &QTimer::timeout, this, &TrackingManager::checkPausedWormsAndResolveSplits);
 
-    qDebug() << "TrackingManager (" << this << ") created.";
+    //qDebug() << "TrackingManager (" << this << ") created.";
 }
 
 // Destructor
 TrackingManager::~TrackingManager() {
-    qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
+    //qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
     if (m_pauseResolutionTimer) {
         m_pauseResolutionTimer->stop();
         // delete m_pauseResolutionTimer; // Parent QObject handles this
@@ -219,12 +219,12 @@ void TrackingManager::startFullTrackingProcess(
     }
 
     m_totalVideoChunksToProcess = forwardFrameRanges.size() + backwardFrameRanges.size();
-    qDebug() << "Total video chunks to process:" << m_totalVideoChunksToProcess
-             << "(Fwd:" << forwardFrameRanges.size() << ", Bwd:" << backwardFrameRanges.size() << ")";
+    //qDebug() << "Total video chunks to process:" << m_totalVideoChunksToProcess
+    //         << "(Fwd:" << forwardFrameRanges.size() << ", Bwd:" << backwardFrameRanges.size() << ")";
 
 
     if (m_totalVideoChunksToProcess == 0) {
-        qDebug() << "No video frames to process based on keyframe and total frames. Finishing early.";
+        //qDebug() << "No video frames to process based on keyframe and total frames. Finishing early.";
         // This will call launchWormTrackers with empty frame vectors
         handleInitialProcessingComplete({}, {}, m_videoFps, m_videoFrameSize);
         return;
@@ -260,7 +260,7 @@ void TrackingManager::startFullTrackingProcess(
                 // Or, if we want to remove dynamically:
                 // m_videoProcessorThreads.removeOne(threadPtr);
                 // delete threadPtr; // If TM owns it directly
-                qDebug() << "Video processor thread" << threadPtr << "finished.";
+                //qDebug() << "Video processor thread" << threadPtr << "finished.";
             }
         });
         thread->start();
@@ -280,15 +280,15 @@ void TrackingManager::startFullTrackingProcess(
 
 // Cancel Tracking
 void TrackingManager::cancelTracking() {
-    qDebug() << "TrackingManager (" << this << "): cancelTracking called. IsRunning:" << m_isTrackingRunning << "CancelRequested:" << m_cancelRequested;
+    //qDebug() << "TrackingManager (" << this << "): cancelTracking called. IsRunning:" << m_isTrackingRunning << "CancelRequested:" << m_cancelRequested;
 
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested && !m_isTrackingRunning) {
-        qDebug() << "TM: Cancellation already fully processed or tracking not running.";
+        //qDebug() << "TM: Cancellation already fully processed or tracking not running.";
         return;
     }
     if (m_cancelRequested) {
-        qDebug() << "TM: Cancellation already in progress.";
+        //qDebug() << "TM: Cancellation already in progress.";
         return;
     }
     m_cancelRequested = true; // Set the flag
@@ -305,7 +305,7 @@ void TrackingManager::cancelTracking() {
     // Request interruption for all video processor threads
     for (QPointer<QThread> thread : m_videoProcessorThreads) {
         if (thread && thread->isRunning()) {
-            qDebug() << "Cancelling: Requesting interruption for video processor thread:" << thread;
+            //qDebug() << "Cancelling: Requesting interruption for video processor thread:" << thread;
             thread->requestInterruption();
         }
     }
@@ -329,7 +329,7 @@ void TrackingManager::cancelTracking() {
     if ((wasRunning && m_expectedTrackersToFinish == 0 && m_wormTrackersList.isEmpty()) || !wasRunning) {
         m_isTrackingRunning = false; // Ensure tracking stops
         locker.unlock();
-        qDebug() << "TM: Cancellation processed. Emitting trackingCancelled.";
+        //qDebug() << "TM: Cancellation processed. Emitting trackingCancelled.";
         emit trackingCancelled(); // This will trigger cleanup via checkForAllTrackersFinished if needed
     } else if (wasRunning && m_videoProcessorsFinishedCount < m_totalVideoChunksToProcess && m_totalVideoChunksToProcess > 0) {
         // If cancelled during video processing, and some chunks might still be "running"
@@ -345,7 +345,7 @@ void TrackingManager::cancelTracking() {
         // For now, if cancel is called, and video processors are running, they will be interrupted.
         // Their completion (even if partial or errored due to interrupt) should lead to assembleProcessedFrames,
         // which will see m_cancelRequested and bail, then emit trackingCancelled.
-        qDebug() << "TM: Cancellation requested during active video processing. Video threads interrupted.";
+        //qDebug() << "TM: Cancellation requested during active video processing. Video threads interrupted.";
         // No direct emit trackingCancelled() here; let the processing pipeline wind down.
     }
     // checkForAllTrackersFinished will be called by trackers finishing/erroring,
@@ -355,7 +355,7 @@ void TrackingManager::cancelTracking() {
 
 // Cleanup
 void TrackingManager::cleanupThreadsAndObjects() {
-    qDebug() << "TrackingManager (" << this << "): cleanupThreadsAndObjects - START";
+    //qDebug() << "TrackingManager (" << this << "): cleanupThreadsAndObjects - START";
 
     // Stop and wait for video processor threads
     // Use a copy for iteration as threads might be removed from m_videoProcessorThreads upon finishing
@@ -364,7 +364,7 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
     for (QPointer<QThread> thread : videoThreadsToClean) {
         if (thread) { // QPointer checks if object still exists
-            qDebug() << "  Cleaning up video processor thread:" << thread;
+            //qDebug() << "  Cleaning up video processor thread:" << thread;
             if (thread->isRunning()) {
                 thread->requestInterruption(); // Ensure it's asked to stop
                 thread->quit();
@@ -384,7 +384,7 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
     for (QPointer<QThread> thread : trackerThreadsToClean) {
         if (thread) {
-            qDebug() << "  Cleaning up tracker thread:" << thread;
+            //qDebug() << "  Cleaning up tracker thread:" << thread;
             if (thread->isRunning()) {
                 thread->requestInterruption();
                 thread->quit();
@@ -428,7 +428,7 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
     m_isTrackingRunning = false; // Ensure state is reset
     m_cancelRequested = false;   // Reset cancel flag for next run
-    qDebug() << "TrackingManager (" << this << "): cleanupThreadsAndObjects - FINISHED";
+    //qDebug() << "TrackingManager (" << this << "): cleanupThreadsAndObjects - FINISHED";
 }
 
 // This is the original slot, now called by assembleProcessedFrames
@@ -438,10 +438,10 @@ void TrackingManager::handleInitialProcessingComplete(
     double fps,
     cv::Size frameSize) {
 
-    qDebug() << "TrackingManager (" << this << "): All video processing assembled and complete.";
+    //qDebug() << "TrackingManager (" << this << "): All video processing assembled and complete.";
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested) {
-        qDebug() << "TM: Video processing fully complete but cancellation requested. Not launching trackers.";
+        //qDebug() << "TM: Video processing fully complete but cancellation requested. Not launching trackers.";
         m_isTrackingRunning = false;
         locker.unlock();
         emit trackingCancelled();
@@ -470,10 +470,10 @@ void TrackingManager::handleInitialProcessingComplete(
 
 // Slot to handle errors from any video processing chunk
 void TrackingManager::handleVideoChunkProcessingError(int chunkId, const QString& errorMessage) {
-    qDebug() << "TrackingManager (" << this << "): handleVideoChunkProcessingError from chunk" << chunkId << ":" << errorMessage;
+    //qDebug() << "TrackingManager (" << this << "): handleVideoChunkProcessingError from chunk" << chunkId << ":" << errorMessage;
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested) {
-        qDebug() << "TM: Video processing error (chunk " << chunkId << ":" << errorMessage << ") received during/after cancellation. Letting cancel flow proceed.";
+        //qDebug() << "TM: Video processing error (chunk " << chunkId << ":" << errorMessage << ") received during/after cancellation. Letting cancel flow proceed.";
         return;
     }
     if (!m_isTrackingRunning) {
@@ -494,7 +494,7 @@ void TrackingManager::handleVideoChunkProcessingError(int chunkId, const QString
     // Request interruption for all video processor threads
     for (QPointer<QThread> thread : m_videoProcessorThreads) {
         if (thread && thread->isRunning()) {
-            qDebug() << "Requesting interruption for video processor thread:" << thread;
+            //qDebug() << "Requesting interruption for video processor thread:" << thread;
             thread->requestInterruption();
         }
     }
@@ -536,18 +536,18 @@ void TrackingManager::handleRangeProcessingComplete(int chunkId,
                                                     bool wasForwardChunk) {
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested) {
-        qDebug() << "Video chunk" << chunkId << "finished, but cancellation was requested. Discarding.";
+        //qDebug() << "Video chunk" << chunkId << "finished, but cancellation was requested. Discarding.";
         // Decrement count to ensure cleanup logic works if some threads finish after cancel
         m_totalVideoChunksToProcess = qMax(0, m_totalVideoChunksToProcess -1);
         if (m_videoProcessorsFinishedCount >= m_totalVideoChunksToProcess && m_totalVideoChunksToProcess == 0) {
-            qDebug() << "All remaining video chunks accounted for after cancellation.";
+            //qDebug() << "All remaining video chunks accounted for after cancellation.";
             // Potentially call a cleanup or final cancel step if needed
         }
         return;
     }
 
-    qDebug() << "Video processing chunk" << chunkId << (wasForwardChunk ? "(Forward)" : "(Backward)")
-             << "finished with" << processedFrames.size() << "frames.";
+    //qDebug() << "Video processing chunk" << chunkId << (wasForwardChunk ? "(Forward)" : "(Backward)")
+    //         << "finished with" << processedFrames.size() << "frames.";
 
     if (wasForwardChunk) {
         m_assembledForwardFrameChunks[chunkId] = processedFrames;
@@ -557,13 +557,13 @@ void TrackingManager::handleRangeProcessingComplete(int chunkId,
     m_videoChunkProgressMap[chunkId] = 100; // Mark this chunk as 100% complete
 
     m_videoProcessorsFinishedCount++;
-    qDebug() << "Finished video chunks:" << m_videoProcessorsFinishedCount << "/" << m_totalVideoChunksToProcess;
+    //qDebug() << "Finished video chunks:" << m_videoProcessorsFinishedCount << "/" << m_totalVideoChunksToProcess;
 
 
     // Check if all chunks are done
     if (m_videoProcessorsFinishedCount >= m_totalVideoChunksToProcess) {
         locker.unlock();
-        qDebug() << "All video processing chunks are complete. Assembling final frames.";
+        //qDebug() << "All video processing chunks are complete. Assembling final frames.";
         assembleProcessedFrames(); // This will eventually call handleInitialProcessingComplete
     } else {
         // Update overall video processing progress based on completed chunks and ongoing ones
@@ -585,7 +585,7 @@ void TrackingManager::handleRangeProcessingComplete(int chunkId,
 void TrackingManager::assembleProcessedFrames() {
     QMutexLocker locker(&m_dataMutex); // Protect access to chunk maps
     if (m_cancelRequested) {
-        qDebug() << "AssembleProcessedFrames called during cancellation. Aborting assembly.";
+        //qDebug() << "AssembleProcessedFrames called during cancellation. Aborting assembly.";
         // If cancellation happened right before this, ensure we signal cancellation.
         // The checkForAllTrackersFinished or cancelTracking itself should handle emitting trackingCancelled.
         // We might need to ensure that if video processing is cancelled, tracking doesn't start.
@@ -602,7 +602,7 @@ void TrackingManager::assembleProcessedFrames() {
     for (const auto& chunk : m_assembledForwardFrameChunks.values()) {
         m_finalProcessedForwardFrames.insert(m_finalProcessedForwardFrames.end(), chunk.begin(), chunk.end());
     }
-    qDebug() << "Assembled" << m_finalProcessedForwardFrames.size() << "forward frames from" << m_assembledForwardFrameChunks.size() << "chunks.";
+    //qDebug() << "Assembled" << m_finalProcessedForwardFrames.size() << "forward frames from" << m_assembledForwardFrameChunks.size() << "chunks.";
 
     // For backward frames, assemble them in their natural chunk order first
     std::vector<cv::Mat> tempBackwardFrames;
@@ -615,9 +615,9 @@ void TrackingManager::assembleProcessedFrames() {
     m_finalProcessedReversedFrames = tempBackwardFrames;
     std::reverse(m_finalProcessedReversedFrames.begin(), m_finalProcessedReversedFrames.end());
 
-    qDebug() << "Assembled" << tempBackwardFrames.size() << "frames for backward segment from"
-             << m_assembledBackwardFrameChunks.size() << "chunks. After reversing, size is"
-             << m_finalProcessedReversedFrames.size();
+    //qDebug() << "Assembled" << tempBackwardFrames.size() << "frames for backward segment from"
+    //         << m_assembledBackwardFrameChunks.size() << "chunks. After reversing, size is"
+    //         << m_finalProcessedReversedFrames.size();
 
     // Clear the temporary chunk storage
     m_assembledForwardFrameChunks.clear();

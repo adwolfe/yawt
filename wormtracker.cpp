@@ -517,8 +517,8 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
         m_lastFullBlob = blobToReport;     // Store the full reported blob
 
         emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, searchRoiUsedForThisFrame, m_currentState, plausibleBlobsInFixedRoi);
-        qDebug().noquote()<< dmsg <<"Position updated." << "Anchor Centroid:" << m_lastPrimaryBlob.centroid
-                                  << "Full Centroid:" << m_lastFullBlob.centroid;
+        //qDebug().noquote()<< dmsg <<"Position updated." << "Anchor Centroid:" << m_lastPrimaryBlob.centroid
+        //                          << "Full Centroid:" << m_lastFullBlob.centroid;
 
         currentFixedSearchRoiRef_InOut = nextFrameSearchRoi;
         return true;
