@@ -5,119 +5,103 @@
 #include <algorithm> // For std::reverse
 
 VideoProcessor::VideoProcessor(QObject *parent)
-    : QObject(parent), m_keyFrameNum(-1), m_totalFramesHint(0), m_processingActive(false)
+    : QObject(parent)
 {
+    qDebug() << "VideoProcessor (" << this << ") created.";
 }
 
 VideoProcessor::~VideoProcessor() {
-    qDebug() << "VideoProcessor destroyed.";
+    qDebug() << "VideoProcessor (" << this << ") destroyed.";
 }
 
-void VideoProcessor::startInitialProcessing(const QString& videoPath, int keyFrameNum, const Thresholding::ThresholdSettings& settings, int totalFramesHint) {
-    m_videoPath = videoPath;
-    m_keyFrameNum = keyFrameNum;
-    m_thresholdSettings = settings;
-    m_totalFramesHint = totalFramesHint;
-    m_processingActive = true;
-
-    emit processingStarted();
-    qDebug() << "VideoProcessor: Starting initial processing for" << videoPath << "Keyframe:" << keyFrameNum;
+// NEW IMPLEMENTATION
+void VideoProcessor::processFrameRange(
+    const QString& videoPath,
+    const Thresholding::ThresholdSettings& settings,
+    int startFrameAbsolute,
+    int endFrameAbsolute,
+    int chunkId,
+    bool isForwardChunk)
+{
+    bool processingActive = true; // Local flag for this processing task
+    qDebug() << "VideoProcessor (" << this << "): Starting processing for chunk" << chunkId
+             << "Frames:" << startFrameAbsolute << "to" << endFrameAbsolute -1
+             << (isForwardChunk ? "(ForwardSegment)" : "(BackwardSegment)");
 
     cv::VideoCapture cap;
     try {
-        if (!cap.open(m_videoPath.toStdString())) {
-            emit processingError("Failed to open video file: " + m_videoPath);
+        if (!cap.open(videoPath.toStdString())) {
+            emit processingError(chunkId, "Failed to open video file: " + videoPath);
             return;
         }
     } catch (const cv::Exception& ex) {
-        emit processingError("OpenCV exception while opening video: " + QString(ex.what()));
+        emit processingError(chunkId, "OpenCV exception while opening video: " + QString(ex.what()));
         return;
     }
 
-
-    int totalFrames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
-    if (totalFrames <= 0 && m_totalFramesHint > 0) {
-        totalFrames = m_totalFramesHint; // Use hint if CAP_PROP_FRAME_COUNT fails
-    } else if (totalFrames <= 0) {
-        emit processingError("Could not determine total number of frames.");
-        cap.release();
-        return;
+    // It's important to set the starting position for reading frames.
+    // CAP_PROP_POS_FRAMES is 0-based index of the frame to be decoded/captured next.
+    if (startFrameAbsolute > 0) { // No need to set if starting from frame 0
+        if (!cap.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(startFrameAbsolute))) {
+            qWarning() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Failed to set video capture to frame" << startFrameAbsolute;
+            // Depending on the video backend, seeking might not be perfectly accurate or supported.
+            // We can try to read frames until we reach the desired startFrame as a fallback,
+            // but this is less efficient. For now, we'll proceed and rely on set().
+        }
     }
 
-    double fps = cap.get(cv::CAP_PROP_FPS);
-    if (fps <= 0) fps = 7.5; // Default FPS if not available
-
-    cv::Size frameSize(
-        static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),
-        static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT))
-        );
-    if (frameSize.width <= 0 || frameSize.height <= 0) {
-        emit processingError("Could not determine frame size.");
-        cap.release();
-        return;
-    }
-
-
-    if (m_keyFrameNum < 0 || m_keyFrameNum >= totalFrames) {
-        emit processingError(QString("Keyframe index %1 is out of bounds (0-%2).").arg(m_keyFrameNum).arg(totalFrames - 1));
-        cap.release();
-        return;
-    }
-
-    std::vector<cv::Mat> forwardFrames;
-    std::vector<cv::Mat> backwardFramesTemp; // Frames from 0 to keyframe-1, to be reversed later
-
+    std::vector<cv::Mat> processedFramesInChunk;
     cv::Mat currentFrame, processedFrame;
-    int framesProcessedCount = 0;
+    int framesProcessedInThisChunk = 0;
+    int totalFramesInThisChunk = endFrameAbsolute - startFrameAbsolute;
 
-    for (int i = 0; i < totalFrames && m_processingActive; ++i) {
+    if (totalFramesInThisChunk <= 0) {
+        qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": No frames to process in this range.";
+        cap.release();
+        emit rangeProcessingComplete(chunkId, processedFramesInChunk, isForwardChunk);
+        return;
+    }
+
+    // The loop should go from the current position up to (but not including) endFrameAbsolute
+    // or until totalFramesInThisChunk frames are processed.
+    for (int i = 0; i < totalFramesInThisChunk && processingActive; ++i) {
+        int currentVideoFrameIndex = startFrameAbsolute + i; // Actual frame number in the video
+
         if (QThread::currentThread()->isInterruptionRequested()) {
-            m_processingActive = false;
-            emit processingError("Initial processing was interrupted.");
+            processingActive = false;
+            qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Processing was interrupted.";
+            // Don't emit error here, let TrackingManager handle cancellation flow
             cap.release();
-            return;
+            return; // Exit cleanly
         }
 
         if (!cap.read(currentFrame) || currentFrame.empty()) {
-            qWarning() << "VideoProcessor: Failed to read frame or empty frame at index" << i;
-            // If this happens before all expected frames are read, it might be an issue.
-            // For now, we continue, but this could be an error condition.
-            if (i < totalFrames -1) { // If not the very last frame, it's more concerning
-                // emit processingError(QString("Failed to read frame %1 of %2.").arg(i).arg(totalFrames));
-                // cap.release();
-                // return;
-            }
-            continue;
+            qWarning() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Failed to read frame or empty frame at video index" << currentVideoFrameIndex
+                       << "(chunk frame" << i << "). Expected end:" << endFrameAbsolute -1;
+            // If this happens before all expected frames in the chunk are read, it might be an issue.
+            // This could mean the video ended prematurely or there was a read error.
+            break; // Stop processing this chunk
         }
 
-        applyThresholding(currentFrame, processedFrame, m_thresholdSettings);
+        applyThresholding(currentFrame, processedFrame, settings);
+        processedFramesInChunk.push_back(processedFrame.clone()); // Frames are in natural video order
 
-        if (i >= m_keyFrameNum) {
-            forwardFrames.push_back(processedFrame.clone()); // Clone because processedFrame is reused
-        } else { // i < m_keyFrameNum
-            backwardFramesTemp.push_back(processedFrame.clone());
-        }
-
-        framesProcessedCount++;
-        if (framesProcessedCount % 20 == 0 || framesProcessedCount == totalFrames) { // Update progress periodically
-            emit initialProcessingProgress(static_cast<int>((static_cast<double>(framesProcessedCount) / totalFrames) * 100.0));
+        framesProcessedInThisChunk++;
+        if (framesProcessedInThisChunk % 10 == 0 || framesProcessedInThisChunk == totalFramesInThisChunk) { // Update progress periodically
+            emit rangeProcessingProgress(chunkId, static_cast<int>((static_cast<double>(framesProcessedInThisChunk) / totalFramesInThisChunk) * 100.0));
         }
     }
     cap.release();
 
-    if (!m_processingActive) { // Processing was stopped or interrupted
-        return; // Error signal already emitted or will be by caller
+    if (!processingActive) { // Processing was stopped or interrupted
+        qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Exiting due to interruption/stop request.";
+        return;
     }
 
-    // Reverse the backwardFramesTemp to get the correct order for "reversed" tracking
-    // The "reversedFrames" will start with the frame *before* the keyframe, then the one before that, etc.
-    std::vector<cv::Mat> reversedFrames = backwardFramesTemp;
-    std::reverse(reversedFrames.begin(), reversedFrames.end());
-
-    qDebug() << "VideoProcessor: Initial processing complete. Forward frames:" << forwardFrames.size()
-             << "Reversed frames:" << reversedFrames.size();
-    emit initialProcessingComplete(forwardFrames, reversedFrames, fps, frameSize);
+    qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Processing complete. Processed" << processedFramesInChunk.size() << "frames.";
+    emit rangeProcessingComplete(chunkId, processedFramesInChunk, isForwardChunk);
 }
+
 
 void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const Thresholding::ThresholdSettings& settings) {
     if (inputFrame.empty()) {
@@ -132,12 +116,22 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
         grayFrame = inputFrame.clone(); // Already grayscale or single channel
     }
 
-    // Optional: Apply Gaussian blur (consider making kernel size/sigma part of Thresholding::ThresholdSettings)
+    // Optional: Apply Gaussian blur
     if(settings.enableBlur) {
-        cv::GaussianBlur(grayFrame, grayFrame, cv::Size(settings.blurKernelSize, settings.blurKernelSize), settings.blurSigmaX);
+        // Ensure kernel size is odd and positive
+        int kernelSize = settings.blurKernelSize;
+        if (kernelSize % 2 == 0) kernelSize++;
+        if (kernelSize <= 0) kernelSize = 1;
+        cv::GaussianBlur(grayFrame, grayFrame, cv::Size(kernelSize, kernelSize), settings.blurSigmaX);
     }
 
     int thresholdTypeOpenCV = settings.assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
+
+    // Ensure adaptive block size is odd and greater than 1
+    int adaptiveBlock = settings.adaptiveBlockSize;
+    if (adaptiveBlock <= 1) adaptiveBlock = 3;
+    else if (adaptiveBlock % 2 == 0) adaptiveBlock++;
+
 
     switch (settings.algorithm) {
     case Thresholding::ThresholdAlgorithm::Global:
@@ -149,15 +143,14 @@ void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outpu
     case Thresholding::ThresholdAlgorithm::AdaptiveMean:
         cv::adaptiveThreshold(grayFrame, outputFrame, 255,
                               cv::ADAPTIVE_THRESH_MEAN_C, thresholdTypeOpenCV,
-                              settings.adaptiveBlockSize, settings.adaptiveCValue);
+                              adaptiveBlock, settings.adaptiveCValue);
         break;
     case Thresholding::ThresholdAlgorithm::AdaptiveGaussian:
         cv::adaptiveThreshold(grayFrame, outputFrame, 255,
                               cv::ADAPTIVE_THRESH_GAUSSIAN_C, thresholdTypeOpenCV,
-                              settings.adaptiveBlockSize, settings.adaptiveCValue);
+                              adaptiveBlock, settings.adaptiveCValue);
         break;
     default:
-        // Fallback to global if algorithm unknown
         cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
         break;
     }

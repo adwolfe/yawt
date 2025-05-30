@@ -17,27 +17,43 @@ public:
     ~VideoProcessor();
 
 public slots:
-    void startInitialProcessing(const QString& videoPath, int keyFrameNum, const Thresholding::ThresholdSettings& settings, int totalFramesHint);
+    // OLD: void startInitialProcessing(const QString& videoPath, int keyFrameNum, const Thresholding::ThresholdSettings& settings, int totalFramesHint);
+
+    // NEW: Process a specific range of frames
+    void processFrameRange(
+        const QString& videoPath, // Video path for this processor instance
+        const Thresholding::ThresholdSettings& settings, // Settings for this processor instance
+        int startFrameAbsolute,    // Absolute start frame index in the video
+        int endFrameAbsolute,      // Absolute end frame index (exclusive)
+        int chunkId,               // An identifier for this processing job/chunk
+        bool isForwardChunk        // To know if these frames are for forward or backward tracking segments
+        );
 
 signals:
-    void processingStarted();
-    void initialProcessingProgress(int percentage);
-    // Emits processed frames: forward (keyframe to end), reversed (keyframe-1 to start)
-    void initialProcessingComplete(const std::vector<cv::Mat>& forwardFrames,
-                                   const std::vector<cv::Mat>& reversedFrames,
-                                   double fps,
-                                   cv::Size frameSize);
-    void processingError(const QString& errorMessage);
+    // OLD: void processingStarted();
+    // OLD: void initialProcessingProgress(int percentage);
+    // OLD: void initialProcessingComplete(const std::vector<cv::Mat>& forwardFrames,
+    //                               const std::vector<cv::Mat>& reversedFrames,
+    //                               double fps,
+    //                               cv::Size frameSize);
+
+    // NEW: Emit results for a specific chunk
+    // The processedFrames are always in their natural video order (e.g., frame 10, 11, 12...)
+    void rangeProcessingComplete(
+        int chunkId,
+        const std::vector<cv::Mat>& processedFrames,
+        bool wasForwardChunk // To help TrackingManager sort them correctly
+        );
+
+    void rangeProcessingProgress(int chunkId, int percentage);
+    void processingError(int chunkId, const QString& errorMessage); // Added chunkId for better error tracking
 
 private:
     void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const Thresholding::ThresholdSettings& settings);
 
-    QString m_videoPath;
-    int m_keyFrameNum; // 0-indexed
-    Thresholding::ThresholdSettings m_thresholdSettings;
-    int m_totalFramesHint; // For progress calculation
-    bool m_processingActive;
+    // Member variables for settings passed during construction or first call, if needed.
+    // For this design, videoPath and settings are passed directly to processFrameRange.
+    // bool m_processingActive; // Can be local to processFrameRange
 };
 
 #endif // VIDEOPROCESSOR_H
-
