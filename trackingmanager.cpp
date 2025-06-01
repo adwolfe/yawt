@@ -656,12 +656,13 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
         return;
     }
 
-    QString dirTag = reportingTrackerInstance ? (reportingTrackerInstance->getDirection() == WormTracker::TrackingDirection::Forward ? "Fwd" : "Bwd") : "UnkDir";
-    qDebug().noquote() << QString("TM: WT %1(%2) Frame %3 State %4")
-                              .arg(reportingConceptualWormId)
-                              .arg(dirTag)
-                              .arg(originalFrameNumber)
-                              .arg(static_cast<int>(currentState));
+    QString dirTag = reportingTrackerInstance ? (reportingTrackerInstance->getDirection() == WormTracker::TrackingDirection::Forward ? "" : "-") : "UnkDir";
+    QString dmsg = QString("TM: WT %1%2 Frame %3 |")
+                       .arg(dirTag)
+                       .arg(reportingConceptualWormId)
+                       .arg(originalFrameNumber);
+
+    qDebug().noquote() << dmsg << "State" << currentState;
 
     if (primaryBlob.isValid) {
         Tracking::WormTrackPoint point;
@@ -682,15 +683,15 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
                 group.individualEstimatedCentroids.remove(reportingConceptualWormId);
                 if (group.participatingWormIds.isEmpty()) {
                     group.isValid = false; // Mark for cleanup by cleanupStaleMergeGroups
-                    qDebug() << "TM: Merge group" << currentMergeGroupId << "is now empty due to worm" << reportingConceptualWormId << "state" << static_cast<int>(currentState);
+                    qDebug().noquote() << dmsg << "merge group" << currentMergeGroupId << "is now empty due to worm" << reportingConceptualWormId << "state" << static_cast<int>(currentState);
                 }
             }
             m_wormToCurrentMergeGroupId[reportingConceptualWormId] = -1;
-            qDebug() << "TM: Worm" << reportingConceptualWormId << "exited merge group" << currentMergeGroupId << "to state" << static_cast<int>(currentState);
+            qDebug().noquote() << dmsg << "exited merge group" << currentMergeGroupId << "to state" << static_cast<int>(currentState);
         }
         if (m_pausedWorms.contains(reportingConceptualWormId)) {
             m_pausedWorms.remove(reportingConceptualWormId);
-            qDebug() << "TM: Worm" << reportingConceptualWormId << "removed from pause queue due to state" << static_cast<int>(currentState);
+            qDebug().noquote() << dmsg << "removed from pause queue due to state" << static_cast<int>(currentState);
         }
     } else if (currentState == Tracking::TrackerState::TrackingMerged) {
         if (fullBlob.isValid) {
@@ -716,18 +717,25 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
         }
     }
 
-    if (originalFrameNumber > 0 && originalFrameNumber % 20 == 0) { // Less frequent cleanup
-        cleanupStaleMergeGroups(originalFrameNumber);
-    }
+    //if (originalFrameNumber > 0 && originalFrameNumber % 20 == 0) { // Less frequent cleanup
+    //    cleanupStaleMergeGroups(originalFrameNumber);
+    //}
 }
 
-void TrackingManager::processMergedState(int reportingConceptualWormId, int frameNumber, const Tracking::DetectedBlob& mergedBlobData, WormTracker* /*reportingTrackerInstance*/) {
+void TrackingManager::processMergedState(int reportingConceptualWormId, int frameNumber, const Tracking::DetectedBlob& mergedBlobData, WormTracker* reportingTrackerInstance) {
+    QString dirTag = reportingTrackerInstance ? (reportingTrackerInstance->getDirection() == WormTracker::TrackingDirection::Forward ? "" : "-") : "UnkDir";
+    QString dmsg = QString("TM: WT %1%2 Frame %3 |")
+                       .arg(dirTag)
+                       .arg(reportingConceptualWormId)
+                       .arg(frameNumber);
+    qDebug().noquote() << dmsg << "processing merged state. ";
     // m_dataMutex is already locked
     QRectF reportedBox = mergedBlobData.boundingBox;
     cv::Point2f reportedCentroid(static_cast<float>(mergedBlobData.centroid.x()), static_cast<float>(mergedBlobData.centroid.y()));
     double reportedArea = mergedBlobData.area;
 
-    TrackedMergeGroup* matchedGroup = findMatchingMergeGroup(frameNumber, reportedBox, reportedCentroid, reportedArea);
+    WormTracker::TrackingDirection dir = reportingTrackerInstance ? reportingTrackerInstance->getDirection() : WormTracker::TrackingDirection::Forward; // Default to Fwd if instance is null for safety
+    TrackedMergeGroup* matchedGroup = findMatchingMergeGroup(frameNumber, reportedBox, reportedCentroid, reportedArea, dir);
     int assignedMergeId = -1;
 
     if (matchedGroup) {
@@ -739,13 +747,14 @@ void TrackingManager::processMergedState(int reportingConceptualWormId, int fram
         // Update overall group properties
         matchedGroup->currentBoundingBox = matchedGroup->currentBoundingBox.united(reportedBox);
         matchedGroup->currentArea = qMax(matchedGroup->currentArea, reportedArea);
+        m_frameToActiveMergeGroupIds[frameNumber].insert(assignedMergeId);
         // Centroid could be an average, but for simplicity, let's keep the one from the first worm or the largest contribution
         // Or, if mergedBlobData.centroid is meant to be the overall centroid, we can average them if they are very close.
         // For now, we don't aggressively update the group's main centroid from subsequent joiners unless it's a new group.
-        qDebug() << "TM: Worm" << reportingConceptualWormId << "joined/updated merge group" << assignedMergeId << "in frame" << frameNumber;
+        qDebug().noquote() << dmsg << "joined/updated merge group" << assignedMergeId;
     } else {
         assignedMergeId = createNewMergeGroup(frameNumber, reportingConceptualWormId, mergedBlobData);
-        qDebug() << "TM: Worm" << reportingConceptualWormId << "created new merge group" << assignedMergeId << "in frame" << frameNumber;
+        qDebug().noquote() << dmsg << "created new merge group" << assignedMergeId;
     }
 
     int previousMergeId = m_wormToCurrentMergeGroupId.value(reportingConceptualWormId, -1);
@@ -761,37 +770,57 @@ void TrackingManager::processMergedState(int reportingConceptualWormId, int fram
 
     if (m_pausedWorms.contains(reportingConceptualWormId)) {
         m_pausedWorms.remove(reportingConceptualWormId);
-        qDebug() << "TM: Worm" << reportingConceptualWormId << "exited PausedForSplit into TrackingMerged group" << assignedMergeId;
+        qDebug().noquote() << dmsg << "exited PausedForSplit into TrackingMerged group" << assignedMergeId;
     }
 }
 
-TrackedMergeGroup* TrackingManager::findMatchingMergeGroup(int frameNumber, const QRectF& blobBox, const cv::Point2f& blobCentroid, double /*blobArea*/) {
+TrackedMergeGroup* TrackingManager::findMatchingMergeGroup(int frameNumber, const QRectF& blobBox, const cv::Point2f& blobCentroid, double blobArea, WormTracker::TrackingDirection direction)
+ {
     // m_dataMutex is already locked
     TrackedMergeGroup* bestMatch = nullptr;
     double bestMatchScore = -1.0; // Using a score, e.g., IoU
 
     // Check groups active in current frame or previous frame
+    qDebug() << "TM: findMerges searching for merge groups on frame" << frameNumber;
     QSet<int> candidateGroupIds;
     if (m_frameToActiveMergeGroupIds.contains(frameNumber)) {
         candidateGroupIds.unite(m_frameToActiveMergeGroupIds.value(frameNumber));
+        qDebug() << "TM: findMerges -->" << candidateGroupIds.count() << "merge groups found:" << m_frameToActiveMergeGroupIds.value(frameNumber);
     }
-    if (m_frameToActiveMergeGroupIds.contains(frameNumber - 1)) {
-        candidateGroupIds.unite(m_frameToActiveMergeGroupIds.value(frameNumber - 1));
+
+    // Determine the adjacent frame to check based on tracking direction
+    int adjacentFrame = (direction == WormTracker::TrackingDirection::Forward) ? (frameNumber - 1) : (frameNumber + 1);
+
+    if (m_frameToActiveMergeGroupIds.contains(adjacentFrame)) {
+        candidateGroupIds.unite(m_frameToActiveMergeGroupIds.value(adjacentFrame));
+        qDebug() << "TM: findMerges -->" << candidateGroupIds.count() << "merge groups founds in previous frame:" << m_frameToActiveMergeGroupIds.value(frameNumber);
     }
 
     for (int groupId : candidateGroupIds) {
-        if (!m_activeMergeGroups.contains(groupId) || !m_activeMergeGroups[groupId].isValid) continue;
+        qDebug() << "TM: findMerges --> Testing GroupID" << groupId;
+        //if (!m_activeMergeGroups.contains(groupId) || !m_activeMergeGroups[groupId].isValid) continue;
 
         TrackedMergeGroup& group = m_activeMergeGroups[groupId];
         // Ensure group was active recently enough if checking previous frame's groups
-        if (group.lastFrameActive < frameNumber - 1 && frameNumber > 0) continue;
-
+        //if (group.lastFrameActive < frameNumber - 1 && frameNumber > 0) continue;
 
         double iou = calculateIoU(blobBox, group.currentBoundingBox);
-        double distSq = Tracking::sqDistance(blobCentroid, group.currentCentroid);
 
-        if (iou > MERGE_GROUP_IOU_THRESHOLD && distSq < MERGE_GROUP_CENTROID_MAX_DIST_SQ) {
-            if (iou > bestMatchScore) { // Prioritize IoU for matching
+        // A group is a potential match if the new blob has a high overlap (IoU) with it.
+        bool isHighIoU = (iou > MERGE_GROUP_IOU_THRESHOLD);
+        qDebug() << "TM: findMerge --> IoU check is" << isHighIoU << iou;
+
+        // As a fallback, also consider it a match if the new blob's center is inside the
+        // existing group's box. This is robust against small changes in the overall blob shape.
+        bool isContained = group.currentBoundingBox.contains(QPointF(blobCentroid.x, blobCentroid.y));
+
+        qDebug() << "TM: findMerge --> Centroid check is" << isContained;
+
+        // We require some overlap (iou > 0) for the containment check to be meaningful,
+        // preventing a match with a huge, distant group.
+        if (isHighIoU || (isContained && iou > 0.01)) {
+            // Use IoU as the score to find the *best* match among candidates.
+            if (iou > bestMatchScore) {
                 bestMatchScore = iou;
                 bestMatch = &group;
             }
@@ -823,12 +852,19 @@ void TrackingManager::processPausedForSplitState(int reportingConceptualWormId, 
                                                  const Tracking::DetectedBlob& candidateSplitBlob,
                                                  WormTracker* reportingTrackerInstance) {
     // m_dataMutex is already locked
+    QString dirTag = reportingTrackerInstance ? (reportingTrackerInstance->getDirection() == WormTracker::TrackingDirection::Forward ? "" : "-") : "UnkDir";
+    QString dmsg = QString("TM: WT %1%2 Frame %3 |")
+                       .arg(dirTag)
+                       .arg(reportingConceptualWormId)
+                       .arg(frameNumber);
+
+
     if (!reportingTrackerInstance) {
         qWarning() << "TM: processPausedForSplitState called with null tracker instance for worm" << reportingConceptualWormId << ". Cannot process pause.";
         return;
     }
     if (m_pausedWorms.contains(reportingConceptualWormId)) {
-        qDebug() << "TM: Worm" << reportingConceptualWormId << "reported PausedForSplit again. Updating candidate and resetting timer.";
+        qDebug() << dmsg << "reported PausedForSplit again. Updating candidate and resetting timer.";
         m_pausedWorms[reportingConceptualWormId].candidateSplitBlob = candidateSplitBlob;
         m_pausedWorms[reportingConceptualWormId].timePaused = QDateTime::currentDateTime();
         m_pausedWorms[reportingConceptualWormId].trackerInstance = reportingTrackerInstance; // Ensure it's up-to-date
@@ -844,8 +880,8 @@ void TrackingManager::processPausedForSplitState(int reportingConceptualWormId, 
     pwi.presumedMergeGroupId_F_minus_1 = m_wormToCurrentMergeGroupId.value(reportingConceptualWormId, -1);
 
     m_pausedWorms[reportingConceptualWormId] = pwi;
-    qDebug() << "TM: Worm" << reportingConceptualWormId << " (Tracker:" << reportingTrackerInstance << ")"
-             << "entered PausedForSplit in frame" << frameNumber
+    qDebug() << dmsg << " (Tracker:" << reportingTrackerInstance << ")"
+             << "entered PausedForSplit"
              << ". Candidate @ (" << candidateSplitBlob.centroid.x() << "," << candidateSplitBlob.centroid.y() << ")"
              << ". Came from merge group:" << pwi.presumedMergeGroupId_F_minus_1;
 
@@ -863,6 +899,7 @@ void TrackingManager::processPausedForSplitState(int reportingConceptualWormId, 
 }
 
 void TrackingManager::checkPausedWormsAndResolveSplits() {
+
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested || !m_isTrackingRunning || m_pausedWorms.isEmpty()) {
         return;
@@ -887,6 +924,8 @@ void TrackingManager::checkPausedWormsAndResolveSplits() {
 }
 
 void TrackingManager::attemptAutomaticSplitResolution(int pausedConceptualWormId, PausedWormInfo& pausedInfo) {
+
+    // I THINK THIS TELLS WT-2
     // m_dataMutex is already locked
     if (!pausedInfo.trackerInstance) {
         qWarning() << "TM: No tracker instance for paused worm" << pausedConceptualWormId << ". Cannot resolve split.";

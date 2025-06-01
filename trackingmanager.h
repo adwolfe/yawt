@@ -117,8 +117,7 @@ private:
 
     void processMergedState(int reportingWormId, int frameNumber, const Tracking::DetectedBlob& mergedBlobData, WormTracker* reportingTrackerInstance);
     void processPausedForSplitState(int reportingWormId, int frameNumber, const Tracking::DetectedBlob& candidateSplitBlob, WormTracker* reportingTrackerInstance);
-    TrackedMergeGroup* findMatchingMergeGroup(int frameNumber, const QRectF& blobBox, const cv::Point2f& blobCentroid, double blobArea);
-    int createNewMergeGroup(int frameNumber, int initialWormId, const Tracking::DetectedBlob& mergedBlobData);
+    TrackedMergeGroup* findMatchingMergeGroup(int frameNumber, const QRectF& blobBox, const cv::Point2f& blobCentroid, double blobArea, WormTracker::TrackingDirection direction);int createNewMergeGroup(int frameNumber, int initialWormId, const Tracking::DetectedBlob& mergedBlobData);
     void attemptAutomaticSplitResolution(int pausedConceptualWormId, PausedWormInfo& pausedInfo);
     void forceResolvePausedWorm(int conceptualWormId, PausedWormInfo& pausedInfo);
     void cleanupStaleMergeGroups(int currentFrameNumber);

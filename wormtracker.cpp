@@ -226,7 +226,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
     QString dmsg = QString("WT ") + QString::number(debugId) + QString(" F") + QString::number(originalFrameNumber) + QString(": ");
 
     QRectF searchRoiUsedForThisFrame = currentFixedSearchRoiRef_InOut;
-    // qDebug().noquote()<< dmsg << "State:" << static_cast<int>(m_currentState) << " Search begins with ROI " << searchRoiUsedForThisFrame << "LastPrimaryValid:" << m_lastPrimaryBlob.isValid;
+    qDebug().noquote()<< dmsg << "State:" << m_currentState << " Search begins with ROI " << searchRoiUsedForThisFrame << "LastPrimaryValid:" << m_lastPrimaryBlob.isValid;
 
     QList<Tracking::DetectedBlob> blobsInFixedRoi = findPlausibleBlobsInRoi(frame, searchRoiUsedForThisFrame);
     int plausibleBlobsInFixedRoi = blobsInFixedRoi.count();
@@ -239,23 +239,23 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
 
 
     if (plausibleBlobsInFixedRoi == 0) {
-        // qDebug().noquote()<< dmsg << "No plausible blobs found in initial ROI " << searchRoiUsedForThisFrame;
+        qDebug().noquote()<< dmsg << "No plausible blobs found in initial ROI " << searchRoiUsedForThisFrame;
         nextState = Tracking::TrackerState::TrackingLost;
         // blobForAnchor and blobToReport remain invalid
     } else if (plausibleBlobsInFixedRoi == 1) {
         Tracking::DetectedBlob singleBlob = blobsInFixedRoi.first();
-        // qDebug().noquote()<< dmsg <<"Found 1 plausible blob. BBox:" << singleBlob.boundingBox << "Area:" << singleBlob.area;
+        qDebug().noquote()<< dmsg <<"Found 1 plausible blob. BBox:" << singleBlob.boundingBox << "Area:" << singleBlob.area;
 
         bool touchesBoundary = singleBlob.touchesROIboundary ||
                                !searchRoiUsedForThisFrame.contains(singleBlob.boundingBox);
 
         if (!touchesBoundary) {
-            // qDebug().noquote()<< dmsg << "Single blob fully contained.";
+            qDebug().noquote()<< dmsg << "Single blob fully contained.";
             blobToReport = singleBlob;
             blobForAnchor = singleBlob; // For single, anchor and report are the same
-            nextState = Tracking::TrackerState::TrackingSingle;
+            //nextState = Tracking::TrackerState::TrackingSingle;
         } else { // Touches boundary - perform expansion
-            // qDebug().noquote()<< dmsg << "Single blob touches ROI boundary. Initiating expansion analysis.";
+            qDebug().noquote()<< dmsg << "Single blob touches ROI boundary. Initiating expansion analysis.";
             QRectF analysisRoi = searchRoiUsedForThisFrame;
             Tracking::DetectedBlob candidateBlobAfterExpansion = singleBlob;
 
@@ -299,33 +299,71 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
                 }
 
                 if (confirmedMerge) {
-                    // qDebug().noquote()<< dmsg << "Boundary touch + expansion CONFIRMS MERGE. ReportedArea:" << blobToReport.area << "AnchorArea:" << blobForAnchor.area;
+                    qDebug().noquote()<< dmsg << "Boundary touch + expansion CONFIRMS MERGE. ReportedArea:" << blobToReport.area << "AnchorArea:" << blobForAnchor.area;
                     nextState = Tracking::TrackerState::TrackingMerged;
                 } else {
-                    // qDebug().noquote()<< dmsg << "Boundary touch + expansion, NO merge by area. ReportedArea:" << blobToReport.area;
+                    qDebug().noquote()<< dmsg << "Boundary touch + expansion, NO merge by area. ReportedArea:" << blobToReport.area;
                     // If it wasn't a merge, it's a single worm. Anchor and report should ideally be the same.
                     blobForAnchor = blobToReport; // Ensure anchor is the full single blob if not a merge
                     nextState = Tracking::TrackerState::TrackingSingle;
                 }
             }
+            else {
+                // FRAME 615 SWITCHED TO TRACKING SINGLE
+                // WHY?!
+            }
         }
     } else { // plausibleBlobsInFixedRoi > 1
         if (m_currentState != Tracking::TrackerState::TrackingMerged) { // Potential merge (was single, now multiple blobs in ROI)
-            Tracking::DetectedBlob largestInFixedRoi = blobsInFixedRoi.first(); // Already sorted by area
+
+
+            Tracking::DetectedBlob searchCandidate; // This will be the blob we evaluate further
+            searchCandidate.isValid = false;
+
+            if (!blobsInFixedRoi.isEmpty()) { // Should always be true due to 'plausibleBlobsInFixedRoi > 1'
+                if (m_lastPrimaryBlob.isValid) {
+                    double minSqDist = std::numeric_limits<double>::max();
+                    Tracking::DetectedBlob closestBlob;
+                    closestBlob.isValid = false; // Initialize to invalid
+
+                    for (const Tracking::DetectedBlob& currentBlob : blobsInFixedRoi) {
+                        if (currentBlob.isValid) { // Ensure blob itself is valid
+                            double sqDist = Tracking::sqDistance(m_lastPrimaryBlob.centroid, currentBlob.centroid);
+                            if (sqDist < minSqDist) {
+                                minSqDist = sqDist;
+                                closestBlob = currentBlob;
+                            }
+                        }
+                    }
+                    if (closestBlob.isValid) {
+                        searchCandidate = closestBlob;
+                        // qDebug().noquote() << dmsg << "Found >1 blobs, selected candidate closest to m_lastPrimaryBlob. Centroid:" << searchCandidate.centroid << "Area:" << searchCandidate.area;
+                    } else {
+                        // Fallback if no valid blobs were found to compare distance (should be rare if plausibleBlobsInFixedRoi > 0)
+                        searchCandidate = blobsInFixedRoi.first(); // Fallback to largest
+                        // qDebug().noquote() << dmsg << "Found >1 blobs, but no valid blobs to compare distance or m_lastPrimaryBlob invalid. Defaulting to largest. Centroid:" << searchCandidate.centroid << "Area:" << searchCandidate.area;
+                    }
+                } else {
+                    // If m_lastPrimaryBlob is not valid (e.g., first few frames or lost track previously),
+                    // then falling back to the largest blob is a reasonable strategy.
+                    searchCandidate = blobsInFixedRoi.first();
+                    // qDebug().noquote() << dmsg << "Found >1 blobs, m_lastPrimaryBlob invalid. Defaulting to largest. Centroid:" << searchCandidate.centroid << "Area:" << searchCandidate.area;
+                }
+            }
             // qDebug().noquote()<< dmsg << "Found >1 (" << plausibleBlobsInFixedRoi << ") blobs (not previously merged). Largest BBox:" << largestInFixedRoi.boundingBox;
 
-            bool largestTouchesBoundary = largestInFixedRoi.touchesROIboundary ||
-                                          !searchRoiUsedForThisFrame.contains(largestInFixedRoi.boundingBox);
+            bool largestTouchesBoundary = searchCandidate.touchesROIboundary ||
+                                          !searchRoiUsedForThisFrame.contains(searchCandidate.boundingBox);
 
             if (!largestTouchesBoundary) {
                 // qDebug().noquote()<< dmsg << "Largest blob fully contained. Treating as single, others as distractors.";
-                blobToReport = largestInFixedRoi;
-                blobForAnchor = largestInFixedRoi;
+                blobToReport = searchCandidate;
+                blobForAnchor = searchCandidate;
                 nextState = Tracking::TrackerState::TrackingSingle;
             } else { // Largest touches boundary, expand to see if it's a merge
                 // qDebug().noquote()<< dmsg << "Largest of >1 blobs touches ROI boundary. Expansion for merge check.";
                 QRectF analysisRoi = searchRoiUsedForThisFrame;
-                Tracking::DetectedBlob candidateBlobAfterExpansion = largestInFixedRoi;
+                Tracking::DetectedBlob candidateBlobAfterExpansion = searchCandidate;
 
                 for (int i = 0; i < MAX_EXPANSION_ITERATIONS_BOUNDARY; ++i) {
                     // ... (expansion logic as above) ...
@@ -372,7 +410,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
                 }
             }
         } else { // m_currentState == Tracking::TrackerState::TrackingMerged: Potential split
-            // qDebug().noquote() << dmsg << "Previously merged, now >1 blobs (" << plausibleBlobsInFixedRoi << "). Potential split.";
+            qDebug().noquote() << dmsg << "Previously merged, now >1 blobs (" << plausibleBlobsInFixedRoi << "). Potential split.";
             Tracking::DetectedBlob chosenSplitCandidate;
             chosenSplitCandidate.isValid = false;
 
