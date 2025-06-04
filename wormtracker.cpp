@@ -233,6 +233,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
 
     Tracking::DetectedBlob blobForAnchor;     // This will become m_lastPrimaryBlob (tracking anchor)
     Tracking::DetectedBlob blobToReport;      // This will become m_lastFullBlob (what's actually on screen)
+    QList<Tracking::DetectedBlob> splitCandidates; // All candidates when transitioning to PausedForSplit
     blobForAnchor.isValid = false;
     blobToReport.isValid = false;
     Tracking::TrackerState nextState = m_currentState;
@@ -503,6 +504,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
                         // qDebug().noquote() << dmsg << "Chosen split candidate looks like a single worm. Area: " << chosenSplitCandidate.area << ". Pausing for split.";
                         blobToReport = chosenSplitCandidate;  // This is the split-off part
                         blobForAnchor = chosenSplitCandidate; // Anchor is the split-off part
+                        splitCandidates = blobsInFixedRoi;    // Provide all candidates found in ROI for TM
                         nextState = Tracking::TrackerState::PausedForSplit;
                     }
                 } else { // No valid chosenSplitCandidate after all
@@ -554,7 +556,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
         m_lastPrimaryBlob = blobForAnchor; // Store the anchor blob
         m_lastFullBlob = blobToReport;     // Store the full reported blob
 
-        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, searchRoiUsedForThisFrame, m_currentState, plausibleBlobsInFixedRoi);
+        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, searchRoiUsedForThisFrame, m_currentState, splitCandidates);
         //qDebug().noquote()<< dmsg <<"Position updated." << "Anchor Centroid:" << m_lastPrimaryBlob.centroid
         //                          << "Full Centroid:" << m_lastFullBlob.centroid;
 
@@ -577,7 +579,7 @@ bool WormTracker::processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRe
 
 
         Tracking::DetectedBlob invalidBlobForSignal; // Default invalid
-        emit positionUpdated(m_wormId, originalFrameNumber, invalidBlobForSignal, invalidBlobForSignal, searchRoiUsedForThisFrame, m_currentState, plausibleBlobsInFixedRoi);
+        emit positionUpdated(m_wormId, originalFrameNumber, invalidBlobForSignal, invalidBlobForSignal, searchRoiUsedForThisFrame, m_currentState, splitCandidates);
         // currentFixedSearchRoiRef_InOut remains unchanged from previous valid frame or initial ROI
         return false;
     }
@@ -609,7 +611,8 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
                                           m_videoKeyFrameNum + m_currFrameNum :
                                           m_videoKeyFrameNum - 1 - m_currFrameNum;
             Tracking::DetectedBlob invalidBlob;
-            emit positionUpdated(m_wormId, originalFrameNumber, invalidBlob, invalidBlob, m_currentSearchRoi, m_currentState, 0);
+            QList<Tracking::DetectedBlob> emptySplitCandidates;
+            emit positionUpdated(m_wormId, originalFrameNumber, invalidBlob, invalidBlob, m_currentSearchRoi, m_currentState, emptySplitCandidates);
         }
         m_currFrameNum++; // Advance frame, even if lost, to continue processing sequence
         if (m_trackingActive) {
@@ -653,7 +656,8 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         // For simplicity, we can pass the new m_currentSearchRoi or the old one if stored.
         // Let's assume the ROI that *led* to pause is what TM cares about, but we don't have it.
         // So, we pass the ROI that will be used *next*.
-        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, m_currentSearchRoi, m_currentState, 1);
+        QList<Tracking::DetectedBlob> emptySplitCandidates;
+        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, m_currentSearchRoi, m_currentState, emptySplitCandidates);
     }
 
 
@@ -665,78 +669,6 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         emit finished();
     }
 }
-
-
-/*void WormTracker::confirmTargetIsMerged(int mergedEntityID, const QPointF& mergedBlobCentroid, const QRectF& mergedBlobRoiFromManager) {
-    qDebug().noquote()<< "WormTracker ID" << m_wormId << "(Dir:" << m_direction << "): confirmTargetIsMerged by TrackingManager."
-                       << "Associated MergeID:" << mergedEntityID
-                       << "Merged Centroid (from TM):" << mergedBlobCentroid
-                       << "Merged ROI (from TM):" << mergedBlobRoiFromManager;
-
-    if (m_currentState != Tracking::TrackerState::TrackingMerged) {
-        m_currentState = Tracking::TrackerState::TrackingMerged;
-        emit stateChanged(m_wormId, m_currentState, mergedEntityID);
-    }
-
-    m_lastKnownPosition = cv::Point2f(static_cast<float>(mergedBlobCentroid.x()), static_cast<float>(mergedBlobCentroid.y()));
-
-    cv::Size currentFrameCvSize = cv::Size(640,480); // Fallback
-    if (m_framesToProcess && m_currFrameNum >= 0 && m_currFrameNum < static_cast<int>(m_framesToProcess->size())) {
-        if (!m_framesToProcess->at(m_currFrameNum).empty()) {
-            currentFrameCvSize = m_framesToProcess->at(m_currFrameNum).size();
-        }
-    } else if (m_framesToProcess && !m_framesToProcess->empty()) {
-        if (!m_framesToProcess->at(0).empty()) {
-            currentFrameCvSize = m_framesToProcess->at(0).size();
-        }
-    }
-    m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrameCvSize);
-
-    // Update m_lastFullBlob with the manager-provided info about the merge
-    m_lastFullBlob.isValid = true;
-    m_lastFullBlob.centroid = mergedBlobCentroid;
-    if (mergedBlobRoiFromManager.isValid()) {
-        m_lastFullBlob.boundingBox = mergedBlobRoiFromManager;
-        m_lastFullBlob.area = mergedBlobRoiFromManager.width() * mergedBlobRoiFromManager.height();
-    } else {
-        m_lastFullBlob.boundingBox = m_currentSearchRoi; // Fallback
-        m_lastFullBlob.area = m_currentSearchRoi.width() * m_currentSearchRoi.height();
-    }
-    m_lastFullBlob.contourPoints.clear(); // Contour of full merge is complex, not stored here
-
-    // For m_lastPrimaryBlob (anchor): we need to estimate our part within this merge.
-    // This is tricky without the current frame's image data here.
-    // Best guess: center it on mergedBlobCentroid, use a typical single worm size.
-    // Or, if findPersistingComponent could be called (needs frame), that would be better.
-    // For now, let's make the anchor a small region around the merged centroid.
-    // This anchor will be refined in the next processFrame call using findPersistingComponent.
-    m_lastPrimaryBlob.isValid = true;
-    m_lastPrimaryBlob.centroid = mergedBlobCentroid; // Anchor starts at the center of the merge
-    // Give it a nominal small bounding box and area for the anchor.
-    // This is a placeholder until findPersistingComponent runs in the next frame.
-    qreal anchorSize = m_initialRoiEdge / 2.0; // Smaller than search ROI
-    m_lastPrimaryBlob.boundingBox = QRectF(mergedBlobCentroid.x() - anchorSize/2, mergedBlobCentroid.y() - anchorSize/2, anchorSize, anchorSize);
-    m_lastPrimaryBlob.area = m_minBlobArea; // A typical single worm area
-    m_lastPrimaryBlob.contourPoints.clear();
-
-
-    qDebug().noquote()<< "  WormTracker ID" << m_wormId << ": Next search ROI (fixed-size, recentered on merged centroid):" << m_currentSearchRoi
-                       << "m_lastFullBlob BBox:" << m_lastFullBlob.boundingBox << "Area:" << m_lastFullBlob.area
-                       << "m_lastPrimaryBlob (anchor) Centroid:" << m_lastPrimaryBlob.centroid << "Area:" << m_lastPrimaryBlob.area;
-
-    // The tracker might be paused (e.g. if it initiated the merge detection itself and called positionUpdated).
-    // If it's active and not PausedForSplit, the continueTracking loop will pick up the new state.
-    // If it was PausedForSplit (e.g. it thought it split but TM says no, it's a merge), this unpauses it.
-    if (m_trackingActive && m_currentState == Tracking::TrackerState::PausedForSplit) {
-        m_currentState = Tracking::TrackerState::TrackingMerged; // Correct the state
-            // No need to advance m_currFrameNum here, it was paused on that frame.
-            // The next call to continueTracking will process m_currFrameNum with the new Merged state.
-        QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
-    } else if (m_trackingActive && m_currentState != Tracking::TrackerState::PausedForSplit) {
-        // If it was already in TrackingMerged or TrackingSingle and TM confirms merge,
-        // the loop will continue normally. No explicit invoke needed unless it was somehow stalled.
-    }
-}*/
 
 
 Tracking::DetectedBlob WormTracker::findLargestBlobComponentInMask(const cv::Mat& mask, const QString& /*debugContextName*/) {

@@ -49,8 +49,8 @@ struct PausedWormInfoFrameSpecific {
     QPointer<WormTracker> trackerInstance;
     int framePausedOn;                      // The frame number where the split was detected by this tracker
     QDateTime timePaused;
-    Tracking::DetectedBlob candidateBlob;   // The blob this tracker thinks is "itself" after the split
-        // TODO: Future: Change to QList<Tracking::DetectedBlob> allSplitCandidates
+    QList<Tracking::DetectedBlob> allSplitCandidates; // All split candidates reported by this tracker
+    Tracking::DetectedBlob chosenCandidate; // The specific candidate this tracker chose as its preference
     int presumedPreviousPhysicalBlobId;     // ID of the FrameSpecificPhysicalBlob it split from (on framePausedOn -/+ 1)
 
     PausedWormInfoFrameSpecific() : conceptualWormId(-1), trackerInstance(nullptr), framePausedOn(-1), presumedPreviousPhysicalBlobId(-1) {}
@@ -90,7 +90,8 @@ private slots:
                            const Tracking::DetectedBlob& primaryBlob, // Anchor blob for track history
                            const Tracking::DetectedBlob& fullBlob,    // Full blob for merge/state processing
                            QRectF searchRoiUsed,
-                           Tracking::TrackerState currentState);
+                           Tracking::TrackerState currentState,
+                           const QList<Tracking::DetectedBlob>& splitCandidates = QList<Tracking::DetectedBlob>());
     void handleWormTrackerFinished();
     void handleWormTrackerError(int reportingConceptualWormId, QString errorMessage);
     void handleWormTrackerProgress(int reportingConceptualWormId, int percentDone);
@@ -114,7 +115,8 @@ private:
                                    const Tracking::DetectedBlob& reportedFullBlob,
                                    WormTracker* reportingTrackerInstance);
     void processFrameSpecificPause(int conceptualWormId, int frameNumber,
-                                   const Tracking::DetectedBlob& reportedSplitCandidateBlob, // Will become list later
+                                   const QList<Tracking::DetectedBlob>& allSplitCandidates, // Updated to handle list of candidates
+                                   const Tracking::DetectedBlob& chosenCandidate, // The tracker's preferred candidate
                                    WormTracker* reportingTrackerInstance);
     void attemptAutomaticSplitResolutionFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo);
     void forceResolvePausedWormFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo);

@@ -62,16 +62,18 @@ signals:
      * @param wormId The conceptual ID of the worm being tracked.
      * @param originalFrameNumber The frame number in the original video sequence.
      * @param primaryBlob The characteristics of the blob chosen as the primary target for this frame.
+     * @param fullBlob The full blob being tracked (could be merged entity).
      * @param searchRoiUsed The fixed-size search ROI that was used to find blobs in this frame.
-     * @param plausibleBlobsFoundInSearchRoi The total number of plausible blobs found within searchRoiUsed.
+     * @param currentState The current tracking state.
+     * @param splitCandidates List of all candidate blobs when in PausedForSplit state (empty otherwise).
      */
     void positionUpdated(int wormId,
                          int originalFrameNumber,
-                         const Tracking::DetectedBlob& fullBlob,
                          const Tracking::DetectedBlob& primaryBlob,
+                         const Tracking::DetectedBlob& fullBlob,
                          QRectF searchRoiUsed,
                          Tracking::TrackerState currentState,
-                         int plausibleBlobsFoundInSearchRoi);
+                         const QList<Tracking::DetectedBlob>& splitCandidates = QList<Tracking::DetectedBlob>());
 
     /**
      * @brief Emitted when the tracker was in a merged state and detects that the merged entity has split.
