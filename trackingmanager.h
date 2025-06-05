@@ -38,9 +38,10 @@ struct FrameSpecificPhysicalBlob {
     double currentArea;
     QSet<int> participatingWormTrackerIDs;  // Conceptual IDs of WormTrackers in this blob on this frame
     int frameNumber;                        // The frame this blob exists on
+    int selectedByWormTrackerId;            // Which WT has selected this blob as their target (-1 = unselected)
     // QDateTime timeFirstReported;         // When this physical blob was first noted on this frame
 
-    FrameSpecificPhysicalBlob() : uniqueId(-1), currentArea(0.0), frameNumber(-1) {}
+    FrameSpecificPhysicalBlob() : uniqueId(-1), currentArea(0.0), frameNumber(-1), selectedByWormTrackerId(-1) {}
 };
 
 // Information about a worm that has paused, waiting for split resolution.
@@ -111,16 +112,20 @@ signals:
 
 private:
     // Core logic for new frame-atomic merge/split handling
-    void processFrameSpecificMerge(int conceptualWormId, int frameNumber,
+    void processFrameSpecificMerge(int signedWormId, int frameNumber,
                                    const Tracking::DetectedBlob& reportedFullBlob,
                                    WormTracker* reportingTrackerInstance);
-    void processFrameSpecificPause(int conceptualWormId, int frameNumber,
+    void processFrameSpecificPause(int signedWormId, int frameNumber,
                                    const QList<Tracking::DetectedBlob>& allSplitCandidates, // Updated to handle list of candidates
                                    const Tracking::DetectedBlob& chosenCandidate, // The tracker's preferred candidate
                                    WormTracker* reportingTrackerInstance);
     void attemptAutomaticSplitResolutionFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo);
     void forceResolvePausedWormFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo);
 
+    // Helper functions for signed worm IDs (direction-aware)
+    int getSignedWormId(int conceptualWormId, WormTracker::TrackingDirection direction);
+    int getUnsignedWormId(int signedWormId);
+    WormTracker::TrackingDirection getDirectionFromSignedId(int signedWormId);
 
     // Helper and utility functions
     void cleanupThreadsAndObjects();

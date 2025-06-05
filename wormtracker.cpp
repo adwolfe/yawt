@@ -31,6 +31,7 @@ WormTracker::WormTracker(int wormId,
     m_videoKeyFrameNum(videoKeyFrameNum),
     m_currFrameNum(0), // Initialize m_currFrameNum
     m_trackingActive(false),
+    m_skipMergeDetectionNextFrame(false),
     m_currentState(Tracking::TrackerState::Idle)
 {
     qDebug().noquote()<< "WormTracker (" << this << ") created for worm ID:" << m_wormId
@@ -314,9 +315,12 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
                 blobForAnchor = blobToReport;
             }
 
-            // Check for merge based on blobToReport's area
+            // Check for merge based on blobToReport's area (skip if resuming from split)
             bool confirmedMerge = false;
-            if (m_lastPrimaryBlob.isValid && blobToReport.isValid && blobToReport.area > m_lastPrimaryBlob.area * MERGE_CONFIRM_RELATIVE_AREA_FACTOR) {
+            if (m_skipMergeDetectionNextFrame) {
+                qDebug().noquote() << context.debugMessage << "Skipping merge detection (resuming from split).";
+                confirmedMerge = false;
+            } else if (m_lastPrimaryBlob.isValid && blobToReport.isValid && blobToReport.area > m_lastPrimaryBlob.area * MERGE_CONFIRM_RELATIVE_AREA_FACTOR) {
                 confirmedMerge = true;
             } else if (blobToReport.isValid && blobToReport.area > m_maxBlobArea * MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR) {
                 confirmedMerge = true;
@@ -402,7 +406,10 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
             }
 
             bool confirmedMerge = false;
-            if (m_lastPrimaryBlob.isValid && blobToReport.isValid && blobToReport.area > m_lastPrimaryBlob.area * MERGE_CONFIRM_RELATIVE_AREA_FACTOR) {
+            if (m_skipMergeDetectionNextFrame) {
+                qDebug().noquote() << context.debugMessage << "Skipping merge detection (resuming from split).";
+                confirmedMerge = false;
+            } else if (m_lastPrimaryBlob.isValid && blobToReport.isValid && blobToReport.area > m_lastPrimaryBlob.area * MERGE_CONFIRM_RELATIVE_AREA_FACTOR) {
                 confirmedMerge = true;
             } else if (blobToReport.isValid && blobToReport.area > m_maxBlobArea * MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR) {
                 confirmedMerge = true;
@@ -434,6 +441,10 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
         emit positionUpdated(m_wormId, context.originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, context.searchRoiUsedForThisFrame, m_currentState, splitCandidates);
 
         currentFixedSearchRoiRef_InOut = nextFrameSearchRoi;
+        
+        // Reset merge detection skip flag after processing this frame
+        m_skipMergeDetectionNextFrame = false;
+        
         return true;
     } else { // Lost track
         m_lastPrimaryBlob.isValid = false;
@@ -452,6 +463,10 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
         Tracking::DetectedBlob invalidBlobForSignal; // Default invalid
         emit positionUpdated(m_wormId, context.originalFrameNumber, invalidBlobForSignal, invalidBlobForSignal, context.searchRoiUsedForThisFrame, m_currentState, splitCandidates);
         // currentFixedSearchRoiRef_InOut remains unchanged from previous valid frame or initial ROI
+        
+        // Reset merge detection skip flag after processing this frame
+        m_skipMergeDetectionNextFrame = false;
+        
         return false;
     }
 }
@@ -618,21 +633,26 @@ bool WormTracker::processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIn
                 }
             }
             
-            // Choose best candidate: prefer area similarity if significantly different from distance choice
-            if (closestByArea.isValid && closestByDistance.isValid) {
-                // If area-closest is much more similar in area, prefer it
-                double areaRatio = closestByArea.area / m_lastFullBlob.area;
-                if (areaRatio > 0.8 && areaRatio < 1.25) { // Within reasonable merge range
-                    chosenCandidate = closestByArea;
-                    qDebug().noquote() << context.debugMessage << "Chose area-similar candidate. Area:" << closestByArea.area << "vs previous:" << m_lastFullBlob.area;
-                } else {
+            // Choose best candidate: prioritize distance, use area only as minimum size sanity check
+            if (closestByDistance.isValid) {
+                // Check if distance-closest candidate meets minimum size requirement
+                double minWormAreaThreshold = m_minBlobArea * 0.5; // Half of minimum blob area as sanity check
+                if (closestByDistance.area >= minWormAreaThreshold) {
                     chosenCandidate = closestByDistance;
-                    qDebug().noquote() << context.debugMessage << "Chose distance-closest candidate. Area:" << closestByDistance.area;
+                    qDebug().noquote() << context.debugMessage << "Chose distance-closest candidate. Area:" << closestByDistance.area << "Distance-based selection.";
+                } else {
+                    qDebug().noquote() << context.debugMessage << "Distance-closest too small (" << closestByDistance.area << " < " << minWormAreaThreshold << "). Trying area-similar fallback.";
+                    if (closestByArea.isValid && closestByArea.area >= minWormAreaThreshold) {
+                        chosenCandidate = closestByArea;
+                        qDebug().noquote() << context.debugMessage << "Chose area-similar candidate as fallback. Area:" << closestByArea.area << "vs previous:" << m_lastFullBlob.area;
+                    } else {
+                        chosenCandidate = closestByDistance; // Use anyway if no better option
+                        qDebug().noquote() << context.debugMessage << "No valid fallback, using distance-closest despite small size.";
+                    }
                 }
-            } else if (closestByDistance.isValid) {
-                chosenCandidate = closestByDistance;
             } else if (closestByArea.isValid) {
                 chosenCandidate = closestByArea;
+                qDebug().noquote() << context.debugMessage << "Only area-similar candidate available. Area:" << closestByArea.area;
             }
         } else if (!expandedBlobCandidates.isEmpty()) {
             // Fallback to largest
@@ -723,9 +743,14 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         return;
     }
 
-    qDebug().noquote() << "WormTracker ID" << m_wormId << getDirection()
-                       << ": resumeTrackingWithAssignedTarget received. Blob Centroid:"
-                       << targetBlob.centroid.x() << "," << targetBlob.centroid.y() << "Area:" << targetBlob.area;
+    int signedId = -1 * m_wormId ? getDirection() == TrackingDirection::Backward : m_wormId;
+    int originalFrameNumber = (m_direction == TrackingDirection::Forward) ?
+                                  m_videoKeyFrameNum + m_currFrameNum :
+                                  m_videoKeyFrameNum - 1 - m_currFrameNum;
+
+    QString dmsg = QString("WT %1 FN%2 | resumeTracking | ").arg(m_wormId).arg(originalFrameNumber);
+
+    qDebug().noquote() << dmsg << targetBlob.centroid.x() << "," << targetBlob.centroid.y() << "Area:" << targetBlob.area;
 
     if (!targetBlob.isValid) {
         qWarning() << "WormTracker ID" << m_wormId << getDirection()
@@ -737,9 +762,6 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         emit stateChanged(m_wormId, m_currentState);
         // Emit a lost position update for this frame
         if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0) {
-            int originalFrameNumber = (m_direction == TrackingDirection::Forward) ?
-                                          m_videoKeyFrameNum + m_currFrameNum :
-                                          m_videoKeyFrameNum - 1 - m_currFrameNum;
             Tracking::DetectedBlob invalidBlob;
             QList<Tracking::DetectedBlob> emptySplitCandidates;
             emit positionUpdated(m_wormId, originalFrameNumber, invalidBlob, invalidBlob, m_currentSearchRoi, m_currentState, emptySplitCandidates);
@@ -770,6 +792,7 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
     m_lastPrimaryBlob = targetBlob; // This is the anchor
     m_lastFullBlob = targetBlob;    // And also what's reported
     m_currentState = Tracking::TrackerState::TrackingSingle; // Resumed as single
+    m_skipMergeDetectionNextFrame = true; // Skip merge detection for one frame after resuming from split
     // emit stateChanged(m_wormId, m_currentState); // State change will be implicit in next positionUpdate
 
     qDebug().noquote() << "WormTracker ID" << m_wormId << getDirection()

@@ -148,6 +148,7 @@ private:
     cv::Point2f m_lastKnownPosition;        // Last known centroid of the tracked blob (used as fallback)
     int m_currFrameNum;                     // Index in m_framesToProcess (0 to N-1)
     bool m_trackingActive;                  // Flag to control the tracking loop
+    bool m_skipMergeDetectionNextFrame;     // Flag to skip merge detection for one frame after resuming from split
     Tracking::TrackerState m_currentState;            // Current operational state of this tracker
     Tracking::DetectedBlob m_lastPrimaryBlob; // Characteristics of the blob successfully tracked in the *previous* frame
     Tracking::DetectedBlob m_lastFullBlob;  // basically a state descriptor
