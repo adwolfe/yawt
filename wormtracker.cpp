@@ -278,8 +278,29 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
                 splitCandidates.append(singleBlob); // Single candidate found in ROI
                 nextState = Tracking::TrackerState::PausedForSplit;
             } else {
-                blobToReport = singleBlob;
-                blobForAnchor = singleBlob; // For single, anchor and report are the same
+                // Check for merge based on area increase (skip if resuming from split)
+                bool confirmedMerge = false;
+                if (m_skipMergeDetectionNextFrame) {
+                    qDebug().noquote() << context.debugMessage << "Skipping merge detection (resuming from split).";
+                    confirmedMerge = false;
+                } else if (m_lastPrimaryBlob.isValid && singleBlob.area > m_lastPrimaryBlob.area * MERGE_CONFIRM_RELATIVE_AREA_FACTOR) {
+                    confirmedMerge = true;
+                    qDebug().noquote() << context.debugMessage << "Area significantly increased from" << m_lastPrimaryBlob.area << "to" << singleBlob.area << ". Merge detected.";
+                } else if (singleBlob.area > m_maxBlobArea * MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR) {
+                    confirmedMerge = true;
+                    qDebug().noquote() << context.debugMessage << "Area exceeds merge threshold:" << singleBlob.area << "vs" << (m_maxBlobArea * MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR) << ". Merge detected.";
+                }
+
+                if (confirmedMerge) {
+                    qDebug().noquote() << context.debugMessage << "Single blob fully contained CONFIRMS MERGE. Area:" << singleBlob.area;
+                    blobToReport = singleBlob;
+                    blobForAnchor = singleBlob;
+                    nextState = Tracking::TrackerState::TrackingMerged;
+                } else {
+                    blobToReport = singleBlob;
+                    blobForAnchor = singleBlob; // For single, anchor and report are the same
+                    nextState = Tracking::TrackerState::TrackingSingle;
+                }
             }
         } else { // Touches boundary - perform expansion
             qDebug().noquote() << context.debugMessage << "Single blob touches ROI boundary. Initiating expansion analysis.";
@@ -301,7 +322,21 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
                 QList<Tracking::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, analysisRoi);
                 if (blobsInExpanded.isEmpty()) break;
 
-                candidateBlobAfterExpansion = blobsInExpanded.first(); // Take largest in expanded
+                // Find closest blob to original singleBlob centroid instead of taking largest
+                Tracking::DetectedBlob closestInExpansion;
+                closestInExpansion.isValid = false;
+                double minDistToOriginal = std::numeric_limits<double>::max();
+                for (const auto& b : blobsInExpanded) {
+                    if (b.isValid) {
+                        double d = Tracking::sqDistance(singleBlob.centroid, b.centroid);
+                        if (d < minDistToOriginal) {
+                            minDistToOriginal = d;
+                            closestInExpansion = b;
+                        }
+                    }
+                }
+                
+                candidateBlobAfterExpansion = closestInExpansion.isValid ? closestInExpansion : blobsInExpanded.first();
                 if (analysisRoi.contains(candidateBlobAfterExpansion.boundingBox) || i == MAX_EXPANSION_ITERATIONS_BOUNDARY - 1) break;
             }
             // After expansion, candidateBlobAfterExpansion is our best guess for the full entity
@@ -393,7 +428,22 @@ bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIn
 
                 QList<Tracking::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, analysisRoi);
                 if (blobsInExpanded.isEmpty()) break;
-                candidateBlobAfterExpansion = blobsInExpanded.first();
+                
+                // Find closest blob to searchCandidate centroid instead of taking largest
+                Tracking::DetectedBlob closestInExpansion;
+                closestInExpansion.isValid = false;
+                double minDistToOriginal = std::numeric_limits<double>::max();
+                for (const auto& b : blobsInExpanded) {
+                    if (b.isValid) {
+                        double d = Tracking::sqDistance(searchCandidate.centroid, b.centroid);
+                        if (d < minDistToOriginal) {
+                            minDistToOriginal = d;
+                            closestInExpansion = b;
+                        }
+                    }
+                }
+                
+                candidateBlobAfterExpansion = closestInExpansion.isValid ? closestInExpansion : blobsInExpanded.first();
                 if (analysisRoi.contains(candidateBlobAfterExpansion.boundingBox) || i == MAX_EXPANSION_ITERATIONS_BOUNDARY - 1) break;
             }
             blobToReport = candidateBlobAfterExpansion;

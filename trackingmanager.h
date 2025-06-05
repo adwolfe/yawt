@@ -185,6 +185,7 @@ private:
     // Associates a conceptual worm ID with the uniqueId of the FrameSpecificPhysicalBlob it's part of in the current frame.
     // This helps find which physical blob a worm belonged to in the previous frame when it pauses.
     QMap<int, int> m_wormToPhysicalBlobIdMap;
+    QMap<int, QDateTime> m_lastResolutionAttempt;
 
 
     // General utilities

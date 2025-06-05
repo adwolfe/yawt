@@ -600,9 +600,81 @@ void TrackingManager::attemptAutomaticSplitResolutionFrameSpecific(int conceptua
         }
     }
 
+     // Also check for recently resolved buddies from the same frame
+     if (buddyConceptualIds.isEmpty() && m_splitResolutionMap.contains(pausedInfo.framePausedOn)) {
+         const QMap<int, Tracking::DetectedBlob>& resolvedOnThisFrame = m_splitResolutionMap[pausedInfo.framePausedOn];
+         qDebug().noquote() << dmsg << "No active buddies found. Checking" << resolvedOnThisFrame.size() << "recently resolved WTs from frame" << pausedInfo.framePausedOn;
+        
+         for (auto it = resolvedOnThisFrame.begin(); it != resolvedOnThisFrame.end(); ++it) {
+             int resolvedWormId = it.key();
+             if (resolvedWormId == conceptualWormIdToResolve) continue;
+            
+             qDebug().noquote() << dmsg << "Checking recently resolved WT" << resolvedWormId;
+            
+             // Check if this resolved worm shared PhysicalBlobIds with us
+             QList<int> resolvedWormPhysicalBlobIds;
+             if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
+                 for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
+                     if (blob.participatingWormTrackerIDs.contains(resolvedWormId)) {
+                         resolvedWormPhysicalBlobIds.append(blob.uniqueId);
+                     }
+                 }
+             }
+            
+             // Check for shared PhysicalBlobIds
+             bool sharesBlobIds = false;
+             for (int blobId : resolvedWormPhysicalBlobIds) {
+                 if (thisWormPhysicalBlobIds.contains(blobId)) {
+                     sharesBlobIds = true;
+                     qDebug().noquote() << dmsg << "Shared PhysicalBlobId found with resolved WT" << resolvedWormId << ":" << blobId;
+                     break;
+                 }
+             }
+            
+             if (sharesBlobIds) {
+                 qDebug().noquote() << dmsg << "Recently resolved WT" << resolvedWormId << "was a buddy. Checking for alternative blob assignment.";
+                
+                 // Find an unselected PhysicalBlob for this worm
+                 FrameSpecificPhysicalBlob* alternativeBlob = nullptr;
+                 if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
+                     for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
+                         if (blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) && 
+                             blob.selectedByWormTrackerId == -1) {
+                             alternativeBlob = &blob;
+                             break;
+                         }
+                     }
+                 }
+                
+                 if (alternativeBlob) {
+                     alternativeBlob->selectedByWormTrackerId = conceptualWormIdToResolve;
+                     m_wormToPhysicalBlobIdMap[conceptualWormIdToResolve] = alternativeBlob->uniqueId;
+                    
+                     // Create DetectedBlob from the alternative PhysicalBlob
+                     Tracking::DetectedBlob alternativeDetectedBlob;
+                     alternativeDetectedBlob.isValid = true;
+                     alternativeDetectedBlob.centroid = QPointF(alternativeBlob->currentCentroid.x, alternativeBlob->currentCentroid.y);
+                     alternativeDetectedBlob.boundingBox = alternativeBlob->currentBoundingBox;
+                     alternativeDetectedBlob.area = alternativeBlob->currentArea;
+                    
+                     qDebug().noquote() << dmsg << "Assigned alternative PhysicalBlobId:" << alternativeBlob->uniqueId << "due to recently resolved buddy";
+                     QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, alternativeDetectedBlob));
+                     m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = alternativeDetectedBlob;
+                     m_pausedWormsRecords.remove(conceptualWormIdToResolve);
+                     m_lastResolutionAttempt.remove(conceptualWormIdToResolve);
+                     qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "after resolving with recently resolved buddy. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
+                     return;
+                 } else {
+                     qDebug().noquote() << dmsg << "No alternative PhysicalBlob available for recently resolved buddy scenario";
+                 }
+                 break; // Only handle first buddy found
+             }
+         }
+     }
+
      qDebug().noquote() << dmsg << "Found" << buddyConceptualIds.size() << "buddies.";
 
-    // Simple 2-worm split scenario (1 original worm + 1 buddy = 2 worms from same previous physical blob)
+     // Simple 2-worm split scenario (1 original worm + 1 buddy = 2 worms from same previous physical blob)
     if (buddyConceptualIds.size() == 1) {
         int buddyId = buddyConceptualIds.first();
         if (!m_pausedWormsRecords.contains(buddyId)) { /*qDebug() << dmsg << "Buddy" << buddyId << "no longer in pause records.";*/ return; } // Buddy might have resolved
