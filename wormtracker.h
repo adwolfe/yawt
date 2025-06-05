@@ -27,8 +27,15 @@ public:
         Backward
     };
     Q_ENUM(TrackingDirection)
-    // Internal state for the tracker
 
+    // Helper structure for frame processing
+    struct FrameProcessingContext {
+        int originalFrameNumber;
+        QString debugMessage;
+        QRectF searchRoiUsedForThisFrame;
+        QList<Tracking::DetectedBlob> blobsInFixedRoi;
+        int plausibleBlobsInFixedRoi;
+    };
 
     explicit WormTracker(int wormId,
                          QRectF initialRoi, // This is the fixed-size ROI
@@ -100,10 +107,12 @@ signals:
 
 private:
     // Main processing logic for a frame
-    bool processFrame(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
+    bool processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut);
+    bool processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut);
     //bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
 
     // Helper functions
+    FrameProcessingContext initializeFrameProcessing(const cv::Mat& frame, int sequenceFrameIndex, const QRectF& searchRoi);
     QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
     QList<Tracking::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
     Tracking::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);

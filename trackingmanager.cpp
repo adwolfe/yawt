@@ -423,8 +423,94 @@ void TrackingManager::processFrameSpecificPause(int conceptualWormId, int frameN
     pwi.allSplitCandidates = allSplitCandidates;
     pwi.chosenCandidate = chosenCandidate;
 
-    // Determine the presumedPreviousPhysicalBlobId
-    pwi.presumedPreviousPhysicalBlobId = m_wormToPhysicalBlobIdMap.value(conceptualWormId, -1);
+    // Determine the presumedPreviousPhysicalBlobId by looking at previous frame's records
+    int previousFrame = frameNumber - 1;
+    int foundPreviousPhysicalBlobId = -1;
+    if (m_frameMergeRecords.contains(previousFrame)) {
+        const QList<FrameSpecificPhysicalBlob>& previousFrameBlobs = m_frameMergeRecords[previousFrame];
+        for (const FrameSpecificPhysicalBlob& blob : previousFrameBlobs) {
+            if (blob.participatingWormTrackerIDs.contains(conceptualWormId)) {
+                foundPreviousPhysicalBlobId = blob.uniqueId;
+                break;
+            }
+        }
+    }
+    pwi.presumedPreviousPhysicalBlobId = foundPreviousPhysicalBlobId;
+
+    // If no previous physical blob found, check for other worms pausing on same frame (retroactive merge detection)
+    if (foundPreviousPhysicalBlobId == -1) {
+        QList<int> coSplittingWorms;
+        coSplittingWorms.append(conceptualWormId);
+        
+        // Find other worms that are pausing on the same frame and also have no previous physical blob
+        for (const PausedWormInfoFrameSpecific& existingPaused : m_pausedWormsRecords.values()) {
+            if (existingPaused.conceptualWormId != conceptualWormId && 
+                existingPaused.framePausedOn == frameNumber &&
+                existingPaused.presumedPreviousPhysicalBlobId == -1) {
+                coSplittingWorms.append(existingPaused.conceptualWormId);
+            }
+        }
+        
+        if (coSplittingWorms.size() > 1) {
+            // Create retroactive PhysicalBlob for previous frame
+            FrameSpecificPhysicalBlob retroactiveBlob;
+            retroactiveBlob.uniqueId = m_nextPhysicalBlobId++;
+            retroactiveBlob.frameNumber = previousFrame;
+            
+            // Estimate merged blob properties from current split candidates
+            QRectF combinedBounds;
+            double totalArea = 0.0;
+            bool firstBlob = true;
+            
+            for (int wormId : coSplittingWorms) {
+                if (wormId == conceptualWormId) {
+                    if (chosenCandidate.isValid) {
+                        if (firstBlob) {
+                            combinedBounds = chosenCandidate.boundingBox;
+                            firstBlob = false;
+                        } else {
+                            combinedBounds = combinedBounds.united(chosenCandidate.boundingBox);
+                        }
+                        totalArea += chosenCandidate.area;
+                    }
+                } else if (m_pausedWormsRecords.contains(wormId)) {
+                    const Tracking::DetectedBlob& otherCandidate = m_pausedWormsRecords[wormId].chosenCandidate;
+                    if (otherCandidate.isValid) {
+                        if (firstBlob) {
+                            combinedBounds = otherCandidate.boundingBox;
+                            firstBlob = false;
+                        } else {
+                            combinedBounds = combinedBounds.united(otherCandidate.boundingBox);
+                        }
+                        totalArea += otherCandidate.area;
+                    }
+                }
+                retroactiveBlob.participatingWormTrackerIDs.insert(wormId);
+            }
+            
+            retroactiveBlob.currentBoundingBox = combinedBounds;
+            retroactiveBlob.currentArea = totalArea;
+            if (combinedBounds.isValid()) {
+                QPointF center = combinedBounds.center();
+                retroactiveBlob.currentCentroid = cv::Point2f(static_cast<float>(center.x()), static_cast<float>(center.y()));
+            }
+            
+            m_frameMergeRecords[previousFrame].append(retroactiveBlob);
+            
+            // Update this worm's presumedPreviousPhysicalBlobId
+            pwi.presumedPreviousPhysicalBlobId = retroactiveBlob.uniqueId;
+            
+            // Update other co-splitting worms' presumedPreviousPhysicalBlobId
+            for (int wormId : coSplittingWorms) {
+                if (wormId != conceptualWormId && m_pausedWormsRecords.contains(wormId)) {
+                    m_pausedWormsRecords[wormId].presumedPreviousPhysicalBlobId = retroactiveBlob.uniqueId;
+                }
+            }
+            
+            qDebug().noquote() << dmsg << "Created retroactive PhysicalBlobID:" << retroactiveBlob.uniqueId 
+                               << "for" << coSplittingWorms.size() << "co-splitting worms on frame" << previousFrame;
+        }
+    }
 
      qDebug().noquote() << dmsg << "Recorded pause. PrevPhysBlobID:" << pwi.presumedPreviousPhysicalBlobId;
     m_pausedWormsRecords[conceptualWormId] = pwi;
@@ -438,9 +524,9 @@ void TrackingManager::attemptAutomaticSplitResolutionFrameSpecific(int conceptua
     QString dmsg = QString("TM: WT %1 FN%2 | attemptAutoSplit | ").arg(conceptualWormIdToResolve).arg(pausedInfo.framePausedOn);
     qDebug().noquote() << dmsg << "PrevPhysBlobID:" << pausedInfo.presumedPreviousPhysicalBlobId;
 
-    if (!pausedInfo.trackerInstance) { /*qWarning() << dmsg << "No tracker instance.";*/ m_pausedWormsRecords.remove(conceptualWormIdToResolve); return; }
-    if (!pausedInfo.chosenCandidate.isValid) { /*qDebug() << dmsg << "Invalid candidate. Forcing lost.";*/ QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); m_pausedWormsRecords.remove(conceptualWormIdToResolve); return; }
-    if (pausedInfo.presumedPreviousPhysicalBlobId == -1) { /*qDebug() << dmsg << "No previous physical blob ID. Cannot find buddies. Will timeout or resolve singly.";*/ return; }
+    if (!pausedInfo.trackerInstance) { qWarning() << dmsg << "No tracker instance."; m_pausedWormsRecords.remove(conceptualWormIdToResolve); return; }
+    if (!pausedInfo.chosenCandidate.isValid) { qDebug() << dmsg << "Invalid candidate. Forcing lost."; QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); m_pausedWormsRecords.remove(conceptualWormIdToResolve); return; }
+    if (pausedInfo.presumedPreviousPhysicalBlobId == -1) { qDebug() << dmsg << "No previous physical blob ID. Cannot find buddies. Will timeout or resolve singly."; return; }
 
     QList<int> buddyConceptualIds;
     for (const PausedWormInfoFrameSpecific& otherPausedInfo : m_pausedWormsRecords.values()) {
