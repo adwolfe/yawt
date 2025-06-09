@@ -59,3 +59,6 @@ CONFIG += debug
 
 RESOURCES += \
     resources.qrc
+
+RC_ICONS = resources/icon_tr.ico
+

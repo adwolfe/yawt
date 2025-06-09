@@ -154,12 +154,13 @@ struct DetectedBlob {
     QPointF centroid;                     // Centroid of the blob in video coordinates
     QRectF boundingBox;                   // Bounding box of the blob in video coordinates
     double area = 0.0;                    // Area of the blob
+    double convexHullArea = 0.0;          // Area of the convex hull (blob area without holes)
     std::vector<cv::Point> contourPoints; // Raw contour points (in video coordinates)
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
     // Default constructor
-    DetectedBlob() : area(0.0), isValid(false), touchesROIboundary(false) {}
+    DetectedBlob() : area(0.0), convexHullArea(0.0), isValid(false), touchesROIboundary(false) {}
 };
 
 enum class TrackPointQuality {

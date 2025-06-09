@@ -107,9 +107,34 @@ signals:
 
 private:
     // Main processing logic for a frame
+    bool processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoi);
     bool processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut);
     bool processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut);
     //bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
+    
+    // Helper methods for unified frame processing
+    bool handleLostTracking(const FrameProcessingContext& context, QRectF& currentRoi);
+    bool handleSingleBlobCase(bool asMerged, const Tracking::DetectedBlob& blob, const cv::Mat& frame, 
+                             const FrameProcessingContext& context, QRectF& currentRoi);
+    bool handleMultipleBlobsCase(bool asMerged, const QList<Tracking::DetectedBlob>& blobs, 
+                                const cv::Mat& frame, const FrameProcessingContext& context, QRectF& currentRoi);
+    bool handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedBlob& blob, 
+                              const FrameProcessingContext& context, const cv::Mat& frame, QRectF& currentRoi);
+    bool handleBoundaryTouchingBlob(bool asMerged, const Tracking::DetectedBlob& blob, 
+                                   const cv::Mat& frame, const FrameProcessingContext& context, QRectF& currentRoi);
+    
+    // Blob analysis helpers
+    Tracking::DetectedBlob expandBlobTouchingBoundary(const Tracking::DetectedBlob& initialBlob, 
+                                                    QRectF& expandedRoi, const cv::Mat& frame);
+    bool detectSplitByAreaReduction(const Tracking::DetectedBlob& currentBlob);
+    bool detectMergeByAreaIncrease(const Tracking::DetectedBlob& currentBlob);
+    Tracking::DetectedBlob findPersistingAnchor(const Tracking::DetectedBlob& currentBlob, 
+                                              const cv::Size& frameSize, const FrameProcessingContext& context);
+    Tracking::DetectedBlob selectBestBlobCandidate(const QList<Tracking::DetectedBlob>& blobs);
+    bool updateTrackingState(const Tracking::DetectedBlob& blobForAnchor, const Tracking::DetectedBlob& blobToReport,
+                            const QList<Tracking::DetectedBlob>& splitCandidates, Tracking::TrackerState nextState,
+                            const FrameProcessingContext& context, const cv::Size& frameSize, QRectF& currentRoi);
+    bool isBlobTouchingBoundary(const Tracking::DetectedBlob& blob, const QRectF& roi);
 
     // Helper functions
     FrameProcessingContext initializeFrameProcessing(const cv::Mat& frame, int sequenceFrameIndex, const QRectF& searchRoi);

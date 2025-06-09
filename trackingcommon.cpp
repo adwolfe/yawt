@@ -142,6 +142,12 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
 
     for (const auto& contourInSub : contoursInSubImage) {
         double area = cv::contourArea(contourInSub);
+        
+        // Calculate convex hull area (area without holes)
+        std::vector<cv::Point> hull;
+        cv::convexHull(contourInSub, hull);
+        double hullArea = cv::contourArea(hull);
+        
         if (area < minArea || area > maxArea) {
             continue; // Filter by area
         }
@@ -168,6 +174,7 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             DetectedBlob blob;
             blob.isValid = true;
             blob.area = area;
+            blob.convexHullArea = hullArea;
 
             // Convert centroid and bounding box to full image coordinates
             // Centroid in sub-image: (mu.m10 / mu.m00), (mu.m01 / mu.m00)
