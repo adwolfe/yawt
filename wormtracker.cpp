@@ -360,6 +360,9 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
     qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Initial ROI:" << expandedRoi;
     Tracking::DetectedBlob expandedBlob = initialBlob;
     
+    // Declare blobsInExpanded outside the loop so it's accessible after the loop completes
+    QList<Tracking::DetectedBlob> blobsInExpanded;
+    
     for (int i = 0; i < MAX_EXPANSION_ITERATIONS_BOUNDARY; ++i) {
         qreal newWidth = expandedRoi.width() * BOUNDARY_ROI_EXPANSION_FACTOR;
         qreal newHeight = expandedRoi.height() * BOUNDARY_ROI_EXPANSION_FACTOR;
@@ -380,7 +383,7 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
                           << "- Expanded ROI:" << expandedRoi
                           << " Width:" << expandedRoi.width() << " Height:" << expandedRoi.height();
         
-        QList<Tracking::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, expandedRoi);
+        blobsInExpanded = findPlausibleBlobsInRoi(frame, expandedRoi);
         qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Found" 
                           << blobsInExpanded.size() << "blobs in expanded ROI";
         
@@ -415,16 +418,26 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
                           << expandedBlob.area << " Hull=" << expandedBlob.convexHullArea
                           << " BBox:" << expandedBlob.boundingBox;
         
-        // Only stop expansion if the blob is fully contained (bounding box inside ROI AND not touching boundary)
-        // or we've reached max iterations
-        bool blobFullyContained = expandedRoi.contains(expandedBlob.boundingBox) && !expandedBlob.touchesROIboundary;
-        if (blobFullyContained || i == MAX_EXPANSION_ITERATIONS_BOUNDARY - 1) {
-            qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << 
-                               (blobFullyContained ? 
-                               "Blob fully contained in ROI and not touching boundary." : "Max iterations reached.");
-            if (expandedBlob.touchesROIboundary) {
+        // Check if ANY blob in the expanded ROI touches the boundary
+        bool anyBlobTouchesBoundary = false;
+        for (const auto& b : blobsInExpanded) {
+            if (b.isValid && (b.touchesROIboundary || !expandedRoi.contains(b.boundingBox))) {
+                anyBlobTouchesBoundary = true;
                 qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << 
-                                  "Blob still touches boundary but max iterations reached.";
+                                  "Blob with area " << b.area << " and BBox " << b.boundingBox << 
+                                  " still touches boundary, continuing expansion.";
+            }
+        }
+        
+        // Only stop expansion if NO blobs touch boundary or we've reached max iterations
+        bool allBlobsFullyContained = !anyBlobTouchesBoundary;
+        if (allBlobsFullyContained || i == MAX_EXPANSION_ITERATIONS_BOUNDARY - 1) {
+            qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << 
+                               (allBlobsFullyContained ? 
+                               "All blobs fully contained in ROI and not touching boundary." : "Max iterations reached.");
+            if (anyBlobTouchesBoundary) {
+                qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << 
+                                  "Some blobs still touch boundary but max iterations reached.";
             }
             break;
         }
@@ -434,6 +447,21 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
                       << expandedBlob.area << " Hull=" << expandedBlob.convexHullArea
                       << " BBox:" << expandedBlob.boundingBox
                       << " Centroid:" << expandedBlob.centroid;
+    
+    // Log information about all blobs in the final expanded ROI
+    if (blobsInExpanded.size() > 1) {
+        qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Total blobs in final expanded ROI: " 
+                          << blobsInExpanded.size();
+        int blobIndex = 0;
+        for (const auto& b : blobsInExpanded) {
+            if (b.isValid) {
+                qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Additional blob[" << blobIndex++ 
+                                  << "]: Area=" << b.area << " Hull=" << b.convexHullArea
+                                  << " BBox:" << b.boundingBox
+                                  << " Touches boundary: " << (b.touchesROIboundary || !expandedRoi.contains(b.boundingBox));
+            }
+        }
+    }
     
     return expandedBlob;
 }
@@ -502,10 +530,23 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
     
     bool isSplit = detectSplitByAreaReduction(expandedBlob);
     if (isSplit) {
+        // When split is detected, include ALL blobs found in expanded ROI as candidates
         QList<Tracking::DetectedBlob> splitCandidates;
-        splitCandidates.append(expandedBlob);
+        QList<Tracking::DetectedBlob> blobsInExpandedRoi = findPlausibleBlobsInRoi(frame, expandedRoi);
+        
+        // Filter out blobs that are too small
+        double minSplitBlobArea = m_minBlobArea * 0.5; // Half of minimum area as threshold
+        for (const auto& b : blobsInExpandedRoi) {
+            if (b.isValid && b.area >= minSplitBlobArea) {
+                splitCandidates.append(b);
+                qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Adding split candidate: Area=" 
+                                  << b.area << " BBox=" << b.boundingBox;
+            }
+        }
+        
         qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "After boundary expansion, detected potential split by area.";
-        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Transitioning to PausedForSplit with anchor area=" 
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Transitioning to PausedForSplit with " 
+                          << splitCandidates.size() << " candidates, anchor area=" 
                           << blobForAnchor.area << " and report area=" << blobToReport.area;
         return updateTrackingState(blobForAnchor, blobToReport, splitCandidates, 
                                  Tracking::TrackerState::PausedForSplit, context, frame.size(), currentRoi);
