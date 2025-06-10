@@ -8,8 +8,8 @@
 
 
 // Constants for boundary expansion logic
-const int MAX_EXPANSION_ITERATIONS_BOUNDARY = 3;
-const double BOUNDARY_ROI_EXPANSION_FACTOR = 1.25;
+const int MAX_EXPANSION_ITERATIONS_BOUNDARY = 5;  // Increased from 3 for more complete expansion
+const double BOUNDARY_ROI_EXPANSION_FACTOR = 1.4; // Increased from 1.25 for larger expansion steps
 const double MERGE_CONFIRM_RELATIVE_AREA_FACTOR = 1.3; // For confirming merge after expansion
 const double MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR = 1.3; // For confirming merge against max typical area
 
@@ -34,7 +34,7 @@ WormTracker::WormTracker(int wormId,
     m_skipMergeDetectionNextFrame(false),
     m_currentState(Tracking::TrackerState::Idle)
 {
-    qDebug().noquote()<< "WormTracker (" << this << ") created for worm ID:" << m_wormId
+    qDebug().noquote() << getDebugLabel("Constructor") << "WormTracker (" << this << ") created for worm ID:" << m_wormId
                        << "Direction:" << (direction == TrackingDirection::Forward ? "Forward" : "Backward")
                        << "Initial Fixed ROI:" << initialRoi << "Edge:" << m_initialRoiEdge;
     m_lastPrimaryBlob.isValid = false; // Ensure lastPrimaryBlob starts as invalid
@@ -42,7 +42,7 @@ WormTracker::WormTracker(int wormId,
 }
 
 WormTracker::~WormTracker() {
-    qDebug().noquote()<< "WormTracker (" << this << ") destroyed for worm ID:" << m_wormId;
+    qDebug().noquote() << getDebugLabel("Destructor") << "WormTracker (" << this << ") destroyed for worm ID:" << m_wormId;
 }
 
 void WormTracker::setFrames(const std::vector<cv::Mat>* frames) {
@@ -74,7 +74,7 @@ void WormTracker::continueTracking()
 {
     if (QThread::currentThread()->isInterruptionRequested())
     {
-        qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Tracking interrupted by thread request.";
+        qDebug().noquote() << getDebugLabel("continueTracking") << "Tracking interrupted by thread request.";
         m_trackingActive = false; // Stop active tracking
     }
 
@@ -85,14 +85,13 @@ void WormTracker::continueTracking()
 
         if (currentFrame.empty())
         {
-            qWarning() << "WormTracker ID" << m_wormId << ": Encountered empty frame at sequence index" << m_currFrameNum;
+            qWarning().noquote() << getDebugLabel("continueTracking") << "Encountered empty frame at sequence index" << m_currFrameNum;
         }
         else
         {
             bool foundTargetThisFrame = false;
             if (!m_currentSearchRoi.isValid() || m_currentSearchRoi.isEmpty()) {
-                qWarning() << "WormTracker ID" << m_wormId << "Frame" << (m_direction == TrackingDirection::Forward ? m_videoKeyFrameNum + m_currFrameNum : m_videoKeyFrameNum - 1 - m_currFrameNum)
-                << ": Invalid m_currentSearchRoi before processing. Resetting based on last known position.";
+                qWarning().noquote() << getDebugLabel("continueTracking") << "Invalid m_currentSearchRoi before processing. Resetting based on last known position.";
                 m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrame.size());
                 searchRoiForThisFrame = m_currentSearchRoi; // Update captured ROI if it was reset
             }
@@ -178,16 +177,14 @@ Tracking::DetectedBlob WormTracker::findPersistingComponent(
 
     // Prioritize the overlapping part if it's significant
     if (oldOverlapComponentDetails.isValid && oldOverlapComponentDetails.area > (m_minBlobArea * significanceThresholdFactor)) {
-        qDebug().noquote()<< "WormTracker ID" << m_wormId << "Frame" << originalFrameNumberForDebug
-                     << ": Persisting component identified as 'old overlap'. Centroid:" << oldOverlapComponentDetails.centroid
+        qDebug().noquote() << getDebugLabel("findPersistingComponent") << "Persisting component identified as 'old overlap'. Centroid:" << oldOverlapComponentDetails.centroid
                      << "Area:" << oldOverlapComponentDetails.area;
         persistingComponent = oldOverlapComponentDetails;
     }
     // If old overlap is not good, check if the new growth part is significant
     // This could happen if the worm moved quickly, and the "new growth" is actually the worm in a new spot.
     else if (newGrowthComponentDetails.isValid && newGrowthComponentDetails.area > (m_minBlobArea * significanceThresholdFactor)) {
-        qDebug().noquote()<< "WormTracker ID" << m_wormId << "Frame" << originalFrameNumberForDebug
-                     << ": Persisting component identified as 'new growth' (old overlap was small/invalid). Centroid:" << newGrowthComponentDetails.centroid
+        qDebug().noquote() << getDebugLabel("findPersistingComponent") << "Persisting component identified as 'new growth' (old overlap was small/invalid). Centroid:" << newGrowthComponentDetails.centroid
                      << "Area:" << newGrowthComponentDetails.area;
         persistingComponent = newGrowthComponentDetails;
     } else {
@@ -216,7 +213,7 @@ WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const
         context.originalFrameNumber = m_videoKeyFrameNum - 1 - sequenceFrameIndex;
     }
 
-    context.debugMessage = getDebugLabel("processFrame");
+    // debugMessage field has been removed - using getDebugLabel directly in debug statements
     context.searchRoiUsedForThisFrame = searchRoi;
     context.blobsInFixedRoi = findPlausibleBlobsInRoi(frame, searchRoi);
     context.plausibleBlobsInFixedRoi = context.blobsInFixedRoi.count();
@@ -357,6 +354,10 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
                                                              QRectF& expandedRoi, const cv::Mat& frame)
 {
     qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Single blob touches ROI boundary. Initiating expansion analysis.";
+    qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Starting expansion with initial blob area:" 
+                      << initialBlob.area << " hull:" << initialBlob.convexHullArea
+                      << " BBox:" << initialBlob.boundingBox;
+    qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Initial ROI:" << expandedRoi;
     Tracking::DetectedBlob expandedBlob = initialBlob;
     
     for (int i = 0; i < MAX_EXPANSION_ITERATIONS_BOUNDARY; ++i) {
@@ -375,8 +376,18 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
         expandedRoi.setWidth(qMin(expandedRoi.width(), static_cast<qreal>(frame.cols)));
         expandedRoi.setHeight(qMin(expandedRoi.height(), static_cast<qreal>(frame.rows)));
         
+        qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Iteration" << i 
+                          << "- Expanded ROI:" << expandedRoi
+                          << " Width:" << expandedRoi.width() << " Height:" << expandedRoi.height();
+        
         QList<Tracking::DetectedBlob> blobsInExpanded = findPlausibleBlobsInRoi(frame, expandedRoi);
-        if (blobsInExpanded.isEmpty()) break;
+        qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Found" 
+                          << blobsInExpanded.size() << "blobs in expanded ROI";
+        
+        if (blobsInExpanded.isEmpty()) {
+            qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "No blobs found in expanded ROI!";
+            break;
+        }
         
         // Find closest blob to original blob's centroid
         Tracking::DetectedBlob closestInExpansion;
@@ -386,6 +397,11 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
         for (const auto& b : blobsInExpanded) {
             if (b.isValid) {
                 double d = Tracking::sqDistance(initialBlob.centroid, b.centroid);
+                qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Candidate blob: Area=" 
+                                  << b.area << " Hull=" << b.convexHullArea 
+                                  << " BBox:" << b.boundingBox
+                                  << " Distance=" << d;
+                                  
                 if (d < minDistToOriginal) {
                     minDistToOriginal = d;
                     closestInExpansion = b;
@@ -395,10 +411,29 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
         
         expandedBlob = closestInExpansion.isValid ? closestInExpansion : blobsInExpanded.first();
         
-        if (expandedRoi.contains(expandedBlob.boundingBox) || i == MAX_EXPANSION_ITERATIONS_BOUNDARY - 1) {
+        qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Selected blob: Area=" 
+                          << expandedBlob.area << " Hull=" << expandedBlob.convexHullArea
+                          << " BBox:" << expandedBlob.boundingBox;
+        
+        // Only stop expansion if the blob is fully contained (bounding box inside ROI AND not touching boundary)
+        // or we've reached max iterations
+        bool blobFullyContained = expandedRoi.contains(expandedBlob.boundingBox) && !expandedBlob.touchesROIboundary;
+        if (blobFullyContained || i == MAX_EXPANSION_ITERATIONS_BOUNDARY - 1) {
+            qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << 
+                               (blobFullyContained ? 
+                               "Blob fully contained in ROI and not touching boundary." : "Max iterations reached.");
+            if (expandedBlob.touchesROIboundary) {
+                qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << 
+                                  "Blob still touches boundary but max iterations reached.";
+            }
             break;
         }
     }
+    
+    qDebug().noquote() << getDebugLabel("expandBlobTouchingBoundary") << "Final expanded blob: Area=" 
+                      << expandedBlob.area << " Hull=" << expandedBlob.convexHullArea
+                      << " BBox:" << expandedBlob.boundingBox
+                      << " Centroid:" << expandedBlob.centroid;
     
     return expandedBlob;
 }
@@ -415,23 +450,63 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
     Tracking::DetectedBlob blobToReport = expandedBlob;
     Tracking::DetectedBlob blobForAnchor;
     
+    qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Expanded blob measurements: Area=" 
+                      << blobToReport.area << " Hull=" << blobToReport.convexHullArea
+                      << " BBox=" << blobToReport.boundingBox
+                      << " Centroid=" << blobToReport.centroid;
+    
+    // Log previous blob info for comparison
+    if (m_lastPrimaryBlob.isValid) {
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Previous primary blob: Area=" 
+                          << m_lastPrimaryBlob.area << " Hull=" << m_lastPrimaryBlob.convexHullArea
+                          << " BBox=" << m_lastPrimaryBlob.boundingBox
+                          << " Centroid=" << m_lastPrimaryBlob.centroid;
+    }
+    
+    if (m_lastFullBlob.isValid) {
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Previous full blob: Area=" 
+                          << m_lastFullBlob.area << " Hull=" << m_lastFullBlob.convexHullArea
+                          << " BBox=" << m_lastFullBlob.boundingBox
+                          << " Centroid=" << m_lastFullBlob.centroid;
+    }
+    
     // Determine anchor: if previously tracked, find persisting part. Otherwise, anchor is the full blob.
     if (m_lastPrimaryBlob.isValid) {
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Finding persisting component...";
         Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, blobToReport, frame.size(), context.originalFrameNumber);
         blobForAnchor = persisted.isValid ? persisted : blobToReport;
         qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "findPersistingComponent result: valid=" << persisted.isValid 
                           << " centroid=" << (persisted.isValid ? persisted.centroid : QPointF(-1, -1))
                           << " area=" << (persisted.isValid ? persisted.area : -1);
+        
+        if (persisted.isValid) {
+            // Calculate what percentage of the full blob this represents
+            double percentOfFullArea = (persisted.area / blobToReport.area) * 100.0;
+            qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Persisting component is " 
+                              << QString::number(percentOfFullArea, 'f', 1) << "% of full blob area";
+            
+            // Check if the persisting component seems unusually small
+            if (percentOfFullArea < 20.0) {
+                qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "WARNING: Persisting component is unusually small!";
+            }
+        }
     } else {
         blobForAnchor = blobToReport;
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "No previous primary blob, using full blob as anchor";
     }
     
     // Check for potential split by area reduction
+    qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Checking for split by area reduction...";
+    qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Using blob for split detection: Area=" 
+                      << expandedBlob.area << " Hull=" << expandedBlob.convexHullArea;
+    
     bool isSplit = detectSplitByAreaReduction(expandedBlob);
     if (isSplit) {
         QList<Tracking::DetectedBlob> splitCandidates;
         splitCandidates.append(expandedBlob);
         qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "After boundary expansion, detected potential split by area.";
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "Transitioning to PausedForSplit with anchor area=" 
+                          << blobForAnchor.area << " and report area=" << blobToReport.area;
         return updateTrackingState(blobForAnchor, blobToReport, splitCandidates, 
                                  Tracking::TrackerState::PausedForSplit, context, frame.size(), currentRoi);
     }
@@ -587,11 +662,25 @@ Tracking::DetectedBlob WormTracker::selectBestBlobCandidate(const QList<Tracking
 // Detect split by area reduction
 bool WormTracker::detectSplitByAreaReduction(const Tracking::DetectedBlob& currentBlob)
 {
-    if (!m_lastFullBlob.isValid) return false;
+    if (!m_lastFullBlob.isValid) {
+        qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "No valid previous full blob to compare with";
+        return false;
+    }
+    
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "DETAILED AREA COMPARISON:";
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "  Current blob - regular area:" << currentBlob.area 
+                      << "hull area:" << currentBlob.convexHullArea
+                      << "BBox:" << currentBlob.boundingBox;
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "  Previous blob - regular area:" << m_lastFullBlob.area 
+                      << "hull area:" << m_lastFullBlob.convexHullArea
+                      << "BBox:" << m_lastFullBlob.boundingBox;
     
     // Calculate both area metrics
     double hullAreaRatio = currentBlob.convexHullArea / m_lastFullBlob.convexHullArea;
     double regularAreaRatio = currentBlob.area / m_lastFullBlob.area;
+    
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "  Ratios - regular:" << QString::number(regularAreaRatio, 'f', 3) 
+                      << "hull:" << QString::number(hullAreaRatio, 'f', 3);
     
     // Log area changes
     qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "Area check: prev hull=" << m_lastFullBlob.convexHullArea
@@ -601,7 +690,12 @@ bool WormTracker::detectSplitByAreaReduction(const Tracking::DetectedBlob& curre
                       
     // Split threshold: Both hull area AND regular area must show significant reduction
     // Both metrics must be less than 80% of previous frame's values
-    return (hullAreaRatio < 0.80) && (regularAreaRatio < 0.80);
+    bool isSplit = (hullAreaRatio < 0.80) && (regularAreaRatio < 0.80);
+    
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "Split detection result: " 
+                      << (isSplit ? "SPLIT DETECTED" : "NO SPLIT");
+    
+    return isSplit;
 }
 
 // Detect merge by area increase

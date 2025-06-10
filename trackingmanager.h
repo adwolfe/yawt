@@ -27,7 +27,7 @@ const double PHYSICAL_BLOB_IOU_THRESHOLD = 0.5; // Higher threshold for matching
 const double PHYSICAL_BLOB_CENTROID_MAX_DIST_SQ = 100.0; // Max squared distance (e.g., 10 pixels)
 
 // Constants for paused worm resolution
-const int MAX_PAUSED_DURATION_MS = 5000;
+const int MAX_PAUSED_DURATION_MS = 2000;
 const int PAUSE_RESOLUTION_INTERVAL_MS = 500;
 
 // Represents a distinct physical (merged) blob observed on a specific frame.

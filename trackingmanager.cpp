@@ -429,7 +429,7 @@ void TrackingManager::processFrameSpecificPause(int signedWormId, int frameNumbe
 {
     int conceptualWormId = getUnsignedWormId(signedWormId);
     QString dmsg = QString("TM: WT %1 FN%2 | procFrameSpecPause | ").arg(signedWormId).arg(frameNumber);
-    qDebug().noquote() << dmsg << "Candidates:" << allSplitCandidates.size() << "Chosen @ " << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y();
+    qDebug().noquote() << dmsg << "Candidates:" << allSplitCandidates.size() << "Chosen @ " << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y() << " Area: " << chosenCandidate.area;
 
     if (m_pausedWormsRecords.contains(signedWormId)) {
         qDebug().noquote() << dmsg << "Already paused. Updating candidates and timer.";
@@ -777,33 +777,33 @@ void TrackingManager::attemptAutomaticSplitResolutionFrameSpecific(int conceptua
         if (!validDistinctSelections) {
             // Try to find alternate blobs for assignment
             qDebug().noquote() << dmsg << "Same blob or invalid selection. Attempting to assign different blobs to buddies.";
-            
+
             QList<int> availableBlobIds;
             if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
                 for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                    if ((blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) || 
-                         blob.participatingWormTrackerIDs.contains(buddyId)) && 
+                    if ((blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) ||
+                         blob.participatingWormTrackerIDs.contains(buddyId)) &&
                         blob.selectedByWormTrackerId == 0) { // Only consider unselected blobs
                         availableBlobIds.append(blob.uniqueId);
                     }
                 }
             }
-            
+
             qDebug().noquote() << dmsg << "Available unselected blob IDs for assignment:" << availableBlobIds;
-            
+
             // If we have exactly 2 blobs, assign one to each worm
             if (availableBlobIds.size() >= 2) {
                 // Sort to ensure consistent assignments
                 std::sort(availableBlobIds.begin(), availableBlobIds.end());
-                
+
                 // Assign first blob to this worm, second to buddy
                 thisWormSelectedBlobId = availableBlobIds[0];
                 buddySelectedBlobId = availableBlobIds[1];
-                
+
                 // Update mappings
                 m_wormToPhysicalBlobIdMap[conceptualWormIdToResolve] = thisWormSelectedBlobId;
                 m_wormToPhysicalBlobIdMap[buddyId] = buddySelectedBlobId;
-                
+
                 // Mark blobs as selected
                 for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
                     if (blob.uniqueId == thisWormSelectedBlobId) {
@@ -812,9 +812,9 @@ void TrackingManager::attemptAutomaticSplitResolutionFrameSpecific(int conceptua
                         blob.selectedByWormTrackerId = buddyId;
                     }
                 }
-                
+
                 validDistinctSelections = true;
-                qDebug().noquote() << dmsg << "Successfully reassigned blobs. This worm:" << thisWormSelectedBlobId 
+                qDebug().noquote() << dmsg << "Successfully reassigned blobs. This worm:" << thisWormSelectedBlobId
                                   << "Buddy" << buddyId << ":" << buddySelectedBlobId;
             }
         }

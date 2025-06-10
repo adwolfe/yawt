@@ -31,7 +31,6 @@ public:
     // Helper structure for frame processing
     struct FrameProcessingContext {
         int originalFrameNumber;
-        QString debugMessage;
         QRectF searchRoiUsedForThisFrame;
         QList<Tracking::DetectedBlob> blobsInFixedRoi;
         int plausibleBlobsInFixedRoi;

@@ -187,6 +187,7 @@ void MainWindow::initializeUIStates() {
     
     // Initialize ROI factor spinbox
     ui->roiFactorSpinBoxD->setValue(roiFactorSpinBoxD);
+    ui->roiFactorSpinBoxD->setSingleStep(0.05);
     // Set initial value in the model
     m_blobTableModel->updateRoiSizeMultiplier(roiFactorSpinBoxD);
 
