@@ -19,6 +19,9 @@ public:
 
     // Header:
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
+    
+    // ROI size factor getter
+    double getRoiSizeMultiplier() const;
 
     // Basic functionality:
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
@@ -112,6 +115,12 @@ signals:
                               double minAspectRatio, double maxAspectRatio,
                               const QSizeF& fixedRoiSize);
 
+public slots:
+    /**
+     * @brief Updates the ROI size multiplier when the user adjusts the spinbox
+     * @param newMultiplier The new multiplier value
+     */
+    void updateRoiSizeMultiplier(double newMultiplier);
 
 private:
     QList<TableItems::ClickedItem> m_items;
@@ -125,6 +134,7 @@ private:
     double m_minObservedAspectRatio;
     double m_maxObservedAspectRatio;
     QSizeF m_currentFixedRoiSize; // Stores the calculated fixed ROI dimensions
+    double m_roiSizeMultiplier;   // User-adjustable multiplier for ROI size
 
     QColor getNextColor();
     void initializeColors();

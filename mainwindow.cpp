@@ -25,6 +25,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_trackingProgressDialog(nullptr)
     , m_trackingManager(nullptr)
     , m_interactionModeButtonGroup(new QButtonGroup(this))
+    , roiFactorSpinBoxD(1.5) // Initialize ROI factor to default value 1.5
 {
     ui->setupUi(this);
 
@@ -78,6 +79,10 @@ void MainWindow::setupInteractionModeButtonGroup() {
 
 
 void MainWindow::setupConnections() {
+    // Connect ROI factor spinbox to BlobTableModel
+    connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged), 
+            m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
+            
     // File/Directory
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
 
@@ -179,6 +184,11 @@ void MainWindow::initializeUIStates() {
     ui->globalThreshAutoCheck->setChecked(false);
     qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
     updateThresholdAlgorithmSettings();
+    
+    // Initialize ROI factor spinbox
+    ui->roiFactorSpinBoxD->setValue(roiFactorSpinBoxD);
+    // Set initial value in the model
+    m_blobTableModel->updateRoiSizeMultiplier(roiFactorSpinBoxD);
 
     // Initial button states will be set by sync slots when VideoLoader emits initial modes
 }

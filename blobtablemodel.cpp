@@ -6,7 +6,7 @@
 
 // Define a default small ROI size for when no worms are present or dimensions are zero
 const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0); // Example: 20x20 pixels
-const double ROI_SIZE_MULTIPLIER = 1.5;
+// ROI_SIZE_MULTIPLIER replaced with m_roiSizeMultiplier member variable
 
 BlobTableModel::BlobTableModel(QObject *parent)
     : QAbstractTableModel(parent),
@@ -16,7 +16,8 @@ BlobTableModel::BlobTableModel(QObject *parent)
     m_maxObservedArea(0.0),
     m_minObservedAspectRatio(std::numeric_limits<double>::max()),
     m_maxObservedAspectRatio(0.0),
-    m_currentFixedRoiSize(DEFAULT_ROI_SIZE) // Initialize with a default
+    m_currentFixedRoiSize(DEFAULT_ROI_SIZE), // Initialize with a default
+    m_roiSizeMultiplier(1.5) // Default ROI size multiplier
 {
     initializeColors();
     // Initial call to set up ROI even if no items yet, or to reset if loading an empty state
@@ -237,6 +238,17 @@ QSizeF BlobTableModel::getCurrentFixedRoiSize() const {
     return m_currentFixedRoiSize;
 }
 
+double BlobTableModel::getRoiSizeMultiplier() const {
+    return m_roiSizeMultiplier;
+}
+
+void BlobTableModel::updateRoiSizeMultiplier(double newMultiplier) {
+    if (!qFuzzyCompare(m_roiSizeMultiplier, newMultiplier)) {
+        m_roiSizeMultiplier = newMultiplier;
+        recalculateGlobalMetricsAndROIs();
+    }
+}
+
 // --- Private Helper Methods ---
 void BlobTableModel::recalculateGlobalMetricsAndROIs() {
     double newMinArea = std::numeric_limits<double>::max();
@@ -295,7 +307,7 @@ void BlobTableModel::recalculateGlobalMetricsAndROIs() {
 
     QSizeF newFixedRoiSize;
     if (maxObservedDimensionL > 0) {
-        double sideLength = maxObservedDimensionL * ROI_SIZE_MULTIPLIER;
+        double sideLength = maxObservedDimensionL * m_roiSizeMultiplier;
         newFixedRoiSize = QSizeF(sideLength, sideLength);
     } else {
         newFixedRoiSize = DEFAULT_ROI_SIZE;

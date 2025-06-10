@@ -141,6 +141,9 @@ private:
     QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
     QList<Tracking::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
     Tracking::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
+    
+    // Debug helper function
+    QString getDebugLabel(const QString& functionName) const;
 
     /**
      * @brief Analyzes the overlap and new growth between a blob from the previous frame

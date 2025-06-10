@@ -93,5 +93,8 @@ private:
     TrackingManager *m_trackingManager;
 
     QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
+    
+    // ROI size factor spinbox
+    double roiFactorSpinBoxD;
 };
 #endif // MAINWINDOW_H
