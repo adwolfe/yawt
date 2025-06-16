@@ -47,6 +47,7 @@ public:
     int getWormId() const { return m_wormId; }
     TrackingDirection getDirection() const { return m_direction; }
     Tracking::TrackerState getCurrentTrackerState() const { return m_currentState; }
+    cv::Point2f getLastKnownPosition() const { return m_lastKnownPosition; }
     //Tracking::DetectedBlob getLastPrimaryBlob() const { return m_lastPrimaryBlob; } // Getter for the last tracked blob
 
 

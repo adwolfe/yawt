@@ -42,14 +42,14 @@ TrackingManager::TrackingManager(QObject* parent)
 // Destructor
 TrackingManager::~TrackingManager() {
     qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
-    
+
     // Ensure tracking is cancelled and resources are released
     if (m_isTrackingRunning) {
         qDebug() << "TrackingManager Destructor: Tracking was running, requesting cancel.";
         cancelTracking();
         QThread::msleep(300);
     }
-    
+
     // Force a final cleanup to ensure all resources are released
     cleanupThreadsAndObjects();
     qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
@@ -186,10 +186,10 @@ void TrackingManager::cancelTracking() {
     if (m_cancelRequested) return;
     m_cancelRequested = true;
     bool wasRunning = m_isTrackingRunning;
-    
+
     // Clear the split resolution map
     m_splitResolutionMap.clear();
-    
+
     locker.unlock();
     emit trackingStatusUpdate("Cancellation requested...");
     for (QPointer<QThread> thread : m_videoProcessorThreads) { if (thread && thread->isRunning()) thread->requestInterruption(); }
@@ -224,11 +224,11 @@ void TrackingManager::cleanupThreadsAndObjects() {
     m_frameMergeRecords.clear();
     m_splitResolutionMap.clear();
     m_wormToPhysicalBlobIdMap.clear();
-    
+
     // Reset state flags
-    m_isTrackingRunning = false; 
+    m_isTrackingRunning = false;
     m_cancelRequested = false;
-    
+
     qDebug() << "TrackingManager: All data structures cleared in cleanupThreadsAndObjects - split states eliminated";
 }
 
@@ -428,6 +428,8 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
 
     // Step 1: Create PhysicalBlobIds for all split candidates if they don't exist
     QList<int> candidatePhysicalBlobIds;
+    int chosenCandidatePhysicalBlobId = -1; // Track which physical blob ID corresponds to the chosen candidate
+
     for (const Tracking::DetectedBlob& candidate : allSplitCandidates) {
         if (!candidate.isValid) continue;
 
@@ -443,11 +445,13 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             }
         }
 
+        int currentBlobId = -1;
         if (existingBlob) {
             // Add this WT to the existing blob's participants
             existingBlob->participatingWormTrackerIDs.insert(signedWormId);
-            candidatePhysicalBlobIds.append(existingBlob->uniqueId);
-            qDebug().noquote() << dmsg << "Matched existing PhysicalBlobID:" << existingBlob->uniqueId;
+            currentBlobId = existingBlob->uniqueId;
+            candidatePhysicalBlobIds.append(currentBlobId);
+            qDebug().noquote() << dmsg << "Matched existing PhysicalBlobID:" << currentBlobId;
         } else {
             // Create new physical blob for this candidate
             FrameSpecificPhysicalBlob newPhysicalBlob;
@@ -460,9 +464,23 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             newPhysicalBlob.selectedByWormTrackerId = 0; // Initially unselected
 
             blobsOnThisFrame.append(newPhysicalBlob);
-            candidatePhysicalBlobIds.append(newPhysicalBlob.uniqueId);
-            qDebug().noquote() << dmsg << "Created new PhysicalBlobID:" << newPhysicalBlob.uniqueId << "for split candidate";
+            currentBlobId = newPhysicalBlob.uniqueId;
+            candidatePhysicalBlobIds.append(currentBlobId);
+            qDebug().noquote() << dmsg << "Created new PhysicalBlobID:" << currentBlobId << "for split candidate";
         }
+
+        // Check if this is the chosen candidate (by comparing centroids)
+        if (qFuzzyCompare(candidate.centroid.x(), chosenCandidate.centroid.x()) &&
+            qFuzzyCompare(candidate.centroid.y(), chosenCandidate.centroid.y())) {
+            chosenCandidatePhysicalBlobId = currentBlobId;
+            qDebug().noquote() << dmsg << "Identified chosen candidate as PhysicalBlobID:" << currentBlobId;
+        }
+    }
+
+    // Set the preferred blob for this worm to be the chosen candidate
+    if (chosenCandidatePhysicalBlobId != -1) {
+        m_wormToPhysicalBlobIdMap[conceptualWormId] = chosenCandidatePhysicalBlobId;
+        qDebug().noquote() << dmsg << "Setting preferred blob for worm" << conceptualWormId << "to PhysicalBlobID:" << chosenCandidatePhysicalBlobId;
     }
 
     // Try immediate resolution using our new method
@@ -471,14 +489,14 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
     } else {
         // Fallback - assign the first valid blob or go lost
         qDebug().noquote() << dmsg << "Immediate resolution failed, using fallback (go lost)";
-        QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget", 
+        QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         m_splitResolutionMap[frameNumber][signedWormId] = Tracking::DetectedBlob();
     }
 }
 
 
-bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int frameNumber, 
+bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int frameNumber,
                                                     const QList<Tracking::DetectedBlob>& allCandidates,
                                                     const Tracking::DetectedBlob& chosenCandidate,
                                                     WormTracker* trackerInstance) {
@@ -487,7 +505,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
 
     if (!trackerInstance) { qWarning() << dmsg << "No tracker instance."; return false; }
     if (!chosenCandidate.isValid) { qDebug() << dmsg << "Invalid candidate. Forcing lost."; QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); return true; }
-    
+
     // Find physical blob IDs for this worm
     QList<int> thisWormPhysicalBlobIds;
     if (m_frameMergeRecords.contains(frameNumber)) {
@@ -497,50 +515,50 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
             }
         }
     }
-    
+
     if (thisWormPhysicalBlobIds.isEmpty()) {
         qDebug() << dmsg << "No PhysicalBlobIds found for this worm. Cannot proceed with resolution.";
-        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, 
+        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection,
                                  Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         m_splitResolutionMap[frameNumber][conceptualWormId] = Tracking::DetectedBlob();
         return true;
     }
 
     qDebug().noquote() << dmsg << "This worm's PhysicalBlobIds:" << thisWormPhysicalBlobIds;
-    
+
     // Check if a preferred blob is already assigned to this worm
     int preferredBlobId = m_wormToPhysicalBlobIdMap.value(conceptualWormId, -1);
     Tracking::DetectedBlob blobToAssign;
     blobToAssign.isValid = false;
     bool resolutionSuccess = false;
-    
+
     // Look for already resolved worms on this frame that might have taken blobs we're interested in
     QMap<int, QList<int>> otherWormBlobAssignments; // wormId -> list of blobIds
-    
+
     if (m_splitResolutionMap.contains(frameNumber)) {
         QMap<int, Tracking::DetectedBlob> resolvedBlobs = m_splitResolutionMap[frameNumber];
         for (auto it = resolvedBlobs.begin(); it != resolvedBlobs.end(); ++it) {
             int otherWormId = it.key();
             if (otherWormId == conceptualWormId) continue;
-            
+
             QList<int> otherWormBlobIds;
             for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
                 if (blob.selectedByWormTrackerId == otherWormId) {
                     otherWormBlobIds.append(blob.uniqueId);
                 }
             }
-            
+
             if (!otherWormBlobIds.isEmpty()) {
                 otherWormBlobAssignments[otherWormId] = otherWormBlobIds;
                 qDebug().noquote() << dmsg << "Worm" << otherWormId << "already has blobs assigned:" << otherWormBlobIds;
             }
         }
     }
-    
+
     // First, try to find our preferred blob if it's available
     if (preferredBlobId != -1) {
         bool blobTaken = false;
-        
+
         // Check if any other worm has already been assigned this blob
         for (auto it = otherWormBlobAssignments.begin(); it != otherWormBlobAssignments.end(); ++it) {
             if (it.value().contains(preferredBlobId)) {
@@ -549,20 +567,20 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
                 break;
             }
         }
-        
+
         if (!blobTaken) {
             // Try to find and claim this blob
             for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
                 if (blob.uniqueId == preferredBlobId && blob.selectedByWormTrackerId == 0) {
                     // Claim the blob
                     blob.selectedByWormTrackerId = conceptualWormId;
-                    
+
                     // Create the blob to assign
                     blobToAssign.isValid = true;
                     blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
-                    
+
                     qDebug().noquote() << dmsg << "Successfully claimed preferred blob:" << preferredBlobId;
                     resolutionSuccess = true;
                     break;
@@ -570,46 +588,122 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
             }
         }
     }
-    
+
     // If we couldn't claim our preferred blob, look for any available alternative
     if (!blobToAssign.isValid) {
         qDebug().noquote() << dmsg << "Preferred blob unavailable or not set. Looking for alternatives.";
-        
-        // Find any unassigned blob that this worm is participating in
-        for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
-            if (blob.participatingWormTrackerIDs.contains(conceptualWormId) && blob.selectedByWormTrackerId == 0) {
+
+        // Get the worm tracker instance to find its last known position
+        //WormTracker* tracker = nullptr;
+        //for (WormTracker* trackerPtr : m_wormTrackersList) {
+        //    if (trackerPtr && getSignedWormId(trackerPtr->getWormId(), trackerPtr->getDirection()) == conceptualWormId) {
+        //        tracker = trackerPtr;
+        //        break;
+        //    }
+        // }
+
+        if (trackerInstance) {
+            // Find all unassigned blobs that this worm is participating in
+            struct BlobWithDistance {
+                FrameSpecificPhysicalBlob* blob;
+                double distance;
+            };
+            QList<BlobWithDistance> availableBlobs;
+
+            // Get the last known position
+            QPointF lastKnownPos;
+            if (chosenCandidate.isValid) {
+                // Use the chosen candidate as reference if available
+                lastKnownPos = chosenCandidate.centroid;
+            } else {
+                // Try to use the tracker's last known position
+                cv::Point2f trackerPos = trackerInstance->getLastKnownPosition();
+                lastKnownPos = QPointF(trackerPos.x, trackerPos.y);
+            }
+
+            // Find all available blobs and calculate distances
+            for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
+                if (blob.participatingWormTrackerIDs.contains(conceptualWormId) && blob.selectedByWormTrackerId == 0) {
+                    QPointF blobPos(blob.currentCentroid.x, blob.currentCentroid.y);
+                    double dx = blobPos.x() - lastKnownPos.x();
+                    double dy = blobPos.y() - lastKnownPos.y();
+                    double distSq = dx*dx + dy*dy;
+
+                    BlobWithDistance bwd;
+                    bwd.blob = &blob;
+                    bwd.distance = distSq;
+                    availableBlobs.append(bwd);
+                }
+            }
+
+            // Sort blobs by distance (closest first)
+            std::sort(availableBlobs.begin(), availableBlobs.end(),
+                     [](const BlobWithDistance& a, const BlobWithDistance& b) {
+                         return a.distance < b.distance;
+                     });
+
+            // Use the closest blob if available
+            if (!availableBlobs.isEmpty()) {
+                FrameSpecificPhysicalBlob* closestBlob = availableBlobs.first().blob;
+
                 // Claim this blob
-                blob.selectedByWormTrackerId = conceptualWormId;
-                
+                closestBlob->selectedByWormTrackerId = conceptualWormId;
+
                 // Update the mapping
-                m_wormToPhysicalBlobIdMap[conceptualWormId] = blob.uniqueId;
-                
+                m_wormToPhysicalBlobIdMap[conceptualWormId] = closestBlob->uniqueId;
+
                 // Create the blob to assign
                 blobToAssign.isValid = true;
-                blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
-                blobToAssign.boundingBox = blob.currentBoundingBox;
-                blobToAssign.area = blob.currentArea;
-                
-                qDebug().noquote() << dmsg << "Found and claimed alternative blob:" << blob.uniqueId;
+                blobToAssign.centroid = QPointF(closestBlob->currentCentroid.x, closestBlob->currentCentroid.y);
+                blobToAssign.boundingBox = closestBlob->currentBoundingBox;
+                blobToAssign.area = closestBlob->currentArea;
+
+                qDebug().noquote() << dmsg << "Found and claimed alternative blob:" << closestBlob->uniqueId
+                                  << "at distance:" << std::sqrt(availableBlobs.first().distance);
                 resolutionSuccess = true;
-                break;
+            } else {
+                qDebug().noquote() << dmsg << "No available alternative blobs found.";
+            }
+        } else {
+            // Fallback to original method if we can't find the tracker
+            qDebug().noquote() << dmsg << "Couldn't find tracker, using original method.";
+
+            // Find any unassigned blob that this worm is participating in
+            for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
+                if (blob.participatingWormTrackerIDs.contains(conceptualWormId) && blob.selectedByWormTrackerId == 0) {
+                    // Claim this blob
+                    blob.selectedByWormTrackerId = conceptualWormId;
+
+                    // Update the mapping
+                    m_wormToPhysicalBlobIdMap[conceptualWormId] = blob.uniqueId;
+
+                    // Create the blob to assign
+                    blobToAssign.isValid = true;
+                    blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
+                    blobToAssign.boundingBox = blob.currentBoundingBox;
+                    blobToAssign.area = blob.currentArea;
+
+                    qDebug().noquote() << dmsg << "Found and claimed alternative blob:" << blob.uniqueId;
+                    resolutionSuccess = true;
+                    break;
+                }
             }
         }
     }
-    
+
     // Assign blob or go lost
     if (blobToAssign.isValid) {
         qDebug().noquote() << dmsg << "Assigning blob to worm" << conceptualWormId;
-        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", 
+        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, blobToAssign));
         m_splitResolutionMap[frameNumber][conceptualWormId] = blobToAssign;
     } else {
         qDebug().noquote() << dmsg << "No valid blob available. Going lost.";
-        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", 
+        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         m_splitResolutionMap[frameNumber][conceptualWormId] = Tracking::DetectedBlob();
     }
-    
+
     return true;
 }
 
@@ -702,10 +796,10 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
 
     if (allDoneOrCancelled) {
         bool wasCancelled = m_cancelRequested; m_isTrackingRunning = false;
-        
+
         // Clear any remaining split resolutions
         m_splitResolutionMap.clear();
-        
+
         locker.unlock();
         if (wasCancelled) {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
