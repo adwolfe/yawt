@@ -10,7 +10,6 @@
 #include <QThread>
 #include <QSet>
 #include <QMutex>
-#include <QTimer>
 #include <QDateTime>
 #include <QPointer>
 
@@ -26,9 +25,7 @@
 const double PHYSICAL_BLOB_IOU_THRESHOLD = 0.5; // Higher threshold for matching same physical blob
 const double PHYSICAL_BLOB_CENTROID_MAX_DIST_SQ = 100.0; // Max squared distance (e.g., 10 pixels)
 
-// Constants for paused worm resolution
-const int MAX_PAUSED_DURATION_MS = 2000;
-const int PAUSE_RESOLUTION_INTERVAL_MS = 500;
+// No longer using paused worm resolution
 
 // Represents a distinct physical (merged) blob observed on a specific frame.
 struct FrameSpecificPhysicalBlob {
@@ -44,18 +41,7 @@ struct FrameSpecificPhysicalBlob {
     FrameSpecificPhysicalBlob() : uniqueId(-1), currentArea(0.0), frameNumber(-1), selectedByWormTrackerId(-1) {}
 };
 
-// Information about a worm that has paused, waiting for split resolution.
-struct PausedWormInfoFrameSpecific {
-    int conceptualWormId;
-    QPointer<WormTracker> trackerInstance;
-    int framePausedOn;                      // The frame number where the split was detected by this tracker
-    QDateTime timePaused;
-    QList<Tracking::DetectedBlob> allSplitCandidates; // All split candidates reported by this tracker
-    Tracking::DetectedBlob chosenCandidate; // The specific candidate this tracker chose as its preference
-    int presumedPreviousPhysicalBlobId;     // ID of the FrameSpecificPhysicalBlob it split from (on framePausedOn -/+ 1)
-
-    PausedWormInfoFrameSpecific() : conceptualWormId(-1), trackerInstance(nullptr), framePausedOn(-1), presumedPreviousPhysicalBlobId(-1) {}
-};
+// No longer using pause mechanism - split resolution is immediate
 
 
 class TrackingManager : public QObject {
@@ -97,8 +83,6 @@ private slots:
     void handleWormTrackerError(int reportingConceptualWormId, QString errorMessage);
     void handleWormTrackerProgress(int reportingConceptualWormId, int percentDone);
 
-    // Timer slot for resolving paused worms
-    void checkPausedWormsAndResolveSplits();
 
 
 signals:
@@ -111,16 +95,18 @@ signals:
 
 
 private:
-    // Core logic for new frame-atomic merge/split handling
+    // Core logic for frame-atomic merge/split handling
     void processFrameSpecificMerge(int signedWormId, int frameNumber,
                                    const Tracking::DetectedBlob& reportedFullBlob,
                                    WormTracker* reportingTrackerInstance);
-    void processFrameSpecificPause(int signedWormId, int frameNumber,
-                                   const QList<Tracking::DetectedBlob>& allSplitCandidates, // Updated to handle list of candidates
-                                   const Tracking::DetectedBlob& chosenCandidate, // The tracker's preferred candidate
+    void processFrameSpecificSplit(int signedWormId, int frameNumber,
+                                   const QList<Tracking::DetectedBlob>& allSplitCandidates,
+                                   const Tracking::DetectedBlob& chosenCandidate,
                                    WormTracker* reportingTrackerInstance);
-    void attemptAutomaticSplitResolutionFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo);
-    void forceResolvePausedWormFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo);
+    bool attemptImmediateSplitResolution(int conceptualWormId, int frameNumber, 
+                                     const QList<Tracking::DetectedBlob>& allCandidates,
+                                     const Tracking::DetectedBlob& chosenCandidate,
+                                     WormTracker* trackerInstance);
 
     // Helper functions for signed worm IDs (direction-aware)
     int getSignedWormId(int conceptualWormId, WormTracker::TrackingDirection direction);
@@ -176,21 +162,16 @@ private:
     // Maps frame number to another map, which maps conceptual Worm ID to its chosen blob after a split decision.
     QMap<int, QMap<int, Tracking::DetectedBlob>> m_splitResolutionMap;
 
-    // Stores worms that are paused, waiting for split resolution. Keyed by conceptualWormId for easy lookup.
-    QMap<int, PausedWormInfoFrameSpecific> m_pausedWormsRecords;
-
     // To generate unique IDs for FrameSpecificPhysicalBlob instances
     int m_nextPhysicalBlobId;
 
     // Associates a conceptual worm ID with the uniqueId of the FrameSpecificPhysicalBlob it's part of in the current frame.
     // This helps find which physical blob a worm belonged to in the previous frame when it pauses.
     QMap<int, int> m_wormToPhysicalBlobIdMap;
-    QMap<int, QDateTime> m_lastResolutionAttempt;
 
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures
-    QTimer* m_pauseResolutionTimer;
 };
 
 #endif // TRACKINGMANAGER_H

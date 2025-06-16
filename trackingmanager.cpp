@@ -27,8 +27,7 @@ TrackingManager::TrackingManager(QObject* parent)
     m_expectedTrackersToFinish(0),
     m_finishedTrackersCount(0),
     m_videoProcessingOverallProgress(0),
-    m_nextPhysicalBlobId(1), // Start IDs from 1
-    m_pauseResolutionTimer(nullptr)
+    m_nextPhysicalBlobId(1) // Start IDs from 1
 {
     qRegisterMetaType<std::vector<cv::Mat>>("std::vector<cv::Mat>");
     qRegisterMetaType<cv::Size>("cv::Size");
@@ -37,22 +36,21 @@ TrackingManager::TrackingManager(QObject* parent)
     qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob");
     qRegisterMetaType<Tracking::TrackerState>("Tracking::TrackerState");
 
-    m_pauseResolutionTimer = new QTimer(this);
-    connect(m_pauseResolutionTimer, &QTimer::timeout, this, &TrackingManager::checkPausedWormsAndResolveSplits);
-    qDebug() << "TrackingManager (" << this << ") created with frame-atomic logic. Timer created:" << (m_pauseResolutionTimer != nullptr);
+    qDebug() << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
 }
 
 // Destructor
 TrackingManager::~TrackingManager() {
     qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
-    if (m_pauseResolutionTimer) {
-        m_pauseResolutionTimer->stop();
-    }
+    
+    // Ensure tracking is cancelled and resources are released
     if (m_isTrackingRunning) {
         qDebug() << "TrackingManager Destructor: Tracking was running, requesting cancel.";
         cancelTracking();
         QThread::msleep(300);
     }
+    
+    // Force a final cleanup to ensure all resources are released
     cleanupThreadsAndObjects();
     qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
 }
@@ -88,7 +86,6 @@ void TrackingManager::startFullTrackingProcess(
     m_individualTrackerProgress.clear();
     m_frameMergeRecords.clear();
     m_splitResolutionMap.clear();
-    m_pausedWormsRecords.clear();
     m_wormToPhysicalBlobIdMap.clear();
 
     qDeleteAll(m_wormObjectsMap);
@@ -179,12 +176,8 @@ void TrackingManager::startFullTrackingProcess(
     for (const auto& r : forwardFrameRanges) launch_chunk_processor(r.first, r.second, true);
     for (const auto& r : backwardFrameRanges) launch_chunk_processor(r.first, r.second, false);
 
-    if (m_pauseResolutionTimer) {
-        m_pauseResolutionTimer->start(PAUSE_RESOLUTION_INTERVAL_MS);
-        qDebug() << "TM: Pause resolution timer started with interval" << PAUSE_RESOLUTION_INTERVAL_MS << "ms. Active:" << m_pauseResolutionTimer->isActive();
-    } else {
-        qWarning() << "TM: Failed to start pause resolution timer - timer is null!";
-    }
+    // Timer-based pause resolution has been eliminated in favor of direct resolution
+    qDebug() << "TM: Using direct split resolution instead of timer-based approach";
 }
 
 void TrackingManager::cancelTracking() {
@@ -193,9 +186,12 @@ void TrackingManager::cancelTracking() {
     if (m_cancelRequested) return;
     m_cancelRequested = true;
     bool wasRunning = m_isTrackingRunning;
+    
+    // Clear the split resolution map
+    m_splitResolutionMap.clear();
+    
     locker.unlock();
     emit trackingStatusUpdate("Cancellation requested...");
-    if (m_pauseResolutionTimer) m_pauseResolutionTimer->stop();
     for (QPointer<QThread> thread : m_videoProcessorThreads) { if (thread && thread->isRunning()) thread->requestInterruption(); }
     QList<WormTracker*> trackersToStop;
     locker.relock(); trackersToStop = m_wormTrackersList; locker.unlock();
@@ -224,12 +220,16 @@ void TrackingManager::cleanupThreadsAndObjects() {
     m_finalProcessedReversedFrames.clear(); std::vector<cv::Mat>().swap(m_finalProcessedReversedFrames);
     m_assembledForwardFrameChunks.clear(); m_assembledBackwardFrameChunks.clear(); m_videoChunkProgressMap.clear();
     m_finalTracks.clear(); m_individualTrackerProgress.clear();
-    // Clear new data structures
+    // Clear all data structures related to split resolution
     m_frameMergeRecords.clear();
     m_splitResolutionMap.clear();
-    m_pausedWormsRecords.clear();
     m_wormToPhysicalBlobIdMap.clear();
-    m_isTrackingRunning = false; m_cancelRequested = false;
+    
+    // Reset state flags
+    m_isTrackingRunning = false; 
+    m_cancelRequested = false;
+    
+    qDebug() << "TrackingManager: All data structures cleared in cleanupThreadsAndObjects - split states eliminated";
 }
 
 // --- Video Processing Callbacks ---
@@ -278,7 +278,6 @@ void TrackingManager::handleInitialProcessingComplete(const std::vector<cv::Mat>
 void TrackingManager::handleVideoChunkProcessingError(int chunkId, const QString& errorMessage) {
     QMutexLocker locker(&m_dataMutex); if (m_cancelRequested || !m_isTrackingRunning) return;
     m_cancelRequested = true; m_isTrackingRunning = false;
-    if (m_pauseResolutionTimer && m_pauseResolutionTimer->isActive()) m_pauseResolutionTimer->stop();
     locker.unlock();
     for (QPointer<QThread> thread : m_videoProcessorThreads) { if (thread && thread->isRunning()) thread->requestInterruption(); }
     emit trackingFailed("Video processing failed (chunk " + QString::number(chunkId) + "): " + errorMessage);
@@ -299,12 +298,12 @@ WormTracker::TrackingDirection TrackingManager::getDirectionFromSignedId(int sig
 
 // --- Core Frame Update Logic ---
 void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
-                                        int originalFrameNumber,
-                                        const Tracking::DetectedBlob& primaryBlob, // For WormObject track
-                                        const Tracking::DetectedBlob& fullBlob,    // For merge processing
-                                        QRectF searchRoiUsed,
-                                        Tracking::TrackerState currentState,
-                                        const QList<Tracking::DetectedBlob>& splitCandidates)
+                                           int originalFrameNumber,
+                                           const Tracking::DetectedBlob& primaryBlob, // Anchor blob for track history
+                                           const Tracking::DetectedBlob& fullBlob,    // Full blob for merge/state processing
+                                           QRectF searchRoiUsed,
+                                           Tracking::TrackerState currentState,
+                                           const QList<Tracking::DetectedBlob>& splitCandidates)
 {
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested || !m_isTrackingRunning) return;
@@ -333,10 +332,6 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
 
     if (currentState == Tracking::TrackerState::TrackingSingle || currentState == Tracking::TrackerState::TrackingLost) {
         m_wormToPhysicalBlobIdMap[signedWormId] = -1; // No longer part of a specific physical blob
-        if (m_pausedWormsRecords.contains(signedWormId)) {
-             qDebug().noquote() << dmsg << "Worm was paused, now single/lost. Removing from pause records.";
-            m_pausedWormsRecords.remove(signedWormId);
-        }
     } else if (currentState == Tracking::TrackerState::TrackingMerged) {
         if (fullBlob.isValid) {
             processFrameSpecificMerge(signedWormId, originalFrameNumber, fullBlob, reportingTrackerInstance);
@@ -349,14 +344,15 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
             // Find the chosen candidate (should be the primaryBlob if valid, otherwise first candidate)
             Tracking::DetectedBlob chosenCandidate = primaryBlob.isValid ? primaryBlob :
                                                     (!splitCandidates.isEmpty() ? splitCandidates.first() : Tracking::DetectedBlob());
-            processFrameSpecificPause(signedWormId, originalFrameNumber, splitCandidates, chosenCandidate, reportingTrackerInstance);
+            processFrameSpecificSplit(signedWormId, originalFrameNumber, splitCandidates, chosenCandidate, reportingTrackerInstance);
         } else {
              qDebug().noquote() << dmsg << "State PausedForSplit but no candidates/instance. Forcing lost.";
-            if (m_pausedWormsRecords.contains(signedWormId)) m_pausedWormsRecords.remove(signedWormId);
             m_wormToPhysicalBlobIdMap[signedWormId] = -1;
             if(reportingTrackerInstance) QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         }
     }
+
+    // All split resolution is now immediate without any paused state
 }
 
 
@@ -415,31 +411,17 @@ void TrackingManager::processFrameSpecificMerge(int signedWormId, int frameNumbe
          qDebug().noquote() << dmsg << "Created new PhysicalBlobID:" << newPhysicalBlob.uniqueId << ". Participants:" << newPhysicalBlob.participatingWormTrackerIDs;
     }
 
-    // If this worm was paused, it's no longer paused because it's now merged.
-    //if (m_pausedWormsRecords.contains(conceptualWormId)) {
-    //     qDebug().noquote() << dmsg << "Worm was paused, now merged. Removing from pause records.";
-    //    m_pausedWormsRecords.remove(conceptualWormId);
-    //}
+    // Merge state is fully handled with the frame-specific physical blob representation
 }
 
-void TrackingManager::processFrameSpecificPause(int signedWormId, int frameNumber,
-                                                const QList<Tracking::DetectedBlob>& allSplitCandidates,
-                                                const Tracking::DetectedBlob& chosenCandidate,
-                                                WormTracker* reportingTrackerInstance)
+void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumber,
+                                               const QList<Tracking::DetectedBlob>& allSplitCandidates,
+                                               const Tracking::DetectedBlob& chosenCandidate,
+                                               WormTracker* reportingTrackerInstance)
 {
     int conceptualWormId = getUnsignedWormId(signedWormId);
-    QString dmsg = QString("TM: WT %1 FN%2 | procFrameSpecPause | ").arg(signedWormId).arg(frameNumber);
+    QString dmsg = QString("TM: WT %1 FN%2 | procFrameSpecSplit | ").arg(signedWormId).arg(frameNumber);
     qDebug().noquote() << dmsg << "Candidates:" << allSplitCandidates.size() << "Chosen @ " << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y() << " Area: " << chosenCandidate.area;
-
-    if (m_pausedWormsRecords.contains(signedWormId)) {
-        qDebug().noquote() << dmsg << "Already paused. Updating candidates and timer.";
-        m_pausedWormsRecords[signedWormId].allSplitCandidates = allSplitCandidates;
-        m_pausedWormsRecords[signedWormId].chosenCandidate = chosenCandidate;
-        m_pausedWormsRecords[signedWormId].framePausedOn = frameNumber;  // Update frame number for new pause
-        m_pausedWormsRecords[signedWormId].timePaused = QDateTime::currentDateTime();   // Reset timer
-        m_pausedWormsRecords[signedWormId].trackerInstance = reportingTrackerInstance; // Ensure instance is current
-        return;
-    }
 
     // Get reference to current frame's physical blobs
     QList<FrameSpecificPhysicalBlob>& blobsOnThisFrame = m_frameMergeRecords[frameNumber];
@@ -483,505 +465,157 @@ void TrackingManager::processFrameSpecificPause(int signedWormId, int frameNumbe
         }
     }
 
-    // Step 2: Find and select the best matching unselected blob for this WT's chosen candidate
-    int selectedPhysicalBlobId = -1;
-    if (chosenCandidate.isValid) {
-        FrameSpecificPhysicalBlob* bestMatch = nullptr;
-        double bestMatchScore = std::numeric_limits<double>::max();
-
-        for (FrameSpecificPhysicalBlob& blob : blobsOnThisFrame) {
-            // Only consider blobs that are unselected and match one of our candidates
-            if (blob.selectedByWormTrackerId == 0 && candidatePhysicalBlobIds.contains(blob.uniqueId)) {
-                // Calculate match score (distance + area difference)
-                double distance = Tracking::sqDistance(
-                    cv::Point2f(static_cast<float>(chosenCandidate.centroid.x()), static_cast<float>(chosenCandidate.centroid.y())),
-                    blob.currentCentroid
-                );
-                double areaDiff = qAbs(chosenCandidate.area - blob.currentArea);
-                double matchScore = distance + (areaDiff * 0.1); // Weight area difference less than distance
-
-                if (matchScore < bestMatchScore) {
-                    bestMatchScore = matchScore;
-                    bestMatch = &blob;
-                }
-            }
-        }
-
-        if (bestMatch) {
-            bestMatch->selectedByWormTrackerId = signedWormId;
-            selectedPhysicalBlobId = bestMatch->uniqueId;
-            qDebug().noquote() << dmsg << "Selected PhysicalBlobID:" << selectedPhysicalBlobId << "as target";
-        }
+    // Try immediate resolution using our new method
+    if (attemptImmediateSplitResolution(signedWormId, frameNumber, allSplitCandidates, chosenCandidate, reportingTrackerInstance)) {
+        qDebug().noquote() << dmsg << "Split successfully resolved immediately";
+    } else {
+        // Fallback - assign the first valid blob or go lost
+        qDebug().noquote() << dmsg << "Immediate resolution failed, using fallback (go lost)";
+        QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget", 
+                                 Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
+        m_splitResolutionMap[frameNumber][signedWormId] = Tracking::DetectedBlob();
     }
-
-    // Step 3: Update WT mappings and pause records
-    PausedWormInfoFrameSpecific pwi;
-    pwi.conceptualWormId = signedWormId;
-    pwi.trackerInstance = reportingTrackerInstance;
-    pwi.framePausedOn = frameNumber;
-    pwi.timePaused = QDateTime::currentDateTime();
-    pwi.allSplitCandidates = allSplitCandidates;
-    pwi.chosenCandidate = chosenCandidate;
-    pwi.presumedPreviousPhysicalBlobId = -1; // No longer used in new approach
-
-    m_pausedWormsRecords[signedWormId] = pwi;
-    m_wormToPhysicalBlobIdMap[signedWormId] = selectedPhysicalBlobId;
-
-    qDebug().noquote() << dmsg << "ADDED to pause records. Selected PhysicalBlobID:" << selectedPhysicalBlobId << "Total paused worms:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-    qDebug().noquote() << dmsg << "Timer active:" << (m_pauseResolutionTimer ? m_pauseResolutionTimer->isActive() : false) << "Total paused worms:" << m_pausedWormsRecords.size();
 }
 
 
-void TrackingManager::attemptAutomaticSplitResolutionFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo) {
-    QString dmsg = QString("TM: WT %1 FN%2 | attemptAutoSplit | ").arg(conceptualWormIdToResolve).arg(pausedInfo.framePausedOn);
-    qDebug().noquote() << dmsg << "PrevPhysBlobID:" << pausedInfo.presumedPreviousPhysicalBlobId;
+bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int frameNumber, 
+                                                    const QList<Tracking::DetectedBlob>& allCandidates,
+                                                    const Tracking::DetectedBlob& chosenCandidate,
+                                                    WormTracker* trackerInstance) {
+    QString dmsg = QString("TM: WT %1 FN%2 | attemptImmediateSplit | ").arg(conceptualWormId).arg(frameNumber);
+    qDebug().noquote() << dmsg << "Starting immediate split resolution";
 
-    if (!pausedInfo.trackerInstance) { qWarning() << dmsg << "No tracker instance."; m_pausedWormsRecords.remove(conceptualWormIdToResolve); return; }
-    if (!pausedInfo.chosenCandidate.isValid) { qDebug() << dmsg << "Invalid candidate. Forcing lost."; QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); m_pausedWormsRecords.remove(conceptualWormIdToResolve); return; }
-    // Find buddies: other worms paused on same frame that share PhysicalBlobIds (detected same split blobs)
+    if (!trackerInstance) { qWarning() << dmsg << "No tracker instance."; return false; }
+    if (!chosenCandidate.isValid) { qDebug() << dmsg << "Invalid candidate. Forcing lost."; QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); return true; }
+    
+    // Find physical blob IDs for this worm
     QList<int> thisWormPhysicalBlobIds;
-    if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-        for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-            if (blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve)) {
+    if (m_frameMergeRecords.contains(frameNumber)) {
+        for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
+            if (blob.participatingWormTrackerIDs.contains(conceptualWormId)) {
                 thisWormPhysicalBlobIds.append(blob.uniqueId);
             }
         }
     }
-
+    
     if (thisWormPhysicalBlobIds.isEmpty()) {
-        qDebug() << dmsg << "No PhysicalBlobIds found for this worm. Cannot find buddies. Will timeout or resolve singly.";
-        return;
+        qDebug() << dmsg << "No PhysicalBlobIds found for this worm. Cannot proceed with resolution.";
+        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, 
+                                 Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
+        m_splitResolutionMap[frameNumber][conceptualWormId] = Tracking::DetectedBlob();
+        return true;
     }
 
     qDebug().noquote() << dmsg << "This worm's PhysicalBlobIds:" << thisWormPhysicalBlobIds;
-
-    QList<int> buddyConceptualIds;
-    qDebug().noquote() << dmsg << "Checking" << m_pausedWormsRecords.size() << "paused worms for buddies";
-
-    for (const PausedWormInfoFrameSpecific& otherPausedInfo : m_pausedWormsRecords.values()) {
-        if (otherPausedInfo.conceptualWormId == conceptualWormIdToResolve) continue;
-
-        qDebug().noquote() << dmsg << "Checking potential buddy WT" << otherPausedInfo.conceptualWormId
-                           << "frame:" << otherPausedInfo.framePausedOn << "vs" << pausedInfo.framePausedOn
-                           << "valid:" << otherPausedInfo.chosenCandidate.isValid
-                           << "hasInstance:" << (otherPausedInfo.trackerInstance != nullptr);
-
-        if (otherPausedInfo.framePausedOn == pausedInfo.framePausedOn &&
-            otherPausedInfo.chosenCandidate.isValid && otherPausedInfo.trackerInstance) {
-
-            // Find this other worm's PhysicalBlobIds
-            QList<int> otherWormPhysicalBlobIds;
-            if (m_frameMergeRecords.contains(otherPausedInfo.framePausedOn)) {
-                for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[otherPausedInfo.framePausedOn]) {
-                    if (blob.participatingWormTrackerIDs.contains(otherPausedInfo.conceptualWormId)) {
-                        otherWormPhysicalBlobIds.append(blob.uniqueId);
-                    }
-                }
-            }
-
-            qDebug().noquote() << dmsg << "WT" << otherPausedInfo.conceptualWormId << "PhysicalBlobIds:" << otherWormPhysicalBlobIds;
-
-            // Check if this other worm shares any PhysicalBlobIds with us (meaning same split detected)
-            bool sharesBlobIds = false;
-            for (int blobId : otherWormPhysicalBlobIds) {
-                if (thisWormPhysicalBlobIds.contains(blobId)) {
-                    sharesBlobIds = true;
-                    qDebug().noquote() << dmsg << "Shared PhysicalBlobId found:" << blobId;
-                    break;
-                }
-            }
-
-            if (sharesBlobIds) {
-                buddyConceptualIds.append(otherPausedInfo.conceptualWormId);
-                qDebug().noquote() << dmsg << "WT" << otherPausedInfo.conceptualWormId << "added as buddy";
-            } else {
-                qDebug().noquote() << dmsg << "WT" << otherPausedInfo.conceptualWormId << "no shared PhysicalBlobIds";
-            }
-        }
-    }
-
-     // Also check for recently resolved buddies from the same frame
-     if (buddyConceptualIds.isEmpty() && m_splitResolutionMap.contains(pausedInfo.framePausedOn)) {
-         const QMap<int, Tracking::DetectedBlob>& resolvedOnThisFrame = m_splitResolutionMap[pausedInfo.framePausedOn];
-         qDebug().noquote() << dmsg << "No active buddies found. Checking" << resolvedOnThisFrame.size() << "recently resolved WTs from frame" << pausedInfo.framePausedOn;
-
-         for (auto it = resolvedOnThisFrame.begin(); it != resolvedOnThisFrame.end(); ++it) {
-             int resolvedWormId = it.key();
-             if (resolvedWormId == conceptualWormIdToResolve) continue;
-
-             qDebug().noquote() << dmsg << "Checking recently resolved WT" << resolvedWormId;
-
-             // Check if this resolved worm shared PhysicalBlobIds with us
-             QList<int> resolvedWormPhysicalBlobIds;
-             if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-                 for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                     if (blob.participatingWormTrackerIDs.contains(resolvedWormId)) {
-                         resolvedWormPhysicalBlobIds.append(blob.uniqueId);
-                     }
-                 }
-             }
-
-             // Check for shared PhysicalBlobIds
-             bool sharesBlobIds = false;
-             for (int blobId : resolvedWormPhysicalBlobIds) {
-                 if (thisWormPhysicalBlobIds.contains(blobId)) {
-                     sharesBlobIds = true;
-                     qDebug().noquote() << dmsg << "Shared PhysicalBlobId found with resolved WT" << resolvedWormId << ":" << blobId;
-                     break;
-                 }
-             }
-
-             if (sharesBlobIds) {
-                 qDebug().noquote() << dmsg << "Recently resolved WT" << resolvedWormId << "was a buddy. Checking for alternative blob assignment.";
-
-                 // Find an unselected PhysicalBlob for this worm
-                 FrameSpecificPhysicalBlob* alternativeBlob = nullptr;
-                 if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-                     for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                         if (blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) &&
-                             blob.selectedByWormTrackerId == 0) {
-                             alternativeBlob = &blob;
-                             break;
-                         }
-                     }
-                 }
-
-                 if (alternativeBlob) {
-                     alternativeBlob->selectedByWormTrackerId = conceptualWormIdToResolve;
-                     m_wormToPhysicalBlobIdMap[conceptualWormIdToResolve] = alternativeBlob->uniqueId;
-
-                     // Create DetectedBlob from the alternative PhysicalBlob
-                     Tracking::DetectedBlob alternativeDetectedBlob;
-                     alternativeDetectedBlob.isValid = true;
-                     alternativeDetectedBlob.centroid = QPointF(alternativeBlob->currentCentroid.x, alternativeBlob->currentCentroid.y);
-                     alternativeDetectedBlob.boundingBox = alternativeBlob->currentBoundingBox;
-                     alternativeDetectedBlob.area = alternativeBlob->currentArea;
-
-                     qDebug().noquote() << dmsg << "Assigned alternative PhysicalBlobId:" << alternativeBlob->uniqueId << "due to recently resolved buddy";
-                     QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, alternativeDetectedBlob));
-                     m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = alternativeDetectedBlob;
-                     m_pausedWormsRecords.remove(conceptualWormIdToResolve);
-                     m_lastResolutionAttempt.remove(conceptualWormIdToResolve);
-                     qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "after resolving with recently resolved buddy. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-                     return;
-                 } else {
-                     qDebug().noquote() << dmsg << "No alternative PhysicalBlob available for recently resolved buddy scenario";
-                 }
-                 break; // Only handle first buddy found
-             }
-         }
-     }
-
-     qDebug().noquote() << dmsg << "Found" << buddyConceptualIds.size() << "buddies.";
-
-     // Simple 2-worm split scenario (1 original worm + 1 buddy = 2 worms from same previous physical blob)
-    if (buddyConceptualIds.size() == 1) {
-        int buddyId = buddyConceptualIds.first();
-        if (!m_pausedWormsRecords.contains(buddyId)) { /*qDebug() << dmsg << "Buddy" << buddyId << "no longer in pause records.";*/ return; } // Buddy might have resolved
-
-        PausedWormInfoFrameSpecific& buddyInfo = m_pausedWormsRecords[buddyId];
-
-        // Check if this worm (conceptualWormIdToResolve) has already had its split resolved by the buddy
-        if (m_splitResolutionMap.value(pausedInfo.framePausedOn).contains(conceptualWormIdToResolve)) {
-             qDebug().noquote() << dmsg << "This worm's split already resolved (likely by buddy). REMOVING from pause.";
-            m_pausedWormsRecords.remove(conceptualWormIdToResolve); // Already handled
-            qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "from pause records. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-            return;
-        }
-        // Check if buddy has already had its split resolved (e.g. by timeout)
-        if (m_splitResolutionMap.value(pausedInfo.framePausedOn).contains(buddyId)) {
-             qDebug().noquote() << dmsg << "Buddy" << buddyId << "already resolved. This worm (" << conceptualWormIdToResolve << ") must take a different blob.";
-
-            // Check if we selected different PhysicalBlobIds
-            int thisWormSelectedBlobId = m_wormToPhysicalBlobIdMap.value(conceptualWormIdToResolve, -1);
-            int buddySelectedBlobId = m_wormToPhysicalBlobIdMap.value(buddyId, -1);
-
-            qDebug().noquote() << dmsg << "DEBUG: Buddy already resolved - This worm:" << thisWormSelectedBlobId << "Buddy" << buddyId << ":" << buddySelectedBlobId;
-
-            if (thisWormSelectedBlobId != -1 && buddySelectedBlobId != -1 && thisWormSelectedBlobId != buddySelectedBlobId) {
-                 qDebug().noquote() << dmsg << "Selected different PhysicalBlobId (" << thisWormSelectedBlobId << " vs buddy's " << buddySelectedBlobId << "). Assigning own choice.";
-
-                // Convert PhysicalBlobId back to DetectedBlob
-                Tracking::DetectedBlob assignedBlob;
-                assignedBlob.isValid = false;
-                if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-                    for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                        if (blob.uniqueId == thisWormSelectedBlobId) {
-                            assignedBlob.isValid = true;
-                            assignedBlob.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
-                            assignedBlob.boundingBox = blob.currentBoundingBox;
-                            assignedBlob.area = blob.currentArea;
-                            break;
-                        }
-                    }
-                }
-
-                if (assignedBlob.isValid) {
-                    QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, assignedBlob));
-                    m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = assignedBlob;
-                }
-                m_pausedWormsRecords.remove(conceptualWormIdToResolve);
-                m_lastResolutionAttempt.remove(conceptualWormIdToResolve); // Clean up tracking
-                qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "after assigning different PhysicalBlobId. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-            } else {
-                 qDebug().noquote() << dmsg << "Same PhysicalBlobId selected as buddy or invalid selection. Finding alternative or forcing lost.";
-
-                // Try to find an unselected PhysicalBlob for this worm
-                FrameSpecificPhysicalBlob* alternativeBlob = nullptr;
-                if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-                    for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                        if (blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) &&
-                            blob.selectedByWormTrackerId == 0) {
-                            alternativeBlob = &blob;
-                            break;
-                        }
-                    }
-                }
-
-                if (alternativeBlob) {
-                    alternativeBlob->selectedByWormTrackerId = conceptualWormIdToResolve;
-                    m_wormToPhysicalBlobIdMap[conceptualWormIdToResolve] = alternativeBlob->uniqueId;
-
-                    // Create a DetectedBlob from the alternative PhysicalBlob
-                    Tracking::DetectedBlob alternativeDetectedBlob;
-                    alternativeDetectedBlob.isValid = true;
-                    alternativeDetectedBlob.centroid = QPointF(alternativeBlob->currentCentroid.x, alternativeBlob->currentCentroid.y);
-                    alternativeDetectedBlob.boundingBox = alternativeBlob->currentBoundingBox;
-                    alternativeDetectedBlob.area = alternativeBlob->currentArea;
-
-                     qDebug().noquote() << dmsg << "Found alternative PhysicalBlobId:" << alternativeBlob->uniqueId;
-                    QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, alternativeDetectedBlob));
-                    m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = alternativeDetectedBlob;
-                } else {
-                     qDebug().noquote() << dmsg << "No alternative PhysicalBlob available. Forcing lost.";
-                    QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
-                    m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = Tracking::DetectedBlob(); // Record lost
-                }
-                m_pausedWormsRecords.remove(conceptualWormIdToResolve);
-                qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "after conflict resolution. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-            }
-            return;
-        }
-
-
-        // Standard 2-way split resolution - check if they selected different PhysicalBlobIds
-        int thisWormSelectedBlobId = m_wormToPhysicalBlobIdMap.value(conceptualWormIdToResolve, -1);
-        int buddySelectedBlobId = m_wormToPhysicalBlobIdMap.value(buddyId, -1);
-
-        qDebug().noquote() << dmsg << "DEBUG: Retrieved PhysicalBlobIds - This worm:" << thisWormSelectedBlobId << "Buddy" << buddyId << ":" << buddySelectedBlobId;
-        qDebug().noquote() << dmsg << "DEBUG: m_wormToPhysicalBlobIdMap contents:" << m_wormToPhysicalBlobIdMap;
-
-        // Check if we have valid distinct selections
-        bool validDistinctSelections = thisWormSelectedBlobId != -1 && buddySelectedBlobId != -1 && thisWormSelectedBlobId != buddySelectedBlobId;
-
-        if (!validDistinctSelections) {
-            // Try to find alternate blobs for assignment
-            qDebug().noquote() << dmsg << "Same blob or invalid selection. Attempting to assign different blobs to buddies.";
-
-            QList<int> availableBlobIds;
-            if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-                for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                    if ((blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) ||
-                         blob.participatingWormTrackerIDs.contains(buddyId)) &&
-                        blob.selectedByWormTrackerId == 0) { // Only consider unselected blobs
-                        availableBlobIds.append(blob.uniqueId);
-                    }
-                }
-            }
-
-            qDebug().noquote() << dmsg << "Available unselected blob IDs for assignment:" << availableBlobIds;
-
-            // If we have exactly 2 blobs, assign one to each worm
-            if (availableBlobIds.size() >= 2) {
-                // Sort to ensure consistent assignments
-                std::sort(availableBlobIds.begin(), availableBlobIds.end());
-
-                // Assign first blob to this worm, second to buddy
-                thisWormSelectedBlobId = availableBlobIds[0];
-                buddySelectedBlobId = availableBlobIds[1];
-
-                // Update mappings
-                m_wormToPhysicalBlobIdMap[conceptualWormIdToResolve] = thisWormSelectedBlobId;
-                m_wormToPhysicalBlobIdMap[buddyId] = buddySelectedBlobId;
-
-                // Mark blobs as selected
-                for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                    if (blob.uniqueId == thisWormSelectedBlobId) {
-                        blob.selectedByWormTrackerId = conceptualWormIdToResolve;
-                    } else if (blob.uniqueId == buddySelectedBlobId) {
-                        blob.selectedByWormTrackerId = buddyId;
-                    }
-                }
-
-                validDistinctSelections = true;
-                qDebug().noquote() << dmsg << "Successfully reassigned blobs. This worm:" << thisWormSelectedBlobId
-                                  << "Buddy" << buddyId << ":" << buddySelectedBlobId;
-            }
-        }
-
-        if (validDistinctSelections) {
-             qDebug().noquote() << dmsg << "Resolving 2-way split with buddy" << buddyId << ". Selected different PhysicalBlobIds:" << thisWormSelectedBlobId << "vs" << buddySelectedBlobId;
-
-            // Convert PhysicalBlobIds back to DetectedBlobs
-            Tracking::DetectedBlob thisWormBlob, buddyBlob;
-            thisWormBlob.isValid = false;
-            buddyBlob.isValid = false;
-
-            if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-                for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[pausedInfo.framePausedOn]) {
-                    if (blob.uniqueId == thisWormSelectedBlobId) {
-                        qDebug().noquote() << dmsg << "Found" << thisWormSelectedBlobId<< "blob";
-                        thisWormBlob.isValid = true;
-                        thisWormBlob.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
-                        thisWormBlob.boundingBox = blob.currentBoundingBox;
-                        thisWormBlob.area = blob.currentArea;
-                    }
-                    if (blob.uniqueId == buddySelectedBlobId) {
-                        qDebug().noquote() << dmsg << "Found" << buddySelectedBlobId<< "blob";
-                        buddyBlob.isValid = true;
-                        buddyBlob.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
-                        buddyBlob.boundingBox = blob.currentBoundingBox;
-                        buddyBlob.area = blob.currentArea;
-                    }
-                }
-            }
-
-            if (pausedInfo.trackerInstance && thisWormBlob.isValid) {
-                QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, thisWormBlob));
-                m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = thisWormBlob;
-            }
-            m_pausedWormsRecords.remove(conceptualWormIdToResolve);
-            m_lastResolutionAttempt.remove(conceptualWormIdToResolve); // Clean up tracking
-            qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "after 2-way split resolution. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-
-            if (buddyInfo.trackerInstance && buddyBlob.isValid) {
-                QMetaObject::invokeMethod(buddyInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, buddyBlob));
-                m_splitResolutionMap[buddyInfo.framePausedOn][buddyId] = buddyBlob; // framePausedOn should be same
-            }
-            m_pausedWormsRecords.remove(buddyId);
-            m_lastResolutionAttempt.remove(buddyId); // Clean up tracking
-            qDebug().noquote() << dmsg << "REMOVED buddy WT" << buddyId << "after 2-way split resolution. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-        } else {
-             qDebug().noquote() << dmsg << "Unable to assign different blobs to buddies. Waiting for timeout or clearer separation.";
-        }
-    } else if (buddyConceptualIds.size() > 1) {
-         qDebug().noquote() << dmsg << "N-way split (" << buddyConceptualIds.size() + 1 << " worms). Deferring to timeout (TODO: implement N-M logic).";
-        // For now, N-way splits will resolve via timeout individually.
-    }
-    // If no buddies, it will also resolve via timeout.
-}
-
-void TrackingManager::checkPausedWormsAndResolveSplits() {
-    QMutexLocker locker(&m_dataMutex);
-    qDebug() << "TM: checkPausedWormsAndResolveSplits() called. Cancelled:" << m_cancelRequested
-             << "Running:" << m_isTrackingRunning << "PausedWorms:" << m_pausedWormsRecords.size();
-
-    if (m_cancelRequested || !m_isTrackingRunning || m_pausedWormsRecords.isEmpty()) {
-        if (m_pausedWormsRecords.isEmpty()) {
-            qDebug() << "TM: No paused worms to resolve, returning";
-        }
-        return;
-    }
-    QDateTime currentTime = QDateTime::currentDateTime();
-    QList<int> pausedConceptualWormIds = m_pausedWormsRecords.keys(); // Iterate over a copy
-    qDebug() << "TM: Processing" << pausedConceptualWormIds.size() << "paused worms:" << pausedConceptualWormIds;
-
-    for (int conceptualId : pausedConceptualWormIds) {
-        if (!m_pausedWormsRecords.contains(conceptualId)) continue; // Already resolved
-
-        PausedWormInfoFrameSpecific& pausedInfo = m_pausedWormsRecords[conceptualId];
-        if (m_splitResolutionMap.value(pausedInfo.framePausedOn).contains(conceptualId)) {
-             qDebug() << "TM: Worm" << conceptualId << "on frame" << pausedInfo.framePausedOn << "already has a split resolution. REMOVING from pause.";
-            m_pausedWormsRecords.remove(conceptualId);
-            qDebug() << "TM: REMOVED WT" << conceptualId << "from pause records (already resolved). Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
-            continue;
-        }
-
-        int pausedDuration = pausedInfo.timePaused.msecsTo(currentTime);
-        qDebug() << "TM: Worm" << conceptualId << "FN" << pausedInfo.framePausedOn
-                 << "paused for" << pausedDuration << "ms (timeout at" << MAX_PAUSED_DURATION_MS << "ms)";
-
-        if (pausedDuration > MAX_PAUSED_DURATION_MS) {
-             qDebug() << "TM: Worm" << conceptualId << "FN" << pausedInfo.framePausedOn << " PausedForSplit TIMED OUT. Forcing resolution.";
-            forceResolvePausedWormFrameSpecific(conceptualId, pausedInfo);
-        } else {
-            // Try resolution again, in case a buddy has since paused.
-            qDebug() << "TM: Attempting automatic resolution for worm" << conceptualId;
-            attemptAutomaticSplitResolutionFrameSpecific(conceptualId, pausedInfo);
-        }
-    }
-}
-
-void TrackingManager::forceResolvePausedWormFrameSpecific(int conceptualWormIdToResolve, PausedWormInfoFrameSpecific& pausedInfo) {
-    QString dmsg = QString("TM: WT %1 FN%2 | forceResolve | ").arg(conceptualWormIdToResolve).arg(pausedInfo.framePausedOn);
-    qDebug().noquote() << dmsg;
-
-    if (!pausedInfo.trackerInstance) {
-        m_pausedWormsRecords.remove(conceptualWormIdToResolve);
-        return;
-    }
-
-    // The blob we will ultimately assign.
+    
+    // Check if a preferred blob is already assigned to this worm
+    int preferredBlobId = m_wormToPhysicalBlobIdMap.value(conceptualWormId, -1);
     Tracking::DetectedBlob blobToAssign;
     blobToAssign.isValid = false;
-
-    // The PhysicalBlob ID this worm initially preferred.
-    int preferredBlobId = m_wormToPhysicalBlobIdMap.value(conceptualWormIdToResolve, -1);
-    FrameSpecificPhysicalBlob* claimedBlob = nullptr;
-
-    if (m_frameMergeRecords.contains(pausedInfo.framePausedOn)) {
-        QList<FrameSpecificPhysicalBlob>& blobsOnThisFrame = m_frameMergeRecords[pausedInfo.framePausedOn];
-
-        // --- Step 1: Try to claim the preferred blob ---
-        if (preferredBlobId != -1) {
-            for (FrameSpecificPhysicalBlob& blob : blobsOnThisFrame) {
-                // Check if this is the preferred blob and it's unselected (ID is 0)
+    bool resolutionSuccess = false;
+    
+    // Look for already resolved worms on this frame that might have taken blobs we're interested in
+    QMap<int, QList<int>> otherWormBlobAssignments; // wormId -> list of blobIds
+    
+    if (m_splitResolutionMap.contains(frameNumber)) {
+        QMap<int, Tracking::DetectedBlob> resolvedBlobs = m_splitResolutionMap[frameNumber];
+        for (auto it = resolvedBlobs.begin(); it != resolvedBlobs.end(); ++it) {
+            int otherWormId = it.key();
+            if (otherWormId == conceptualWormId) continue;
+            
+            QList<int> otherWormBlobIds;
+            for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
+                if (blob.selectedByWormTrackerId == otherWormId) {
+                    otherWormBlobIds.append(blob.uniqueId);
+                }
+            }
+            
+            if (!otherWormBlobIds.isEmpty()) {
+                otherWormBlobAssignments[otherWormId] = otherWormBlobIds;
+                qDebug().noquote() << dmsg << "Worm" << otherWormId << "already has blobs assigned:" << otherWormBlobIds;
+            }
+        }
+    }
+    
+    // First, try to find our preferred blob if it's available
+    if (preferredBlobId != -1) {
+        bool blobTaken = false;
+        
+        // Check if any other worm has already been assigned this blob
+        for (auto it = otherWormBlobAssignments.begin(); it != otherWormBlobAssignments.end(); ++it) {
+            if (it.value().contains(preferredBlobId)) {
+                blobTaken = true;
+                qDebug().noquote() << dmsg << "Preferred blob" << preferredBlobId << "already taken by worm" << it.key();
+                break;
+            }
+        }
+        
+        if (!blobTaken) {
+            // Try to find and claim this blob
+            for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
                 if (blob.uniqueId == preferredBlobId && blob.selectedByWormTrackerId == 0) {
-                    blob.selectedByWormTrackerId = conceptualWormIdToResolve; // Mark as taken
-                    claimedBlob = &blob;
-                    blobToAssign = pausedInfo.chosenCandidate; // Assign the preferred candidate
-                    qDebug().noquote() << dmsg << "Successfully claimed preferred PhysicalBlobId:" << preferredBlobId;
+                    // Claim the blob
+                    blob.selectedByWormTrackerId = conceptualWormId;
+                    
+                    // Create the blob to assign
+                    blobToAssign.isValid = true;
+                    blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
+                    blobToAssign.boundingBox = blob.currentBoundingBox;
+                    blobToAssign.area = blob.currentArea;
+                    
+                    qDebug().noquote() << dmsg << "Successfully claimed preferred blob:" << preferredBlobId;
+                    resolutionSuccess = true;
                     break;
                 }
             }
         }
-
-        // --- Step 2: If preferred blob was not claimed, find any available alternative ---
-        if (!claimedBlob) {
-            qDebug().noquote() << dmsg << "Preferred blob (" << preferredBlobId << ") was unavailable. Searching for alternative.";
-            for (FrameSpecificPhysicalBlob& blob : blobsOnThisFrame) {
-                // Must be a participant and the blob must be unselected (ID is 0)
-                if (blob.participatingWormTrackerIDs.contains(conceptualWormIdToResolve) && blob.selectedByWormTrackerId == 0) {
-                    blob.selectedByWormTrackerId = conceptualWormIdToResolve; // Mark as taken
-                    claimedBlob = &blob;
-
-                    // This is an alternative, so we need to construct its DetectedBlob representation
-                    blobToAssign.isValid = true;
-                    blobToAssign.centroid = QPointF(claimedBlob->currentCentroid.x, claimedBlob->currentCentroid.y);
-                    blobToAssign.boundingBox = claimedBlob->currentBoundingBox;
-                    blobToAssign.area = claimedBlob->currentArea;
-
-                    // Also update the official mapping for this worm to the new blob
-                    m_wormToPhysicalBlobIdMap[conceptualWormIdToResolve] = claimedBlob->uniqueId;
-                    qDebug().noquote() << dmsg << "Found and claimed alternative PhysicalBlobId:" << claimedBlob->uniqueId;
-                    break; // Stop after finding the first available one
-                }
+    }
+    
+    // If we couldn't claim our preferred blob, look for any available alternative
+    if (!blobToAssign.isValid) {
+        qDebug().noquote() << dmsg << "Preferred blob unavailable or not set. Looking for alternatives.";
+        
+        // Find any unassigned blob that this worm is participating in
+        for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
+            if (blob.participatingWormTrackerIDs.contains(conceptualWormId) && blob.selectedByWormTrackerId == 0) {
+                // Claim this blob
+                blob.selectedByWormTrackerId = conceptualWormId;
+                
+                // Update the mapping
+                m_wormToPhysicalBlobIdMap[conceptualWormId] = blob.uniqueId;
+                
+                // Create the blob to assign
+                blobToAssign.isValid = true;
+                blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
+                blobToAssign.boundingBox = blob.currentBoundingBox;
+                blobToAssign.area = blob.currentArea;
+                
+                qDebug().noquote() << dmsg << "Found and claimed alternative blob:" << blob.uniqueId;
+                resolutionSuccess = true;
+                break;
             }
         }
     }
-
-    // --- Step 3: Finalize and emit signal ---
-    if (!blobToAssign.isValid) {
-        qDebug().noquote() << dmsg << "No valid candidate could be claimed. Going lost.";
+    
+    // Assign blob or go lost
+    if (blobToAssign.isValid) {
+        qDebug().noquote() << dmsg << "Assigning blob to worm" << conceptualWormId;
+        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", 
+                                 Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, blobToAssign));
+        m_splitResolutionMap[frameNumber][conceptualWormId] = blobToAssign;
     } else {
-        qDebug().noquote() << dmsg << "Assigning candidate " << blobToAssign.boundingBox;
+        qDebug().noquote() << dmsg << "No valid blob available. Going lost.";
+        QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", 
+                                 Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
+        m_splitResolutionMap[frameNumber][conceptualWormId] = Tracking::DetectedBlob();
     }
-
-    QMetaObject::invokeMethod(pausedInfo.trackerInstance.data(), "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, blobToAssign));
-    m_splitResolutionMap[pausedInfo.framePausedOn][conceptualWormIdToResolve] = blobToAssign;
-    m_pausedWormsRecords.remove(conceptualWormIdToResolve);
-    qDebug().noquote() << dmsg << "REMOVED WT" << conceptualWormIdToResolve << "after force resolution. Remaining:" << m_pausedWormsRecords.size() << "IDs:" << m_pausedWormsRecords.keys();
+    
+    return true;
 }
+
+// This function has been replaced by immediate resolution in processFrameSpecificSplit
+
+// This function has been replaced by immediate resolution in processFrameSpecificSplit
 
 // --- Helper and Utility functions (calculateIoU, launchWormTrackers, progress, finish handlers etc.) ---
 // These remain largely the same as your version with parallel video processing.
@@ -1036,7 +670,7 @@ void TrackingManager::launchWormTrackers() { /* ... same as your version ... */
             thr->start(); m_expectedTrackersToFinish++;
         }
     }
-    if (m_expectedTrackersToFinish == 0 && !m_initialWormInfos.empty()) { emit trackingFailed("No trackers launched."); m_isTrackingRunning = false; if(m_pauseResolutionTimer) m_pauseResolutionTimer->stop(); }
+    if (m_expectedTrackersToFinish == 0 && !m_initialWormInfos.empty()) { emit trackingFailed("No trackers launched."); m_isTrackingRunning = false; }
     else if (m_expectedTrackersToFinish > 0) { emit trackingStatusUpdate(QString("Launching %1 trackers...").arg(m_expectedTrackersToFinish)); }
     updateOverallProgress();
 }
@@ -1068,7 +702,10 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
 
     if (allDoneOrCancelled) {
         bool wasCancelled = m_cancelRequested; m_isTrackingRunning = false;
-        if (m_pauseResolutionTimer && m_pauseResolutionTimer->isActive()) m_pauseResolutionTimer->stop();
+        
+        // Clear any remaining split resolutions
+        m_splitResolutionMap.clear();
+        
         locker.unlock();
         if (wasCancelled) {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
