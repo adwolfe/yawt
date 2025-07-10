@@ -26,7 +26,7 @@ set(SOURCES
     blobtablemodel.cpp
     colordelegate.cpp
     folderfirstsortproxymodel.cpp
-    framecachemanager.cpp
+    #framecachemanager.cpp
     itemtypedelegate.cpp
     main.cpp
     mainwindow.cpp
@@ -45,7 +45,7 @@ set(HEADERS
     blobtablemodel.h
     colordelegate.h
     folderfirstsortproxymodel.h
-    framecachemanager.h
+    #framecachemanager.h
     itemtypedelegate.h
     mainwindow.h
     trackingcommon.h
