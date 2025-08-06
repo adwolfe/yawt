@@ -1,0 +1,68 @@
+# UI Modifications for Median Background Subtraction
+
+To complete the implementation of the median background subtraction feature, you need to add the following UI elements to your mainwindow.ui file:
+
+## 1. Add checkbox for enabling median background subtraction
+
+Location: Add this in the thresholding section of the UI, right after the "Background:" dropdown (ui->bgCombo)
+
+```xml
+<item row="12" column="0" colspan="3">
+  <widget class="Line" name="line_median">
+    <property name="orientation">
+      <enum>Qt::Orientation::Horizontal</enum>
+    </property>
+  </widget>
+</item>
+
+<item row="13" column="0" colspan="3">
+  <widget class="QLabel" name="labelMedianBg">
+    <property name="font">
+      <font>
+        <bold>true</bold>
+      </font>
+    </property>
+    <property name="text">
+      <string>Median Background</string>
+    </property>
+  </widget>
+</item>
+
+<item row="14" column="0" colspan="2">
+  <widget class="QCheckBox" name="medianBgCheck">
+    <property name="enabled">
+      <bool>false</bool>
+    </property>
+    <property name="text">
+      <string>Subtract median background</string>
+    </property>
+    <property name="toolTip">
+      <string>Subtracts median pixel values across frames to remove static background elements before thresholding</string>
+    </property>
+  </widget>
+</item>
+```
+
+## 2. Add button to compute median background
+
+```xml
+<item row="15" column="0" colspan="3">
+  <widget class="QPushButton" name="computeMedianBgButton">
+    <property name="text">
+      <string>Compute Median Background</string>
+    </property>
+    <property name="toolTip">
+      <string>Samples frames across the video to compute a median background</string>
+    </property>
+  </widget>
+</item>
+```
+
+## Notes:
+
+1. Adjust the row numbers as needed based on your existing UI layout
+2. The checkbox is initially disabled until a median background is computed
+3. Make sure these elements are added within the same QGridLayout as the other thresholding controls
+4. You may need to adjust the row spans of other widgets if there are conflicts
+
+After making these changes, the UI will properly connect to the new code implementing median background subtraction.
