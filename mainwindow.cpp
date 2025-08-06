@@ -5,6 +5,7 @@
 #include "itemtypedelegate.h"
 #include "trackingprogressdialog.h"
 #include "trackingmanager.h"
+#include "version.h"
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
 // #include "videoloader.h"
 // #include "trackingcommon.h"
@@ -59,6 +60,7 @@ MainWindow::MainWindow(QWidget *parent)
     // ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::None, true); // Or start with nothing
 
     qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
+    ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !");
 }
 
 MainWindow::~MainWindow()
@@ -80,9 +82,9 @@ void MainWindow::setupInteractionModeButtonGroup() {
 
 void MainWindow::setupConnections() {
     // Connect ROI factor spinbox to BlobTableModel
-    connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged), 
+    connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
-            
+
     // File/Directory
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
 
@@ -184,7 +186,7 @@ void MainWindow::initializeUIStates() {
     ui->globalThreshAutoCheck->setChecked(false);
     qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
     updateThresholdAlgorithmSettings();
-    
+
     // Initialize ROI factor spinbox
     ui->roiFactorSpinBoxD->setValue(roiFactorSpinBoxD);
     ui->roiFactorSpinBoxD->setSingleStep(0.05);

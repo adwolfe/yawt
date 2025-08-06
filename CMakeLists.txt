@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-project(yawt LANGUAGES CXX)
+project(yawt LANGUAGES CXX VERSION 0.9.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
+
+
 
 # Add source directory includes
 include_directories(${CMAKE_SOURCE_DIR})
@@ -101,6 +103,13 @@ target_link_libraries(${PROJECT_NAME}
     Qt6::Svg
     ${OpenCV_LIBS}
 )
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/version.h"
+    @ONLY
+)
+include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
 # Optional: install target path (similar to .pro file behavior)
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
