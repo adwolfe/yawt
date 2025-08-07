@@ -1,5 +1,8 @@
 QT += core gui widgets svg
 
+TARGET = yawt
+VERSION = 0.9.0
+
 CONFIG += c++17
 CONFIG += warn_on
 CONFIG += thread
@@ -18,9 +21,10 @@ SOURCES += \
     itemtypedelegate.cpp \
     main.cpp \
     mainwindow.cpp \
+    thresholdingutils.cpp \
     trackingcommon.cpp \
+    trackingdatastorage.cpp \
     trackingmanager.cpp \
-    #trackingmanager_copy.cpp \
     trackingprogressdialog.cpp \
     videofiletreeview.cpp \
     videoloader.cpp \
@@ -34,9 +38,10 @@ HEADERS += \
     folderfirstsortproxymodel.h \
     itemtypedelegate.h \
     mainwindow.h \
+    thresholdingutils.h \
     trackingcommon.h \
+    trackingdatastorage.h \
     trackingmanager.h \
-    #trackingmanager_copy.h \
     trackingprogressdialog.h \
     videofiletreeview.h \
     videoloader.h \
@@ -53,7 +58,6 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
-
 # Optional: enable debug info
 CONFIG += debug
 
@@ -61,4 +65,3 @@ RESOURCES += \
     resources.qrc
 
 RC_ICONS = resources/icon_tr.ico
-
