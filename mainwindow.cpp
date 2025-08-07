@@ -60,7 +60,7 @@ MainWindow::MainWindow(QWidget *parent)
     // ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::None, true); // Or start with nothing
 
     qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
-    ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !");
+    ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !", 10000);
 }
 
 MainWindow::~MainWindow()
