@@ -8,6 +8,9 @@
 #include <QTextStream>
 #include <QPair>
 #include <QRectF>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 
 #include <algorithm> // For std::reverse, std::min, std::max
 #include <numeric>   // For std::accumulate
@@ -82,7 +85,7 @@ TrackingManager::~TrackingManager() {
 
 // Main entry point for tracking
 void TrackingManager::startFullTrackingProcess(
-    const QString& videoPath, int keyFrameNum,
+    const QString& videoPath, const QString& dataDirectory, int keyFrameNum,
     const std::vector<Tracking::InitialWormInfo>& initialWorms,
     const Thresholding::ThresholdSettings& settings, int totalFramesInVideoHint) {
     qDebug() << "TrackingManager (" << this << "): startFullTrackingProcess called.";
@@ -95,10 +98,28 @@ void TrackingManager::startFullTrackingProcess(
     cleanupThreadsAndObjects(); // Clean up from any previous run
 
     m_videoPath = videoPath;
+    m_dataDirectory = dataDirectory;
     m_keyFrameNum = keyFrameNum;
     m_initialWormInfos = initialWorms;
     m_thresholdSettings = settings;
     m_totalFramesInVideoHint = totalFramesInVideoHint;
+    
+    // Create video-specific directory and save JSON files
+    m_videoSpecificDirectory = createVideoSpecificDirectory(dataDirectory, videoPath);
+    if (!m_videoSpecificDirectory.isEmpty()) {
+        saveThresholdSettings(m_videoSpecificDirectory, settings);
+        saveInputBlobs(m_videoSpecificDirectory, initialWorms);
+        
+        // Check if threshold settings differ from existing ones
+        QString thresholdFilePath = QDir(m_videoSpecificDirectory).absoluteFilePath("thresh_settings.json");
+        if (QFile::exists(thresholdFilePath)) {
+            bool settingsMatch = compareThresholdSettings(thresholdFilePath, settings);
+            if (!settingsMatch) {
+                qDebug() << "Current threshold settings differ from stored settings in" << thresholdFilePath;
+                emit trackingStatusUpdate("Threshold settings differ from previous run");
+            }
+        }
+    }
     m_isTrackingRunning = true;
     m_cancelRequested = false;
     m_videoProcessingOverallProgress = 0;
@@ -832,7 +853,16 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
             emit trackingStatusUpdate("Tracking cancelled."); emit trackingCancelled();
         } else {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
-            emit allTracksUpdated(m_finalTracks); QString csvPath = m_videoPath.isEmpty() ? "tracks.csv" : QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+            emit allTracksUpdated(m_finalTracks); 
+            QString csvPath;
+            if (m_videoPath.isEmpty()) {
+                csvPath = "tracks.csv";
+            } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
+                csvPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+            } else {
+                // Fallback to video directory if video-specific directory is not available
+                csvPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+            }
             if (outputTracksToCsv(m_finalTracks, csvPath)) { emit trackingStatusUpdate("Tracks saved: " + csvPath); emit trackingFinishedSuccessfully(csvPath); }
             else { emit trackingStatusUpdate("Failed to save CSV: " + csvPath); emit trackingFailed("Failed to save CSV."); }
         }
@@ -878,4 +908,172 @@ bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, c
               << QString::number(p.roi.width(), 'f', 2) << "," << QString::number(p.roi.height(), 'f', 2) << ","
               << static_cast<int>(p.quality) << "\n"; }}
     f.close(); return f.error() == QFile::NoError;
+}
+
+QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath) {
+    if (dataDirectory.isEmpty() || videoPath.isEmpty()) {
+        qWarning() << "TrackingManager: Invalid data directory or video path";
+        return QString();
+    }
+    
+    QFileInfo videoInfo(videoPath);
+    QString videoBaseName = videoInfo.completeBaseName(); // Gets filename without extension
+    QString videoSpecificPath = QDir(dataDirectory).absoluteFilePath(videoBaseName);
+    
+    QDir videoSpecificDir(videoSpecificPath);
+    if (!videoSpecificDir.exists()) {
+        if (QDir().mkpath(videoSpecificPath)) {
+            qDebug() << "TrackingManager: Created video-specific directory:" << videoSpecificPath;
+        } else {
+            qWarning() << "TrackingManager: Failed to create video-specific directory:" << videoSpecificPath;
+            return QString();
+        }
+    } else {
+        qDebug() << "TrackingManager: Using existing video-specific directory:" << videoSpecificPath;
+    }
+    
+    return videoSpecificPath;
+}
+
+void TrackingManager::saveThresholdSettings(const QString& directoryPath, const Thresholding::ThresholdSettings& settings) {
+    if (directoryPath.isEmpty()) {
+        qWarning() << "TrackingManager: Cannot save threshold settings - empty directory path";
+        return;
+    }
+    
+    QJsonObject jsonObj = thresholdSettingsToJson(settings);
+    QJsonDocument doc(jsonObj);
+    
+    QString filePath = QDir(directoryPath).absoluteFilePath("thresh_settings.json");
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+        file.close();
+        qDebug() << "TrackingManager: Saved threshold settings to:" << filePath;
+    } else {
+        qWarning() << "TrackingManager: Failed to save threshold settings to:" << filePath;
+    }
+}
+
+void TrackingManager::saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms) {
+    if (directoryPath.isEmpty()) {
+        qWarning() << "TrackingManager: Cannot save input blobs - empty directory path";
+        return;
+    }
+    
+    QJsonArray wormsArray;
+    for (const auto& worm : worms) {
+        wormsArray.append(initialWormInfoToJson(worm));
+    }
+    
+    QJsonObject rootObj;
+    rootObj["worms"] = wormsArray;
+    rootObj["count"] = static_cast<int>(worms.size());
+    
+    QJsonDocument doc(rootObj);
+    QString filePath = QDir(directoryPath).absoluteFilePath("input_blobs.json");
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+        file.close();
+        qDebug() << "TrackingManager: Saved input blobs to:" << filePath;
+    } else {
+        qWarning() << "TrackingManager: Failed to save input blobs to:" << filePath;
+    }
+}
+
+bool TrackingManager::compareThresholdSettings(const QString& filePath, const Thresholding::ThresholdSettings& currentSettings) {
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "TrackingManager: Cannot read threshold settings file:" << filePath;
+        return false;
+    }
+    
+    QByteArray data = file.readAll();
+    file.close();
+    
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        qWarning() << "TrackingManager: JSON parse error in threshold settings:" << parseError.errorString();
+        return false;
+    }
+    
+    QJsonObject stored = doc.object();
+    QJsonObject current = thresholdSettingsToJson(currentSettings);
+    
+    // Compare key settings and log differences
+    bool match = true;
+    QStringList differences;
+    
+    if (stored["algorithm"].toInt() != current["algorithm"].toInt()) {
+        differences << QString("algorithm: %1 vs %2").arg(stored["algorithm"].toInt()).arg(current["algorithm"].toInt());
+        match = false;
+    }
+    if (stored["globalThresholdValue"].toInt() != current["globalThresholdValue"].toInt()) {
+        differences << QString("globalThresholdValue: %1 vs %2").arg(stored["globalThresholdValue"].toInt()).arg(current["globalThresholdValue"].toInt());
+        match = false;
+    }
+    if (stored["assumeLightBackground"].toBool() != current["assumeLightBackground"].toBool()) {
+        differences << QString("assumeLightBackground: %1 vs %2").arg(stored["assumeLightBackground"].toBool()).arg(current["assumeLightBackground"].toBool());
+        match = false;
+    }
+    if (stored["adaptiveBlockSize"].toInt() != current["adaptiveBlockSize"].toInt()) {
+        differences << QString("adaptiveBlockSize: %1 vs %2").arg(stored["adaptiveBlockSize"].toInt()).arg(current["adaptiveBlockSize"].toInt());
+        match = false;
+    }
+    if (qAbs(stored["adaptiveCValue"].toDouble() - current["adaptiveCValue"].toDouble()) >= 0.001) {
+        differences << QString("adaptiveCValue: %1 vs %2").arg(stored["adaptiveCValue"].toDouble()).arg(current["adaptiveCValue"].toDouble());
+        match = false;
+    }
+    if (stored["enableBlur"].toBool() != current["enableBlur"].toBool()) {
+        differences << QString("enableBlur: %1 vs %2").arg(stored["enableBlur"].toBool()).arg(current["enableBlur"].toBool());
+        match = false;
+    }
+    if (stored["blurKernelSize"].toInt() != current["blurKernelSize"].toInt()) {
+        differences << QString("blurKernelSize: %1 vs %2").arg(stored["blurKernelSize"].toInt()).arg(current["blurKernelSize"].toInt());
+        match = false;
+    }
+    if (qAbs(stored["blurSigmaX"].toDouble() - current["blurSigmaX"].toDouble()) >= 0.001) {
+        differences << QString("blurSigmaX: %1 vs %2").arg(stored["blurSigmaX"].toDouble()).arg(current["blurSigmaX"].toDouble());
+        match = false;
+    }
+    
+    if (!match) {
+        qDebug() << "TrackingManager: Threshold settings differ:";
+        for (const QString& diff : differences) {
+            qDebug() << "  " << diff;
+        }
+    } else {
+        qDebug() << "TrackingManager: Threshold settings match stored values";
+    }
+    
+    return match;
+}
+
+QJsonObject TrackingManager::thresholdSettingsToJson(const Thresholding::ThresholdSettings& settings) const {
+    QJsonObject obj;
+    obj["algorithm"] = static_cast<int>(settings.algorithm);
+    obj["globalThresholdValue"] = settings.globalThresholdValue;
+    obj["assumeLightBackground"] = settings.assumeLightBackground;
+    obj["adaptiveBlockSize"] = settings.adaptiveBlockSize;
+    obj["adaptiveCValue"] = settings.adaptiveCValue;
+    obj["enableBlur"] = settings.enableBlur;
+    obj["blurKernelSize"] = settings.blurKernelSize;
+    obj["blurSigmaX"] = settings.blurSigmaX;
+    return obj;
+}
+
+QJsonObject TrackingManager::initialWormInfoToJson(const Tracking::InitialWormInfo& worm) const {
+    QJsonObject obj;
+    obj["id"] = worm.id;
+    
+    QJsonObject roiObj;
+    roiObj["x"] = worm.initialRoi.x();
+    roiObj["y"] = worm.initialRoi.y();
+    roiObj["width"] = worm.initialRoi.width();
+    roiObj["height"] = worm.initialRoi.height();
+    obj["initialRoi"] = roiObj;
+    
+    return obj;
 }

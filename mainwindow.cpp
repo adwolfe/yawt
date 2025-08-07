@@ -646,7 +646,8 @@ void MainWindow::handleBeginTrackingFromDialog() {
     if (initialWorms.empty()) {
         if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("No worms to track."); return;
     }
-    m_trackingManager->startFullTrackingProcess(videoPath, keyFrame, initialWorms, settings, totalFrames);
+    QString dataDirectory = ui->videoLoader->getDataDirectory();
+    m_trackingManager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
 }
 
 void MainWindow::handleCancelTrackingFromDialog() {

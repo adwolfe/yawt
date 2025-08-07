@@ -16,6 +16,9 @@
 #include <QSet>
 #include <vector>
 #include <QColor>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -80,6 +83,7 @@ public:
     VideoLoader::ViewModeOptions getActiveViewModes() const;
     double getPlaybackSpeed() const;
     QString getCurrentVideoPath() const;
+    QString getDataDirectory() const;
 
     // --- Thresholding and Pre-processing Status Getters ---
     // bool isThresholdViewEnabled() const; // This will be controlled by ViewMode::Threshold
@@ -175,6 +179,12 @@ signals:
 
     void trackPointClicked(int wormId, int frameNumber, QPointF videoPoint); // For interaction in EditTracks mode
 
+    /**
+     * @brief Emitted when the data directory is created or changed.
+     * @param directoryPath The path to the yawt data directory.
+     */
+    void dataDirectoryChanged(const QString& directoryPath);
+
 
 protected:
     // --- Qt Event Handlers ---
@@ -204,6 +214,7 @@ private:
     void updateTimerInterval();
     void emitThresholdParametersChanged();
     QColor getTrackColor(int trackId) const; // Used for drawing tracks
+    QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
 
 
     // --- OpenCV Video Members ---
@@ -259,6 +270,9 @@ private:
     bool m_enableBlur;
     int m_blurKernelSize;
     double m_blurSigmaX;
+    
+    // --- Data Directory ---
+    QString m_dataDirectory;  // Path to the "yawt" directory for data storage
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(VideoLoader::ViewModeOptions)

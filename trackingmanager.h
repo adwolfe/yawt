@@ -12,6 +12,10 @@
 #include <QMutex>
 #include <QDateTime>
 #include <QPointer>
+#include <QDir>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -58,6 +62,7 @@ public:
 
 public slots:
     void startFullTrackingProcess(const QString& videoPath,
+                                  const QString& dataDirectory,
                                   int keyFrameNum,
                                   const std::vector<Tracking::InitialWormInfo>& initialWorms,
                                   const Thresholding::ThresholdSettings& settings,
@@ -126,9 +131,19 @@ private:
     bool outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
+    
+    // JSON storage methods
+    QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
+    void saveThresholdSettings(const QString& directoryPath, const Thresholding::ThresholdSettings& settings);
+    void saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms);
+    bool compareThresholdSettings(const QString& filePath, const Thresholding::ThresholdSettings& currentSettings);
+    QJsonObject thresholdSettingsToJson(const Thresholding::ThresholdSettings& settings) const;
+    QJsonObject initialWormInfoToJson(const Tracking::InitialWormInfo& worm) const;
 
     // Basic tracking parameters
     QString m_videoPath;
+    QString m_dataDirectory;
+    QString m_videoSpecificDirectory;
     int m_keyFrameNum;
     std::vector<Tracking::InitialWormInfo> m_initialWormInfos;
     Thresholding::ThresholdSettings m_thresholdSettings;

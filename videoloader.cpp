@@ -8,6 +8,7 @@
 #include <QResizeEvent>
 #include <QWheelEvent>
 #include <QtMath>
+#include <QStandardPaths>
 #include <algorithm> // Required for std::find_if
 
 // Default crop parameters
@@ -39,7 +40,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_adaptiveC(2.0),
     m_enableBlur(false),
     m_blurKernelSize(5),
-    m_blurSigmaX(0.0) {
+    m_blurSigmaX(0.0),
+    m_dataDirectory() {
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -97,6 +99,8 @@ double VideoLoader::getPlaybackSpeed() const {
 }
 QString VideoLoader::getCurrentVideoPath() const { return currentFilePath; }
 
+QString VideoLoader::getDataDirectory() const { return m_dataDirectory; }
+
 Thresholding::ThresholdSettings VideoLoader::getCurrentThresholdSettings() const {
     Thresholding::ThresholdSettings settings;
     settings.assumeLightBackground = m_assumeLightBackground;
@@ -144,6 +148,12 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     }
 
     currentFilePath = filePath;
+    
+    // Create data directory for storing analysis results
+    m_dataDirectory = createDataDirectory(filePath);
+    if (!m_dataDirectory.isEmpty()) {
+        emit dataDirectoryChanged(m_dataDirectory);
+    }
     framesPerSecond = videoCapture.get(cv::CAP_PROP_FPS);
     if (framesPerSecond <= 0) {
         qWarning() << "Video FPS reported as 0 or less, defaulting to 25.0";
@@ -1240,4 +1250,43 @@ QColor VideoLoader::getTrackColor(int trackId) const {
     QColor color = QColor::fromHsv(hue, saturation, value);
     m_trackColors.insert(trackId, color);
     return color;
+}
+
+QString VideoLoader::createDataDirectory(const QString& videoFilePath) {
+    QFileInfo videoInfo(videoFilePath);
+    QString videoDirectory = videoInfo.absolutePath();
+    QString yawtDirPath = QDir(videoDirectory).absoluteFilePath("yawt");
+    
+    // Try to create the directory in the same folder as the video
+    QDir yawtDir(yawtDirPath);
+    if (!yawtDir.exists()) {
+        if (QDir().mkpath(yawtDirPath)) {
+            qDebug() << "Created yawt data directory:" << yawtDirPath;
+            return yawtDirPath;
+        } else {
+            qWarning() << "Failed to create yawt directory in video folder:" << yawtDirPath;
+            qWarning() << "Falling back to user's home directory";
+            
+            // Fallback to user's home directory
+            QString homeDirectory = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+            QString fallbackYawtDir = QDir(homeDirectory).absoluteFilePath("yawt");
+            
+            QDir fallbackDir(fallbackYawtDir);
+            if (!fallbackDir.exists()) {
+                if (QDir().mkpath(fallbackYawtDir)) {
+                    qDebug() << "Created yawt data directory in home:" << fallbackYawtDir;
+                    return fallbackYawtDir;
+                } else {
+                    qWarning() << "Failed to create yawt directory in home folder:" << fallbackYawtDir;
+                    return QString(); // Return empty string if all attempts fail
+                }
+            } else {
+                qDebug() << "Using existing yawt data directory in home:" << fallbackYawtDir;
+                return fallbackYawtDir;
+            }
+        }
+    } else {
+        qDebug() << "Using existing yawt data directory:" << yawtDirPath;
+        return yawtDirPath;
+    }
 }
