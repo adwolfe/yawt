@@ -32,7 +32,9 @@ set(SOURCES
     itemtypedelegate.cpp
     main.cpp
     mainwindow.cpp
+    thresholdingutils.cpp
     trackingcommon.cpp
+    trackingdatastorage.cpp
     trackingmanager.cpp
     trackingprogressdialog.cpp
     videofiletreeview.cpp
@@ -50,7 +52,9 @@ set(HEADERS
     #framecachemanager.h
     itemtypedelegate.h
     mainwindow.h
+    thresholdingutils.h
     trackingcommon.h
+    trackingdatastorage.h
     trackingmanager.h
     trackingprogressdialog.h
     videofiletreeview.h
