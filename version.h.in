@@ -1,0 +1,5 @@
+// version.h.in
+#pragma once
+
+#define PROJECT_VERSION "@CMAKE_PROJECT_VERSION@"
+#define APP_CUSTOM_VERSION "@MY_APP_VERSION@"
