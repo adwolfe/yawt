@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include <QTimer>
 #include "ui_mainwindow.h"
 #include "blobtablemodel.h"
 #include "colordelegate.h"
@@ -43,8 +44,14 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
     // Don't stretch last section - we'll handle column widths in resizeTableColumns()
     ui->wormTableView->horizontalHeader()->setStretchLastSection(false);
+    // Set header to always be visible, even for empty tables
+    ui->wormTableView->horizontalHeader()->setVisible(true);
     // Ensure horizontal scrollbar appears when needed
     ui->wormTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    
+    // Configure selection behavior to select entire rows and allow only single selection
+    ui->wormTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
     
     resizeTableColumns();
 
@@ -90,6 +97,17 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     // Call resizeTableColumns directly instead of using a signal
     resizeTableColumns();
+}
+
+void MainWindow::showEvent(QShowEvent* event) {
+    QMainWindow::showEvent(event);
+    // Resize table columns when the window is first shown
+    // First immediate call
+    resizeTableColumns();
+    // Then schedule another resize after layout is complete
+    QTimer::singleShot(0, this, &MainWindow::resizeTableColumns);
+    // And one more after all Qt internal events are processed
+    QTimer::singleShot(300, this, &MainWindow::resizeTableColumns);
 }
 
 void MainWindow::setupConnections() {
@@ -149,7 +167,8 @@ void MainWindow::setupConnections() {
     connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
     connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
-
+    connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
+    
     // Auto-resize table columns when model data changes
     connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
@@ -158,6 +177,12 @@ void MainWindow::setupConnections() {
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &MainWindow::updateVisibleTracksInVideoLoader);
+            
+    // Enable/disable delete button based on selection state
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
+        ui->deleteButton->setEnabled(!selected.isEmpty());
+    });
 
     // Video File Tree View -> VideoLoader
     connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
@@ -179,7 +204,8 @@ void MainWindow::initializeUIStates() {
     ui->frameSlider->setPageStep(100);
     ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png")));
 
-
+    // Initialize delete button to disabled state since there are no items selected initially
+    ui->deleteButton->setEnabled(false);
 
 
     ui->adaptiveTypeCombo->setCurrentIndex(0);
@@ -218,13 +244,20 @@ void MainWindow::resizeTableColumns()
     if (!m_blobTableModel || m_blobTableModel->columnCount() == 0) {
         return;
     }
+    
+    // Get available viewport width and column count - we'll need these throughout the method
+    int viewportWidth = ui->wormTableView->viewport()->width();
+    int columnCount = m_blobTableModel->columnCount();
+    
+    // Ensure header is visible even when table is empty
+    ui->wormTableView->horizontalHeader()->setVisible(true);
+    ui->wormTableView->horizontalHeader()->setStretchLastSection(false);
 
     // Set minimum width for each column to ensure readability
     ui->wormTableView->horizontalHeader()->setMinimumSectionSize(10);
     
     // First, resize all columns to fit their contents
     int totalContentWidth = 0;
-    int columnCount = m_blobTableModel->columnCount();
     QVector<int> contentWidths(columnCount);
     
     for (int i = 0; i < columnCount; ++i) {
@@ -233,8 +266,7 @@ void MainWindow::resizeTableColumns()
         totalContentWidth += contentWidths[i];
     }
     
-    // Get available viewport width
-    int viewportWidth = ui->wormTableView->viewport()->width();
+    // Use the viewport width we already calculated
     
     // Decide whether to expand columns or use scrollbar
     if (viewportWidth > totalContentWidth && totalContentWidth > 0) {
@@ -393,11 +425,55 @@ void MainWindow::setBackgroundAssumption(int index) {
 void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
-    m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, TableItems::ItemType::Worm);
+    bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, TableItems::ItemType::Worm);
+    
+    if (added) {
+        // Enable the delete button since we now have an item
+        ui->deleteButton->setEnabled(true);
+        
+        // Select the newly added row
+        int lastRow = m_blobTableModel->rowCount() - 1;
+        QModelIndex newIndex = m_blobTableModel->index(lastRow, 0);
+        ui->wormTableView->setCurrentIndex(newIndex);
+        ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        
+        // Resize columns to fit the new content
+        resizeTableColumns();
+    }
 }
 
 void MainWindow::handleRemoveBlobsClicked() {
     m_blobTableModel->removeRows(0, m_blobTableModel->getAllItems().length());
+    ui->deleteButton->setEnabled(false); // Disable delete button after clearing all items
+    // Update VideoLoader to reflect that all items are removed
+    ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
+}
+
+void MainWindow::handleDeleteSelectedBlobClicked() {
+    // Get the currently selected row
+    QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
+    
+    // If there's a selection (should be at least one index per row)
+    if (!selectedIndexes.isEmpty()) {
+        // Get the row of the first selected index (we only allow single row selection)
+        int selectedRow = selectedIndexes.first().row();
+        
+        // Remove the selected row
+        m_blobTableModel->removeRows(selectedRow, 1);
+        
+        // Select the next row if available, or the previous row if this was the last one
+        if (m_blobTableModel->rowCount() > 0) {
+            int newRow = (selectedRow < m_blobTableModel->rowCount()) ? selectedRow : m_blobTableModel->rowCount() - 1;
+            QModelIndex newIndex = m_blobTableModel->index(newRow, 0);
+            ui->wormTableView->setCurrentIndex(newIndex);
+            ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        }
+        
+        // The delete button will be automatically enabled/disabled by the selection changed handler
+        
+        // Make sure the table layout is updated
+        resizeTableColumns();
+    }
 }
 
 // --- Video Playback and Frame Navigation ---

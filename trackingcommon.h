@@ -61,6 +61,7 @@ struct ClickedItem {
     QRectF initialBoundingBox;      // Bounding box in video coordinates at selection. THIS WILL BECOME THE STANDARDIZED ROI.
     QRectF originalClickedBoundingBox; // The actual bounding box of the blob when it was clicked. Used for metrics.
     int frameOfSelection;           // Frame number where this item was selected
+    bool visible = true;            // Whether this item's track/ROI should be displayed
     // Add other relevant data as needed
 };
 

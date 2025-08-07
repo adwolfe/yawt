@@ -201,6 +201,26 @@ bool BlobTableModel::removeRows(int position, int rows, const QModelIndex &paren
     }
     endRemoveRows();
 
+    // If all items were removed, reset the ID counter
+    if (m_items.isEmpty()) {
+        m_nextId = 1;
+    } else {
+        // Renumber all remaining items sequentially
+        QModelIndex topLeft = index(0, 0);
+        QModelIndex bottomRight = index(m_items.count() - 1, 0);
+        
+        // Update IDs to be sequential
+        for (int i = 0; i < m_items.count(); ++i) {
+            m_items[i].id = i + 1;
+        }
+        
+        // Set m_nextId to be one more than the highest ID
+        m_nextId = m_items.count() + 1;
+        
+        // Notify views that the ID column data has changed
+        emit dataChanged(topLeft, bottomRight, {Qt::DisplayRole});
+    }
+
     // Recalculate global metrics and update remaining item ROIs
     recalculateGlobalMetricsAndROIs();
     return true;

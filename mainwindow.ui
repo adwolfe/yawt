@@ -58,7 +58,7 @@
       <item>
        <layout class="QHBoxLayout" name="horizontalLayout_6">
         <property name="spacing">
-         <number>0</number>
+         <number>2</number>
         </property>
         <item>
          <widget class="QLabel" name="label_5">
@@ -68,7 +68,14 @@
            </font>
           </property>
           <property name="text">
-           <string>Tracked ROIs</string>
+           <string>Blobs</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="deleteButton">
+          <property name="text">
+           <string>Delete</string>
           </property>
          </widget>
         </item>
@@ -78,7 +85,7 @@
            <bool>true</bool>
           </property>
           <property name="text">
-           <string>Clear all</string>
+           <string>Clear</string>
           </property>
          </widget>
         </item>

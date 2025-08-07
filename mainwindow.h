@@ -31,6 +31,7 @@ public:
     
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 public slots:
     // File/Directory Operations
@@ -68,6 +69,7 @@ public slots:
     // Blob/Item Handling
     void handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData);
     void handleRemoveBlobsClicked();
+    void handleDeleteSelectedBlobClicked();
 
     // Tracking Process
     void onStartTrackingActionTriggered();

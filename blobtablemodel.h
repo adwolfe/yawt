@@ -26,13 +26,16 @@ public:
     // Basic functionality:
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     int columnCount(const QModelIndex &parent = QModelIndex()) const override;
+    
+    // Override for checkbox handling
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
 
     // Data handling:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
 
     // Editing:
-    Qt::ItemFlags flags(const QModelIndex& index) const override;
+    // Already declared the flags method above
 
     // Custom methods for model manipulation:
     /**
@@ -77,12 +80,13 @@ public:
 
     // Enum for column indices for clarity
     enum Column {
-        ID = 0,
-        Color = 1,
-        Type = 2,
-        Frame = 3,      // Frame of selection
-        CentroidX = 4,  // Optional: display centroid X
-        CentroidY = 5   // Optional: display centroid Y
+        Show = 0,       // Show/Hide checkbox
+        ID = 1,
+        Color = 2,
+        Type = 3,
+        Frame = 4,      // Frame of selection
+        CentroidX = 5,  // Optional: display centroid X
+        CentroidY = 6   // Optional: display centroid Y
         // Add more columns if needed, e.g., for bounding box details
     };
 
