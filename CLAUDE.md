@@ -16,6 +16,7 @@ This project supports both CMake and qmake build systems:
 ./zed_build_debug.sh
 
 # Manual CMake build
+mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$(qtpaths --install-prefix)
 make -j$(sysctl -n hw.logicalcpu)
@@ -27,6 +28,7 @@ make -j$(sysctl -n hw.logicalcpu)
 ./qtbuildtool.sh yawt.pro
 
 # Manual qmake build
+mkdir -p build
 cd build
 qmake ../yawt.pro
 make
@@ -36,6 +38,11 @@ make
 - Qt6 (Core, Gui, Widgets, Svg)
 - OpenCV (installed at /opt/homebrew on macOS)
 - C++17 standard
+
+**Build Scripts:**
+- `zed_build_debug.sh` - Debug build convenience script for Zed editor
+- `zed_launch.sh` - Launch script for debug mode
+- `qtbuildtool.sh` - qmake build convenience script
 
 ## Core Architecture
 
@@ -55,10 +62,11 @@ The application follows a layered architecture with these key components:
 - `TrackingManager` - Coordinates the overall tracking process, manages multiple worm trackers
 - `WormTracker` - Individual tracker for a single worm, handles forward/backward tracking from keyframe
 - `WormObject` - Represents a tracked worm with its complete trajectory over time
+- `TrackingDataStorage` - Central data storage for all tracking data, serves as single source of truth
 
 **Computer Vision:**
 - `thresholdingutils.h/.cpp` - OpenCV-based thresholding algorithms for blob detection
-- `trackingcommon.h` - Shared data structures (`DetectedBlob`, `InitialWormInfo`, `TrackerState`)
+- `trackingcommon.h/.cpp` - Shared data structures (`DetectedBlob`, `InitialWormInfo`, `TrackerState`)
 
 **UI Components:**
 - `BlobTableModel` - Model for displaying detected blobs in table views
@@ -89,3 +97,6 @@ The system handles complex worm interactions through state management:
 - OpenCV is used for all computer vision operations (thresholding, blob detection)
 - The application supports both macOS app bundles and cross-platform builds
 - Frame-specific merge/split handling uses unique blob IDs and IoU calculations
+- Central data storage (`TrackingDataStorage`) manages all blob and track data with signal-based updates
+- Version information is managed through CMake template (`version.h.in`)
+- Current project version: 0.9.0
