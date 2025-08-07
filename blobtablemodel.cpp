@@ -56,8 +56,8 @@ QVariant BlobTableModel::headerData(int section, Qt::Orientation orientation, in
     case Column::Color:     return "Color";
     case Column::Type:      return "Type";
     case Column::Frame:     return "Frame";
-    case Column::CentroidX: return "Centroid X";
-    case Column::CentroidY: return "Centroid Y";
+    case Column::CentroidX: return "X";
+    case Column::CentroidY: return "Y";
     default:                return QVariant();
     }
 }

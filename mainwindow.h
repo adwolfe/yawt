@@ -4,6 +4,7 @@
 #include <QMainWindow>
 #include <QItemSelection>
 #include <QButtonGroup> // For interaction modes
+#include <QResizeEvent>
 
 // Forward declarations
 namespace Ui { class MainWindow; }
@@ -27,6 +28,9 @@ class MainWindow : public QMainWindow
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
+    
+protected:
+    void resizeEvent(QResizeEvent* event) override;
 
 public slots:
     // File/Directory Operations
@@ -79,10 +83,14 @@ public slots:
     void syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes); // Updated for QFlags
 
 
+
+
 private:
     void setupConnections();
     void initializeUIStates();
     void setupInteractionModeButtonGroup(); // Renamed for clarity
+    void resizeTableColumns(); // Resize WormTableView columns to fit contents
+
 
 
     Ui::MainWindow *ui;

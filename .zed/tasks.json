@@ -48,7 +48,7 @@
     "tags": []
   },
   {
-    "label": "Build YAWT",
+    "label": "Build/Run YAWT",
     "command": "$ZED_WORKTREE_ROOT/zed_build_debug.sh",
     //"args": [],
     // Env overrides for the command, will be appended to the terminal's environment from the settings.

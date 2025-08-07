@@ -41,7 +41,12 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
 
     ui->wormTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-    ui->wormTableView->horizontalHeader()->setStretchLastSection(true);
+    // Don't stretch last section - we'll handle column widths in resizeTableColumns()
+    ui->wormTableView->horizontalHeader()->setStretchLastSection(false);
+    // Ensure horizontal scrollbar appears when needed
+    ui->wormTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    
+    resizeTableColumns();
 
     // Tracking Manager
     m_trackingManager = new TrackingManager(this);
@@ -79,6 +84,13 @@ void MainWindow::setupInteractionModeButtonGroup() {
     // No QButtonGroup for view modes as they are independent toggles now
 }
 
+
+// Override resize event to handle table column resizing
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    // Call resizeTableColumns directly instead of using a signal
+    resizeTableColumns();
+}
 
 void MainWindow::setupConnections() {
     // Connect ROI factor spinbox to BlobTableModel
@@ -138,6 +150,11 @@ void MainWindow::setupConnections() {
     connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
 
+    // Auto-resize table columns when model data changes
+    connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
+    connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
+    connect(m_blobTableModel, &BlobTableModel::rowsRemoved, this, &MainWindow::resizeTableColumns);
+
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &MainWindow::updateVisibleTracksInVideoLoader);
@@ -194,6 +211,50 @@ void MainWindow::initializeUIStates() {
     m_blobTableModel->updateRoiSizeMultiplier(roiFactorSpinBoxD);
 
     // Initial button states will be set by sync slots when VideoLoader emits initial modes
+}
+
+void MainWindow::resizeTableColumns()
+{
+    if (!m_blobTableModel || m_blobTableModel->columnCount() == 0) {
+        return;
+    }
+
+    // Set minimum width for each column to ensure readability
+    ui->wormTableView->horizontalHeader()->setMinimumSectionSize(10);
+    
+    // First, resize all columns to fit their contents
+    int totalContentWidth = 0;
+    int columnCount = m_blobTableModel->columnCount();
+    QVector<int> contentWidths(columnCount);
+    
+    for (int i = 0; i < columnCount; ++i) {
+        ui->wormTableView->resizeColumnToContents(i);
+        contentWidths[i] = ui->wormTableView->horizontalHeader()->sectionSize(i);
+        totalContentWidth += contentWidths[i];
+    }
+    
+    // Get available viewport width
+    int viewportWidth = ui->wormTableView->viewport()->width();
+    
+    // Decide whether to expand columns or use scrollbar
+    if (viewportWidth > totalContentWidth && totalContentWidth > 0) {
+        // Extra space available - expand columns proportionally
+        float expansionRatio = static_cast<float>(viewportWidth) / totalContentWidth;
+        
+        for (int i = 0; i < columnCount; ++i) {
+            int newWidth = qRound(contentWidths[i] * expansionRatio);
+            ui->wormTableView->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Interactive);
+            ui->wormTableView->horizontalHeader()->resizeSection(i, newWidth);
+        }
+    } else {
+        // Content requires more space than available - keep content width and enable scrollbar
+        for (int i = 0; i < columnCount; ++i) {
+            ui->wormTableView->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Interactive);
+            // Keep the content width we already set with resizeColumnToContents
+        }
+        // Make sure horizontal scrollbar is enabled when needed
+        ui->wormTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    }
 }
 
 
