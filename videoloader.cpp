@@ -555,6 +555,17 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             // Tracking has run, display current frame's blob positions from tracks
             for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 if (m_allTracksToDisplay.count(trackId)) {
+                    // Find the corresponding item to check visibility flag
+                    bool isVisible = false;
+                    for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                        if (item.id == trackId) {
+                            // Only show tracks for items with visible checkbox checked
+                            isVisible = item.visible;
+                            break;
+                        }
+                    }
+                    if (!isVisible) continue;
+                    
                     const std::vector<Tracking::WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(trackId);
 
                     // Find the track point for the current frame
@@ -596,8 +607,10 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         } else if (!m_itemsToDisplay.isEmpty()) {
             // Fallback: Tracking not run or no tracks, display initial blob selections from m_itemsToDisplay
             for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                // Optional: Filter by m_visibleTrackIDs if you want consistency with table selection
-                // if (!m_visibleTrackIDs.contains(item.id) && !m_visibleTrackIDs.isEmpty()) continue;
+                // Only show items with visible checkbox checked
+                if (!item.visible) continue;
+                
+                // No need to filter by selection - visibility is controlled only by the checkbox
 
                 QColor itemColor = getTrackColor(item.id);
 
@@ -633,7 +646,17 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
             int trackId = it_map->first;
             const std::vector<Tracking::WormTrackPoint>& trackPoints = it_map->second;
-            if (!m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
+            
+            // Only show tracks for items with visible checkbox checked
+            bool isVisible = false;
+            for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                if (item.id == trackId) {
+                    isVisible = item.visible;
+                    break;
+                }
+            }
+            
+            if (!isVisible || !m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
 
             QPainterPath path;
             QColor trackColorWithAlpha = getTrackColor(trackId); // Assuming getTrackColor provides color with desired alpha
@@ -703,6 +726,16 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             int bestTrackId = -1; int bestFrameNum = -1; QPointF bestVideoPoint;
             double minDistanceSq = TRACK_POINT_CLICK_TOLERANCE * TRACK_POINT_CLICK_TOLERANCE;
             for (int trackId : std::as_const(m_visibleTrackIDs)) {
+                // Only interact with tracks for items with visible checkbox checked
+                bool isVisible = false;
+                for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                    if (item.id == trackId) {
+                        isVisible = item.visible;
+                        break;
+                    }
+                }
+                if (!isVisible) continue;
+                
                 if (m_allTracksToDisplay.count(trackId)) {
                     const auto& trackPoints = m_allTracksToDisplay.at(trackId);
                     for (const auto& pt : trackPoints) {

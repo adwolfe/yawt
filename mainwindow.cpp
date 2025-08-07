@@ -53,6 +53,12 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
     
+    // Configure Show/Hide column with checkboxes
+    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
+    // Allow checking checkboxes in the header
+    ui->wormTableView->horizontalHeader()->setSectionsClickable(true);
+    ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
+    
     resizeTableColumns();
 
     // Tracking Manager
@@ -166,6 +172,11 @@ void MainWindow::setupConnections() {
     // BlobTableModel -> VideoLoader
     connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
     connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
+    connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, 
+            [this](int id, bool visible) {
+                // When an item's visibility changes, update the VideoLoader with current items
+                ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
+            });
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
     
@@ -183,6 +194,31 @@ void MainWindow::setupConnections() {
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         ui->deleteButton->setEnabled(!selected.isEmpty());
     });
+    
+    // Connect to headerClicked signal for handling Show/Hide column header click
+    connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
+            [this](int logicalIndex) {
+        if (logicalIndex == BlobTableModel::Column::Show) {
+            // Get current header state
+            QVariant checkState = m_blobTableModel->headerData(
+                BlobTableModel::Column::Show, Qt::Horizontal, Qt::CheckStateRole);
+            
+            // Toggle state
+            if (checkState.isValid()) {
+                Qt::CheckState newState;
+                // If all or partial, make all unchecked. If none, make all checked.
+                if (checkState.toInt() == Qt::Unchecked) {
+                    newState = Qt::Checked;
+                } else {
+                    newState = Qt::Unchecked;
+                }
+                
+                m_blobTableModel->setHeaderData(
+                    BlobTableModel::Column::Show, Qt::Horizontal, 
+                    newState, Qt::CheckStateRole);
+            }
+        }
+    });
 
     // Video File Tree View -> VideoLoader
     connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
@@ -190,6 +226,22 @@ void MainWindow::setupConnections() {
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
     connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
+    
+    // Connect header data changes to trigger UI update
+    connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
+            this, [this](Qt::Orientation orientation, int first, int last) {
+        if (orientation == Qt::Horizontal && first <= BlobTableModel::Column::Show && last >= BlobTableModel::Column::Show) {
+            // Update the table view when header checkbox state changes
+            ui->wormTableView->update();
+        }
+    });
+    
+    // Initial call to setVisibleTrackIDs with all item IDs
+    QSet<int> initialItemIDs;
+    for (const auto& item : m_blobTableModel->getAllItems()) {
+        initialItemIDs.insert(item.id);
+    }
+    ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
     // Connections for TrackingProgressDialog are made when it's created/shown
 }
 
@@ -447,6 +499,9 @@ void MainWindow::handleRemoveBlobsClicked() {
     ui->deleteButton->setEnabled(false); // Disable delete button after clearing all items
     // Update VideoLoader to reflect that all items are removed
     ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
+    ui->videoLoader->setVisibleTrackIDs(QSet<int>());
+    // Ensure table columns are properly sized after clearing
+    resizeTableColumns();
 }
 
 void MainWindow::handleDeleteSelectedBlobClicked() {
@@ -601,22 +656,21 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
 // --- Table View and VideoLoader Sync ---
 void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected) {
+    Q_UNUSED(selected);
     Q_UNUSED(deselected);
-    QSet<int> selectedItemIDs;
-    if (ui->wormTableView && m_blobTableModel) {
-        QItemSelectionModel *selectionModel = ui->wormTableView->selectionModel();
-        if (selectionModel) {
-            QModelIndexList selectedRowsIndexes = selectionModel->selectedRows();
-            for (const QModelIndex &rowIdx : selectedRowsIndexes) {
-                QModelIndex idModelIndex = m_blobTableModel->index(rowIdx.row(), BlobTableModel::Column::ID);
-                if (idModelIndex.isValid()) {
-                    bool conversionOk;
-                    int itemId = m_blobTableModel->data(idModelIndex, Qt::DisplayRole).toInt(&conversionOk);
-                    if (conversionOk) selectedItemIDs.insert(itemId);
-                }
-            }
+    
+    // Create a set with all item IDs regardless of selection
+    // This effectively disables selection-based visibility filtering
+    // Only the checkbox state (visible flag) will control display
+    QSet<int> allItemIDs;
+    
+    if (m_blobTableModel) {
+        const QList<TableItems::ClickedItem>& allItems = m_blobTableModel->getAllItems();
+        for (const auto& item : allItems) {
+            allItemIDs.insert(item.id);
         }
     }
-    qDebug() << "MainWindow: Setting visible track/item IDs in VideoLoader:" << selectedItemIDs;
-    ui->videoLoader->setVisibleTrackIDs(selectedItemIDs);
+    
+    qDebug() << "MainWindow: Setting all item IDs as visible in VideoLoader:" << allItemIDs;
+    ui->videoLoader->setVisibleTrackIDs(allItemIDs);
 }

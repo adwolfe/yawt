@@ -29,6 +29,9 @@ public:
     
     // Override for checkbox handling
     Qt::ItemFlags flags(const QModelIndex &index) const override;
+    
+    // Header click handling
+    bool setHeaderData(int section, Qt::Orientation orientation, const QVariant &value, int role = Qt::EditRole) override;
 
     // Data handling:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
@@ -107,6 +110,14 @@ signals:
     void itemColorChanged(int id, const QColor& color);
 
     /**
+     * @brief Emitted when an item's visibility is changed.
+     * Useful for components that need to update visibility without refreshing all items.
+     * @param id The ID of the item.
+     * @param visible The new visibility state of the item.
+     */
+    void itemVisibilityChanged(int id, bool visible);
+
+    /**
      * @brief Emitted when the calculated global metrics (min/max area, aspect ratio, fixed ROI size) change.
      * This can be used by UI elements to display these values.
      * @param minArea Minimum observed area of worms.
@@ -125,6 +136,12 @@ public slots:
      * @param newMultiplier The new multiplier value
      */
     void updateRoiSizeMultiplier(double newMultiplier);
+    
+    /**
+     * @brief Toggles visibility for all items in the model
+     * @param checked If true, all items will be visible; if false, all will be hidden
+     */
+    void toggleAllVisibility(bool checked);
 
 private:
     QList<TableItems::ClickedItem> m_items;

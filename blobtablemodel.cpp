@@ -47,19 +47,43 @@ QColor BlobTableModel::getNextColor() {
 }
 
 QVariant BlobTableModel::headerData(int section, Qt::Orientation orientation, int role) const {
-    if (role != Qt::DisplayRole || orientation != Qt::Horizontal) {
+    if (orientation != Qt::Horizontal) {
         return QVariant();
     }
 
-    switch (static_cast<Column>(section)) {
-    case Column::ID:        return "ID";
-    case Column::Color:     return "Color";
-    case Column::Type:      return "Type";
-    case Column::Frame:     return "Frame";
-    case Column::CentroidX: return "X";
-    case Column::CentroidY: return "Y";
-    default:                return QVariant();
+    if (role == Qt::DisplayRole) {
+        switch (static_cast<Column>(section)) {
+        case Column::Show:      return "Show";
+        case Column::ID:        return "ID";
+        case Column::Color:     return "Color";
+        case Column::Type:      return "Type";
+        case Column::Frame:     return "Frame";
+        case Column::CentroidX: return "X";
+        case Column::CentroidY: return "Y";
+        default:                return QVariant();
+        }
+    } else if (role == Qt::CheckStateRole && static_cast<Column>(section) == Column::Show) {
+        // Support checkbox in header for the Show column
+        // Count how many items are visible to determine header check state
+        int visibleCount = 0;
+        for (const auto& item : m_items) {
+            if (item.visible) {
+                visibleCount++;
+            }
+        }
+        
+        if (m_items.isEmpty()) {
+            return QVariant(); // No items, no checkbox state
+        } else if (visibleCount == 0) {
+            return Qt::Unchecked;
+        } else if (visibleCount == m_items.count()) {
+            return Qt::Checked;
+        } else {
+            return Qt::PartiallyChecked;
+        }
     }
+    
+    return QVariant();
 }
 
 int BlobTableModel::rowCount(const QModelIndex &parent) const {
@@ -67,7 +91,7 @@ int BlobTableModel::rowCount(const QModelIndex &parent) const {
 }
 
 int BlobTableModel::columnCount(const QModelIndex &parent) const {
-    return parent.isValid() ? 0 : 6; // ID, Color, Type, Frame, CentroidX, CentroidY
+    return parent.isValid() ? 0 : 7; // Show, ID, Color, Type, Frame, CentroidX, CentroidY
 }
 
 QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
@@ -76,6 +100,15 @@ QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
     }
 
     const TableItems::ClickedItem &item = m_items.at(index.row());
+    
+    // Handle checkbox for Show column
+    if (static_cast<Column>(index.column()) == Column::Show) {
+        if (role == Qt::CheckStateRole) {
+            return item.visible ? Qt::Checked : Qt::Unchecked;
+        }
+        // No display text for checkbox column
+        return QVariant();
+    }
 
     if (role == Qt::DisplayRole || role == Qt::EditRole) {
         switch (static_cast<Column>(index.column())) {
@@ -103,54 +136,73 @@ QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
 }
 
 bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, int role) {
-    if (!index.isValid() || role != Qt::EditRole || index.row() >= m_items.count() || index.row() < 0) {
+    if (!index.isValid() || index.row() >= m_items.count() || index.row() < 0) {
         return false;
     }
 
     TableItems::ClickedItem &item = m_items[index.row()];
     bool dataWasChanged = false;
     bool typeChanged = false;
-
-    switch (static_cast<Column>(index.column())) {
-    case Column::Color:
-        if (value.canConvert<QColor>()) {
-            QColor newColor = value.value<QColor>();
-            if (item.color != newColor) {
-                item.color = newColor;
-                dataWasChanged = true;
-                emit itemColorChanged(item.id, newColor);
-            }
-        }
-        break;
-    case Column::Type: {
-        QString typeStr = value.toString();
-        TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
-        if (item.type != newType) {
-            item.type = newType;
+    bool visibilityChanged = false;
+    
+    // Handle checkbox for Show column
+    if (static_cast<Column>(index.column()) == Column::Show && role == Qt::CheckStateRole) {
+        Qt::CheckState checkState = static_cast<Qt::CheckState>(value.toInt());
+        bool newVisible = (checkState == Qt::Checked);
+        if (item.visible != newVisible) {
+            item.visible = newVisible;
             dataWasChanged = true;
-            typeChanged = true; // Mark that type specifically changed for recalculation
+            visibilityChanged = true;
+            emit itemVisibilityChanged(item.id, newVisible);
+            
+            // Ensure the header state is updated
+            emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
         }
-        break;
-    }
-    case Column::ID:
-    case Column::Frame:
-    case Column::CentroidX:
-    case Column::CentroidY:
-    default:
+    } else if (role == Qt::EditRole) {
+        switch (static_cast<Column>(index.column())) {
+        case Column::Color:
+            if (value.canConvert<QColor>()) {
+                QColor newColor = value.value<QColor>();
+                if (item.color != newColor) {
+                    item.color = newColor;
+                    dataWasChanged = true;
+                    emit itemColorChanged(item.id, newColor);
+                }
+            }
+            break;
+        case Column::Type: {
+            QString typeStr = value.toString();
+            TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
+            if (item.type != newType) {
+                item.type = newType;
+                dataWasChanged = true;
+                typeChanged = true; // Mark that type specifically changed for recalculation
+            }
+            break;
+        }
+        case Column::ID:
+        case Column::Frame:
+        case Column::CentroidX:
+        case Column::CentroidY:
+        case Column::Show: // Already handled above with CheckStateRole
+        default:
+            return false;
+        }
+    } else {
         return false;
     }
 
     if (dataWasChanged) {
-        emit dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole, Qt::DecorationRole});
+        emit dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole, Qt::DecorationRole, Qt::CheckStateRole});
+        
+        // No need to call headerDataChanged here as it's already called in specific sections
+        
         // itemsChanged will be emitted by recalculateGlobalMetricsAndROIs if type changed
         // or if other changes necessitate a full refresh.
-        // If only color changed, we don't need to recalculate global ROIs.
         if (typeChanged) {
             recalculateGlobalMetricsAndROIs();
         } else {
-            // If only color changed, we still need to inform VideoLoader to update if it uses m_itemsToDisplay directly
-            // However, VideoLoader also connects to itemColorChanged.
-            // To be safe and ensure VideoLoader always has the latest full list if any part of an item changes:
+            // If visibility or color changed, we need to inform VideoLoader
             emit itemsChanged(m_items);
         }
         return true;
@@ -163,9 +215,14 @@ Qt::ItemFlags BlobTableModel::flags(const QModelIndex& index) const {
         return Qt::NoItemFlags;
     }
     Qt::ItemFlags defaultFlags = QAbstractTableModel::flags(index);
-    if (static_cast<Column>(index.column()) == Column::Type || static_cast<Column>(index.column()) == Column::Color) {
+    
+    Column col = static_cast<Column>(index.column());
+    if (col == Column::Type || col == Column::Color) {
         return defaultFlags | Qt::ItemIsEditable;
+    } else if (col == Column::Show) {
+        return defaultFlags | Qt::ItemIsUserCheckable;
     }
+    
     return defaultFlags;
 }
 
@@ -179,12 +236,16 @@ bool BlobTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox,
     newItem.originalClickedBoundingBox = boundingBox; // Store the original clicked bounding box
     // newItem.initialBoundingBox will be set by recalculateGlobalMetricsAndROIs
     newItem.frameOfSelection = frameNumber;
+    newItem.visible = true; // New items are visible by default
     m_items.append(newItem);
     endInsertRows();
 
     // Recalculate global metrics and update all item ROIs
     recalculateGlobalMetricsAndROIs();
     // itemColorChanged and itemsChanged are emitted by recalculateGlobalMetricsAndROIs
+    
+    // Update header checkbox state
+    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
 
     qDebug() << "BlobTableModel: Added item ID" << newItem.id << "Original BBox:" << boundingBox;
     return true;
@@ -221,9 +282,69 @@ bool BlobTableModel::removeRows(int position, int rows, const QModelIndex &paren
         emit dataChanged(topLeft, bottomRight, {Qt::DisplayRole});
     }
 
+    // Update header checkbox state
+    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
+
     // Recalculate global metrics and update remaining item ROIs
     recalculateGlobalMetricsAndROIs();
     return true;
+}
+
+bool BlobTableModel::setHeaderData(int section, Qt::Orientation orientation, const QVariant &value, int role) {
+    // Only handle the Show column header for CheckStateRole
+    if (orientation == Qt::Horizontal && 
+        static_cast<Column>(section) == Column::Show && 
+        role == Qt::CheckStateRole) {
+        
+        Qt::CheckState newState = static_cast<Qt::CheckState>(value.toInt());
+        bool checked = (newState == Qt::Checked);
+        
+        // Toggle all items visibility
+        toggleAllVisibility(checked);
+        
+        // This will trigger a repaint of the header with the new state
+        emit headerDataChanged(Qt::Horizontal, section, section);
+        
+        return true;
+    }
+    
+    return QAbstractTableModel::setHeaderData(section, orientation, value, role);
+}
+
+void BlobTableModel::toggleAllVisibility(bool checked) {
+    if (m_items.isEmpty()) {
+        return;
+    }
+    
+    // Don't use beginResetModel() as it's too disruptive - instead do targeted updates
+    if (m_items.isEmpty()) {
+        return;
+    }
+
+    // First notify the view that we're about to change data
+    QModelIndex topLeft = index(0, Column::Show);
+    QModelIndex bottomRight = index(m_items.count() - 1, Column::Show);
+    
+    // Update all items' visibility
+    bool anyChanged = false;
+    for (int i = 0; i < m_items.count(); ++i) {
+        if (m_items[i].visible != checked) {
+            m_items[i].visible = checked;
+            emit itemVisibilityChanged(m_items[i].id, checked);
+            anyChanged = true;
+        }
+    }
+    
+    // Notify the view that data has changed for the Show column
+    emit dataChanged(topLeft, bottomRight, {Qt::CheckStateRole});
+    
+    // Update header state
+    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
+    
+    if (anyChanged) {
+        // Notify VideoLoader of the change
+        emit itemsChanged(m_items);
+    }
 }
 
 const TableItems::ClickedItem& BlobTableModel::getItem(int row) const {
