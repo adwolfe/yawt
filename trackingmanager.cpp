@@ -27,15 +27,40 @@ TrackingManager::TrackingManager(QObject* parent)
     m_expectedTrackersToFinish(0),
     m_finishedTrackersCount(0),
     m_videoProcessingOverallProgress(0),
-    m_nextPhysicalBlobId(1) // Start IDs from 1
+    m_nextPhysicalBlobId(1), // Start IDs from 1
+    m_storage(nullptr)
 {
+    registerMetaTypes();
+}
+
+TrackingManager::TrackingManager(TrackingDataStorage* storage, QObject* parent)
+    : QObject(parent),
+    m_keyFrameNum(-1),
+    m_totalFramesInVideoHint(0),
+    m_isTrackingRunning(false),
+    m_cancelRequested(false),
+    m_videoProcessorsFinishedCount(0),
+    m_totalVideoChunksToProcess(0),
+    m_videoFps(0.0),
+    m_expectedTrackersToFinish(0),
+    m_finishedTrackersCount(0),
+    m_videoProcessingOverallProgress(0),
+    m_nextPhysicalBlobId(1), // Start IDs from 1
+    m_storage(storage)
+{
+    registerMetaTypes();
+}
+
+void TrackingManager::registerMetaTypes()
+{
+
+    qRegisterMetaType<QMap<int, std::vector<Tracking::WormTrackPoint>>>("QMap<int, std::vector<Tracking::WormTrackPoint>>");
     qRegisterMetaType<std::vector<cv::Mat>>("std::vector<cv::Mat>");
     qRegisterMetaType<cv::Size>("cv::Size");
     qRegisterMetaType<Tracking::AllWormTracks>("Tracking::AllWormTracks");
     qRegisterMetaType<QList<Tracking::DetectedBlob>>("QList<Tracking::DetectedBlob>");
     qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob");
     qRegisterMetaType<Tracking::TrackerState>("Tracking::TrackerState");
-
     qDebug() << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
 }
 

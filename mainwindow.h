@@ -13,10 +13,12 @@ class ColorDelegate;
 class ItemTypeDelegate;
 class TrackingProgressDialog;
 class TrackingManager;
+class TrackingDataStorage;
 
 // Include VideoLoader header for enums and QFlags type
 #include "videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
 #include "trackingcommon.h" // For AllWormTracks and Tracking::DetectedBlob
+#include "trackingdatastorage.h" // Central data storage
 
 QT_BEGIN_NAMESPACE
 QT_END_NAMESPACE
@@ -101,6 +103,7 @@ private:
     ItemTypeDelegate *m_itemTypeDelegate;
     TrackingProgressDialog *m_trackingProgressDialog;
     TrackingManager *m_trackingManager;
+    TrackingDataStorage *m_trackingDataStorage; // Central data storage
 
     QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
     

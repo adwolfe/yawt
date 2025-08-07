@@ -8,14 +8,19 @@
 #include <QColor>
 #include <QSizeF> // Added for QSizeF
 #include "trackingcommon.h" // Contains TrackedItem and ItemType
+#include "trackingdatastorage.h" // Central data storage
 #include <limits> // For std::numeric_limits, good to have explicitly
+
+// Forward declaration
+class TrackingDataStorage;
+
 
 
 class BlobTableModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
-    explicit BlobTableModel(QObject *parent = nullptr);
+    explicit BlobTableModel(TrackingDataStorage* storage, QObject *parent = nullptr);
 
     // Header:
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
@@ -144,28 +149,19 @@ public slots:
     void toggleAllVisibility(bool checked);
 
 private:
-    QList<TableItems::ClickedItem> m_items;
-    int m_nextId; // For auto-generating IDs
-    QList<QColor> m_predefinedColors; // List of predefined colors
-    int m_currentColorIndex; // To cycle through predefined colors
-
-    // --- New Private Members for Metrics & ROI ---
-    double m_minObservedArea;
-    double m_maxObservedArea;
-    double m_minObservedAspectRatio;
-    double m_maxObservedAspectRatio;
-    QSizeF m_currentFixedRoiSize; // Stores the calculated fixed ROI dimensions
-    double m_roiSizeMultiplier;   // User-adjustable multiplier for ROI size
-
-    QColor getNextColor();
-    void initializeColors();
-
-    /**
-     * @brief Recalculates global min/max metrics based on current "Worm" items
-     * and updates the initialBoundingBox of all items to a standardized ROI size.
-     * Emits itemsChanged() and globalMetricsUpdated() if changes occur.
-     */
-    void recalculateGlobalMetricsAndROIs();
+    TrackingDataStorage* m_storage; // Pointer to the central data storage
+    
+    // Private slots to handle storage signals
+    private slots:
+        void onStorageItemAdded(int itemId);
+        void onStorageItemRemoved(int itemId);
+        void onStorageItemChanged(int itemId);
+        void onStorageItemVisibilityChanged(int itemId, bool visible);
+        void onStorageItemColorChanged(int itemId, const QColor& color);
+        void onStorageAllDataChanged();
+        void onStorageGlobalMetricsUpdated(double minArea, double maxArea,
+                                          double minAspectRatio, double maxAspectRatio,
+                                          const QSizeF& fixedRoiSize);
 };
 
 #endif // BLOBTABLEMODEL_H

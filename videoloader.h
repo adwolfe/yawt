@@ -22,10 +22,12 @@
 #include <opencv2/imgproc.hpp>
 
 #include "trackingcommon.h" // Contains TrackedItem, DetectedBlob, etc.
+#include "trackingdatastorage.h" // Central data storage
 
 // Forward declare to avoid including the full header if only pointers/references are used
 // class TrackedItem; // Already in trackingcommon.h
 // namespace TrackingHelper { struct DetectedBlob; } // Already in trackingcommon.h
+class TrackingDataStorage;
 
 
 
@@ -66,6 +68,7 @@ public:
     Q_FLAG(ViewModeOptions) // Makes ViewModeOptions usable in Qt's property system, if needed
 
     // --- Public Methods ---
+    void setTrackingDataStorage(TrackingDataStorage* storage);
     bool isVideoLoaded() const;
     int getTotalFrames() const;
     double getFPS() const;
@@ -240,6 +243,7 @@ private:
     Tracking::AllWormTracks m_allTracksToDisplay;  // All tracks data
     QSet<int> m_visibleTrackIDs;         // IDs of tracks that should be currently rendered
     mutable QMap<int, QColor> m_trackColors; // Cache for track/item colors
+    TrackingDataStorage* m_storage;      // Pointer to central data storage
 
     // --- Zoom & Pan Members ---
     double m_zoomFactor;

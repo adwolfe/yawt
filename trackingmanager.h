@@ -20,6 +20,7 @@
 #include "wormobject.h"
 #include "videoprocessor.h" // For VideoProcessor type, not direct instantiation here
 #include "wormtracker.h"    // For WormTracker type and enums
+#include "trackingdatastorage.h" // Central data storage
 
 // Constants for matching physical blobs on a frame
 const double PHYSICAL_BLOB_IOU_THRESHOLD = 0.5; // Higher threshold for matching same physical blob
@@ -44,11 +45,15 @@ struct FrameSpecificPhysicalBlob {
 // No longer using pause mechanism - split resolution is immediate
 
 
+// Forward declaration
+class TrackingDataStorage;
+
 class TrackingManager : public QObject {
     Q_OBJECT
 
 public:
-    explicit TrackingManager(QObject *parent = nullptr);
+    explicit TrackingManager(QObject* parent = nullptr);
+    explicit TrackingManager(TrackingDataStorage* storage, QObject* parent = nullptr);
     ~TrackingManager();
 
 public slots:
@@ -154,6 +159,7 @@ private:
     int m_videoProcessingOverallProgress;
     QMap<WormTracker*, int> m_individualTrackerProgress; // WormTracker instance -> progress %
     Tracking::AllWormTracks m_finalTracks; // Final consolidated tracks
+    TrackingDataStorage* m_storage;        // Pointer to central data storage
 
     // --- NEW Data Structures for Frame-Atomic Merge Logic ---
     // Maps frame number to a list of distinct physical merged blobs observed on that frame.
@@ -172,6 +178,9 @@ private:
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures
+    
+    // Helper method to register meta types
+    void registerMetaTypes();
 };
 
 #endif // TRACKINGMANAGER_H

@@ -31,6 +31,7 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_isDefiningRoi(false),
     m_zoomFactor(1.0),
     m_panOffset(0.0, 0.0),
+    m_storage(nullptr),
     m_thresholdAlgorithm(Thresholding::ThresholdAlgorithm::Global),
     m_thresholdValue(100),
     m_assumeLightBackground(true),
@@ -47,6 +48,26 @@ VideoLoader::VideoLoader(QWidget* parent)
             &VideoLoader::processNextFrame);
     setMouseTracking(true);
     updateCursorShape();
+}
+
+void VideoLoader::setTrackingDataStorage(TrackingDataStorage* storage) {
+    m_storage = storage;
+    
+    // If we have valid storage, connect to its signals
+    if (m_storage) {
+        // Connect to storage's signals to update display when data changes
+        connect(m_storage, &TrackingDataStorage::itemsChanged, this, [this]() {
+            // Update from storage when items change
+            if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
+                update(); // Trigger repaint
+            }
+        });
+        
+        connect(m_storage, &TrackingDataStorage::allDataChanged, this, [this]() {
+            // Full refresh when all data changes
+            update(); // Trigger repaint
+        });
+    }
 }
 
 VideoLoader::~VideoLoader() {
@@ -380,6 +401,8 @@ void VideoLoader::setBlurSigmaX(double sigmaX) {
 
 // --- Slots for Data Display from Models ---
 void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& items) {
+    // For backward compatibility - simply store in our local cache
+    // In the future, this won't be needed as we'll get items directly from storage
     m_itemsToDisplay = items;
     for (const TableItems::ClickedItem& item : items) {
         if (item.color.isValid()) {
@@ -393,6 +416,7 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
 }
 
 void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
+    // For backward compatibility - in the future we'll get tracks directly from storage
     m_allTracksToDisplay = tracks;
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs (as blobs now use track data)
         update();
@@ -555,13 +579,21 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             // Tracking has run, display current frame's blob positions from tracks
             for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 if (m_allTracksToDisplay.count(trackId)) {
-                    // Find the corresponding item to check visibility flag
+                    // Check if this track's item is set to visible
                     bool isVisible = false;
-                    for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                        if (item.id == trackId) {
-                            // Only show tracks for items with visible checkbox checked
-                            isVisible = item.visible;
-                            break;
+                    if (m_storage) {
+                        // Get item from storage if available
+                        const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+                        if (item) {
+                            isVisible = item->visible;
+                        }
+                    } else {
+                        // Fallback to legacy method
+                        for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                            if (item.id == trackId) {
+                                isVisible = item.visible;
+                                break;
+                            }
                         }
                     }
                     if (!isVisible) continue;
@@ -604,9 +636,14 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     }
                 }
             }
-        } else if (!m_itemsToDisplay.isEmpty()) {
-            // Fallback: Tracking not run or no tracks, display initial blob selections from m_itemsToDisplay
-            for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+        } else if ((m_storage && m_storage->getItemCount() > 0) || !m_itemsToDisplay.isEmpty()) {
+            // Fallback: Tracking not run or no tracks, display initial blob selections
+            
+            // If storage is available, use it
+            const QList<TableItems::ClickedItem>& itemsToDisplay = 
+                m_storage ? m_storage->getAllItems() : m_itemsToDisplay;
+                
+            for (const TableItems::ClickedItem& item : std::as_const(itemsToDisplay)) {
                 // Only show items with visible checkbox checked
                 if (!item.visible) continue;
                 
@@ -642,20 +679,31 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
 
     // Draw Tracks if ViewMode is Tracks
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty()) {
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
+        // Paint tracks for all worms
+        // For each track, paint its path
         for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
             int trackId = it_map->first;
             const std::vector<Tracking::WormTrackPoint>& trackPoints = it_map->second;
-            
+        
             // Only show tracks for items with visible checkbox checked
             bool isVisible = false;
-            for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                if (item.id == trackId) {
-                    isVisible = item.visible;
-                    break;
+            if (m_storage) {
+                // Get item from storage if available
+                const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+                if (item) {
+                    isVisible = item->visible;
+                }
+            } else {
+                // Fallback to legacy method
+                for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                    if (item.id == trackId) {
+                        isVisible = item.visible;
+                        break;
+                    }
                 }
             }
-            
+        
             if (!isVisible || !m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
 
             QPainterPath path;
@@ -728,10 +776,19 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 // Only interact with tracks for items with visible checkbox checked
                 bool isVisible = false;
-                for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                    if (item.id == trackId) {
-                        isVisible = item.visible;
-                        break;
+                if (m_storage) {
+                    // Get item from storage if available
+                    const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+                    if (item) {
+                        isVisible = item->visible;
+                    }
+                } else {
+                    // Fallback to legacy method
+                    for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                        if (item.id == trackId) {
+                            isVisible = item.visible;
+                            break;
+                        }
                     }
                 }
                 if (!isVisible) continue;
@@ -1161,9 +1218,20 @@ void VideoLoader::emitThresholdParametersChanged() {
 }
 
 QColor VideoLoader::getTrackColor(int trackId) const {
+    // First check if the item exists in storage
+    if (m_storage) {
+        const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+        if (item && item->color.isValid()) {
+            return item->color;
+        }
+    }
+    
+    // Fall back to cached colors
     if (m_trackColors.contains(trackId)) {
         return m_trackColors.value(trackId);
     }
+    
+    // Generate a random color if not found
     quint32 seed = static_cast<quint32>(trackId + 0xABCDEF);
     QRandomGenerator generator(seed);
     int hue = generator.bounded(360);

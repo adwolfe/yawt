@@ -4,46 +4,18 @@
 #include <QtMath> // For qMax, qMin, qSqrt, etc.
 #include <limits> // For std::numeric_limits
 
-// Define a default small ROI size for when no worms are present or dimensions are zero
-const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0); // Example: 20x20 pixels
-// ROI_SIZE_MULTIPLIER replaced with m_roiSizeMultiplier member variable
-
-BlobTableModel::BlobTableModel(QObject *parent)
+BlobTableModel::BlobTableModel(TrackingDataStorage* storage, QObject *parent)
     : QAbstractTableModel(parent),
-    m_nextId(1),
-    m_currentColorIndex(0),
-    m_minObservedArea(std::numeric_limits<double>::max()),
-    m_maxObservedArea(0.0),
-    m_minObservedAspectRatio(std::numeric_limits<double>::max()),
-    m_maxObservedAspectRatio(0.0),
-    m_currentFixedRoiSize(DEFAULT_ROI_SIZE), // Initialize with a default
-    m_roiSizeMultiplier(1.5) // Default ROI size multiplier
+    m_storage(storage)
 {
-    initializeColors();
-    // Initial call to set up ROI even if no items yet, or to reset if loading an empty state
-    // recalculateGlobalMetricsAndROIs(); // Not strictly needed here if no items, but good for consistency
-}
-
-void BlobTableModel::initializeColors() {
-    m_predefinedColors
-        << QColor(0, 63, 92, 255).lighter(120)
-        << QColor(47, 75, 124, 255).lighter(120)
-        << QColor(102, 81, 145, 255).lighter(120)
-        << QColor(160, 81, 149, 255).lighter(120)
-        << QColor(212, 80, 135, 255).lighter(120)
-        << QColor(249, 93, 106, 255).lighter(120)
-        << QColor(255, 124, 67, 255).lighter(120)
-        << QColor(255, 166, 0, 255).lighter(120);
-    // Add more distinct colors if needed
-}
-
-QColor BlobTableModel::getNextColor() {
-    if (m_predefinedColors.isEmpty()) {
-        return QColor(Qt::gray); // Fallback
-    }
-    QColor color = m_predefinedColors.at(m_currentColorIndex);
-    m_currentColorIndex = (m_currentColorIndex + 1) % m_predefinedColors.count();
-    return color;
+    // Connect to storage signals
+    connect(m_storage, &TrackingDataStorage::itemAdded, this, &BlobTableModel::onStorageItemAdded);
+    connect(m_storage, &TrackingDataStorage::itemRemoved, this, &BlobTableModel::onStorageItemRemoved);
+    connect(m_storage, &TrackingDataStorage::itemChanged, this, &BlobTableModel::onStorageItemChanged);
+    connect(m_storage, &TrackingDataStorage::itemVisibilityChanged, this, &BlobTableModel::onStorageItemVisibilityChanged);
+    connect(m_storage, &TrackingDataStorage::itemColorChanged, this, &BlobTableModel::onStorageItemColorChanged);
+    connect(m_storage, &TrackingDataStorage::allDataChanged, this, &BlobTableModel::onStorageAllDataChanged);
+    connect(m_storage, &TrackingDataStorage::globalMetricsUpdated, this, &BlobTableModel::onStorageGlobalMetricsUpdated);
 }
 
 QVariant BlobTableModel::headerData(int section, Qt::Orientation orientation, int role) const {
@@ -65,18 +37,19 @@ QVariant BlobTableModel::headerData(int section, Qt::Orientation orientation, in
     } else if (role == Qt::CheckStateRole && static_cast<Column>(section) == Column::Show) {
         // Support checkbox in header for the Show column
         // Count how many items are visible to determine header check state
+        const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
         int visibleCount = 0;
-        for (const auto& item : m_items) {
+        for (const auto& item : items) {
             if (item.visible) {
                 visibleCount++;
             }
         }
         
-        if (m_items.isEmpty()) {
+        if (items.isEmpty()) {
             return QVariant(); // No items, no checkbox state
         } else if (visibleCount == 0) {
             return Qt::Unchecked;
-        } else if (visibleCount == m_items.count()) {
+        } else if (visibleCount == items.count()) {
             return Qt::Checked;
         } else {
             return Qt::PartiallyChecked;
@@ -87,7 +60,7 @@ QVariant BlobTableModel::headerData(int section, Qt::Orientation orientation, in
 }
 
 int BlobTableModel::rowCount(const QModelIndex &parent) const {
-    return parent.isValid() ? 0 : m_items.count();
+    return parent.isValid() ? 0 : m_storage->getItemCount();
 }
 
 int BlobTableModel::columnCount(const QModelIndex &parent) const {
@@ -95,118 +68,101 @@ int BlobTableModel::columnCount(const QModelIndex &parent) const {
 }
 
 QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
-    if (!index.isValid() || index.row() >= m_items.count() || index.row() < 0) {
+    if (!index.isValid() || index.row() >= m_storage->getItemCount() || index.row() < 0) {
         return QVariant();
     }
 
-    const TableItems::ClickedItem &item = m_items.at(index.row());
-    
-    // Handle checkbox for Show column
-    if (static_cast<Column>(index.column()) == Column::Show) {
-        if (role == Qt::CheckStateRole) {
-            return item.visible ? Qt::Checked : Qt::Unchecked;
-        }
-        // No display text for checkbox column
-        return QVariant();
-    }
-
-    if (role == Qt::DisplayRole || role == Qt::EditRole) {
-        switch (static_cast<Column>(index.column())) {
-        case Column::ID:
-            return item.id;
-        case Column::Color:
-            return item.color; // Delegate handles QColor directly for display and edit
-        case Column::Type:
-            return itemTypeToString(item.type); // For display, delegate might use enum for edit
-        case Column::Frame:
-            return item.frameOfSelection;
-        case Column::CentroidX:
-            return QString::number(item.initialCentroid.x(), 'f', 2);
-        case Column::CentroidY:
-            return QString::number(item.initialCentroid.y(), 'f', 2);
-        default:
+    try {
+        const TableItems::ClickedItem &item = m_storage->getItemByIndex(index.row());
+        
+        // Handle checkbox for Show column
+        if (static_cast<Column>(index.column()) == Column::Show) {
+            if (role == Qt::CheckStateRole) {
+                return item.visible ? Qt::Checked : Qt::Unchecked;
+            }
+            // No display text for checkbox column
             return QVariant();
         }
-    } else if (role == Qt::DecorationRole) {
-        if (static_cast<Column>(index.column()) == Column::Color) {
-            return item.color; // Provide color for basic swatch if no delegate or for other roles
+
+        if (role == Qt::DisplayRole || role == Qt::EditRole) {
+            switch (static_cast<Column>(index.column())) {
+            case Column::ID:
+                return item.id;
+            case Column::Color:
+                return item.color; // Delegate handles QColor directly for display and edit
+            case Column::Type:
+                return TableItems::itemTypeToString(item.type); // For display, delegate might use enum for edit
+            case Column::Frame:
+                return item.frameOfSelection;
+            case Column::CentroidX:
+                return QString::number(item.initialCentroid.x(), 'f', 2);
+            case Column::CentroidY:
+                return QString::number(item.initialCentroid.y(), 'f', 2);
+            default:
+                return QVariant();
+            }
+        } else if (role == Qt::DecorationRole) {
+            if (static_cast<Column>(index.column()) == Column::Color) {
+                return item.color; // Provide color for basic swatch if no delegate or for other roles
+            }
         }
+    } catch (const std::out_of_range& e) {
+        qWarning() << "BlobTableModel: Error accessing item at index" << index.row() << ":" << e.what();
     }
+    
     return QVariant();
 }
 
 bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, int role) {
-    if (!index.isValid() || index.row() >= m_items.count() || index.row() < 0) {
+    if (!index.isValid() || index.row() >= m_storage->getItemCount() || index.row() < 0) {
         return false;
     }
 
-    TableItems::ClickedItem &item = m_items[index.row()];
-    bool dataWasChanged = false;
-    bool typeChanged = false;
-    bool visibilityChanged = false;
-    
-    // Handle checkbox for Show column
-    if (static_cast<Column>(index.column()) == Column::Show && role == Qt::CheckStateRole) {
-        Qt::CheckState checkState = static_cast<Qt::CheckState>(value.toInt());
-        bool newVisible = (checkState == Qt::Checked);
-        if (item.visible != newVisible) {
-            item.visible = newVisible;
-            dataWasChanged = true;
-            visibilityChanged = true;
-            emit itemVisibilityChanged(item.id, newVisible);
-            
-            // Ensure the header state is updated
-            emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
-        }
-    } else if (role == Qt::EditRole) {
-        switch (static_cast<Column>(index.column())) {
-        case Column::Color:
-            if (value.canConvert<QColor>()) {
-                QColor newColor = value.value<QColor>();
-                if (item.color != newColor) {
-                    item.color = newColor;
-                    dataWasChanged = true;
-                    emit itemColorChanged(item.id, newColor);
+    try {
+        const TableItems::ClickedItem &item = m_storage->getItemByIndex(index.row());
+        int itemId = item.id;
+        
+        // Handle checkbox for Show column
+        if (static_cast<Column>(index.column()) == Column::Show && role == Qt::CheckStateRole) {
+            Qt::CheckState checkState = static_cast<Qt::CheckState>(value.toInt());
+            bool newVisible = (checkState == Qt::Checked);
+            if (item.visible != newVisible) {
+                m_storage->setItemVisibility(itemId, newVisible);
+                return true;
+            }
+        } else if (role == Qt::EditRole) {
+            switch (static_cast<Column>(index.column())) {
+            case Column::Color:
+                if (value.canConvert<QColor>()) {
+                    QColor newColor = value.value<QColor>();
+                    if (item.color != newColor) {
+                        m_storage->setItemColor(itemId, newColor);
+                        return true;
+                    }
                 }
+                break;
+            case Column::Type: {
+                QString typeStr = value.toString();
+                TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
+                if (item.type != newType) {
+                    m_storage->setItemType(itemId, newType);
+                    return true;
+                }
+                break;
             }
-            break;
-        case Column::Type: {
-            QString typeStr = value.toString();
-            TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
-            if (item.type != newType) {
-                item.type = newType;
-                dataWasChanged = true;
-                typeChanged = true; // Mark that type specifically changed for recalculation
+            case Column::ID:
+            case Column::Frame:
+            case Column::CentroidX:
+            case Column::CentroidY:
+            case Column::Show: // Already handled above with CheckStateRole
+            default:
+                return false;
             }
-            break;
         }
-        case Column::ID:
-        case Column::Frame:
-        case Column::CentroidX:
-        case Column::CentroidY:
-        case Column::Show: // Already handled above with CheckStateRole
-        default:
-            return false;
-        }
-    } else {
-        return false;
+    } catch (const std::out_of_range& e) {
+        qWarning() << "BlobTableModel: Error accessing item at index" << index.row() << ":" << e.what();
     }
-
-    if (dataWasChanged) {
-        emit dataChanged(index, index, {Qt::DisplayRole, Qt::EditRole, Qt::DecorationRole, Qt::CheckStateRole});
-        
-        // No need to call headerDataChanged here as it's already called in specific sections
-        
-        // itemsChanged will be emitted by recalculateGlobalMetricsAndROIs if type changed
-        // or if other changes necessitate a full refresh.
-        if (typeChanged) {
-            recalculateGlobalMetricsAndROIs();
-        } else {
-            // If visibility or color changed, we need to inform VideoLoader
-            emit itemsChanged(m_items);
-        }
-        return true;
-    }
+    
     return false;
 }
 
@@ -227,67 +183,40 @@ Qt::ItemFlags BlobTableModel::flags(const QModelIndex& index) const {
 }
 
 bool BlobTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type) {
-    beginInsertRows(QModelIndex(), rowCount(), rowCount());
-    TableItems::ClickedItem newItem;
-    newItem.id = m_nextId++;
-    newItem.color = getNextColor();
-    newItem.type = type;
-    newItem.initialCentroid = centroid;
-    newItem.originalClickedBoundingBox = boundingBox; // Store the original clicked bounding box
-    // newItem.initialBoundingBox will be set by recalculateGlobalMetricsAndROIs
-    newItem.frameOfSelection = frameNumber;
-    newItem.visible = true; // New items are visible by default
-    m_items.append(newItem);
-    endInsertRows();
-
-    // Recalculate global metrics and update all item ROIs
-    recalculateGlobalMetricsAndROIs();
-    // itemColorChanged and itemsChanged are emitted by recalculateGlobalMetricsAndROIs
-    
-    // Update header checkbox state
-    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
-
-    qDebug() << "BlobTableModel: Added item ID" << newItem.id << "Original BBox:" << boundingBox;
-    return true;
+    // Delegate to storage
+    int newId = m_storage->addItem(centroid, boundingBox, frameNumber, type);
+    return (newId > 0);
 }
 
 bool BlobTableModel::removeRows(int position, int rows, const QModelIndex &parent) {
     Q_UNUSED(parent);
-    if (position < 0 || position + rows > m_items.count() || rows <= 0) {
+    if (position < 0 || position + rows > m_storage->getItemCount() || rows <= 0) {
         return false;
     }
-    beginRemoveRows(QModelIndex(), position, position + rows - 1);
+    
+    // We need to remove items one by one by their IDs
+    bool success = true;
+    QList<int> itemsToRemove;
+    
+    // First collect all the item IDs to remove
     for (int i = 0; i < rows; ++i) {
-        m_items.removeAt(position);
-    }
-    endRemoveRows();
-
-    // If all items were removed, reset the ID counter
-    if (m_items.isEmpty()) {
-        m_nextId = 1;
-    } else {
-        // Renumber all remaining items sequentially
-        QModelIndex topLeft = index(0, 0);
-        QModelIndex bottomRight = index(m_items.count() - 1, 0);
-        
-        // Update IDs to be sequential
-        for (int i = 0; i < m_items.count(); ++i) {
-            m_items[i].id = i + 1;
+        try {
+            const TableItems::ClickedItem &item = m_storage->getItemByIndex(position + i);
+            itemsToRemove.append(item.id);
+        } catch (const std::out_of_range& e) {
+            qWarning() << "BlobTableModel: Error accessing item at index" << (position + i) << ":" << e.what();
+            success = false;
         }
-        
-        // Set m_nextId to be one more than the highest ID
-        m_nextId = m_items.count() + 1;
-        
-        // Notify views that the ID column data has changed
-        emit dataChanged(topLeft, bottomRight, {Qt::DisplayRole});
     }
-
-    // Update header checkbox state
-    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
-
-    // Recalculate global metrics and update remaining item ROIs
-    recalculateGlobalMetricsAndROIs();
-    return true;
+    
+    // Then remove them from storage
+    for (int id : itemsToRemove) {
+        if (!m_storage->removeItem(id)) {
+            success = false;
+        }
+    }
+    
+    return success;
 }
 
 bool BlobTableModel::setHeaderData(int section, Qt::Orientation orientation, const QVariant &value, int role) {
@@ -302,9 +231,6 @@ bool BlobTableModel::setHeaderData(int section, Qt::Orientation orientation, con
         // Toggle all items visibility
         toggleAllVisibility(checked);
         
-        // This will trigger a repaint of the header with the new state
-        emit headerDataChanged(Qt::Horizontal, section, section);
-        
         return true;
     }
     
@@ -312,190 +238,133 @@ bool BlobTableModel::setHeaderData(int section, Qt::Orientation orientation, con
 }
 
 void BlobTableModel::toggleAllVisibility(bool checked) {
-    if (m_items.isEmpty()) {
-        return;
-    }
-    
-    // Don't use beginResetModel() as it's too disruptive - instead do targeted updates
-    if (m_items.isEmpty()) {
-        return;
-    }
-
-    // First notify the view that we're about to change data
-    QModelIndex topLeft = index(0, Column::Show);
-    QModelIndex bottomRight = index(m_items.count() - 1, Column::Show);
-    
-    // Update all items' visibility
-    bool anyChanged = false;
-    for (int i = 0; i < m_items.count(); ++i) {
-        if (m_items[i].visible != checked) {
-            m_items[i].visible = checked;
-            emit itemVisibilityChanged(m_items[i].id, checked);
-            anyChanged = true;
-        }
-    }
-    
-    // Notify the view that data has changed for the Show column
-    emit dataChanged(topLeft, bottomRight, {Qt::CheckStateRole});
-    
-    // Update header state
-    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
-    
-    if (anyChanged) {
-        // Notify VideoLoader of the change
-        emit itemsChanged(m_items);
-    }
+    m_storage->setAllItemsVisibility(checked);
 }
 
 const TableItems::ClickedItem& BlobTableModel::getItem(int row) const {
-    if (row < 0 || row >= m_items.count()) {
-        throw std::out_of_range("Row index out of range in BlobTableModel::getItem");
-    }
-    return m_items.at(row);
+    return m_storage->getItemByIndex(row);
 }
 
 const QList<TableItems::ClickedItem>& BlobTableModel::getAllItems() const {
-    return m_items;
+    return m_storage->getAllItems();
 }
 
-// --- New Public Getters for Metrics ---
+// --- Public Getters for Metrics (now from storage) ---
 double BlobTableModel::getMinObservedArea() const {
-    return m_minObservedArea;
+    return m_storage->getMinObservedArea();
 }
 
 double BlobTableModel::getMaxObservedArea() const {
-    return m_maxObservedArea;
+    return m_storage->getMaxObservedArea();
 }
 
 double BlobTableModel::getMinObservedAspectRatio() const {
-    return m_minObservedAspectRatio;
+    return m_storage->getMinObservedAspectRatio();
 }
 
 double BlobTableModel::getMaxObservedAspectRatio() const {
-    return m_maxObservedAspectRatio;
+    return m_storage->getMaxObservedAspectRatio();
 }
 
 QSizeF BlobTableModel::getCurrentFixedRoiSize() const {
-    return m_currentFixedRoiSize;
+    return m_storage->getCurrentFixedRoiSize();
 }
 
 double BlobTableModel::getRoiSizeMultiplier() const {
-    return m_roiSizeMultiplier;
+    return m_storage->getRoiSizeMultiplier();
 }
 
 void BlobTableModel::updateRoiSizeMultiplier(double newMultiplier) {
-    if (!qFuzzyCompare(m_roiSizeMultiplier, newMultiplier)) {
-        m_roiSizeMultiplier = newMultiplier;
-        recalculateGlobalMetricsAndROIs();
+    m_storage->setRoiSizeMultiplier(newMultiplier);
+}
+
+// --- Private slots to handle storage signals ---
+
+void BlobTableModel::onStorageItemAdded(int itemId) {
+    Q_UNUSED(itemId);
+    // Full model reset is simplest but we could optimize with beginInsertRows
+    beginResetModel();
+    endResetModel();
+}
+
+void BlobTableModel::onStorageItemRemoved(int itemId) {
+    Q_UNUSED(itemId);
+    // Full model reset is simplest but we could optimize with beginRemoveRows
+    beginResetModel();
+    endResetModel();
+}
+
+void BlobTableModel::onStorageItemChanged(int itemId) {
+    // Find the row for this item ID
+    int row = -1;
+    for (int i = 0; i < m_storage->getItemCount(); ++i) {
+        if (m_storage->getItemByIndex(i).id == itemId) {
+            row = i;
+            break;
+        }
+    }
+    
+    if (row >= 0) {
+        QModelIndex topLeft = index(row, 0);
+        QModelIndex bottomRight = index(row, columnCount() - 1);
+        emit dataChanged(topLeft, bottomRight);
     }
 }
 
-// --- Private Helper Methods ---
-void BlobTableModel::recalculateGlobalMetricsAndROIs() {
-    double newMinArea = std::numeric_limits<double>::max();
-    double newMaxArea = 0.0;
-    double newMinAspectRatio = std::numeric_limits<double>::max();
-    double newMaxAspectRatio = 0.0;
-    double maxObservedDimensionL = 0.0;
-    int wormCount = 0;
-
-    for (const TableItems::ClickedItem &item : qAsConst(m_items)) {
-        if (item.type == TableItems::ItemType::Worm) {
-            wormCount++;
-            const QRectF& originalBox = item.originalClickedBoundingBox;
-            if (originalBox.isValid() && originalBox.width() > 0 && originalBox.height() > 0) {
-                double area = originalBox.width() * originalBox.height();
-                newMinArea = qMin(newMinArea, area);
-                newMaxArea = qMax(newMaxArea, area);
-
-                double w = originalBox.width();
-                double h = originalBox.height();
-                double aspectRatio = (w > h) ? (w / h) : (h / w); // Ensure aspect ratio >= 1
-                if (h == 0 && w == 0) aspectRatio = 1.0; // Avoid division by zero for zero-size box
-                else if (h == 0 || w == 0) aspectRatio = std::numeric_limits<double>::max(); // Or some large number for degenerate cases
-
-                newMinAspectRatio = qMin(newMinAspectRatio, aspectRatio);
-                newMaxAspectRatio = qMax(newMaxAspectRatio, aspectRatio);
-
-                maxObservedDimensionL = qMax(maxObservedDimensionL, qMax(w, h));
-            }
+void BlobTableModel::onStorageItemVisibilityChanged(int itemId, bool visible) {
+    // Forward the signal
+    emit itemVisibilityChanged(itemId, visible);
+    
+    // Update header checkbox state
+    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
+    
+    // Find the row and update the checkbox cell
+    int row = -1;
+    for (int i = 0; i < m_storage->getItemCount(); ++i) {
+        if (m_storage->getItemByIndex(i).id == itemId) {
+            row = i;
+            break;
         }
     }
-
-    // If no worms, reset metrics to defaults
-    if (wormCount == 0) {
-        newMinArea = 0.0; // Or some other sensible default
-        newMaxArea = 0.0;
-        newMinAspectRatio = 1.0; // Aspect ratio of 1 for a square
-        newMaxAspectRatio = 1.0;
-        maxObservedDimensionL = 0.0; // This will lead to DEFAULT_ROI_SIZE
+    
+    if (row >= 0) {
+        QModelIndex checkboxIndex = index(row, Column::Show);
+        emit dataChanged(checkboxIndex, checkboxIndex, {Qt::CheckStateRole});
     }
-
-
-    // Update stored metrics if they changed
-    bool metricsChanged = false;
-    if (!qFuzzyCompare(m_minObservedArea, newMinArea) ||
-        !qFuzzyCompare(m_maxObservedArea, newMaxArea) ||
-        !qFuzzyCompare(m_minObservedAspectRatio, newMinAspectRatio) ||
-        !qFuzzyCompare(m_maxObservedAspectRatio, newMaxAspectRatio)) {
-        metricsChanged = true;
-    }
-
-    m_minObservedArea = newMinArea;
-    m_maxObservedArea = newMaxArea;
-    m_minObservedAspectRatio = newMinAspectRatio;
-    m_maxObservedAspectRatio = newMaxAspectRatio;
-
-    QSizeF newFixedRoiSize;
-    if (maxObservedDimensionL > 0) {
-        double sideLength = maxObservedDimensionL * m_roiSizeMultiplier;
-        newFixedRoiSize = QSizeF(sideLength, sideLength);
-    } else {
-        newFixedRoiSize = DEFAULT_ROI_SIZE;
-    }
-
-    if (m_currentFixedRoiSize != newFixedRoiSize) {
-        metricsChanged = true; // Also consider ROI size change as a metric change
-        m_currentFixedRoiSize = newFixedRoiSize;
-    }
-
-    // Update initialBoundingBox for all items
-    bool itemROIsChanged = false;
-    for (TableItems::ClickedItem &item : m_items) {
-        QRectF oldItemRoi = item.initialBoundingBox;
-        QPointF center = item.initialCentroid;
-        double w = m_currentFixedRoiSize.width();
-        double h = m_currentFixedRoiSize.height();
-        item.initialBoundingBox = QRectF(center.x() - w / 2.0,
-                                         center.y() - h / 2.0,
-                                         w, h);
-        if (item.initialBoundingBox != oldItemRoi) {
-            itemROIsChanged = true;
-        }
-    }
-
-    // Emit signals
-    if (metricsChanged) {
-        qDebug() << "BlobTableModel: Global metrics updated."
-                 << "Area (min/max):" << m_minObservedArea << "/" << m_maxObservedArea
-                 << "Aspect (min/max):" << m_minObservedAspectRatio << "/" << m_maxObservedAspectRatio
-                 << "Fixed ROI Size:" << m_currentFixedRoiSize;
-        emit globalMetricsUpdated(m_minObservedArea, m_maxObservedArea,
-                                  m_minObservedAspectRatio, m_maxObservedAspectRatio,
-                                  m_currentFixedRoiSize);
-    }
-
-    // Always emit itemsChanged if ROIs were updated, or if items were added/removed (covered by caller)
-    // or if metrics that affect display (like ROI size) changed.
-    // The initial add/remove calls will trigger this function, and it will emit itemsChanged.
-    // If called from setData (type change), this ensures the update.
-    if (itemROIsChanged || metricsChanged) { // If ROIs changed OR other metrics changed (which implies ROI might have changed)
-        emit itemsChanged(m_items);
-        qDebug() << "BlobTableModel: itemsChanged emitted due to ROI or metric updates.";
-    }
-    // If an item was just added or removed, the model's structure changed,
-    // so itemsChanged should definitely be emitted.
-    // The beginInsertRows/endInsertRows and beginRemoveRows/endRemoveRows
-    // handle the basic model update notifications. This itemsChanged(m_items)
-    // is for the VideoLoader to get the *full list* with potentially updated ROIs.
 }
+
+void BlobTableModel::onStorageItemColorChanged(int itemId, const QColor& color) {
+    // Forward the signal
+    emit itemColorChanged(itemId, color);
+    
+    // Find the row and update the color cell
+    int row = -1;
+    for (int i = 0; i < m_storage->getItemCount(); ++i) {
+        if (m_storage->getItemByIndex(i).id == itemId) {
+            row = i;
+            break;
+        }
+    }
+    
+    if (row >= 0) {
+        QModelIndex colorIndex = index(row, Column::Color);
+        emit dataChanged(colorIndex, colorIndex, {Qt::DisplayRole, Qt::EditRole, Qt::DecorationRole});
+    }
+}
+
+void BlobTableModel::onStorageAllDataChanged() {
+    // Full model reset
+    beginResetModel();
+    endResetModel();
+    
+    // Forward the signal to connected components
+    emit itemsChanged(m_storage->getAllItems());
+}
+
+void BlobTableModel::onStorageGlobalMetricsUpdated(double minArea, double maxArea,
+                                                double minAspectRatio, double maxAspectRatio,
+                                                const QSizeF& fixedRoiSize) {
+    // Forward the signal
+    emit globalMetricsUpdated(minArea, maxArea, minAspectRatio, maxAspectRatio, fixedRoiSize);
+}
+

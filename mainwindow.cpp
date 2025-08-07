@@ -27,12 +27,16 @@ MainWindow::MainWindow(QWidget *parent)
     , m_trackingProgressDialog(nullptr)
     , m_trackingManager(nullptr)
     , m_interactionModeButtonGroup(new QButtonGroup(this))
+    , m_trackingDataStorage(nullptr)
     , roiFactorSpinBoxD(1.5) // Initialize ROI factor to default value 1.5
 {
     ui->setupUi(this);
 
+    // Initialize central data storage
+    m_trackingDataStorage = new TrackingDataStorage(this);
+    
     // Model and Delegates
-    m_blobTableModel = new BlobTableModel(this);
+    m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
     ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
 
     m_itemTypeDelegate = new ItemTypeDelegate(this);
@@ -61,8 +65,11 @@ MainWindow::MainWindow(QWidget *parent)
     
     resizeTableColumns();
 
-    // Tracking Manager
-    m_trackingManager = new TrackingManager(this);
+    // Tracking Manager - pass data storage
+    m_trackingManager = new TrackingManager(m_trackingDataStorage, this);
+    
+    // Pass data storage to VideoLoader
+    ui->videoLoader->setTrackingDataStorage(m_trackingDataStorage);
 
     setupInteractionModeButtonGroup(); // Setup for exclusive interaction mode buttons
     setupConnections();
@@ -477,6 +484,8 @@ void MainWindow::setBackgroundAssumption(int index) {
 void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+    
+    // Now adding through the data storage via the model
     bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, TableItems::ItemType::Worm);
     
     if (added) {
@@ -497,7 +506,7 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
 void MainWindow::handleRemoveBlobsClicked() {
     m_blobTableModel->removeRows(0, m_blobTableModel->getAllItems().length());
     ui->deleteButton->setEnabled(false); // Disable delete button after clearing all items
-    // Update VideoLoader to reflect that all items are removed
+    // VideoLoader will get updates from storage, but keep these for backward compatibility
     ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
     ui->videoLoader->setVisibleTrackIDs(QSet<int>());
     // Ensure table columns are properly sized after clearing
@@ -646,7 +655,16 @@ void MainWindow::handleCancelTrackingFromDialog() {
 
 void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {
     qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
+    
+    // Store tracks in the central data storage
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        m_trackingDataStorage->setTrackForItem(it->first, it->second);
+    }
+    
+    // VideoLoader still needs direct track data for backward compatibility
+    // It will also get data from storage now
     ui->videoLoader->setTracksToDisplay(tracks);
+    
     if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
         ui->wormTableView->selectAll();
@@ -659,12 +677,15 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
     Q_UNUSED(selected);
     Q_UNUSED(deselected);
     
-    // Create a set with all item IDs regardless of selection
-    // This effectively disables selection-based visibility filtering
-    // Only the checkbox state (visible flag) will control display
+    // Create a set with all item IDs from the central data storage
+    // Only the checkbox state (visible flag) will control actual display
     QSet<int> allItemIDs;
     
-    if (m_blobTableModel) {
+    if (m_trackingDataStorage) {
+        // Get all IDs directly from the storage
+        allItemIDs = m_trackingDataStorage->getAllItemIds();
+    } else if (m_blobTableModel) {
+        // Fallback to model if storage not available
         const QList<TableItems::ClickedItem>& allItems = m_blobTableModel->getAllItems();
         for (const auto& item : allItems) {
             allItemIDs.insert(item.id);
