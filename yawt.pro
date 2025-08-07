@@ -1,7 +1,7 @@
 QT += core gui widgets svg
 
 TARGET = yawt
-VERSION = 0.9.0
+VERSION = 0.9.1
 
 CONFIG += c++17
 CONFIG += warn_on

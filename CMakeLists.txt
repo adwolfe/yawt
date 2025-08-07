@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-project(yawt LANGUAGES CXX VERSION 0.9.0)
+project(yawt LANGUAGES CXX VERSION 0.9.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,7 +33,6 @@ set(SOURCES
     main.cpp
     mainwindow.cpp
     trackingcommon.cpp
-    trackingdatastorage.cpp
     trackingmanager.cpp
     trackingprogressdialog.cpp
     videofiletreeview.cpp
@@ -52,7 +51,6 @@ set(HEADERS
     itemtypedelegate.h
     mainwindow.h
     trackingcommon.h
-    trackingdatastorage.h
     trackingmanager.h
     trackingprogressdialog.h
     videofiletreeview.h
