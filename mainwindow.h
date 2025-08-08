@@ -44,6 +44,8 @@ public slots:
     void updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame);
     void seekFrame(int frame);
     void frameSliderMoved(int value);
+    void goToFirstFrame();
+    void goToLastFrame();
 
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();

@@ -146,6 +146,8 @@ void MainWindow::setupConnections() {
         if (checked) { ui->videoLoader->play(); ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-pause", QIcon(":/icons/pause.png"))); }
         else { ui->videoLoader->pause(); ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png"))); }
     });
+    connect(ui->firstFrameButton, &QToolButton::clicked, this, &MainWindow::goToFirstFrame);
+    connect(ui->lastFrameButton, &QToolButton::clicked, this, &MainWindow::goToLastFrame);
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
 
@@ -620,6 +622,32 @@ void MainWindow::seekFrame(int frame) {
     }
 }
 
+void MainWindow::goToFirstFrame() {
+    ui->videoLoader->seekToFrame(0, false);
+    if (!ui->frameSlider->isSliderDown()) {
+        ui->frameSlider->setValue(0);
+    }
+    if (!ui->framePosition->hasFocus()) {
+        ui->framePosition->setValue(0);
+    }
+}
+
+void MainWindow::goToLastFrame() {
+    int totalFrames = ui->videoLoader->getTotalFrames();
+    int lastFrame = totalFrames - 1; // Assuming 0-based indexing
+    ui->videoLoader->seekToFrame(lastFrame, false);
+    if (!ui->frameSlider->isSliderDown()) {
+        ui->frameSlider->setValue(lastFrame);
+    }
+    if (!ui->framePosition->hasFocus()) {
+        ui->framePosition->setValue(lastFrame);
+    }
+    if (ui->playPauseButton->isChecked())
+    {
+        ui->playPauseButton->setChecked(false);
+    }
+}
+
 // --- Tracking Process ---
 void MainWindow::onStartTrackingActionTriggered() {
     if (!ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
@@ -731,12 +759,12 @@ void MainWindow::setupPlaybackSpeedComboBox() {
     ui->comboPlaybackSpeed->addItem("0.25x", 0.25);
     ui->comboPlaybackSpeed->addItem("0.5x", 0.5);
     ui->comboPlaybackSpeed->addItem("0.75x", 0.75);
-    ui->comboPlaybackSpeed->addItem("1.0x (Normal)", 1.0);
-    ui->comboPlaybackSpeed->addItem("1.25x", 1.25);
+    ui->comboPlaybackSpeed->addItem("1.0x", 1.0);
+    //ui->comboPlaybackSpeed->addItem("1.25x", 1.25);
     ui->comboPlaybackSpeed->addItem("1.5x", 1.5);
     ui->comboPlaybackSpeed->addItem("2.0x", 2.0);
     ui->comboPlaybackSpeed->addItem("2.5x", 2.5);
-    ui->comboPlaybackSpeed->addItem("3.0x", 3.0);
+    //ui->comboPlaybackSpeed->addItem("3.0x", 3.0);
     ui->comboPlaybackSpeed->addItem("5.0x", 5.0);
     ui->comboPlaybackSpeed->addItem("10.0x", 10.0);
     ui->comboPlaybackSpeed->addItem("20.0x", 20.0);
