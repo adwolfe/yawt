@@ -723,7 +723,15 @@ void VideoLoader::updateWormColor(int wormId, const QColor& color) {
         bool needsRepaint = false;
         if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
             // Check if this wormId is relevant for current frame blob display
-            if (!m_allTracksToDisplay.empty() && m_allTracksToDisplay.count(wormId)) {
+            if (m_storage) {
+                // Use optimized lookup instead of linear search
+                QPointF position;
+                QRectF roi;
+                if (m_storage->getWormDataForFrame(wormId, currentFrameIdx, position, roi)) {
+                    needsRepaint = true;
+                }
+            } else if (!m_allTracksToDisplay.empty() && m_allTracksToDisplay.count(wormId)) {
+                // Fallback to linear search if no storage available
                 const std::vector<Tracking::WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(wormId);
                 auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
                                        [this](const Tracking::WormTrackPoint& pt) {
@@ -904,20 +912,14 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     }
                     if (!isVisible) continue;
                     
-                    const std::vector<Tracking::WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(trackId);
-
-                    // Find the track point for the current frame
-                    auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
-                                           [this](const Tracking::WormTrackPoint& pt) {
-                                               return pt.frameNumberOriginal == currentFrameIdx;
-                                           });
-
-                    if (it != trackPoints.end()) { // Found track point for current frame
-                        const Tracking::WormTrackPoint& currentFramePoint = *it;
+                    // Use optimized lookup instead of linear search
+                    QPointF wormPosition;
+                    QRectF wormRoi;
+                    if (m_storage && m_storage->getWormDataForFrame(trackId, currentFrameIdx, wormPosition, wormRoi)) {
                         QColor itemColor = getTrackColor(trackId);
 
                         // Draw Bounding Box for current frame from track data
-                        QRectF bboxVideo = currentFramePoint.roi;
+                        QRectF bboxVideo = wormRoi;
                         if (bboxVideo.isValid()) {
                             QPointF bbTopLeftWidget = mapPointFromVideo(bboxVideo.topLeft());
                             QPointF bbBottomRightWidget = mapPointFromVideo(bboxVideo.bottomRight());
@@ -931,7 +933,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                         }
 
                         // Draw Centroid for current frame from track data
-                        QPointF centroidVideo = QPointF(currentFramePoint.position.x, currentFramePoint.position.y);
+                        QPointF centroidVideo = wormPosition;
                         QPointF centroidWidget = mapPointFromVideo(centroidVideo);
                         if (centroidWidget.x() >= 0) { // Check if on screen
                             painter.setPen(QPen(itemColor, 2)); // Outline for centroid
