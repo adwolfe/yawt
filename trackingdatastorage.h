@@ -290,6 +290,10 @@ private:
     QList<TableItems::ClickedItem> m_items;                // List of all blob items
     QMap<int, int> m_idToIndexMap;                         // Maps item ID to index in m_items
     Tracking::AllWormTracks m_tracks;                      // Maps item ID to track points
+    
+    // Frame index for fast track point lookup: wormId -> frameNumber -> trackPoint pointer
+    QMap<int, QMap<int, const Tracking::WormTrackPoint*>> m_frameIndex;
+    
     int m_nextId;                                          // Next available ID
     
     // Color management (from BlobTableModel)
@@ -309,6 +313,7 @@ private:
     void initializeColors();                               // Initialize color palette
     void recalculateGlobalMetricsAndROIs();                // Update metrics and ROIs
     void updateIdToIndexMap();                             // Rebuild ID-to-index map
+    void buildFrameIndex();                                // Build frame index for fast lookups
 };
 
 #endif // TRACKINGDATASTORAGE_H

@@ -82,14 +82,12 @@ void MiniVideoLoader::updateFrame(int frameNumber, const QImage& frame)
     
     // Poll for worm position if we have a selected worm
     if (m_selectedWormId >= 0) {
-        bool foundPosition = pollWormPosition();
-        qDebug() << "MiniVideoLoader: pollWormPosition returned:" << foundPosition;
+        pollWormPosition();
         updateCroppedImage();
     }
     
     update();  // Trigger repaint
     repaint(); // Force immediate repaint
-    qDebug() << "MiniVideoLoader: update() and repaint() called";
 }
 
 void MiniVideoLoader::onWormSelectionChanged(const QList<TableItems::ClickedItem>& selectedItems)
@@ -144,8 +142,6 @@ void MiniVideoLoader::clearSelection()
 bool MiniVideoLoader::pollWormPosition()
 {
     if (!m_trackingDataStorage || m_selectedWormId < 0 || m_currentFrameNumber < 0) {
-        qDebug() << "MiniVideoLoader: pollWormPosition failed - storage:" << m_trackingDataStorage 
-                 << "wormId:" << m_selectedWormId << "frame:" << m_currentFrameNumber;
         m_hasValidData = false;
         return false;
     }
@@ -154,14 +150,11 @@ bool MiniVideoLoader::pollWormPosition()
     QRectF roi;
     
     if (m_trackingDataStorage->getWormDataForFrame(m_selectedWormId, m_currentFrameNumber, position, roi)) {
-        qDebug() << "MiniVideoLoader: Found worm" << m_selectedWormId << "at frame" << m_currentFrameNumber 
-                 << "position:" << position << "roi:" << roi;
         m_wormPosition = position;
         m_wormRoi = roi;
         m_hasValidData = true;
         return true;
     } else {
-        qDebug() << "MiniVideoLoader: No data found for worm" << m_selectedWormId << "at frame" << m_currentFrameNumber;
         m_hasValidData = false;
         return false;
     }

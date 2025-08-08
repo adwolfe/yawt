@@ -198,6 +198,9 @@ void TrackingDataStorage::setTrackForItem(int itemId, const std::vector<Tracking
     bool isNewTrack = !m_tracks.count(itemId);
     m_tracks[itemId] = trackPoints;
     
+    // Rebuild frame index for fast lookups
+    buildFrameIndex();
+    
     if (isNewTrack) {
         emit trackAdded(itemId);
     } else {
@@ -210,8 +213,9 @@ void TrackingDataStorage::setTrackForItem(int itemId, const std::vector<Tracking
 }
 
 void TrackingDataStorage::clearTrackForItem(int itemId) {
-    if (m_tracks.count(itemId)) {
-        m_tracks.erase(itemId);
+    if (m_tracks.erase(itemId)) {
+        // Rebuild frame index after removing track
+        buildFrameIndex();
         emit trackRemoved(itemId);
         emit allDataChanged();
         emit itemsChanged(m_items);
@@ -236,6 +240,9 @@ void TrackingDataStorage::clearAllTracks() {
         emit trackRemoved(id);
     }
     
+    // Clear frame index
+    m_frameIndex.clear();
+    
     emit allDataChanged();
 }
 
@@ -246,6 +253,9 @@ void TrackingDataStorage::clearAndCompactTrackData() {
     // Aggressively clear and compact track data
     m_tracks.clear();
     Tracking::AllWormTracks().swap(m_tracks); // Force memory deallocation
+    
+    // Clear frame index
+    m_frameIndex.clear();
     
     // Also compact other related data structures
     QMap<int, int>().swap(m_idToIndexMap);
@@ -297,63 +307,35 @@ QSet<int> TrackingDataStorage::getItemsWithTracks() const {
 }
 
 bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outRoi) const {
-    qDebug() << "TrackingDataStorage::getWormDataForFrame - wormId:" << wormId << "frameNumber:" << frameNumber;
-    qDebug() << "Available tracks count:" << m_tracks.size();
-    
-    // Debug: show what tracks we have
-    for (const auto& track : m_tracks) {
-        qDebug() << "  Track ID:" << track.first << "has" << track.second.size() << "points";
-        if (track.first == wormId) {
-            qDebug() << "    Frames for worm" << wormId << ":";
-            for (size_t i = 0; i < std::min(track.second.size(), size_t(10)); ++i) {
-                qDebug() << "      Frame:" << track.second[i].frameNumberOriginal;
-            }
-            if (track.second.size() > 10) {
-                qDebug() << "      ... and" << (track.second.size() - 10) << "more frames";
-            }
-        }
-    }
-    
     // First, check if we can get the initial position from the ClickedItem (for keyframe)
     const TableItems::ClickedItem* item = getItem(wormId);
     if (item && item->frameOfSelection == frameNumber) {
-        qDebug() << "TrackingDataStorage: Found keyframe data for worm" << wormId << "at frame" << frameNumber;
         outPosition = item->initialCentroid;
         outRoi = item->initialBoundingBox;
         return true;
     }
     
-    // Try to get from tracking data
-    auto trackIt = m_tracks.find(wormId);
-    if (trackIt != m_tracks.end()) {
-        const std::vector<Tracking::WormTrackPoint>& trackPoints = trackIt->second;
-        qDebug() << "TrackingDataStorage: Found track for worm" << wormId << "with" << trackPoints.size() << "points";
-        
-        // Find track point for the specific frame
-        for (const auto& trackPoint : trackPoints) {
-            if (trackPoint.frameNumberOriginal == frameNumber) {
-                qDebug() << "TrackingDataStorage: Found tracking data for worm" << wormId << "at frame" << frameNumber;
-                // Convert cv::Point2f to QPointF
-                outPosition = QPointF(trackPoint.position.x, trackPoint.position.y);
-                outRoi = trackPoint.roi;
-                return true;
-            }
+    // Try to get from tracking data using frame index for O(1) lookup
+    auto wormIndexIt = m_frameIndex.find(wormId);
+    if (wormIndexIt != m_frameIndex.end()) {
+        auto frameIt = wormIndexIt.value().find(frameNumber);
+        if (frameIt != wormIndexIt.value().end()) {
+            const Tracking::WormTrackPoint* trackPoint = frameIt.value();
+            // Convert cv::Point2f to QPointF
+            outPosition = QPointF(trackPoint->position.x, trackPoint->position.y);
+            outRoi = trackPoint->roi;
+            return true;
         }
-        qDebug() << "TrackingDataStorage: No tracking data found for frame" << frameNumber;
-    } else {
-        qDebug() << "TrackingDataStorage: No track found for worm" << wormId;
     }
     
     // If we still have the item data but no specific frame match, and we're close to the keyframe,
     // use the initial position as fallback
     if (item && qAbs(frameNumber - item->frameOfSelection) <= 1) {
-        qDebug() << "TrackingDataStorage: Using fallback position for worm" << wormId << "at frame" << frameNumber << "(keyframe:" << item->frameOfSelection << ")";
         outPosition = item->initialCentroid;
         outRoi = item->initialBoundingBox;
         return true;
     }
     
-    qDebug() << "TrackingDataStorage: No data found for worm" << wormId << "at frame" << frameNumber;
     return false;  // Worm not found for this frame
 }
 
@@ -497,4 +479,24 @@ void TrackingDataStorage::recalculateGlobalMetricsAndROIs() {
         emit allDataChanged();
         emit itemsChanged(m_items);
     }
+}
+
+void TrackingDataStorage::buildFrameIndex() {
+    // Clear existing index
+    m_frameIndex.clear();
+
+    // Build new index: wormId -> frameNumber -> trackPoint pointer
+    for (const auto& trackPair : m_tracks) {
+        int wormId = trackPair.first;
+        const std::vector<Tracking::WormTrackPoint>& trackPoints = trackPair.second;
+    
+        QMap<int, const Tracking::WormTrackPoint*> frameMap;
+        for (const auto& trackPoint : trackPoints) {
+            frameMap[trackPoint.frameNumberOriginal] = &trackPoint;
+        }
+    
+        m_frameIndex[wormId] = frameMap;
+    }
+
+    qDebug() << "TrackingDataStorage: Built frame index for" << m_tracks.size() << "worms";
 }

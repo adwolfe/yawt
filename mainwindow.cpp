@@ -227,19 +227,7 @@ void MainWindow::setupConnections() {
         }
     });
 
-    // Click-to-deselect functionality for wormTableView
-    connect(ui->wormTableView, &QTableView::pressed,
-            this, [this](const QModelIndex &index) {
-        // Check if the clicked row is already selected
-        QModelIndexList currentSelection = ui->wormTableView->selectionModel()->selectedIndexes();
-        if (!currentSelection.isEmpty()) {
-            int currentSelectedRow = currentSelection.first().row();
-            if (currentSelectedRow == index.row()) {
-                // Clicking on already selected row - deselect it
-                ui->wormTableView->selectionModel()->clearSelection();
-            }
-        }
-    });
+
 
     // Main VideoLoader frame changes -> MiniVideoLoader
     connect(ui->videoLoader, &VideoLoader::frameChanged,
