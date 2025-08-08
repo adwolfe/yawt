@@ -79,6 +79,11 @@ public slots:
     void handleCancelTrackingFromDialog();
     void acceptTracksFromManager(const Tracking::AllWormTracks& tracks);
     void performPostTrackingMemoryCleanup();
+    
+    // Playback speed control
+    void setupPlaybackSpeedComboBox();
+    void onPlaybackSpeedChanged(int index);
+    void updatePlaybackSpeedComboBox(double speedMultiplier);
 
     // Table View and VideoLoader Sync
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);

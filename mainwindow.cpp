@@ -75,6 +75,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->videoLoader->setTrackingDataStorage(m_trackingDataStorage);
 
     setupInteractionModeButtonGroup(); // Setup for exclusive interaction mode buttons
+    setupPlaybackSpeedComboBox(); // Initialize playback speed options
     setupConnections();
     initializeUIStates();
 
@@ -209,7 +210,7 @@ void MainWindow::setupConnections() {
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         Q_UNUSED(deselected)
-        
+
         if (selected.isEmpty()) {
             // No selection - clear the mini video loader
             ui->miniVideoLoader->clearSelection();
@@ -226,9 +227,31 @@ void MainWindow::setupConnections() {
         }
     });
 
+    // Click-to-deselect functionality for wormTableView
+    connect(ui->wormTableView, &QTableView::pressed,
+            this, [this](const QModelIndex &index) {
+        // Check if the clicked row is already selected
+        QModelIndexList currentSelection = ui->wormTableView->selectionModel()->selectedIndexes();
+        if (!currentSelection.isEmpty()) {
+            int currentSelectedRow = currentSelection.first().row();
+            if (currentSelectedRow == index.row()) {
+                // Clicking on already selected row - deselect it
+                ui->wormTableView->selectionModel()->clearSelection();
+            }
+        }
+    });
+
     // Main VideoLoader frame changes -> MiniVideoLoader
-    connect(ui->videoLoader, &VideoLoader::frameChanged, 
+    connect(ui->videoLoader, &VideoLoader::frameChanged,
             ui->miniVideoLoader, &MiniVideoLoader::updateFrame);
+
+    // Playback speed control
+    connect(ui->comboPlaybackSpeed, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onPlaybackSpeedChanged);
+
+    // Update combobox when VideoLoader speed changes (optional - for consistency)
+    connect(ui->videoLoader, &VideoLoader::playbackSpeedChanged,
+            this, &MainWindow::updatePlaybackSpeedComboBox);
 
     // Connect to headerClicked signal for handling Show/Hide column header click
     connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
@@ -690,7 +713,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
         qDebug() << "MainWindow: Storing track for worm" << it->first << "with" << it->second.size() << "points";
         m_trackingDataStorage->setTrackForItem(it->first, it->second);
     }
-    
+
     // Debug: Verify tracks were stored
     qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
 
@@ -704,12 +727,63 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
         ui->wormTableView->selectAll();
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
-    
+
     // Keep track data in storage for MiniVideoLoader and other components
     // Memory cleanup will be handled elsewhere if needed
-    
+
     // Perform memory cleanup after tracking is complete
     performPostTrackingMemoryCleanup();
+}
+
+void MainWindow::setupPlaybackSpeedComboBox() {
+    // Clear any existing items
+    ui->comboPlaybackSpeed->clear();
+
+    // Add speed options with display text and actual multiplier values
+    ui->comboPlaybackSpeed->addItem("0.25x", 0.25);
+    ui->comboPlaybackSpeed->addItem("0.5x", 0.5);
+    ui->comboPlaybackSpeed->addItem("0.75x", 0.75);
+    ui->comboPlaybackSpeed->addItem("1.0x (Normal)", 1.0);
+    ui->comboPlaybackSpeed->addItem("1.25x", 1.25);
+    ui->comboPlaybackSpeed->addItem("1.5x", 1.5);
+    ui->comboPlaybackSpeed->addItem("2.0x", 2.0);
+    ui->comboPlaybackSpeed->addItem("2.5x", 2.5);
+    ui->comboPlaybackSpeed->addItem("3.0x", 3.0);
+    ui->comboPlaybackSpeed->addItem("5.0x", 5.0);
+    ui->comboPlaybackSpeed->addItem("10.0x", 10.0);
+    ui->comboPlaybackSpeed->addItem("20.0x", 20.0);
+    // Set default to 1.0x (Normal)
+    ui->comboPlaybackSpeed->setCurrentIndex(3);
+
+    qDebug() << "MainWindow: Playback speed combobox initialized";
+}
+
+void MainWindow::onPlaybackSpeedChanged(int index) {
+    if (index < 0 || index >= ui->comboPlaybackSpeed->count()) {
+        return;
+    }
+
+    // Get the speed multiplier from the item data
+    double speedMultiplier = ui->comboPlaybackSpeed->itemData(index).toDouble();
+
+    qDebug() << "MainWindow: Setting playback speed to" << speedMultiplier << "x";
+
+    // Set the speed in VideoLoader
+    ui->videoLoader->setPlaybackSpeed(speedMultiplier);
+}
+
+void MainWindow::updatePlaybackSpeedComboBox(double speedMultiplier) {
+    // Find the combobox item that matches this speed
+    for (int i = 0; i < ui->comboPlaybackSpeed->count(); ++i) {
+        double itemSpeed = ui->comboPlaybackSpeed->itemData(i).toDouble();
+        if (qFuzzyCompare(itemSpeed, speedMultiplier)) {
+            // Block signals to avoid recursive calls
+            ui->comboPlaybackSpeed->blockSignals(true);
+            ui->comboPlaybackSpeed->setCurrentIndex(i);
+            ui->comboPlaybackSpeed->blockSignals(false);
+            break;
+        }
+    }
 }
 
 // --- Table View and VideoLoader Sync ---
@@ -738,40 +812,40 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
 
 void MainWindow::performPostTrackingMemoryCleanup() {
     qDebug() << "MainWindow: Performing post-tracking memory cleanup...";
-    
+
     // Get memory usage before cleanup
     double cacheHitRate = ui->videoLoader->getCacheHitRate();
     int cacheSize = ui->videoLoader->getCacheSize();
-    
-    qDebug() << "MainWindow: VideoLoader cache status before cleanup - Size:" << cacheSize 
+
+    qDebug() << "MainWindow: VideoLoader cache status before cleanup - Size:" << cacheSize
              << "frames, Hit rate:" << QString::number(cacheHitRate, 'f', 1) << "%";
-    
+
     // Reduce VideoLoader frame cache size significantly after tracking
     // During tracking, we don't need as many cached frames since we're not seeking rapidly
     int originalCacheSize = 50; // Default cache size
     int reducedCacheSize = 10;  // Smaller cache for post-tracking
-    
+
     if (cacheSize > reducedCacheSize) {
         ui->videoLoader->setCacheSize(reducedCacheSize);
         qDebug() << "MainWindow: Reduced VideoLoader cache from" << cacheSize << "to" << reducedCacheSize << "frames";
     }
-    
+
     // Clear any temporary UI state that might hold large data
     // Model will automatically refresh when needed
-    
+
     // Report final cache status
     int finalCacheSize = ui->videoLoader->getCacheSize();
     double finalHitRate = ui->videoLoader->getCacheHitRate();
-    
-    qDebug() << "MainWindow: Memory cleanup complete - Final cache size:" << finalCacheSize 
+
+    qDebug() << "MainWindow: Memory cleanup complete - Final cache size:" << finalCacheSize
              << "frames, Hit rate:" << QString::number(finalHitRate, 'f', 1) << "%";
-    
+
     // Estimate memory freed (rough calculation)
     int framesFreed = cacheSize - finalCacheSize;
     if (framesFreed > 0) {
         // Assume ~1MB per frame for rough estimate (depends on resolution)
         double estimatedMBFreed = framesFreed * 1.0;
-        qDebug() << "MainWindow: Estimated" << QString::number(estimatedMBFreed, 'f', 1) 
+        qDebug() << "MainWindow: Estimated" << QString::number(estimatedMBFreed, 'f', 1)
                  << "MB freed from VideoLoader cache reduction";
     }
 }
