@@ -34,7 +34,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Initialize central data storage
     m_trackingDataStorage = new TrackingDataStorage(this);
-    
+
     // Model and Delegates
     m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
     ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
@@ -52,22 +52,22 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->horizontalHeader()->setVisible(true);
     // Ensure horizontal scrollbar appears when needed
     ui->wormTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    
+
     // Configure selection behavior to select entire rows and allow only single selection
     ui->wormTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
-    
+
     // Configure Show/Hide column with checkboxes
     ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
     // Allow checking checkboxes in the header
     ui->wormTableView->horizontalHeader()->setSectionsClickable(true);
     ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
-    
+
     resizeTableColumns();
 
     // Tracking Manager - pass data storage
     m_trackingManager = new TrackingManager(m_trackingDataStorage, this);
-    
+
     // Pass data storage to VideoLoader
     ui->videoLoader->setTrackingDataStorage(m_trackingDataStorage);
 
@@ -179,14 +179,14 @@ void MainWindow::setupConnections() {
     // BlobTableModel -> VideoLoader
     connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
     connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
-    connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, 
+    connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged,
             [this](int id, bool visible) {
                 // When an item's visibility changes, update the VideoLoader with current items
                 ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
             });
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
-    
+
     // Auto-resize table columns when model data changes
     connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
@@ -195,13 +195,13 @@ void MainWindow::setupConnections() {
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &MainWindow::updateVisibleTracksInVideoLoader);
-            
+
     // Enable/disable delete button based on selection state
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         ui->deleteButton->setEnabled(!selected.isEmpty());
     });
-    
+
     // Connect to headerClicked signal for handling Show/Hide column header click
     connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
             [this](int logicalIndex) {
@@ -209,7 +209,7 @@ void MainWindow::setupConnections() {
             // Get current header state
             QVariant checkState = m_blobTableModel->headerData(
                 BlobTableModel::Column::Show, Qt::Horizontal, Qt::CheckStateRole);
-            
+
             // Toggle state
             if (checkState.isValid()) {
                 Qt::CheckState newState;
@@ -219,9 +219,9 @@ void MainWindow::setupConnections() {
                 } else {
                     newState = Qt::Unchecked;
                 }
-                
+
                 m_blobTableModel->setHeaderData(
-                    BlobTableModel::Column::Show, Qt::Horizontal, 
+                    BlobTableModel::Column::Show, Qt::Horizontal,
                     newState, Qt::CheckStateRole);
             }
         }
@@ -233,7 +233,7 @@ void MainWindow::setupConnections() {
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
     connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
-    
+
     // Connect header data changes to trigger UI update
     connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
             this, [this](Qt::Orientation orientation, int first, int last) {
@@ -242,7 +242,7 @@ void MainWindow::setupConnections() {
             ui->wormTableView->update();
         }
     });
-    
+
     // Initial call to setVisibleTrackIDs with all item IDs
     QSet<int> initialItemIDs;
     for (const auto& item : m_blobTableModel->getAllItems()) {
@@ -303,35 +303,35 @@ void MainWindow::resizeTableColumns()
     if (!m_blobTableModel || m_blobTableModel->columnCount() == 0) {
         return;
     }
-    
+
     // Get available viewport width and column count - we'll need these throughout the method
     int viewportWidth = ui->wormTableView->viewport()->width();
     int columnCount = m_blobTableModel->columnCount();
-    
+
     // Ensure header is visible even when table is empty
     ui->wormTableView->horizontalHeader()->setVisible(true);
     ui->wormTableView->horizontalHeader()->setStretchLastSection(false);
 
     // Set minimum width for each column to ensure readability
     ui->wormTableView->horizontalHeader()->setMinimumSectionSize(10);
-    
+
     // First, resize all columns to fit their contents
     int totalContentWidth = 0;
     QVector<int> contentWidths(columnCount);
-    
+
     for (int i = 0; i < columnCount; ++i) {
         ui->wormTableView->resizeColumnToContents(i);
         contentWidths[i] = ui->wormTableView->horizontalHeader()->sectionSize(i);
         totalContentWidth += contentWidths[i];
     }
-    
+
     // Use the viewport width we already calculated
-    
+
     // Decide whether to expand columns or use scrollbar
     if (viewportWidth > totalContentWidth && totalContentWidth > 0) {
         // Extra space available - expand columns proportionally
         float expansionRatio = static_cast<float>(viewportWidth) / totalContentWidth;
-        
+
         for (int i = 0; i < columnCount; ++i) {
             int newWidth = qRound(contentWidths[i] * expansionRatio);
             ui->wormTableView->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Interactive);
@@ -484,20 +484,20 @@ void MainWindow::setBackgroundAssumption(int index) {
 void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
-    
+
     // Now adding through the data storage via the model
     bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, TableItems::ItemType::Worm);
-    
+
     if (added) {
         // Enable the delete button since we now have an item
         ui->deleteButton->setEnabled(true);
-        
+
         // Select the newly added row
         int lastRow = m_blobTableModel->rowCount() - 1;
         QModelIndex newIndex = m_blobTableModel->index(lastRow, 0);
         ui->wormTableView->setCurrentIndex(newIndex);
         ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        
+
         // Resize columns to fit the new content
         resizeTableColumns();
     }
@@ -516,15 +516,15 @@ void MainWindow::handleRemoveBlobsClicked() {
 void MainWindow::handleDeleteSelectedBlobClicked() {
     // Get the currently selected row
     QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
-    
+
     // If there's a selection (should be at least one index per row)
     if (!selectedIndexes.isEmpty()) {
         // Get the row of the first selected index (we only allow single row selection)
         int selectedRow = selectedIndexes.first().row();
-        
+
         // Remove the selected row
         m_blobTableModel->removeRows(selectedRow, 1);
-        
+
         // Select the next row if available, or the previous row if this was the last one
         if (m_blobTableModel->rowCount() > 0) {
             int newRow = (selectedRow < m_blobTableModel->rowCount()) ? selectedRow : m_blobTableModel->rowCount() - 1;
@@ -532,9 +532,9 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
             ui->wormTableView->setCurrentIndex(newIndex);
             ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         }
-        
+
         // The delete button will be automatically enabled/disabled by the selection changed handler
-        
+
         // Make sure the table layout is updated
         resizeTableColumns();
     }
@@ -656,18 +656,19 @@ void MainWindow::handleCancelTrackingFromDialog() {
 
 void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {
     qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
-    
+
     // Store tracks in the central data storage
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
         m_trackingDataStorage->setTrackForItem(it->first, it->second);
     }
-    
+
     // VideoLoader still needs direct track data for backward compatibility
     // It will also get data from storage now
     ui->videoLoader->setTracksToDisplay(tracks);
-    
+
     if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
+        ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
         ui->wormTableView->selectAll();
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
@@ -677,11 +678,11 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected) {
     Q_UNUSED(selected);
     Q_UNUSED(deselected);
-    
+
     // Create a set with all item IDs from the central data storage
     // Only the checkbox state (visible flag) will control actual display
     QSet<int> allItemIDs;
-    
+
     if (m_trackingDataStorage) {
         // Get all IDs directly from the storage
         allItemIDs = m_trackingDataStorage->getAllItemIds();
@@ -692,7 +693,7 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
             allItemIDs.insert(item.id);
         }
     }
-    
+
     qDebug() << "MainWindow: Setting all item IDs as visible in VideoLoader:" << allItemIDs;
     ui->videoLoader->setVisibleTrackIDs(allItemIDs);
 }

@@ -103,13 +103,13 @@ void TrackingManager::startFullTrackingProcess(
     m_initialWormInfos = initialWorms;
     m_thresholdSettings = settings;
     m_totalFramesInVideoHint = totalFramesInVideoHint;
-    
+
     // Create video-specific directory and save JSON files
     m_videoSpecificDirectory = createVideoSpecificDirectory(dataDirectory, videoPath);
     if (!m_videoSpecificDirectory.isEmpty()) {
         saveThresholdSettings(m_videoSpecificDirectory, settings);
         saveInputBlobs(m_videoSpecificDirectory, initialWorms);
-        
+
         // Check if threshold settings differ from existing ones
         QString thresholdFilePath = QDir(m_videoSpecificDirectory).absoluteFilePath("thresh_settings.json");
         if (QFile::exists(thresholdFilePath)) {
@@ -853,7 +853,7 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
             emit trackingStatusUpdate("Tracking cancelled."); emit trackingCancelled();
         } else {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
-            emit allTracksUpdated(m_finalTracks); 
+            emit allTracksUpdated(m_finalTracks);
             QString csvPath;
             if (m_videoPath.isEmpty()) {
                 csvPath = "tracks.csv";
@@ -902,11 +902,14 @@ void TrackingManager::handleWormTrackerProgress(int, int percentDone) { /* ... s
 bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const { /* ... same as your version ... */
     if (outputFilePath.isEmpty()) return false; QFile f(outputFilePath); if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) return false;
     QTextStream o(&f); o << "WormID,Frame,PositionX,PositionY,RoiX,RoiY,RoiWidth,RoiHeight,Quality\n";
-    for (auto const& [wId, tps] : tracks) { for (const Tracking::WormTrackPoint& p : tps) {
+    for (auto const& [wId, tps] : tracks) {
+        for (const Tracking::WormTrackPoint& p : tps) {
             o << wId << "," << p.frameNumberOriginal << "," << QString::number(p.position.x, 'f', 4) << "," << QString::number(p.position.y, 'f', 4) << ","
               << QString::number(p.roi.x(), 'f', 2) << "," << QString::number(p.roi.y(), 'f', 2) << ","
               << QString::number(p.roi.width(), 'f', 2) << "," << QString::number(p.roi.height(), 'f', 2) << ","
-              << static_cast<int>(p.quality) << "\n"; }}
+              << static_cast<int>(p.quality) << "\n"; }
+        o << "\n";
+    }
     f.close(); return f.error() == QFile::NoError;
 }
 
@@ -915,11 +918,11 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
         qWarning() << "TrackingManager: Invalid data directory or video path";
         return QString();
     }
-    
+
     QFileInfo videoInfo(videoPath);
     QString videoBaseName = videoInfo.completeBaseName(); // Gets filename without extension
     QString videoSpecificPath = QDir(dataDirectory).absoluteFilePath(videoBaseName);
-    
+
     QDir videoSpecificDir(videoSpecificPath);
     if (!videoSpecificDir.exists()) {
         if (QDir().mkpath(videoSpecificPath)) {
@@ -931,7 +934,7 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
     } else {
         qDebug() << "TrackingManager: Using existing video-specific directory:" << videoSpecificPath;
     }
-    
+
     return videoSpecificPath;
 }
 
@@ -940,10 +943,10 @@ void TrackingManager::saveThresholdSettings(const QString& directoryPath, const 
         qWarning() << "TrackingManager: Cannot save threshold settings - empty directory path";
         return;
     }
-    
+
     QJsonObject jsonObj = thresholdSettingsToJson(settings);
     QJsonDocument doc(jsonObj);
-    
+
     QString filePath = QDir(directoryPath).absoluteFilePath("thresh_settings.json");
     QFile file(filePath);
     if (file.open(QIODevice::WriteOnly)) {
@@ -960,16 +963,16 @@ void TrackingManager::saveInputBlobs(const QString& directoryPath, const std::ve
         qWarning() << "TrackingManager: Cannot save input blobs - empty directory path";
         return;
     }
-    
+
     QJsonArray wormsArray;
     for (const auto& worm : worms) {
         wormsArray.append(initialWormInfoToJson(worm));
     }
-    
+
     QJsonObject rootObj;
     rootObj["worms"] = wormsArray;
     rootObj["count"] = static_cast<int>(worms.size());
-    
+
     QJsonDocument doc(rootObj);
     QString filePath = QDir(directoryPath).absoluteFilePath("input_blobs.json");
     QFile file(filePath);
@@ -988,24 +991,24 @@ bool TrackingManager::compareThresholdSettings(const QString& filePath, const Th
         qWarning() << "TrackingManager: Cannot read threshold settings file:" << filePath;
         return false;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     QJsonParseError parseError;
     QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
         qWarning() << "TrackingManager: JSON parse error in threshold settings:" << parseError.errorString();
         return false;
     }
-    
+
     QJsonObject stored = doc.object();
     QJsonObject current = thresholdSettingsToJson(currentSettings);
-    
+
     // Compare key settings and log differences
     bool match = true;
     QStringList differences;
-    
+
     if (stored["algorithm"].toInt() != current["algorithm"].toInt()) {
         differences << QString("algorithm: %1 vs %2").arg(stored["algorithm"].toInt()).arg(current["algorithm"].toInt());
         match = false;
@@ -1038,7 +1041,7 @@ bool TrackingManager::compareThresholdSettings(const QString& filePath, const Th
         differences << QString("blurSigmaX: %1 vs %2").arg(stored["blurSigmaX"].toDouble()).arg(current["blurSigmaX"].toDouble());
         match = false;
     }
-    
+
     if (!match) {
         qDebug() << "TrackingManager: Threshold settings differ:";
         for (const QString& diff : differences) {
@@ -1047,7 +1050,7 @@ bool TrackingManager::compareThresholdSettings(const QString& filePath, const Th
     } else {
         qDebug() << "TrackingManager: Threshold settings match stored values";
     }
-    
+
     return match;
 }
 
@@ -1067,13 +1070,13 @@ QJsonObject TrackingManager::thresholdSettingsToJson(const Thresholding::Thresho
 QJsonObject TrackingManager::initialWormInfoToJson(const Tracking::InitialWormInfo& worm) const {
     QJsonObject obj;
     obj["id"] = worm.id;
-    
+
     QJsonObject roiObj;
     roiObj["x"] = worm.initialRoi.x();
     roiObj["y"] = worm.initialRoi.y();
     roiObj["width"] = worm.initialRoi.width();
     roiObj["height"] = worm.initialRoi.height();
     obj["initialRoi"] = roiObj;
-    
+
     return obj;
 }
