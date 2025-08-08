@@ -249,6 +249,12 @@ void TrackingManager::cancelTracking() {
 }
 
 void TrackingManager::cleanupThreadsAndObjects() {
+    qDebug() << "TrackingManager: Starting aggressive memory cleanup...";
+    
+    // Calculate memory usage before cleanup for reporting
+    size_t memoryBefore = getProcessedVideoMemoryUsage();
+    size_t tracksMemoryBefore = m_finalTracks.size() * sizeof(Tracking::WormTrackPoint) * 100; // Rough estimate
+    
     // (Largely same as your version, ensuring QPointer safety and clearing new maps)
     QList<QPointer<QThread>> videoThreadsToClean = m_videoProcessorThreads;
     m_videoProcessorThreads.clear();
@@ -260,22 +266,58 @@ void TrackingManager::cleanupThreadsAndObjects() {
     for (QPointer<QThread> thread : trackerThreadsToClean) { /* ... quit, wait, delete ... */
         if (thread) { if (thread->isRunning()) { thread->requestInterruption(); thread->quit(); if (!thread->wait(1000)) { thread->terminate(); thread->wait();}} delete thread;}
     }
-    m_wormTrackersList.clear(); m_wormIdToForwardTrackerInstanceMap.clear(); m_wormIdToBackwardTrackerInstanceMap.clear();
-    qDeleteAll(m_wormObjectsMap); m_wormObjectsMap.clear();
-    m_finalProcessedForwardFrames.clear(); std::vector<cv::Mat>().swap(m_finalProcessedForwardFrames);
-    m_finalProcessedReversedFrames.clear(); std::vector<cv::Mat>().swap(m_finalProcessedReversedFrames);
-    m_assembledForwardFrameChunks.clear(); m_assembledBackwardFrameChunks.clear(); m_videoChunkProgressMap.clear();
-    m_finalTracks.clear(); m_individualTrackerProgress.clear();
-    // Clear all data structures related to split resolution
+    
+    // Aggressively clear worm trackers and objects
+    m_wormTrackersList.clear(); 
+    m_wormIdToForwardTrackerInstanceMap.clear(); 
+    m_wormIdToBackwardTrackerInstanceMap.clear();
+    
+    // Clear WormObject map with explicit deletion and memory hints
+    qDeleteAll(m_wormObjectsMap); 
+    m_wormObjectsMap.clear();
+    QMap<int, WormObject*>().swap(m_wormObjectsMap); // Force deallocation
+    
+    // Aggressively clear processed video memory
+    clearProcessedVideoMemory();
+    
+    // Clear and shrink all chunk processing maps
+    m_assembledForwardFrameChunks.clear();
+    m_assembledBackwardFrameChunks.clear();
+    QMap<int, std::vector<cv::Mat>>().swap(m_assembledForwardFrameChunks);
+    QMap<int, std::vector<cv::Mat>>().swap(m_assembledBackwardFrameChunks);
+    
+    m_videoChunkProgressMap.clear();
+    QMap<int, int>().swap(m_videoChunkProgressMap);
+    
+    // Aggressively clear final tracks with memory hints
+    m_finalTracks.clear(); 
+    Tracking::AllWormTracks().swap(m_finalTracks);
+    
+    m_individualTrackerProgress.clear();
+    QMap<WormTracker*, int>().swap(m_individualTrackerProgress);
+    
+    // Clear all data structures related to split resolution with forced deallocation
     m_frameMergeRecords.clear();
+    QMap<int, QList<FrameSpecificPhysicalBlob>>().swap(m_frameMergeRecords);
+    
     m_splitResolutionMap.clear();
+    QMap<int, QMap<int, Tracking::DetectedBlob>>().swap(m_splitResolutionMap);
+    
     m_wormToPhysicalBlobIdMap.clear();
+    QMap<int, int>().swap(m_wormToPhysicalBlobIdMap);
 
     // Reset state flags
     m_isTrackingRunning = false;
     m_cancelRequested = false;
+    
+    // Reset frame counters and IDs
+    m_nextPhysicalBlobId = 1;
 
-    qDebug() << "TrackingManager: All data structures cleared in cleanupThreadsAndObjects - split states eliminated";
+    // Calculate and report memory freed
+    double memoryMB = (memoryBefore + tracksMemoryBefore) / (1024.0 * 1024.0);
+    qDebug() << "TrackingManager: Aggressive cleanup complete - freed approximately" 
+             << QString::number(memoryMB, 'f', 1) << "MB of tracking data";
+    qDebug() << "TrackingManager: All data structures cleared and memory aggressively freed";
 }
 
 // --- Video Processing Callbacks ---
@@ -1079,4 +1121,52 @@ QJsonObject TrackingManager::initialWormInfoToJson(const Tracking::InitialWormIn
     obj["initialRoi"] = roiObj;
 
     return obj;
+}
+
+size_t TrackingManager::getProcessedVideoMemoryUsage() const {
+    size_t totalBytes = 0;
+    
+    // Calculate memory usage of forward frames
+    for (const cv::Mat& frame : m_finalProcessedForwardFrames) {
+        if (!frame.empty()) {
+            totalBytes += frame.total() * frame.elemSize();
+        }
+    }
+    
+    // Calculate memory usage of backward frames
+    for (const cv::Mat& frame : m_finalProcessedReversedFrames) {
+        if (!frame.empty()) {
+            totalBytes += frame.total() * frame.elemSize();
+        }
+    }
+    
+    return totalBytes;
+}
+
+void TrackingManager::clearProcessedVideoMemory() {
+    qDebug() << "TrackingManager: Clearing processed video memory...";
+    
+    // Calculate memory usage before clearing
+    size_t memoryUsageBefore = getProcessedVideoMemoryUsage();
+    size_t forwardSize = m_finalProcessedForwardFrames.size();
+    size_t backwardSize = m_finalProcessedReversedFrames.size();
+    
+    // Clear and shrink the vectors to free memory
+    m_finalProcessedForwardFrames.clear();
+    m_finalProcessedReversedFrames.clear();
+    std::vector<cv::Mat>().swap(m_finalProcessedForwardFrames);
+    std::vector<cv::Mat>().swap(m_finalProcessedReversedFrames);
+    
+    // Also clear intermediate chunk storage if still present
+    m_assembledForwardFrameChunks.clear();
+    m_assembledBackwardFrameChunks.clear();
+    
+    // Report memory savings
+    double memoryMB = memoryUsageBefore / (1024.0 * 1024.0);
+    qDebug() << "TrackingManager: Cleared" << forwardSize << "forward frames and" << backwardSize 
+             << "backward frames from memory, freed" << QString::number(memoryMB, 'f', 1) << "MB";
+    
+    QString statusMessage = QString("Processed video data cleared from memory (freed %1 MB)")
+                           .arg(QString::number(memoryMB, 'f', 1));
+    emit trackingStatusUpdate(statusMessage);
 }

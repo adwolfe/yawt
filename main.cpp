@@ -8,6 +8,7 @@ int main(int argc, char *argv[])
 
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
+
     QFont appFont;
 
 #ifdef Q_OS_MAC
@@ -21,6 +22,7 @@ int main(int argc, char *argv[])
     QApplication::setFont(appFont);
 
     MainWindow w;
+    w.setWindowTitle("Yet Another Worm Tracker");
     w.show();
     return a.exec();
 }

@@ -35,6 +35,9 @@ MainWindow::MainWindow(QWidget *parent)
     // Initialize central data storage
     m_trackingDataStorage = new TrackingDataStorage(this);
 
+    // Set up MiniVideoLoader with tracking data storage
+    ui->miniVideoLoader->setTrackingDataStorage(m_trackingDataStorage);
+
     // Model and Delegates
     m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
     ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
@@ -201,6 +204,31 @@ void MainWindow::setupConnections() {
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         ui->deleteButton->setEnabled(!selected.isEmpty());
     });
+
+    // Table View Selection -> MiniVideoLoader
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
+        Q_UNUSED(deselected)
+        
+        if (selected.isEmpty()) {
+            // No selection - clear the mini video loader
+            ui->miniVideoLoader->clearSelection();
+        } else {
+            // Get the first selected row and extract the worm ID
+            QModelIndexList selectedIndexes = selected.indexes();
+            if (!selectedIndexes.isEmpty()) {
+                int selectedRow = selectedIndexes.first().row();
+                if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
+                    const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
+                    ui->miniVideoLoader->setSelectedWorm(selectedItem.id);
+                }
+            }
+        }
+    });
+
+    // Main VideoLoader frame changes -> MiniVideoLoader
+    connect(ui->videoLoader, &VideoLoader::frameChanged, 
+            ui->miniVideoLoader, &MiniVideoLoader::updateFrame);
 
     // Connect to headerClicked signal for handling Show/Hide column header click
     connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
@@ -659,8 +687,12 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
     // Store tracks in the central data storage
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        qDebug() << "MainWindow: Storing track for worm" << it->first << "with" << it->second.size() << "points";
         m_trackingDataStorage->setTrackForItem(it->first, it->second);
     }
+    
+    // Debug: Verify tracks were stored
+    qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
 
     // VideoLoader still needs direct track data for backward compatibility
     // It will also get data from storage now
@@ -672,6 +704,12 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
         ui->wormTableView->selectAll();
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
+    
+    // Keep track data in storage for MiniVideoLoader and other components
+    // Memory cleanup will be handled elsewhere if needed
+    
+    // Perform memory cleanup after tracking is complete
+    performPostTrackingMemoryCleanup();
 }
 
 // --- Table View and VideoLoader Sync ---
@@ -696,4 +734,44 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
 
     qDebug() << "MainWindow: Setting all item IDs as visible in VideoLoader:" << allItemIDs;
     ui->videoLoader->setVisibleTrackIDs(allItemIDs);
+}
+
+void MainWindow::performPostTrackingMemoryCleanup() {
+    qDebug() << "MainWindow: Performing post-tracking memory cleanup...";
+    
+    // Get memory usage before cleanup
+    double cacheHitRate = ui->videoLoader->getCacheHitRate();
+    int cacheSize = ui->videoLoader->getCacheSize();
+    
+    qDebug() << "MainWindow: VideoLoader cache status before cleanup - Size:" << cacheSize 
+             << "frames, Hit rate:" << QString::number(cacheHitRate, 'f', 1) << "%";
+    
+    // Reduce VideoLoader frame cache size significantly after tracking
+    // During tracking, we don't need as many cached frames since we're not seeking rapidly
+    int originalCacheSize = 50; // Default cache size
+    int reducedCacheSize = 10;  // Smaller cache for post-tracking
+    
+    if (cacheSize > reducedCacheSize) {
+        ui->videoLoader->setCacheSize(reducedCacheSize);
+        qDebug() << "MainWindow: Reduced VideoLoader cache from" << cacheSize << "to" << reducedCacheSize << "frames";
+    }
+    
+    // Clear any temporary UI state that might hold large data
+    // Model will automatically refresh when needed
+    
+    // Report final cache status
+    int finalCacheSize = ui->videoLoader->getCacheSize();
+    double finalHitRate = ui->videoLoader->getCacheHitRate();
+    
+    qDebug() << "MainWindow: Memory cleanup complete - Final cache size:" << finalCacheSize 
+             << "frames, Hit rate:" << QString::number(finalHitRate, 'f', 1) << "%";
+    
+    // Estimate memory freed (rough calculation)
+    int framesFreed = cacheSize - finalCacheSize;
+    if (framesFreed > 0) {
+        // Assume ~1MB per frame for rough estimate (depends on resolution)
+        double estimatedMBFreed = framesFreed * 1.0;
+        qDebug() << "MainWindow: Estimated" << QString::number(estimatedMBFreed, 'f', 1) 
+                 << "MB freed from VideoLoader cache reduction";
+    }
 }

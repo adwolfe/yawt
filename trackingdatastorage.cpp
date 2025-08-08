@@ -239,6 +239,22 @@ void TrackingDataStorage::clearAllTracks() {
     emit allDataChanged();
 }
 
+void TrackingDataStorage::clearAndCompactTrackData() {
+    // Get count before clearing for reporting
+    int trackCount = m_tracks.size();
+    
+    // Aggressively clear and compact track data
+    m_tracks.clear();
+    Tracking::AllWormTracks().swap(m_tracks); // Force memory deallocation
+    
+    // Also compact other related data structures
+    QMap<int, int>().swap(m_idToIndexMap);
+    updateIdToIndexMap(); // Rebuild the map
+    
+    qDebug() << "TrackingDataStorage: Cleared and compacted" << trackCount << "track datasets, memory deallocated";
+    emit allDataChanged();
+}
+
 // --- Data Access Methods ---
 
 const QList<TableItems::ClickedItem>& TrackingDataStorage::getAllItems() const {
@@ -278,6 +294,67 @@ QSet<int> TrackingDataStorage::getItemsWithTracks() const {
         ids.insert(track.first);
     }
     return ids;
+}
+
+bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outRoi) const {
+    qDebug() << "TrackingDataStorage::getWormDataForFrame - wormId:" << wormId << "frameNumber:" << frameNumber;
+    qDebug() << "Available tracks count:" << m_tracks.size();
+    
+    // Debug: show what tracks we have
+    for (const auto& track : m_tracks) {
+        qDebug() << "  Track ID:" << track.first << "has" << track.second.size() << "points";
+        if (track.first == wormId) {
+            qDebug() << "    Frames for worm" << wormId << ":";
+            for (size_t i = 0; i < std::min(track.second.size(), size_t(10)); ++i) {
+                qDebug() << "      Frame:" << track.second[i].frameNumberOriginal;
+            }
+            if (track.second.size() > 10) {
+                qDebug() << "      ... and" << (track.second.size() - 10) << "more frames";
+            }
+        }
+    }
+    
+    // First, check if we can get the initial position from the ClickedItem (for keyframe)
+    const TableItems::ClickedItem* item = getItem(wormId);
+    if (item && item->frameOfSelection == frameNumber) {
+        qDebug() << "TrackingDataStorage: Found keyframe data for worm" << wormId << "at frame" << frameNumber;
+        outPosition = item->initialCentroid;
+        outRoi = item->initialBoundingBox;
+        return true;
+    }
+    
+    // Try to get from tracking data
+    auto trackIt = m_tracks.find(wormId);
+    if (trackIt != m_tracks.end()) {
+        const std::vector<Tracking::WormTrackPoint>& trackPoints = trackIt->second;
+        qDebug() << "TrackingDataStorage: Found track for worm" << wormId << "with" << trackPoints.size() << "points";
+        
+        // Find track point for the specific frame
+        for (const auto& trackPoint : trackPoints) {
+            if (trackPoint.frameNumberOriginal == frameNumber) {
+                qDebug() << "TrackingDataStorage: Found tracking data for worm" << wormId << "at frame" << frameNumber;
+                // Convert cv::Point2f to QPointF
+                outPosition = QPointF(trackPoint.position.x, trackPoint.position.y);
+                outRoi = trackPoint.roi;
+                return true;
+            }
+        }
+        qDebug() << "TrackingDataStorage: No tracking data found for frame" << frameNumber;
+    } else {
+        qDebug() << "TrackingDataStorage: No track found for worm" << wormId;
+    }
+    
+    // If we still have the item data but no specific frame match, and we're close to the keyframe,
+    // use the initial position as fallback
+    if (item && qAbs(frameNumber - item->frameOfSelection) <= 1) {
+        qDebug() << "TrackingDataStorage: Using fallback position for worm" << wormId << "at frame" << frameNumber << "(keyframe:" << item->frameOfSelection << ")";
+        outPosition = item->initialCentroid;
+        outRoi = item->initialBoundingBox;
+        return true;
+    }
+    
+    qDebug() << "TrackingDataStorage: No data found for worm" << wormId << "at frame" << frameNumber;
+    return false;  // Worm not found for this frame
 }
 
 int TrackingDataStorage::getItemCount() const {

@@ -68,6 +68,7 @@ public slots:
                                   const Thresholding::ThresholdSettings& settings,
                                   int totalFramesInVideoHint);
     void cancelTracking();
+    void cleanupThreadsAndObjects(); // Made public slot so it can be called via QMetaObject::invokeMethod
 
 private slots:
     // Video processing slots
@@ -124,13 +125,14 @@ private:
     WormTracker::TrackingDirection getDirectionFromSignedId(int signedWormId);
 
     // Helper and utility functions
-    void cleanupThreadsAndObjects();
     void launchWormTrackers();
     void updateOverallProgress();
     void checkForAllTrackersFinished();
     bool outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
+    size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
+    void clearProcessedVideoMemory(); // Clear processed video data from memory
     
     // JSON storage methods
     QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);

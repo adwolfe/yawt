@@ -111,6 +111,12 @@ public:
      */
     void clearAllTracks();
     
+    /**
+     * @brief Clear track data and compact memory usage
+     * This is more aggressive than clearAllTracks() and forces memory deallocation
+     */
+    void clearAndCompactTrackData();
+    
     // --- Data access ---
     
     /**
@@ -151,6 +157,16 @@ public:
      * @return Set of item IDs with tracks
      */
     QSet<int> getItemsWithTracks() const;
+    
+    /**
+     * @brief Get worm position and ROI for a specific frame
+     * @param wormId The ID of the worm
+     * @param frameNumber The frame number to get data for
+     * @param outPosition Output parameter for the worm's position (centroid)
+     * @param outRoi Output parameter for the worm's ROI
+     * @return True if worm data was found for the frame, false otherwise
+     */
+    bool getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outRoi) const;
     
     /**
      * @brief Get the total number of items

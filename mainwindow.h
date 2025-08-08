@@ -78,6 +78,7 @@ public slots:
     void handleBeginTrackingFromDialog();
     void handleCancelTrackingFromDialog();
     void acceptTracksFromManager(const Tracking::AllWormTracks& tracks);
+    void performPostTrackingMemoryCleanup();
 
     // Table View and VideoLoader Sync
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);
