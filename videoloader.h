@@ -19,6 +19,13 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QThread>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QWaitCondition>
+#include <QQueue>
+#include <QDateTime>
+#include <QAtomicInt>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -27,10 +34,103 @@
 #include "trackingcommon.h" // Contains TrackedItem, DetectedBlob, etc.
 #include "trackingdatastorage.h" // Central data storage
 
-// Forward declare to avoid including the full header if only pointers/references are used
-// class TrackedItem; // Already in trackingcommon.h
-// namespace TrackingHelper { struct DetectedBlob; } // Already in trackingcommon.h
+// Forward declarations
 class TrackingDataStorage;
+
+// Cached frame structure
+struct CachedFrame {
+    int frameNumber;
+    cv::Mat rawFrame;
+    cv::Mat thresholdedFrame;
+    QDateTime lastAccessed;
+    bool isValid;
+    
+    CachedFrame() : frameNumber(-1), isValid(false) {}
+    CachedFrame(int fn, const cv::Mat& raw) 
+        : frameNumber(fn), rawFrame(raw.clone()), isValid(true), lastAccessed(QDateTime::currentDateTime()) {}
+};
+
+// Thread-safe LRU frame cache
+class FrameCache {
+public:
+    explicit FrameCache(int maxCacheSize = 50);
+    ~FrameCache();
+    
+    // Cache operations
+    void insertFrame(int frameNumber, const cv::Mat& frame);
+    bool getFrame(int frameNumber, cv::Mat& outFrame);
+    bool hasFrame(int frameNumber) const;
+    void clear();
+    void setMaxSize(int maxSize);
+    
+    // Statistics
+    int size() const;
+    int maxSize() const;
+    double hitRate() const;
+    
+private:
+    void evictLRU();
+    void updateAccessTime(int frameNumber);
+    
+    mutable QMutex m_mutex;
+    QMap<int, CachedFrame> m_frames;
+    int m_maxSize;
+    mutable QAtomicInt m_hits;
+    mutable QAtomicInt m_requests;
+};
+
+// Frame loading request structure
+struct FrameLoadRequest {
+    int frameNumber;
+    int priority; // Higher number = higher priority
+    QDateTime requestTime;
+    
+    FrameLoadRequest(int fn, int prio = 1) 
+        : frameNumber(fn), priority(prio), requestTime(QDateTime::currentDateTime()) {}
+        
+    bool operator<(const FrameLoadRequest& other) const {
+        if (priority != other.priority) return priority < other.priority;
+        return requestTime > other.requestTime; // Newer requests first for same priority
+    }
+    
+    bool operator>(const FrameLoadRequest& other) const {
+        if (priority != other.priority) return priority > other.priority;
+        return requestTime < other.requestTime; // Older requests last for same priority
+    }
+};
+
+// Background frame loader worker
+class FrameLoader : public QObject {
+    Q_OBJECT
+    
+public:
+    explicit FrameLoader(QObject* parent = nullptr);
+    ~FrameLoader();
+    
+    void setVideoPath(const QString& path);
+    void requestFrames(const QList<int>& frameNumbers, int priority = 1);
+    void requestSingleFrame(int frameNumber, int priority = 1);
+    void clearRequests();
+    void stop();
+
+signals:
+    void frameLoaded(int frameNumber, cv::Mat frame);
+    void frameLoadError(int frameNumber, QString error);
+
+public slots:
+    void processRequests();
+    
+private:
+    void loadFrame(int frameNumber);
+    
+    QString m_videoPath;
+    cv::VideoCapture m_videoCapture;
+    QQueue<FrameLoadRequest> m_requestQueue;
+    mutable QMutex m_queueMutex;
+    QWaitCondition m_waitCondition;
+    bool m_stopRequested;
+    bool m_isProcessing;
+};
 
 
 
@@ -84,6 +184,11 @@ public:
     double getPlaybackSpeed() const;
     QString getCurrentVideoPath() const;
     QString getDataDirectory() const;
+    
+    // Frame cache management
+    void setCacheSize(int maxFrames);
+    int getCacheSize() const;
+    double getCacheHitRate() const;
 
     // --- Thresholding and Pre-processing Status Getters ---
     // bool isThresholdViewEnabled() const; // This will be controlled by ViewMode::Threshold
@@ -215,8 +320,18 @@ private:
     void emitThresholdParametersChanged();
     QColor getTrackColor(int trackId) const; // Used for drawing tracks
     QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
+    
+    // Frame caching and loading helpers
+    bool getCachedFrame(int frameNumber, cv::Mat& outFrame);
+    void preloadAdjacentFrames(int centerFrame, int radius = 5);
+    void startFrameLoader();
+    void stopFrameLoader();
 
+private slots:
+    void onFrameLoaded(int frameNumber, cv::Mat frame);
+    void onFrameLoadError(int frameNumber, QString error);
 
+private:
     // --- OpenCV Video Members ---
     cv::VideoCapture videoCapture;
     cv::Mat currentCvFrame;          // Holds the raw/original current frame from video
@@ -273,6 +388,13 @@ private:
     
     // --- Data Directory ---
     QString m_dataDirectory;  // Path to the "yawt" directory for data storage
+    
+    // --- Frame Caching and Background Loading ---
+    FrameCache* m_frameCache;                  // Thread-safe frame cache
+    FrameLoader* m_frameLoader;                // Background frame loader
+    QThread* m_frameLoaderThread;              // Thread for background loading
+    int m_lastPreloadCenter;                   // Last center frame for preloading
+    mutable QAtomicInt m_pendingSeekFrame;     // Frame number for pending seek operation
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(VideoLoader::ViewModeOptions)

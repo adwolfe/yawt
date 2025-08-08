@@ -15,6 +15,239 @@
 #define DEFAULT_CROP_EXTENSION ".mp4"
 #define DEFAULT_CROP_FOURCC cv::VideoWriter::fourcc('H', '2', '6', '4')
 
+// ============================================================================
+// FrameCache Implementation
+// ============================================================================
+
+FrameCache::FrameCache(int maxCacheSize) 
+    : m_maxSize(maxCacheSize), m_hits(0), m_requests(0) {
+    qDebug() << "FrameCache created with max size:" << m_maxSize;
+}
+
+FrameCache::~FrameCache() {
+    clear();
+    qDebug() << "FrameCache destroyed. Final hit rate:" << hitRate() << "%";
+}
+
+void FrameCache::insertFrame(int frameNumber, const cv::Mat& frame) {
+    if (frame.empty()) return;
+    
+    QMutexLocker locker(&m_mutex);
+    
+    // Remove existing frame if present
+    m_frames.remove(frameNumber);
+    
+    // Add new frame
+    m_frames.insert(frameNumber, CachedFrame(frameNumber, frame));
+    
+    // Evict if over capacity
+    while (m_frames.size() > m_maxSize) {
+        evictLRU();
+    }
+    
+    qDebug() << "FrameCache: Cached frame" << frameNumber << "- Cache size:" << m_frames.size();
+}
+
+bool FrameCache::getFrame(int frameNumber, cv::Mat& outFrame) {
+    QMutexLocker locker(&m_mutex);
+    m_requests.fetchAndAddOrdered(1);
+    
+    auto it = m_frames.find(frameNumber);
+    if (it != m_frames.end() && it->isValid) {
+        outFrame = it->rawFrame.clone();
+        updateAccessTime(frameNumber);
+        m_hits.fetchAndAddOrdered(1);
+        return true;
+    }
+    
+    return false;
+}
+
+bool FrameCache::hasFrame(int frameNumber) const {
+    QMutexLocker locker(&m_mutex);
+    auto it = m_frames.find(frameNumber);
+    return (it != m_frames.end() && it->isValid);
+}
+
+void FrameCache::clear() {
+    QMutexLocker locker(&m_mutex);
+    m_frames.clear();
+    qDebug() << "FrameCache: Cleared all frames";
+}
+
+void FrameCache::setMaxSize(int maxSize) {
+    QMutexLocker locker(&m_mutex);
+    m_maxSize = maxSize;
+    while (m_frames.size() > m_maxSize) {
+        evictLRU();
+    }
+}
+
+int FrameCache::size() const {
+    QMutexLocker locker(&m_mutex);
+    return m_frames.size();
+}
+
+int FrameCache::maxSize() const {
+    QMutexLocker locker(&m_mutex);
+    return m_maxSize;
+}
+
+double FrameCache::hitRate() const {
+    int requests = m_requests;
+    int hits = m_hits;
+    return requests > 0 ? (static_cast<double>(hits) / requests) * 100.0 : 0.0;
+}
+
+void FrameCache::evictLRU() {
+    if (m_frames.isEmpty()) return;
+    
+    // Find frame with oldest access time
+    auto oldest = m_frames.begin();
+    for (auto it = m_frames.begin(); it != m_frames.end(); ++it) {
+        if (it->lastAccessed < oldest->lastAccessed) {
+            oldest = it;
+        }
+    }
+    
+    qDebug() << "FrameCache: Evicting frame" << oldest->frameNumber;
+    m_frames.erase(oldest);
+}
+
+void FrameCache::updateAccessTime(int frameNumber) {
+    auto it = m_frames.find(frameNumber);
+    if (it != m_frames.end()) {
+        it->lastAccessed = QDateTime::currentDateTime();
+    }
+}
+
+// ============================================================================
+// FrameLoader Implementation  
+// ============================================================================
+
+FrameLoader::FrameLoader(QObject* parent)
+    : QObject(parent), m_stopRequested(false), m_isProcessing(false) {
+}
+
+FrameLoader::~FrameLoader() {
+    stop();
+    if (m_videoCapture.isOpened()) {
+        m_videoCapture.release();
+    }
+}
+
+void FrameLoader::setVideoPath(const QString& path) {
+    QMutexLocker locker(&m_queueMutex);
+    
+    if (m_videoCapture.isOpened()) {
+        m_videoCapture.release();
+    }
+    
+    m_videoPath = path;
+    if (!path.isEmpty()) {
+        if (!m_videoCapture.open(path.toStdString())) {
+            qWarning() << "FrameLoader: Failed to open video:" << path;
+            return;
+        }
+        qDebug() << "FrameLoader: Video opened successfully:" << path;
+    }
+}
+
+void FrameLoader::requestFrames(const QList<int>& frameNumbers, int priority) {
+    QMutexLocker locker(&m_queueMutex);
+    
+    for (int frameNumber : frameNumbers) {
+        m_requestQueue.enqueue(FrameLoadRequest(frameNumber, priority));
+    }
+    
+    locker.unlock();
+    m_waitCondition.wakeOne();
+}
+
+void FrameLoader::requestSingleFrame(int frameNumber, int priority) {
+    QMutexLocker locker(&m_queueMutex);
+    m_requestQueue.enqueue(FrameLoadRequest(frameNumber, priority));
+    locker.unlock();
+    m_waitCondition.wakeOne();
+}
+
+void FrameLoader::clearRequests() {
+    QMutexLocker locker(&m_queueMutex);
+    m_requestQueue.clear();
+    qDebug() << "FrameLoader: Cleared all pending requests";
+}
+
+void FrameLoader::stop() {
+    QMutexLocker locker(&m_queueMutex);
+    m_stopRequested = true;
+    locker.unlock();
+    m_waitCondition.wakeAll();
+}
+
+void FrameLoader::processRequests() {
+    qDebug() << "FrameLoader: Started processing requests";
+    m_isProcessing = true;
+    
+    while (!m_stopRequested) {
+        QMutexLocker locker(&m_queueMutex);
+        
+        if (m_requestQueue.isEmpty()) {
+            m_waitCondition.wait(&m_queueMutex, 1000); // Wait up to 1 second
+            continue;
+        }
+        
+        // Sort queue by priority
+        QList<FrameLoadRequest> requests;
+        while (!m_requestQueue.isEmpty()) {
+            requests.append(m_requestQueue.dequeue());
+        }
+        std::sort(requests.begin(), requests.end(), std::greater<FrameLoadRequest>());
+        
+        // Process highest priority request
+        FrameLoadRequest request = requests.first();
+        requests.removeFirst();
+        
+        // Put remaining requests back
+        for (const auto& req : requests) {
+            m_requestQueue.enqueue(req);
+        }
+        
+        locker.unlock();
+        
+        // Load the frame (outside of lock)
+        loadFrame(request.frameNumber);
+        
+        // Small delay to prevent overwhelming the system
+        QThread::msleep(5);
+    }
+    
+    m_isProcessing = false;
+    qDebug() << "FrameLoader: Stopped processing requests";
+}
+
+void FrameLoader::loadFrame(int frameNumber) {
+    if (!m_videoCapture.isOpened() || frameNumber < 0) {
+        emit frameLoadError(frameNumber, "Video not opened or invalid frame number");
+        return;
+    }
+    
+    try {
+        if (!m_videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
+            emit frameLoadError(frameNumber, "Failed to seek to frame");
+            return;
+        }
+        
+        cv::Mat frame;
+        if (m_videoCapture.read(frame) && !frame.empty()) {
+            emit frameLoaded(frameNumber, frame);
+        } else {
+            emit frameLoadError(frameNumber, "Failed to read frame");
+        }
+    } catch (const cv::Exception& ex) {
+        emit frameLoadError(frameNumber, QString("OpenCV exception: %1").arg(ex.what()));
+    }
+}
+
 // Define a click tolerance for selecting track points (in widget pixels)
 const qreal TRACK_POINT_CLICK_TOLERANCE = 5.0;
 
@@ -41,7 +274,12 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_enableBlur(false),
     m_blurKernelSize(5),
     m_blurSigmaX(0.0),
-    m_dataDirectory() {
+    m_dataDirectory(),
+    m_frameCache(nullptr),
+    m_frameLoader(nullptr),
+    m_frameLoaderThread(nullptr),
+    m_lastPreloadCenter(-1),
+    m_pendingSeekFrame(-1) {
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -50,6 +288,10 @@ VideoLoader::VideoLoader(QWidget* parent)
             &VideoLoader::processNextFrame);
     setMouseTracking(true);
     updateCursorShape();
+    
+    // Initialize frame caching system
+    m_frameCache = new FrameCache(50); // Default cache size of 50 frames
+    startFrameLoader();
 }
 
 void VideoLoader::setTrackingDataStorage(TrackingDataStorage* storage) {
@@ -73,6 +315,13 @@ void VideoLoader::setTrackingDataStorage(TrackingDataStorage* storage) {
 }
 
 VideoLoader::~VideoLoader() {
+    stopFrameLoader();
+    
+    if (m_frameCache) {
+        delete m_frameCache;
+        m_frameCache = nullptr;
+    }
+    
     if (videoCapture.isOpened()) {
         videoCapture.release();
     }
@@ -149,6 +398,20 @@ bool VideoLoader::loadVideo(const QString& filePath) {
 
     currentFilePath = filePath;
     
+    // Clear frame cache for new video
+    if (m_frameCache) {
+        m_frameCache->clear();
+    }
+    
+    // Set up frame loader for new video
+    if (m_frameLoader) {
+        m_frameLoader->clearRequests();
+        m_frameLoader->setVideoPath(filePath);
+    }
+    
+    m_lastPreloadCenter = -1;
+    m_pendingSeekFrame = -1;
+    
     // Create data directory for storing analysis results
     m_dataDirectory = createDataDirectory(filePath);
     if (!m_dataDirectory.isEmpty()) {
@@ -178,7 +441,7 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     emit interactionModeChanged(m_currentInteractionMode);
     emit activeViewModesChanged(m_activeViewModes);
     updateCursorShape();
-    qDebug() << "Video loaded:" << filePath;
+    qDebug() << "Video loaded:" << filePath << "- Cache hit rate:" << getCacheHitRate() << "%";
     return true;
 }
 
@@ -487,23 +750,56 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
     if (!videoCapture.isOpened() || originalFrameSize.isEmpty()) { return; }
     if (frameNumber < 0 || frameNumber >= totalFramesCount) { return; }
 
-    int currentPos = static_cast<int>(videoCapture.get(cv::CAP_PROP_POS_FRAMES));
-    if (currentPos != frameNumber && !(currentPos == frameNumber - 1 && m_isPlaying)) {
-        if (!videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
+    // First, try to get frame from cache
+    cv::Mat cachedFrame;
+    bool frameFromCache = false;
+    
+    if (getCachedFrame(frameNumber, cachedFrame)) {
+        // Frame found in cache - use it directly
+        currentCvFrame = cachedFrame;
+        frameFromCache = true;
+    } else {
+        // Frame not in cache - load from disk
+        int currentPos = static_cast<int>(videoCapture.get(cv::CAP_PROP_POS_FRAMES));
+        if (currentPos != frameNumber && !(currentPos == frameNumber - 1 && m_isPlaying)) {
+            if (!videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
+                // If direct loading fails, try background loading
+                m_pendingSeekFrame = frameNumber;
+                if (m_frameLoader) {
+                    m_frameLoader->requestSingleFrame(frameNumber, 100); // High priority
+                }
+                return;
+            }
+        }
+
+        if (videoCapture.read(currentCvFrame)) {
+            if (!currentCvFrame.empty()) {
+                // Cache the newly loaded frame
+                if (m_frameCache) {
+                    m_frameCache->insertFrame(frameNumber, currentCvFrame);
+                }
+            } else {
+                currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
+                return;
+            }
+        } else {
+            currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
+            if (m_isPlaying) pause();
             return;
         }
     }
 
-    if (videoCapture.read(currentCvFrame)) {
-        if (!currentCvFrame.empty()) {
-            currentFrameIdx = frameNumber;
-            applyThresholding();
-        } else {
-            currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
+    if (!currentCvFrame.empty()) {
+        currentFrameIdx = frameNumber;
+        applyThresholding();
+        
+        // Trigger preloading of adjacent frames (but not during rapid seeking)
+        static QDateTime lastPreloadTime;
+        QDateTime now = QDateTime::currentDateTime();
+        if (lastPreloadTime.msecsTo(now) > 100) { // Throttle preloading
+            preloadAdjacentFrames(frameNumber, m_isPlaying ? 10 : 5);
+            lastPreloadTime = now;
         }
-    } else {
-        currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
-        if (m_isPlaying) pause();
     }
 
     if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
@@ -1250,6 +1546,138 @@ QColor VideoLoader::getTrackColor(int trackId) const {
     QColor color = QColor::fromHsv(hue, saturation, value);
     m_trackColors.insert(trackId, color);
     return color;
+}
+
+void VideoLoader::startFrameLoader() {
+    if (m_frameLoaderThread) {
+        stopFrameLoader();
+    }
+    
+    m_frameLoader = new FrameLoader();
+    m_frameLoaderThread = new QThread(this);
+    m_frameLoader->moveToThread(m_frameLoaderThread);
+    
+    // Connect signals
+    connect(m_frameLoaderThread, &QThread::started, m_frameLoader, &FrameLoader::processRequests);
+    connect(m_frameLoader, &FrameLoader::frameLoaded, this, &VideoLoader::onFrameLoaded);
+    connect(m_frameLoader, &FrameLoader::frameLoadError, this, &VideoLoader::onFrameLoadError);
+    connect(m_frameLoaderThread, &QThread::finished, m_frameLoader, &QObject::deleteLater);
+    
+    m_frameLoaderThread->start();
+    qDebug() << "VideoLoader: Frame loader thread started";
+}
+
+void VideoLoader::stopFrameLoader() {
+    if (m_frameLoader) {
+        m_frameLoader->stop();
+    }
+    
+    if (m_frameLoaderThread && m_frameLoaderThread->isRunning()) {
+        m_frameLoaderThread->quit();
+        if (!m_frameLoaderThread->wait(3000)) {
+            qWarning() << "VideoLoader: Frame loader thread failed to stop gracefully, terminating";
+            m_frameLoaderThread->terminate();
+            m_frameLoaderThread->wait(1000);
+        }
+    }
+    
+    m_frameLoader = nullptr;
+    m_frameLoaderThread = nullptr;
+    qDebug() << "VideoLoader: Frame loader thread stopped";
+}
+
+bool VideoLoader::getCachedFrame(int frameNumber, cv::Mat& outFrame) {
+    if (!m_frameCache) {
+        return false;
+    }
+    return m_frameCache->getFrame(frameNumber, outFrame);
+}
+
+void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
+    if (!m_frameLoader || !m_frameCache || centerFrame < 0) {
+        return;
+    }
+    
+    // Avoid redundant preloading
+    if (centerFrame == m_lastPreloadCenter) {
+        return;
+    }
+    
+    m_lastPreloadCenter = centerFrame;
+    
+    // Create list of frames to preload
+    QList<int> framesToLoad;
+    
+    // Add frames in priority order: closest to center first
+    for (int distance = 1; distance <= radius; distance++) {
+        // Add frame before center
+        int prevFrame = centerFrame - distance;
+        if (prevFrame >= 0 && prevFrame < totalFramesCount && !m_frameCache->hasFrame(prevFrame)) {
+            framesToLoad.append(prevFrame);
+        }
+        
+        // Add frame after center
+        int nextFrame = centerFrame + distance;
+        if (nextFrame >= 0 && nextFrame < totalFramesCount && !m_frameCache->hasFrame(nextFrame)) {
+            framesToLoad.append(nextFrame);
+        }
+    }
+    
+    if (!framesToLoad.isEmpty()) {
+        // Higher priority for closer frames
+        int priority = 10 - qMin(radius, 9); // Priority 1-10
+        m_frameLoader->requestFrames(framesToLoad, priority);
+        qDebug() << "VideoLoader: Requested preload of" << framesToLoad.size() << "frames around" << centerFrame;
+    }
+}
+
+void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat frame) {
+    if (m_frameCache) {
+        m_frameCache->insertFrame(frameNumber, frame);
+        
+        // If this is the pending seek frame, display it immediately
+        if (m_pendingSeekFrame == frameNumber) {
+            m_pendingSeekFrame = -1;
+            
+            // Update the display with the newly loaded frame
+            currentCvFrame = frame.clone();
+            currentFrameIdx = frameNumber;
+            applyThresholding();
+            
+            if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
+                convertCvMatToQImage(m_thresholdedFrame_mono, currentQImageFrame);
+            } else if (!currentCvFrame.empty()) {
+                convertCvMatToQImage(currentCvFrame, currentQImageFrame);
+            }
+            
+            emit frameChanged(currentFrameIdx, currentQImageFrame);
+            update();
+        }
+    }
+}
+
+void VideoLoader::onFrameLoadError(int frameNumber, QString error) {
+    qWarning() << "VideoLoader: Failed to load frame" << frameNumber << ":" << error;
+    
+    // If this was the pending seek frame, clear it
+    if (m_pendingSeekFrame == frameNumber) {
+        m_pendingSeekFrame = -1;
+    }
+}
+
+void VideoLoader::setCacheSize(int maxFrames) {
+    if (m_frameCache) {
+        m_frameCache->setMaxSize(maxFrames);
+        qDebug() << "VideoLoader: Cache size set to" << maxFrames;
+    }
+}
+
+int VideoLoader::getCacheSize() const {
+    return m_frameCache ? m_frameCache->size() : 0;
+}
+
+double VideoLoader::getCacheHitRate() const {
+    return m_frameCache ? m_frameCache->hitRate() : 0.0;
 }
 
 QString VideoLoader::createDataDirectory(const QString& videoFilePath) {
