@@ -335,7 +335,10 @@ int VideoLoader::getTotalFrames() const { return totalFramesCount; }
 double VideoLoader::getFPS() const { return framesPerSecond; }
 int VideoLoader::getCurrentFrameNumber() const { return currentFrameIdx; }
 QSize VideoLoader::getVideoFrameSize() const { return originalFrameSize; }
-double VideoLoader::getZoomFactor() const { return m_zoomFactor; }
+double VideoLoader::getZoomFactor() const { 
+    qDebug() << "VideoLoader::getZoomFactor() called - returning:" << m_zoomFactor;
+    return m_zoomFactor; 
+}
 QRectF VideoLoader::getCurrentRoi() const { return m_activeRoiRect; }
 VideoLoader::InteractionMode VideoLoader::getCurrentInteractionMode() const {
     return m_currentInteractionMode;
@@ -379,6 +382,7 @@ double VideoLoader::getBlurSigmaX() const { return m_blurSigmaX; }
 bool VideoLoader::loadVideo(const QString& filePath) {
     if (m_isPlaying) pause();
 
+    qDebug() << "VideoLoader::loadVideo() - resetting zoom factor from" << m_zoomFactor << "to 1.0";
     m_zoomFactor = 1.0;
     m_panOffset = QPointF(0.0, 0.0);
     m_activeRoiRect = QRectF();
@@ -489,11 +493,13 @@ void VideoLoader::setZoomFactor(double factor) {
 }
 
 void VideoLoader::setZoomFactorAtPoint(double factor, const QPointF& widgetPoint) {
+    qDebug() << "VideoLoader::setZoomFactorAtPoint() called with factor:" << factor << "current zoom:" << m_zoomFactor;
     if (!isVideoLoaded()) return;
     double newZoomFactor = qBound(0.05, factor, 50.0);
     if (qFuzzyCompare(m_zoomFactor, newZoomFactor)) return;
     QPointF videoPointBeforeZoom = mapPointToVideo(widgetPoint);
     m_zoomFactor = newZoomFactor;
+    qDebug() << "VideoLoader::setZoomFactorAtPoint() - zoom changed to:" << m_zoomFactor;
 
     if (videoPointBeforeZoom.x() < 0 || videoPointBeforeZoom.y() < 0) {
         QSizeF widgetSize = size();
@@ -510,41 +516,55 @@ void VideoLoader::setZoomFactorAtPoint(double factor, const QPointF& widgetPoint
 }
 
 void VideoLoader::centerOnVideoPoint(const QPointF& videoPoint) {
+    qDebug() << "VideoLoader::centerOnVideoPoint called with point:" << videoPoint;
+    qDebug() << "VideoLoader: isVideoLoaded():" << isVideoLoaded() << "zoomFactor:" << m_zoomFactor;
+    
     if (!isVideoLoaded() || m_zoomFactor <= 0) {
+        qDebug() << "VideoLoader::centerOnVideoPoint - early return: video not loaded or invalid zoom";
         return;
     }
     
     // Bounds checking for video point
     if (videoPoint.isNull() || videoPoint.x() < 0 || videoPoint.y() < 0) {
+        qDebug() << "VideoLoader::centerOnVideoPoint - early return: invalid video point";
         return;
     }
     
     // Ensure point is within video frame bounds
+    qDebug() << "VideoLoader: originalFrameSize:" << originalFrameSize << "videoPoint:" << videoPoint;
     if (videoPoint.x() >= originalFrameSize.width() || videoPoint.y() >= originalFrameSize.height()) {
+        qDebug() << "VideoLoader::centerOnVideoPoint - early return: point outside frame bounds";
         return;
     }
     
     // Get the center of the widget
     QSizeF widgetSize = size();
     QPointF widgetCenter(widgetSize.width() / 2.0, widgetSize.height() / 2.0);
+    qDebug() << "VideoLoader: widgetSize:" << widgetSize << "widgetCenter:" << widgetCenter;
     
     // Calculate where the video point currently maps to in widget coordinates
     QPointF currentWidgetPoint = mapPointFromVideo(videoPoint);
+    qDebug() << "VideoLoader: currentWidgetPoint:" << currentWidgetPoint;
     
-    // If the mapping failed, don't adjust
-    if (currentWidgetPoint.x() < 0 || currentWidgetPoint.y() < 0) {
+    // If the mapping failed (returns -1, -1 for errors), don't adjust
+    if (currentWidgetPoint == QPointF(-1, -1)) {
+        qDebug() << "VideoLoader::centerOnVideoPoint - early return: mapping to widget coordinates failed";
         return;
     }
     
     // Calculate the offset needed to move the video point to the center
     QPointF offsetNeeded = widgetCenter - currentWidgetPoint;
+    qDebug() << "VideoLoader: offsetNeeded:" << offsetNeeded << "current m_panOffset:" << m_panOffset;
     
     // Apply the offset to the pan
     m_panOffset += offsetNeeded;
+    qDebug() << "VideoLoader: new m_panOffset:" << m_panOffset;
     
     // Clamp to valid bounds and update
     clampPanOffset();
+    qDebug() << "VideoLoader: m_panOffset after clamp:" << m_panOffset;
     update();
+    qDebug() << "VideoLoader::centerOnVideoPoint - completed successfully";
 }
 
 // --- Mode Setting Slots ---

@@ -263,39 +263,74 @@ void MainWindow::setupConnections() {
                     
                     // Auto-center video on worm position if zoomed in
                     double currentZoom = ui->videoLoader->getZoomFactor();
-                    if (currentZoom > 1.5) {  // Only center if significantly zoomed in
+                    qDebug() << "MainWindow: Blob selection - zoom factor:" << currentZoom << "worm ID:" << selectedItem.id;
+                    if (currentZoom > 1.5) {
+                        qDebug() << "MainWindow: Zoom factor > 1.5, attempting auto-center for worm" << selectedItem.id;
                         int currentFrame = ui->videoLoader->getCurrentFrameNumber();
                         QPointF wormPosition;
                         QRectF wormRoi;
                         bool centered = false;
                         QString statusMessage;
                         
+
+                        
                         // Try to get worm position for current frame
+                        qDebug() << "MainWindow: Trying to get worm data for frame" << currentFrame << "worm ID" << selectedItem.id;
                         if (m_trackingDataStorage->getWormDataForFrame(selectedItem.id, currentFrame, wormPosition, wormRoi)) {
+                            qDebug() << "MainWindow: Found worm data - position:" << wormPosition << "ROI:" << wormRoi;
                             if (!wormPosition.isNull() && wormPosition.x() >= 0 && wormPosition.y() >= 0) {
+                                qDebug() << "MainWindow: Calling centerOnVideoPoint with position" << wormPosition;
                                 ui->videoLoader->centerOnVideoPoint(wormPosition);
                                 statusMessage = QString("Centered on Worm %1 at frame %2 (zoom: %3x)")
                                                .arg(selectedItem.id).arg(currentFrame).arg(currentZoom, 0, 'f', 1);
                                 centered = true;
                                 qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "at tracked position" << wormPosition;
+                            } else {
+                                qDebug() << "MainWindow: Worm position invalid:" << wormPosition;
                             }
                         }
                         
                         if (!centered) {
-                            // If no tracking data, use initial position from blob
+                            // Try to get the last known position before this frame (for lost tracking)
+                            qDebug() << "MainWindow: Trying to get last known position before frame" << currentFrame << "for worm" << selectedItem.id;
+                            if (m_trackingDataStorage->getLastKnownPositionBefore(selectedItem.id, currentFrame, wormPosition, wormRoi)) {
+                                qDebug() << "MainWindow: Found last known position:" << wormPosition << "ROI:" << wormRoi;
+                                if (!wormPosition.isNull() && wormPosition.x() >= 0 && wormPosition.y() >= 0) {
+                                    qDebug() << "MainWindow: Calling centerOnVideoPoint with last known position" << wormPosition;
+                                    ui->videoLoader->centerOnVideoPoint(wormPosition);
+                                    statusMessage = QString("Centered on Worm %1 last known position (zoom: %2x)")
+                                                   .arg(selectedItem.id).arg(currentZoom, 0, 'f', 1);
+                                    centered = true;
+                                    qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "at last known position" << wormPosition;
+                                } else {
+                                    qDebug() << "MainWindow: Last known position invalid:" << wormPosition;
+                                }
+                            }
+                        }
+                        
+                        if (!centered) {
+                            // If no tracking data, use initial position from blob as final fallback
                             QPointF initialPos = selectedItem.initialCentroid;
+                            qDebug() << "MainWindow: No last known position found, using initial position:" << initialPos;
                             if (!initialPos.isNull() && initialPos.x() >= 0 && initialPos.y() >= 0) {
+                                qDebug() << "MainWindow: Calling centerOnVideoPoint with initial position" << initialPos;
                                 ui->videoLoader->centerOnVideoPoint(initialPos);
                                 statusMessage = QString("Centered on Worm %1 initial position (zoom: %2x)")
                                                .arg(selectedItem.id).arg(currentZoom, 0, 'f', 1);
                                 centered = true;
                                 qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "initial position" << initialPos;
+                            } else {
+                                qDebug() << "MainWindow: Initial position also invalid:" << initialPos;
                             }
                         }
                         
                         if (centered) {
                             statusBar()->showMessage(statusMessage, 3000);
+                        } else {
+                            qDebug() << "MainWindow: Auto-center failed - no valid position found";
                         }
+                    } else {
+                        qDebug() << "MainWindow: Zoom factor too low for auto-center:" << currentZoom;
                     }
                 }
             }
@@ -895,6 +930,10 @@ void MainWindow::onAnnotationTableRowClicked(const QModelIndex& index) {
         return;
     }
     
+    // DEBUG: Check zoom factor at start of annotation click
+    double initialZoom = ui->videoLoader->getZoomFactor();
+    qDebug() << "MainWindow: Annotation click START - zoom factor:" << initialZoom;
+    
     // Pause playback if it's currently playing
     if (ui->playPauseButton->isChecked()) {
         ui->playPauseButton->setChecked(false);
@@ -905,9 +944,16 @@ void MainWindow::onAnnotationTableRowClicked(const QModelIndex& index) {
     
     // Seek to the start frame of the annotation
     int targetFrame = annotation->startFrame;
-    qDebug() << "MainWindow: Seeking to annotation frame" << targetFrame << "for worm" << annotation->wormId;
+    int targetWormId = annotation->wormId;
+    qDebug() << "MainWindow: About to seek to frame" << targetFrame;
+    qDebug() << "MainWindow: Seeking to annotation frame" << targetFrame << "for worm" << targetWormId;
     
     seekFrame(targetFrame);
+    
+    // DEBUG: Check zoom factor after seeking
+    double zoomAfterSeek = ui->videoLoader->getZoomFactor();
+    qDebug() << "MainWindow: After seekFrame - zoom factor:" << zoomAfterSeek;
+    qDebug() << "MainWindow: About to find blob table row for worm" << targetWormId;
     
     // Update the frame position display
     if (!ui->framePosition->hasFocus()) {
@@ -915,8 +961,11 @@ void MainWindow::onAnnotationTableRowClicked(const QModelIndex& index) {
     }
     
     // Select the corresponding worm in the blob table
-    int targetWormId = annotation->wormId;
     int blobTableRow = -1;
+
+    // DEBUG: Check zoom factor before blob selection
+    double zoomBeforeBlobSelection = ui->videoLoader->getZoomFactor();
+    qDebug() << "MainWindow: Before blob selection - zoom factor:" << zoomBeforeBlobSelection;
     
     // Find the row with matching worm ID
     for (int i = 0; i < m_blobTableModel->rowCount(); ++i) {

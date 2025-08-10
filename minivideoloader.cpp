@@ -149,14 +149,27 @@ bool MiniVideoLoader::pollWormPosition()
     QPointF position;
     QRectF roi;
     
+    qDebug() << "MiniVideoLoader: Trying to get worm data for frame" << m_currentFrameNumber << "worm ID" << m_selectedWormId;
     if (m_trackingDataStorage->getWormDataForFrame(m_selectedWormId, m_currentFrameNumber, position, roi)) {
+        qDebug() << "MiniVideoLoader: Found current frame data - position:" << position << "ROI:" << roi;
         m_wormPosition = position;
         m_wormRoi = roi;
         m_hasValidData = true;
         return true;
     } else {
-        m_hasValidData = false;
-        return false;
+        qDebug() << "MiniVideoLoader: No current frame data, trying to get last known position before frame" << m_currentFrameNumber;
+        // Try to get last known position before this frame (for lost tracking)
+        if (m_trackingDataStorage->getLastKnownPositionBefore(m_selectedWormId, m_currentFrameNumber, position, roi)) {
+            qDebug() << "MiniVideoLoader: Found last known position - position:" << position << "ROI:" << roi;
+            m_wormPosition = position;
+            m_wormRoi = roi;
+            m_hasValidData = true;
+            return true;
+        } else {
+            qDebug() << "MiniVideoLoader: No last known position found either";
+            m_hasValidData = false;
+            return false;
+        }
     }
 }
 

@@ -343,6 +343,40 @@ bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPoin
     return false;  // Worm not found for this frame
 }
 
+bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame, QPointF& outPosition, QRectF& outRoi) const {
+    // Check if we have tracking data for this worm
+    auto wormIndexIt = m_frameIndex.find(wormId);
+    if (wormIndexIt == m_frameIndex.end()) {
+        return false;  // No tracking data for this worm
+    }
+    
+    const auto& frameMap = wormIndexIt.value();
+    
+    // Search backwards from beforeFrame-1 to find the last valid position
+    for (int frame = beforeFrame - 1; frame >= 0; frame--) {
+        auto frameIt = frameMap.find(frame);
+        if (frameIt != frameMap.end()) {
+            const Tracking::WormTrackPoint* trackPoint = frameIt.value();
+            // Only return positions with good tracking quality (not Lost)
+            if (trackPoint->quality != Tracking::TrackPointQuality::Lost) {
+                outPosition = QPointF(trackPoint->position.x, trackPoint->position.y);
+                outRoi = trackPoint->roi;
+                return true;
+            }
+        }
+    }
+    
+    // If no valid tracking data found, try to use initial position from ClickedItem
+    const TableItems::ClickedItem* item = getItem(wormId);
+    if (item) {
+        outPosition = item->initialCentroid;
+        outRoi = item->initialBoundingBox;
+        return true;
+    }
+    
+    return false;  // No valid position found
+}
+
 QSet<int> TrackingDataStorage::getLostTrackingFrames(int wormId) const {
     QSet<int> lostFrames;
     
