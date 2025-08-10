@@ -194,6 +194,20 @@ public:
     double getRoiSizeMultiplier() const;
     
     /**
+     * @brief Get lost tracking segments for a specific worm
+     * @param wormId The ID of the worm to analyze
+     * @return List of frame number ranges where tracking was lost (pairs of start/end frame numbers)
+     */
+    QList<QPair<int, int>> getLostTrackingSegments(int wormId) const;
+    
+    /**
+     * @brief Get all frames where tracking was lost for a specific worm
+     * @param wormId The ID of the worm to analyze
+     * @return Set of frame numbers where tracking quality is Lost
+     */
+    QSet<int> getLostTrackingFrames(int wormId) const;
+    
+    /**
      * @brief Get minimum observed area
      * @return Minimum area value
      */

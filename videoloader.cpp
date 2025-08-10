@@ -509,6 +509,44 @@ void VideoLoader::setZoomFactorAtPoint(double factor, const QPointF& widgetPoint
     emit zoomFactorChanged(m_zoomFactor);
 }
 
+void VideoLoader::centerOnVideoPoint(const QPointF& videoPoint) {
+    if (!isVideoLoaded() || m_zoomFactor <= 0) {
+        return;
+    }
+    
+    // Bounds checking for video point
+    if (videoPoint.isNull() || videoPoint.x() < 0 || videoPoint.y() < 0) {
+        return;
+    }
+    
+    // Ensure point is within video frame bounds
+    if (videoPoint.x() >= originalFrameSize.width() || videoPoint.y() >= originalFrameSize.height()) {
+        return;
+    }
+    
+    // Get the center of the widget
+    QSizeF widgetSize = size();
+    QPointF widgetCenter(widgetSize.width() / 2.0, widgetSize.height() / 2.0);
+    
+    // Calculate where the video point currently maps to in widget coordinates
+    QPointF currentWidgetPoint = mapPointFromVideo(videoPoint);
+    
+    // If the mapping failed, don't adjust
+    if (currentWidgetPoint.x() < 0 || currentWidgetPoint.y() < 0) {
+        return;
+    }
+    
+    // Calculate the offset needed to move the video point to the center
+    QPointF offsetNeeded = widgetCenter - currentWidgetPoint;
+    
+    // Apply the offset to the pan
+    m_panOffset += offsetNeeded;
+    
+    // Clamp to valid bounds and update
+    clampPanOffset();
+    update();
+}
+
 // --- Mode Setting Slots ---
 void VideoLoader::setInteractionMode(InteractionMode mode) {
     if (m_currentInteractionMode == mode) return;
@@ -1024,6 +1062,11 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
             bool firstPoint = true;
             for (const Tracking::WormTrackPoint& pt : trackPoints) {
+                // Skip lost tracking points - they create gaps in the track display
+                if (pt.quality == Tracking::TrackPointQuality::Lost) {
+                    continue;
+                }
+                
                 QPointF currentPointVideo(pt.position.x, pt.position.y);
                 QPointF currentPointWidget = mapPointFromVideo(currentPointVideo);
                 if (currentPointWidget.x() < 0) continue; // Skip points not visible on screen
@@ -1104,6 +1147,11 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 if (m_allTracksToDisplay.count(trackId)) {
                     const auto& trackPoints = m_allTracksToDisplay.at(trackId);
                     for (const auto& pt : trackPoints) {
+                        // Skip lost tracking points for mouse interaction
+                        if (pt.quality == Tracking::TrackPointQuality::Lost) {
+                            continue;
+                        }
+                        
                         QPointF videoPt(pt.position.x, pt.position.y);
                         QPointF widgetPt = mapPointFromVideo(videoPt);
                         if (widgetPt.x() < 0) continue;

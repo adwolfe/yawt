@@ -47,7 +47,9 @@ void WormTracker::setFrames(const std::vector<cv::Mat>* frames) {
     m_framesToProcess = frames;
 }
 
-void WormTracker::startTracking() {
+void WormTracker::startTracking()
+{
+    qDebug().noquote() << getDebugLabel("startTracking") << "startTracking - STARTING TRACKING";
     if (!m_framesToProcess || m_framesToProcess->empty()) {
         qWarning().noquote() << getDebugLabel("startTracking") << "No frames";
         emit errorOccurred(m_wormId, "No frames provided to tracker.");
@@ -69,6 +71,8 @@ void WormTracker::startTracking() {
 
 void WormTracker::continueTracking()
 {
+    qDebug().noquote() << getDebugLabel("continueTracking") << "continueTracking - CALLED for frame:" << m_currFrameNum;
+    
     if (QThread::currentThread()->isInterruptionRequested())
     {
         m_trackingActive = false; // Stop active tracking without debug message
@@ -217,6 +221,8 @@ WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const
 // Unified frame processing - handles both single and merged tracking modes
 bool WormTracker::processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoi)
 {
+    qDebug().noquote() << getDebugLabel("processFrame") << "processFrame - CALLED asMerged:" << asMerged;
+    
     // 1. Initialize processing context
     FrameProcessingContext context = initializeFrameProcessing(frame, sequenceFrameIndex, currentRoi);
     
@@ -277,6 +283,8 @@ bool WormTracker::handleSingleBlobCase(bool asMerged, const Tracking::DetectedBl
                                       const cv::Mat& frame, const FrameProcessingContext& context, 
                                       QRectF& currentRoi)
 {
+    qDebug().noquote() << getDebugLabel("handleSingleBlobCase") << "handleSingleBlobCase - CALLED asMerged:" << asMerged << "area:" << blob.area;
+    
     // Debug removed - found single blob
     
     bool touchesBoundary = isBlobTouchingBoundary(blob, context.searchRoiUsedForThisFrame);
@@ -292,13 +300,13 @@ bool WormTracker::handleSingleBlobCase(bool asMerged, const Tracking::DetectedBl
 bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedBlob& blob, 
                                        const FrameProcessingContext& context, const cv::Mat& frame, QRectF& currentRoi)
 {
-    qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Single blob fully contained.";
+    qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "handleNonBoundaryBlob - CALLED asMerged:" << asMerged << "area:" << blob.area;
     
     // Check for split by area reduction
     bool isSplit = detectSplitByAreaReduction(blob);
     
     if (isSplit) {
-        qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Potential split detected. Expanding to look for other fragments...";
+        // qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Potential split detected. Expanding to look for other fragments...";
         
         // Proactively expand ROI to look for other fragments, even though this blob doesn't touch the boundary
         QRectF expandedRoi = context.searchRoiUsedForThisFrame;
@@ -318,30 +326,30 @@ bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedB
             expandedRoi.setWidth(qMin(expandedRoi.width(), static_cast<qreal>(frame.cols)));
             expandedRoi.setHeight(qMin(expandedRoi.height(), static_cast<qreal>(frame.rows)));
             
-            qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Expanded ROI: " << expandedRoi;
+            // qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Expanded ROI: " << expandedRoi;
         }
         
         // Look for all blobs in the expanded area
         QList<Tracking::DetectedBlob> splitCandidates;
         QList<Tracking::DetectedBlob> blobsInExpandedRoi = findPlausibleBlobsInRoi(frame, expandedRoi);
         
-        qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Found " 
-                          << blobsInExpandedRoi.size() << " blobs in expanded ROI";
+        // qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Found " 
+        //                   << blobsInExpandedRoi.size() << " blobs in expanded ROI";
         
         // Filter and add split candidates
         double minSplitBlobArea = m_minBlobArea * 0.5; // Half of minimum area as threshold
         for (const auto& b : blobsInExpandedRoi) {
             if (b.isValid && b.area >= minSplitBlobArea) {
                 splitCandidates.append(b);
-                qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Adding split candidate: Area=" 
-                                  << b.area << " BBox=" << b.boundingBox;
+                // qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Adding split candidate: Area=" 
+                //                   << b.area << " BBox=" << b.boundingBox;
             }
         }
         
         // If we didn't find additional candidates, add the original blob
         if (splitCandidates.isEmpty()) {
             splitCandidates.append(blob);
-            qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "No additional split candidates found, using original blob.";
+            // qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "No additional split candidates found, using original blob.";
         }
         
         return updateTrackingState(blob, blob, splitCandidates, 
@@ -352,7 +360,7 @@ bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedB
         bool confirmedMerge = detectMergeByAreaIncrease(blob);
         
         if (confirmedMerge) {
-            qDebug().noquote() << getDebugLabel("Frame") << "MERGE detected";
+            qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "handleNonBoundaryBlob - MERGE confirmed - Area:" << blob.area;
             return updateTrackingState(blob, blob, QList<Tracking::DetectedBlob>(), 
                                       Tracking::TrackerState::TrackingMerged, 
                                       context, frame.size(), currentRoi);
@@ -455,9 +463,12 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
 }
 // Handle a blob that touches the boundary
 bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::DetectedBlob& blob, 
-                                          const cv::Mat& frame, const FrameProcessingContext& context, 
-                                          QRectF& currentRoi)
+                                            const cv::Mat& frame, const FrameProcessingContext& context, 
+                                            QRectF& currentRoi)
 {
+    qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "handleBoundaryTouchingBlob - CALLED asMerged:" << asMerged << "area:" << blob.area;
+    
+    // Try to expand the blob by growing the ROI and re-thresholding
     // Expand ROI to get full blob
     QRectF expandedRoi = context.searchRoiUsedForThisFrame;
     Tracking::DetectedBlob expandedBlob = expandBlobTouchingBoundary(blob, expandedRoi, frame);
@@ -516,7 +527,13 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
             }
         }
         
-        qDebug().noquote() << getDebugLabel("Frame") << "SPLIT detected with " << splitCandidates.size() << " candidates";
+        qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "handleBoundaryTouchingBlob - SPLIT detected with " << splitCandidates.size() << " candidates";
+        // for (int i = 0; i < splitCandidates.size(); ++i) {
+        //     const auto& candidate = splitCandidates[i];
+        //     qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") 
+        //                       << "Split candidate" << i << "Area:" << candidate.area 
+        //                       << "Centroid:" << candidate.centroid.x() << "," << candidate.centroid.y();
+        // }
         return updateTrackingState(blobForAnchor, blobToReport, splitCandidates, 
                                  Tracking::TrackerState::PausedForSplit, context, frame.size(), currentRoi);
     }
@@ -526,7 +543,7 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
         bool confirmedMerge = detectMergeByAreaIncrease(blobToReport);
         
         if (confirmedMerge) {
-            qDebug().noquote() << getDebugLabel("Frame") << "MERGE detected";
+            qDebug().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "handleBoundaryTouchingBlob - MERGE confirmed - Area:" << blobToReport.area;
             return updateTrackingState(blobForAnchor, blobToReport, QList<Tracking::DetectedBlob>(), 
                                      Tracking::TrackerState::TrackingMerged, context, frame.size(), currentRoi);
         } else {
@@ -545,9 +562,10 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
 
 // Handle multiple blobs case
 bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::DetectedBlob>& blobs, 
-                                        const cv::Mat& frame, const FrameProcessingContext& context, 
-                                        QRectF& currentRoi)
+                                         const cv::Mat& frame, const FrameProcessingContext& context, 
+                                         QRectF& currentRoi)
 {
+    qDebug().noquote() << getDebugLabel("handleMultipleBlobsCase") << "handleMultipleBlobsCase - CALLED asMerged:" << asMerged << "blobCount:" << blobs.size();
     if (asMerged) {
         // For merged mode, multiple blobs might indicate a split
         // Multiple blobs debug removed
@@ -662,26 +680,27 @@ Tracking::DetectedBlob WormTracker::selectBestBlobCandidate(const QList<Tracking
 // Detect split by area reduction
 bool WormTracker::detectSplitByAreaReduction(const Tracking::DetectedBlob& currentBlob)
 {
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "detectSplitByAreaReduction - CALLED with currentArea:" << currentBlob.area;
+    
     if (!m_lastFullBlob.isValid) {
+        qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") << "detectSplitByAreaReduction - No lastFullBlob, returning false";
         return false;
     }
-    
-    // Detailed area comparison debug removed
     
     // Calculate both area metrics
     double hullAreaRatio = currentBlob.convexHullArea / m_lastFullBlob.convexHullArea;
     double regularAreaRatio = currentBlob.area / m_lastFullBlob.area;
     
-    // Area ratios debug removed
-    
-    // Log area changes
-    // Debug message removed - split detection internal calculations
-                      
     // Split threshold: Both hull area AND regular area must show significant reduction
     // Both metrics must be less than 80% of previous frame's values
     bool isSplit = (hullAreaRatio < 0.80) && (regularAreaRatio < 0.80);
     
-    // Split detection result debug removed
+    qDebug().noquote() << getDebugLabel("detectSplitByAreaReduction") 
+                      << "detectSplitByAreaReduction - CurrentArea:" << currentBlob.area 
+                      << "LastArea:" << m_lastFullBlob.area
+                      << "HullRatio:" << QString::number(hullAreaRatio, 'f', 3)
+                      << "RegularRatio:" << QString::number(regularAreaRatio, 'f', 3) 
+                      << "IsSplit:" << isSplit;
     
     return isSplit;
 }
@@ -689,23 +708,34 @@ bool WormTracker::detectSplitByAreaReduction(const Tracking::DetectedBlob& curre
 // Detect merge by area increase
 bool WormTracker::detectMergeByAreaIncrease(const Tracking::DetectedBlob& currentBlob)
 {
+    qDebug().noquote() << getDebugLabel("detectMergeByAreaIncrease") << "detectMergeByAreaIncrease - CALLED with currentArea:" << currentBlob.area;
+    
     if (m_skipMergeDetectionNextFrame) {
-        // Debug message removed - merge detection skip info
+        qDebug().noquote() << getDebugLabel("detectMergeByAreaIncrease") << "detectMergeByAreaIncrease - Skipping merge detection this frame";
         return false;
     }
     
+    bool isMerge = false;
     if (m_lastPrimaryBlob.isValid && 
         currentBlob.area > m_lastPrimaryBlob.area * MERGE_CONFIRM_RELATIVE_AREA_FACTOR) {
-        // Debug message removed - merge detection details (reported elsewhere)
-        return true;
+        isMerge = true;
+        qDebug().noquote() << getDebugLabel("detectMergeByAreaIncrease") 
+                          << "detectMergeByAreaIncrease - MERGE by relative area - Current:" << currentBlob.area 
+                          << "Last:" << m_lastPrimaryBlob.area 
+                          << "Factor:" << MERGE_CONFIRM_RELATIVE_AREA_FACTOR;
     }
     
     if (currentBlob.area > m_maxBlobArea * MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR) {
-        // Debug message removed - merge detection details (reported elsewhere)
-        return true;
+        isMerge = true;
+        qDebug().noquote() << getDebugLabel("detectMergeByAreaIncrease") 
+                          << "detectMergeByAreaIncrease - MERGE by absolute area - Current:" << currentBlob.area 
+                          << "Max:" << m_maxBlobArea 
+                          << "Factor:" << MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR;
     }
     
-    return false;
+    qDebug().noquote() << getDebugLabel("detectMergeByAreaIncrease") << "detectMergeByAreaIncrease - Result isMerge:" << isMerge;
+    
+    return isMerge;
 }
 
 // Update tracking state and emit signals
@@ -801,7 +831,9 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
                                   m_videoKeyFrameNum + m_currFrameNum :
                                   m_videoKeyFrameNum - 1 - m_currFrameNum;
 
-    // Debug removed - resuming tracking message
+    qDebug().noquote() << getDebugLabel("resumeTrackingWithAssignedTarget") 
+                      << "resumeTrackingWithAssignedTarget - Resuming with target - Valid:" << targetBlob.isValid 
+                      << (targetBlob.isValid ? QString(" Area:%1 Pos:%2,%3").arg(targetBlob.area).arg(targetBlob.centroid.x()).arg(targetBlob.centroid.y()) : QString());
 
     if (!targetBlob.isValid) {
         qWarning().noquote() << getDebugLabel("resumeTrackingWithAssignedTarget") << "Invalid blob";
@@ -845,7 +877,7 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
     m_skipMergeDetectionNextFrame = true; // Skip merge detection for one frame after resuming from split
     // emit stateChanged(m_wormId, m_currentState); // State change will be implicit in next positionUpdate
 
-    // Debug removed - resumed state message
+    qDebug().noquote() << getDebugLabel("resumeTrackingWithAssignedTarget") << "resumeTrackingWithAssignedTarget - Resumed tracking as single worm";
 
     // Emit position update for the *current* frame where it was paused, now with the assigned target
     if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0) {
@@ -933,7 +965,7 @@ QString WormTracker::getDebugLabel(const QString& functionName) const {
         frameNumber = (m_videoKeyFrameNum - 1 - m_currFrameNum);
     }
         
-    return QString("WT: %1|FN%2|%3-->").arg(displayId).arg(frameNumber).arg(functionName);
+    return QString("WT: %1|FN%2|").arg(displayId).arg(frameNumber);
 }
 
 QRectF WormTracker::adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize) {

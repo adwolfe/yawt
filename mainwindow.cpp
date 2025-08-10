@@ -1,11 +1,13 @@
 #include "mainwindow.h"
 #include <QTimer>
 #include "ui_mainwindow.h"
+#include "annotationtablemodel.h"
 #include "blobtablemodel.h"
 #include "colordelegate.h"
 #include "itemtypedelegate.h"
 #include "trackingprogressdialog.h"
 #include "trackingmanager.h"
+#include "trackingdatastorage.h"
 #include "version.h"
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
 // #include "videoloader.h"
@@ -42,6 +44,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
     ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
 
+    // Annotation Table Model
+    m_annotationTableModel = new AnnotationTableModel(m_trackingDataStorage, this);
+    ui->annoTableView->setModel(m_annotationTableModel);
+    qDebug() << "MainWindow: AnnotationTableModel created and connected to annoTableView";
+
     m_itemTypeDelegate = new ItemTypeDelegate(this);
     ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
 
@@ -65,6 +72,35 @@ MainWindow::MainWindow(QWidget *parent)
     // Allow checking checkboxes in the header
     ui->wormTableView->horizontalHeader()->setSectionsClickable(true);
     ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
+
+    // Configure annotation table view
+    ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    ui->annoTableView->horizontalHeader()->setStretchLastSection(false);
+    ui->annoTableView->horizontalHeader()->setVisible(true);
+    ui->annoTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ui->annoTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    
+    // Set column resize modes for annotation table
+    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
+    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
+    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
+    
+    // Add hover effects and cursor styling to indicate clickability
+    ui->annoTableView->setMouseTracking(true);
+    ui->annoTableView->viewport()->setCursor(Qt::PointingHandCursor);
+    ui->annoTableView->setStyleSheet(
+        "QTableView::item:hover { "
+        "    background-color: #e3f2fd; "
+        "    border: 1px solid #2196f3; "
+        "} "
+        "QTableView::item:selected { "
+        "    background-color: #bbdefb; "
+        "    color: #000; "
+        "}"
+    );
+    
+    qDebug() << "MainWindow: Annotation table view configured successfully";
 
     resizeTableColumns();
 
@@ -224,6 +260,43 @@ void MainWindow::setupConnections() {
                 if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
                     const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
                     ui->miniVideoLoader->setSelectedWorm(selectedItem.id);
+                    
+                    // Auto-center video on worm position if zoomed in
+                    double currentZoom = ui->videoLoader->getZoomFactor();
+                    if (currentZoom > 1.5) {  // Only center if significantly zoomed in
+                        int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+                        QPointF wormPosition;
+                        QRectF wormRoi;
+                        bool centered = false;
+                        QString statusMessage;
+                        
+                        // Try to get worm position for current frame
+                        if (m_trackingDataStorage->getWormDataForFrame(selectedItem.id, currentFrame, wormPosition, wormRoi)) {
+                            if (!wormPosition.isNull() && wormPosition.x() >= 0 && wormPosition.y() >= 0) {
+                                ui->videoLoader->centerOnVideoPoint(wormPosition);
+                                statusMessage = QString("Centered on Worm %1 at frame %2 (zoom: %3x)")
+                                               .arg(selectedItem.id).arg(currentFrame).arg(currentZoom, 0, 'f', 1);
+                                centered = true;
+                                qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "at tracked position" << wormPosition;
+                            }
+                        }
+                        
+                        if (!centered) {
+                            // If no tracking data, use initial position from blob
+                            QPointF initialPos = selectedItem.initialCentroid;
+                            if (!initialPos.isNull() && initialPos.x() >= 0 && initialPos.y() >= 0) {
+                                ui->videoLoader->centerOnVideoPoint(initialPos);
+                                statusMessage = QString("Centered on Worm %1 initial position (zoom: %2x)")
+                                               .arg(selectedItem.id).arg(currentZoom, 0, 'f', 1);
+                                centered = true;
+                                qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "initial position" << initialPos;
+                            }
+                        }
+                        
+                        if (centered) {
+                            statusBar()->showMessage(statusMessage, 3000);
+                        }
+                    }
                 }
             }
         }
@@ -274,6 +347,9 @@ void MainWindow::setupConnections() {
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
     connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
+
+    // Annotation table selection
+    connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableRowClicked);
 
     // Connect header data changes to trigger UI update
     connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
@@ -733,6 +809,12 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     // Debug: Verify tracks were stored
     qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
 
+    // Refresh annotation table to show lost tracking events
+    if (m_annotationTableModel) {
+        m_annotationTableModel->refreshAnnotations();
+        qDebug() << "MainWindow: Refreshed annotation table with" << m_annotationTableModel->rowCount() << "annotations";
+    }
+
     // VideoLoader still needs direct track data for backward compatibility
     // It will also get data from storage now
     ui->videoLoader->setTracksToDisplay(tracks);
@@ -800,6 +882,74 @@ void MainWindow::updatePlaybackSpeedComboBox(double speedMultiplier) {
             break;
         }
     }
+}
+
+void MainWindow::onAnnotationTableRowClicked(const QModelIndex& index) {
+    if (!index.isValid() || !m_annotationTableModel) {
+        return;
+    }
+    
+    const AnnotationTableModel::AnnotationEntry* annotation = m_annotationTableModel->getAnnotationAtRow(index.row());
+    if (!annotation) {
+        qWarning() << "MainWindow: Could not get annotation for row" << index.row();
+        return;
+    }
+    
+    // Pause playback if it's currently playing
+    if (ui->playPauseButton->isChecked()) {
+        ui->playPauseButton->setChecked(false);
+        ui->videoLoader->pause();
+        ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png")));
+        qDebug() << "MainWindow: Paused playback for annotation navigation";
+    }
+    
+    // Seek to the start frame of the annotation
+    int targetFrame = annotation->startFrame;
+    qDebug() << "MainWindow: Seeking to annotation frame" << targetFrame << "for worm" << annotation->wormId;
+    
+    seekFrame(targetFrame);
+    
+    // Update the frame position display
+    if (!ui->framePosition->hasFocus()) {
+        ui->framePosition->setValue(targetFrame);
+    }
+    
+    // Select the corresponding worm in the blob table
+    int targetWormId = annotation->wormId;
+    int blobTableRow = -1;
+    
+    // Find the row with matching worm ID
+    for (int i = 0; i < m_blobTableModel->rowCount(); ++i) {
+        const TableItems::ClickedItem& item = m_trackingDataStorage->getItemByIndex(i);
+        if (item.id == targetWormId) {
+            blobTableRow = i;
+            break;
+        }
+    }
+    
+    // Select the row in the blob table if found
+    if (blobTableRow >= 0) {
+        QModelIndex blobIndex = m_blobTableModel->index(blobTableRow, 0);
+        ui->wormTableView->setCurrentIndex(blobIndex);
+        ui->wormTableView->selectionModel()->select(blobIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        ui->wormTableView->scrollTo(blobIndex, QAbstractItemView::EnsureVisible);
+        qDebug() << "MainWindow: Selected worm" << targetWormId << "in blob table (row" << blobTableRow << ")";
+    } else {
+        // Clear selection if worm not found in blob table
+        ui->wormTableView->clearSelection();
+        qDebug() << "MainWindow: Worm" << targetWormId << "not found in blob table, cleared selection";
+    }
+    
+    // Show status message
+    QString statusMessage;
+    if (annotation->startFrame == annotation->endFrame) {
+        statusMessage = QString("Navigated to frame %1 - Worm %2 tracking lost")
+                       .arg(targetFrame).arg(annotation->wormId);
+    } else {
+        statusMessage = QString("Navigated to frame %1 - Worm %2 tracking lost (frames %1-%3)")
+                       .arg(targetFrame).arg(annotation->wormId).arg(annotation->endFrame);
+    }
+    statusBar()->showMessage(statusMessage, 4000);
 }
 
 // --- Table View and VideoLoader Sync ---

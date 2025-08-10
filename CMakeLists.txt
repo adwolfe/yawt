@@ -25,6 +25,7 @@ find_package(OpenCV REQUIRED PATHS /opt/homebrew)
 
 # List of sources
 set(SOURCES
+    annotationtablemodel.cpp
     blobtablemodel.cpp
     colordelegate.cpp
     folderfirstsortproxymodel.cpp
@@ -47,6 +48,7 @@ set(SOURCES
 
 # List of headers
 set(HEADERS
+    annotationtablemodel.h
     blobtablemodel.h
     colordelegate.h
     folderfirstsortproxymodel.h

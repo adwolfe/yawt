@@ -166,7 +166,8 @@ struct DetectedBlob {
 
 enum class TrackPointQuality {
     Confident,
-    Ambiguous
+    Ambiguous,
+    Lost        // Tracking was lost - position data is invalid
 
 };
 Q_ENUM_NS(TrackPointQuality)

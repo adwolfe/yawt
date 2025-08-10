@@ -321,6 +321,10 @@ bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPoin
         auto frameIt = wormIndexIt.value().find(frameNumber);
         if (frameIt != wormIndexIt.value().end()) {
             const Tracking::WormTrackPoint* trackPoint = frameIt.value();
+            // Don't return data for lost tracking points
+            if (trackPoint->quality == Tracking::TrackPointQuality::Lost) {
+                return false;
+            }
             // Convert cv::Point2f to QPointF
             outPosition = QPointF(trackPoint->position.x, trackPoint->position.y);
             outRoi = trackPoint->roi;
@@ -337,6 +341,61 @@ bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPoin
     }
     
     return false;  // Worm not found for this frame
+}
+
+QSet<int> TrackingDataStorage::getLostTrackingFrames(int wormId) const {
+    QSet<int> lostFrames;
+    
+    // Check if we have tracking data for this worm
+    auto trackIt = m_tracks.find(wormId);
+    if (trackIt == m_tracks.end()) {
+        return lostFrames; // No tracking data for this worm
+    }
+    
+    const std::vector<Tracking::WormTrackPoint>& trackPoints = trackIt->second;
+    for (const auto& point : trackPoints) {
+        if (point.quality == Tracking::TrackPointQuality::Lost) {
+            lostFrames.insert(point.frameNumberOriginal);
+        }
+    }
+    
+    return lostFrames;
+}
+
+QList<QPair<int, int>> TrackingDataStorage::getLostTrackingSegments(int wormId) const {
+    QList<QPair<int, int>> segments;
+    QSet<int> lostFrames = getLostTrackingFrames(wormId);
+    
+    if (lostFrames.isEmpty()) {
+        return segments;
+    }
+    
+    // Convert set to sorted list for processing
+    QList<int> sortedLostFrames = lostFrames.values();
+    std::sort(sortedLostFrames.begin(), sortedLostFrames.end());
+    
+    // Group consecutive frame numbers into segments
+    int segmentStart = sortedLostFrames.first();
+    int segmentEnd = segmentStart;
+    
+    for (int i = 1; i < sortedLostFrames.size(); ++i) {
+        int currentFrame = sortedLostFrames[i];
+        
+        if (currentFrame == segmentEnd + 1) {
+            // Consecutive frame, extend current segment
+            segmentEnd = currentFrame;
+        } else {
+            // Gap found, close current segment and start new one
+            segments.append(qMakePair(segmentStart, segmentEnd));
+            segmentStart = currentFrame;
+            segmentEnd = currentFrame;
+        }
+    }
+    
+    // Don't forget the last segment
+    segments.append(qMakePair(segmentStart, segmentEnd));
+    
+    return segments;
 }
 
 int TrackingDataStorage::getItemCount() const {

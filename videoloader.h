@@ -212,6 +212,7 @@ public slots:
     void seekToFrame(int frameNumber, bool suppressEmit = false);
     void setZoomFactor(double factor);
     void setZoomFactorAtPoint(double factor, const QPointF& widgetPoint);
+    void centerOnVideoPoint(const QPointF& videoPoint);
 
     // --- Mode Setting Slots ---
     void setInteractionMode(InteractionMode mode);

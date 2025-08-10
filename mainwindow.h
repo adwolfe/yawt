@@ -9,6 +9,7 @@
 // Forward declarations
 namespace Ui { class MainWindow; }
 class BlobTableModel;
+class AnnotationTableModel;
 class ColorDelegate;
 class ItemTypeDelegate;
 class TrackingProgressDialog;
@@ -46,6 +47,7 @@ public slots:
     void frameSliderMoved(int value);
     void goToFirstFrame();
     void goToLastFrame();
+    void onAnnotationTableRowClicked(const QModelIndex& index);
 
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();
@@ -107,6 +109,7 @@ private:
 
     Ui::MainWindow *ui;
     BlobTableModel *m_blobTableModel;
+    AnnotationTableModel *m_annotationTableModel;
     ColorDelegate *m_colorDelegate;
     ItemTypeDelegate *m_itemTypeDelegate;
     TrackingProgressDialog *m_trackingProgressDialog;
