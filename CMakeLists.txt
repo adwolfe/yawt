@@ -121,3 +121,22 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
 # Optional: install target path (similar to .pro file behavior)
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+
+# Custom deployment target for macOS app bundle
+if(APPLE)
+    add_custom_target(deploy
+        COMMAND ${CMAKE_SOURCE_DIR}/deploy_mac.sh
+        DEPENDS ${PROJECT_NAME}
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Deploying macOS app bundle with all dependencies"
+    )
+
+    # Additional bundle properties for better deployment
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME "YAWT"
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_COPYRIGHT "Copyright © 2024"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.sciwolfe.yawt"
+    )
+endif()

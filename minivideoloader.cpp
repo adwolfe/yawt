@@ -1,9 +1,15 @@
 #include "minivideoloader.h"
 #include "trackingdatastorage.h"
+#include "trackingcommon.h"
+#include "videoloader.h"
 #include <QPainter>
 #include <QDebug>
 #include <QResizeEvent>
 #include <QFont>
+#include <QMouseEvent>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <algorithm>
 
 MiniVideoLoader::MiniVideoLoader(QWidget *parent)
@@ -12,7 +18,9 @@ MiniVideoLoader::MiniVideoLoader(QWidget *parent)
     , m_selectedWormId(-1)
     , m_cropMultiplier(DEFAULT_CROP_MULTIPLIER)
     , m_trackingDataStorage(nullptr)
+    , m_videoLoader(nullptr)
     , m_hasValidData(false)
+    , m_hasBlobSelection(false)
 {
     // Set up widget appearance
     setAutoFillBackground(true);
@@ -34,7 +42,11 @@ MiniVideoLoader::~MiniVideoLoader()
 void MiniVideoLoader::setTrackingDataStorage(TrackingDataStorage* storage)
 {
     m_trackingDataStorage = storage;
-    qDebug() << "MiniVideoLoader: TrackingDataStorage set to" << storage;
+}
+
+void MiniVideoLoader::setVideoLoader(VideoLoader* videoLoader)
+{
+    m_videoLoader = videoLoader;
 }
 
 void MiniVideoLoader::setCropMultiplier(double multiplier)
@@ -75,12 +87,37 @@ bool MiniVideoLoader::hasValidCrop() const
 
 void MiniVideoLoader::updateFrame(int frameNumber, const QImage& frame)
 {
-    qDebug() << "MiniVideoLoader: updateFrame called - frame:" << frameNumber << "selectedWorm:" << m_selectedWormId;
-    
     m_currentFrameNumber = frameNumber;
     m_currentFrame = frame;
     
-    // Poll for worm position if we have a selected worm
+    // Convert QImage to cv::Mat for thresholding
+    if (!frame.isNull()) {
+        QImage rgbFrame = frame.convertToFormat(QImage::Format_RGB888);
+        m_currentFrameCv = cv::Mat(rgbFrame.height(), rgbFrame.width(), CV_8UC3, 
+                                   (void*)rgbFrame.constBits(), rgbFrame.bytesPerLine()).clone();
+        // Convert from RGB to BGR for OpenCV
+        cv::cvtColor(m_currentFrameCv, m_currentFrameCv, cv::COLOR_RGB2BGR);
+    } else {
+        m_currentFrameCv = cv::Mat();
+    }
+    
+    if (m_selectedWormId >= 0) {
+        pollWormPosition();
+        updateCroppedImage();
+    }
+    
+    update();  // Trigger repaint
+    repaint(); // Force immediate repaint
+}
+
+void MiniVideoLoader::updateFrame(int frameNumber, const cv::Mat& frame)
+{
+    m_currentFrameNumber = frameNumber;
+    m_currentFrameCv = frame.clone();
+    
+    // Clear the QImage version since we now have cv::Mat
+    m_currentFrame = QImage();
+    
     if (m_selectedWormId >= 0) {
         pollWormPosition();
         updateCroppedImage();
@@ -171,6 +208,15 @@ bool MiniVideoLoader::pollWormPosition()
             return false;
         }
     }
+    
+    // Clear any previous blob selection when worm position changes
+    if (m_hasBlobSelection) {
+        m_hasBlobSelection = false;
+        m_selectedBlob = Tracking::DetectedBlob();
+        m_selectedBlobContour.clear();
+    }
+    
+    return false;
 }
 
 QRectF MiniVideoLoader::calculateCropRect() const
@@ -206,9 +252,14 @@ QRectF MiniVideoLoader::calculateCropRect() const
 
 void MiniVideoLoader::updateCroppedImage()
 {
-    if (m_currentFrame.isNull() || !m_hasValidData) {
+    bool hasQImage = !m_currentFrame.isNull();
+    bool hasCvMat = !m_currentFrameCv.empty();
+    
+    if ((!hasQImage && !hasCvMat) || !m_hasValidData) {
         qDebug() << "MiniVideoLoader: updateCroppedImage - no frame or no valid data";
         m_croppedFrame = QImage();
+        m_croppedFrameCv = cv::Mat();
+        m_thresholdedCropFrame = cv::Mat();
         return;
     }
     
@@ -217,27 +268,59 @@ void MiniVideoLoader::updateCroppedImage()
     if (m_cropRect.isEmpty()) {
         qDebug() << "MiniVideoLoader: updateCroppedImage - empty crop rect";
         m_croppedFrame = QImage();
+        m_croppedFrameCv = cv::Mat();
+        m_thresholdedCropFrame = cv::Mat();
         return;
     }
     
     // Extract the cropped region from the full frame
     QRect cropRectInt = m_cropRect.toRect();
     
-    // Ensure the crop rectangle is within image bounds
-    QRect imageBounds(0, 0, m_currentFrame.width(), m_currentFrame.height());
-    cropRectInt = cropRectInt.intersected(imageBounds);
-    
-    if (cropRectInt.isEmpty()) {
-        qDebug() << "MiniVideoLoader: updateCroppedImage - crop rect outside image bounds";
-        m_croppedFrame = QImage();
-        return;
+    // Handle cv::Mat cropping if available
+    if (hasCvMat) {
+        // Ensure the crop rectangle is within cv::Mat bounds
+        cv::Rect cvImageBounds(0, 0, m_currentFrameCv.cols, m_currentFrameCv.rows);
+        cv::Rect cvCropRect(cropRectInt.x(), cropRectInt.y(), cropRectInt.width(), cropRectInt.height());
+        
+        // Intersect with image bounds
+        cvCropRect &= cvImageBounds;  // OpenCV intersection operator
+        
+        if (cvCropRect.area() > 0) {
+            m_croppedFrameCv = m_currentFrameCv(cvCropRect).clone();
+            
+            // Apply thresholding to the cropped cv::Mat
+            qDebug() << "MiniVideoLoader: About to apply thresholding to cropped frame, size:" << m_croppedFrameCv.cols << "x" << m_croppedFrameCv.rows;
+            applyThresholdingToCrop();
+            qDebug() << "MiniVideoLoader: Thresholding completed, result size:" << m_thresholdedCropFrame.cols << "x" << m_thresholdedCropFrame.rows;
+            
+            // Convert cropped cv::Mat to QImage for display
+            convertCroppedCvMatToQImage();
+            
+            qDebug() << "MiniVideoLoader: Updated cropped cv::Mat and applied thresholding, crop rect:" << m_cropRect 
+                     << "cropped size:" << m_croppedFrame.size();
+        } else {
+            qDebug() << "MiniVideoLoader: cv::Mat crop rect outside image bounds";
+            m_croppedFrameCv = cv::Mat();
+            m_thresholdedCropFrame = cv::Mat();
+            m_croppedFrame = QImage();
+        }
+    } else if (hasQImage) {
+        // Fallback to QImage cropping
+        QRect imageBounds(0, 0, m_currentFrame.width(), m_currentFrame.height());
+        cropRectInt = cropRectInt.intersected(imageBounds);
+        
+        if (cropRectInt.isEmpty()) {
+            qDebug() << "MiniVideoLoader: QImage crop rect outside image bounds";
+            m_croppedFrame = QImage();
+            return;
+        }
+        
+        // Create the cropped image
+        m_croppedFrame = m_currentFrame.copy(cropRectInt);
+        
+        qDebug() << "MiniVideoLoader: Updated cropped QImage, crop rect:" << m_cropRect 
+                 << "cropped size:" << m_croppedFrame.size();
     }
-    
-    // Create the cropped image
-    m_croppedFrame = m_currentFrame.copy(cropRectInt);
-    
-    qDebug() << "MiniVideoLoader: Updated cropped image, crop rect:" << m_cropRect 
-             << "cropped size:" << m_croppedFrame.size();
 }
 
 void MiniVideoLoader::paintEvent(QPaintEvent *event)
@@ -273,7 +356,182 @@ void MiniVideoLoader::paintEvent(QPaintEvent *event)
 void MiniVideoLoader::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
-    update();  // Trigger repaint to adjust scaling
+    updateCroppedImage();
+}
+
+void MiniVideoLoader::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    
+    if (!m_hasValidData || m_croppedFrame.isNull()) {
+        // Clear selection if clicking when no valid data
+        if (m_hasBlobSelection) {
+            m_hasBlobSelection = false;
+            m_selectedBlob = Tracking::DetectedBlob();
+            m_selectedBlobContour.clear();
+            update();
+        }
+        return;
+    }
+    
+    // Convert widget coordinates to cropped image coordinates
+    QRectF drawRect = rect();
+    QSizeF croppedSize = m_croppedFrame.size();
+    
+    double scaleX = croppedSize.width() / drawRect.width();
+    double scaleY = croppedSize.height() / drawRect.height();
+    
+    QPointF cropCoords(
+        event->position().x() * scaleX,
+        event->position().y() * scaleY
+    );
+    
+    // Try to detect a blob at this position
+    if (detectBlobAtCropPosition(cropCoords)) {
+        qDebug() << "MiniVideoLoader: Blob selected at crop position:" << cropCoords;
+        update();
+    } else {
+        // Clear selection if no blob found
+        if (m_hasBlobSelection) {
+            m_hasBlobSelection = false;
+            m_selectedBlob = Tracking::DetectedBlob();
+            m_selectedBlobContour.clear();
+            qDebug() << "MiniVideoLoader: Blob selection cleared";
+            update();
+        }
+    }
+    
+    event->accept();
+}
+
+bool MiniVideoLoader::detectBlobAtCropPosition(const QPointF& cropCoords)
+{
+    qDebug() << "MiniVideoLoader: detectBlobAtCropPosition called with:" << cropCoords;
+    qDebug() << "MiniVideoLoader: thresholded frame empty?" << m_thresholdedCropFrame.empty() 
+             << "size:" << m_thresholdedCropFrame.cols << "x" << m_thresholdedCropFrame.rows;
+    
+    // Use real blob detection if we have thresholded data
+    if (!m_thresholdedCropFrame.empty()) {
+        // Clamp coordinates to be within the cropped frame bounds
+        if (cropCoords.x() < 0 || cropCoords.y() < 0 ||
+            cropCoords.x() >= m_thresholdedCropFrame.cols ||
+            cropCoords.y() >= m_thresholdedCropFrame.rows) {
+            qDebug() << "MiniVideoLoader: Click coordinates outside thresholded frame bounds";
+            return false;
+        }
+        
+        // Find all contours in the thresholded image
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(m_thresholdedCropFrame.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        
+        if (contours.empty()) {
+            qDebug() << "MiniVideoLoader: No contours found in thresholded frame";
+            return false;
+        }
+        
+        // Find the contour that contains the click point
+        cv::Point clickPoint(qRound(cropCoords.x()), qRound(cropCoords.y()));
+        int bestContourIdx = -1;
+        double minArea = std::numeric_limits<double>::max();
+        
+        for (size_t i = 0; i < contours.size(); ++i) {
+            double area = cv::contourArea(contours[i]);
+            if (area < 5.0 || area > 10000.0) continue; // Area filter
+            
+            // Check if the click point is inside this contour
+            double result = cv::pointPolygonTest(contours[i], clickPoint, false);
+            if (result >= 0) { // Point is inside or on the boundary
+                // If multiple contours contain the point, choose the smallest one
+                if (area < minArea) {
+                    minArea = area;
+                    bestContourIdx = i;
+                }
+            }
+        }
+        
+        if (bestContourIdx >= 0) {
+            // Found a valid contour
+            const std::vector<cv::Point>& selectedContour = contours[bestContourIdx];
+            cv::Moments mu = cv::moments(selectedContour);
+            QPointF cropCentroid(mu.m10 / mu.m00, mu.m01 / mu.m00);
+            
+            // Store the contour and blob info
+            m_selectedBlobContour = selectedContour;
+            m_selectedBlob.isValid = true;
+            m_selectedBlob.centroid = mapCropToVideoCoords(cropCentroid);
+            m_selectedBlob.area = minArea;
+            
+            // Calculate bounding box from contour
+            cv::Rect cropBoundingRect = cv::boundingRect(selectedContour);
+            QPointF topLeft = mapCropToVideoCoords(QPointF(cropBoundingRect.x, cropBoundingRect.y));
+            QPointF bottomRight = mapCropToVideoCoords(QPointF(cropBoundingRect.x + cropBoundingRect.width, 
+                                                               cropBoundingRect.y + cropBoundingRect.height));
+            m_selectedBlob.boundingBox = QRectF(topLeft, bottomRight);
+            
+            m_hasBlobSelection = true;
+            
+            qDebug() << "MiniVideoLoader: Found blob contour with" << selectedContour.size() << "points, area:" << minArea;
+            return true;
+        } else {
+            qDebug() << "MiniVideoLoader: No contour contains the click point";
+        }
+    } else {
+        qDebug() << "MiniVideoLoader: No thresholded frame available";
+    }
+    
+    return false;
+}
+
+
+QPointF MiniVideoLoader::mapCropToVideoCoords(const QPointF& cropCoords) const
+{
+    if (m_cropRect.isEmpty()) {
+        return QPointF(-1, -1);
+    }
+    
+    // Scale from cropped image coordinates to crop rectangle coordinates
+    QSizeF croppedSize = m_croppedFrame.size();
+    if (croppedSize.isEmpty()) {
+        return QPointF(-1, -1);
+    }
+    
+    double normalizedX = cropCoords.x() / croppedSize.width();
+    double normalizedY = cropCoords.y() / croppedSize.height();
+    
+    // Map to full video coordinates
+    QPointF videoCoords(
+        m_cropRect.left() + normalizedX * m_cropRect.width(),
+        m_cropRect.top() + normalizedY * m_cropRect.height()
+    );
+    
+    return videoCoords;
+}
+
+QPointF MiniVideoLoader::mapVideoToCropCoords(const QPointF& videoCoords) const
+{
+    if (m_cropRect.isEmpty()) {
+        return QPointF(-1, -1);
+    }
+    
+    // Map from video coordinates to crop rectangle coordinates
+    double normalizedX = (videoCoords.x() - m_cropRect.left()) / m_cropRect.width();
+    double normalizedY = (videoCoords.y() - m_cropRect.top()) / m_cropRect.height();
+    
+    // Scale to cropped image coordinates
+    QSizeF croppedSize = m_croppedFrame.size();
+    if (croppedSize.isEmpty()) {
+        return QPointF(-1, -1);
+    }
+    
+    QPointF cropCoords(
+        normalizedX * croppedSize.width(),
+        normalizedY * croppedSize.height()
+    );
+    
+    return cropCoords;
 }
 
 void MiniVideoLoader::drawNoSelectionMessage(QPainter& painter)
@@ -289,10 +547,12 @@ void MiniVideoLoader::drawNoSelectionMessage(QPainter& painter)
 
 void MiniVideoLoader::drawCroppedView(QPainter& painter)
 {
+    qDebug() << "MiniVideoLoader: Drawing cropped view, crop size:" << m_croppedFrame.size();
+    
     if (m_croppedFrame.isNull()) {
         return;
     }
-    
+
     // Calculate how to scale and position the cropped image to fit the widget
     QRect widgetRect = rect();
     QSize croppedSize = m_croppedFrame.size();
@@ -322,6 +582,27 @@ void MiniVideoLoader::drawCroppedView(QPainter& painter)
     painter.setPen(QPen(Qt::white, 1));
     painter.drawRect(targetRect);
     
+    // Draw selected blob outline if any
+    if (m_hasBlobSelection && m_selectedBlob.isValid && !m_selectedBlobContour.empty()) {
+        // Convert contour coordinates to widget coordinates
+        double scaleX = static_cast<double>(targetRect.width()) / m_croppedFrame.width();
+        double scaleY = static_cast<double>(targetRect.height()) / m_croppedFrame.height();
+        
+        QPolygonF contourPolygon;
+        for (const cv::Point& point : m_selectedBlobContour) {
+            QPointF widgetPoint(
+                targetRect.left() + point.x * scaleX,
+                targetRect.top() + point.y * scaleY
+            );
+            contourPolygon.append(widgetPoint);
+        }
+        
+        // Draw blob contour outline in bright green
+        painter.setPen(QPen(Qt::green, 2));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPolygon(contourPolygon);
+    }
+    
     // Draw worm info overlay
     if (m_selectedWormId >= 0) {
         painter.setPen(Qt::yellow);
@@ -339,4 +620,80 @@ void MiniVideoLoader::drawCroppedView(QPainter& painter)
         QRect textRect(5, 5, width() - 10, 60);
         painter.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, info);
     }
+}
+
+void MiniVideoLoader::applyThresholdingToCrop()
+{
+    qDebug() << "MiniVideoLoader: applyThresholdingToCrop called";
+    
+    if (m_croppedFrameCv.empty()) {
+        qDebug() << "MiniVideoLoader: Cropped cv::Mat is empty, cannot threshold";
+        m_thresholdedCropFrame = cv::Mat();
+        return;
+    }
+    
+    if (!m_videoLoader) {
+        qDebug() << "MiniVideoLoader: No VideoLoader reference for threshold settings";
+        return;
+    }
+    
+    Thresholding::ThresholdSettings settings = getThresholdSettings();
+    qDebug() << "MiniVideoLoader: Applying thresholding with algorithm:" << static_cast<int>(settings.algorithm) 
+             << "threshold:" << settings.globalThresholdValue;
+    
+    ThresholdingUtils::applyThresholding(m_croppedFrameCv, m_thresholdedCropFrame, settings);
+    
+    if (m_thresholdedCropFrame.empty()) {
+        qDebug() << "MiniVideoLoader: Thresholding failed - result is empty";
+    } else {
+        qDebug() << "MiniVideoLoader: Thresholding successful - result size:" << m_thresholdedCropFrame.cols << "x" << m_thresholdedCropFrame.rows 
+                 << "type:" << m_thresholdedCropFrame.type();
+        
+        // Count foreground vs background pixels
+        int totalPixels = m_thresholdedCropFrame.rows * m_thresholdedCropFrame.cols;
+        int foregroundPixels = cv::countNonZero(m_thresholdedCropFrame);
+        int backgroundPixels = totalPixels - foregroundPixels;
+        double foregroundPercent = (double)foregroundPixels / totalPixels * 100.0;
+        
+        qDebug() << "MiniVideoLoader: Threshold analysis - total pixels:" << totalPixels 
+                 << "foreground:" << foregroundPixels << "(" << QString::number(foregroundPercent, 'f', 1) << "%)"
+                 << "background:" << backgroundPixels;
+    }
+}
+
+void MiniVideoLoader::convertCroppedCvMatToQImage()
+{
+    if (m_croppedFrameCv.empty()) {
+        m_croppedFrame = QImage();
+        return;
+    }
+    
+    if (m_croppedFrameCv.channels() == 1) {
+        m_croppedFrame = QImage(m_croppedFrameCv.data, m_croppedFrameCv.cols, m_croppedFrameCv.rows, 
+                               m_croppedFrameCv.step, QImage::Format_Grayscale8).copy();
+    } else if (m_croppedFrameCv.channels() == 3) {
+        cv::Mat rgbFrame;
+        cv::cvtColor(m_croppedFrameCv, rgbFrame, cv::COLOR_BGR2RGB);
+        m_croppedFrame = QImage(rgbFrame.data, rgbFrame.cols, rgbFrame.rows, 
+                               rgbFrame.step, QImage::Format_RGB888).copy();
+    }
+}
+
+Thresholding::ThresholdSettings MiniVideoLoader::getThresholdSettings() const
+{
+    if (!m_videoLoader) {
+        return Thresholding::ThresholdSettings();
+    }
+    
+    Thresholding::ThresholdSettings settings;
+    settings.algorithm = m_videoLoader->getCurrentThresholdAlgorithm();
+    settings.globalThresholdValue = m_videoLoader->getThresholdValue();
+    settings.assumeLightBackground = !m_videoLoader->getAssumeLightBackground();
+    settings.adaptiveBlockSize = m_videoLoader->getAdaptiveBlockSize();
+    settings.adaptiveCValue = m_videoLoader->getAdaptiveCValue();
+    settings.enableBlur = m_videoLoader->isBlurEnabled();
+    settings.blurKernelSize = m_videoLoader->getBlurKernelSize();
+    settings.blurSigmaX = m_videoLoader->getBlurSigmaX();
+    
+    return settings;
 }

@@ -39,6 +39,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Set up MiniVideoLoader with tracking data storage
     ui->miniVideoLoader->setTrackingDataStorage(m_trackingDataStorage);
+    ui->miniVideoLoader->setVideoLoader(ui->videoLoader);
 
     // Model and Delegates
     m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
@@ -341,7 +342,7 @@ void MainWindow::setupConnections() {
 
     // Main VideoLoader frame changes -> MiniVideoLoader
     connect(ui->videoLoader, &VideoLoader::frameChanged,
-            ui->miniVideoLoader, &MiniVideoLoader::updateFrame);
+            ui->miniVideoLoader, static_cast<void(MiniVideoLoader::*)(int, const QImage&)>(&MiniVideoLoader::updateFrame));
 
     // Playback speed control
     connect(ui->comboPlaybackSpeed, QOverload<int>::of(&QComboBox::currentIndexChanged),
