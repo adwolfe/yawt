@@ -28,6 +28,7 @@ set(SOURCES
     annotationtablemodel.cpp
     blobtablemodel.cpp
     colordelegate.cpp
+    debugutils.cpp
     folderfirstsortproxymodel.cpp
     #framecachemanager.cpp
     itemtypedelegate.cpp

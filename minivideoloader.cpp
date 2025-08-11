@@ -92,11 +92,19 @@ void MiniVideoLoader::updateFrame(int frameNumber, const QImage& frame)
     
     // Convert QImage to cv::Mat for thresholding
     if (!frame.isNull()) {
+        qDebug() << "MiniVideoLoader: Original QImage format:" << frame.format() << "size:" << frame.size();
         QImage rgbFrame = frame.convertToFormat(QImage::Format_RGB888);
+        qDebug() << "MiniVideoLoader: Converted QImage format:" << rgbFrame.format();
+        
         m_currentFrameCv = cv::Mat(rgbFrame.height(), rgbFrame.width(), CV_8UC3, 
                                    (void*)rgbFrame.constBits(), rgbFrame.bytesPerLine()).clone();
+        qDebug() << "MiniVideoLoader: Initial cv::Mat - channels:" << m_currentFrameCv.channels() 
+                 << "type:" << m_currentFrameCv.type() << "size:" << m_currentFrameCv.cols << "x" << m_currentFrameCv.rows;
+        
         // Convert from RGB to BGR for OpenCV
         cv::cvtColor(m_currentFrameCv, m_currentFrameCv, cv::COLOR_RGB2BGR);
+        qDebug() << "MiniVideoLoader: After RGB->BGR conversion - channels:" << m_currentFrameCv.channels() 
+                 << "type:" << m_currentFrameCv.type();
     } else {
         m_currentFrameCv = cv::Mat();
     }
@@ -632,6 +640,9 @@ void MiniVideoLoader::applyThresholdingToCrop()
         return;
     }
     
+    qDebug() << "MiniVideoLoader: Input to thresholding - channels:" << m_croppedFrameCv.channels() 
+             << "type:" << m_croppedFrameCv.type() << "size:" << m_croppedFrameCv.cols << "x" << m_croppedFrameCv.rows;
+    
     if (!m_videoLoader) {
         qDebug() << "MiniVideoLoader: No VideoLoader reference for threshold settings";
         return;
@@ -688,7 +699,12 @@ Thresholding::ThresholdSettings MiniVideoLoader::getThresholdSettings() const
     Thresholding::ThresholdSettings settings;
     settings.algorithm = m_videoLoader->getCurrentThresholdAlgorithm();
     settings.globalThresholdValue = m_videoLoader->getThresholdValue();
-    settings.assumeLightBackground = !m_videoLoader->getAssumeLightBackground();
+    settings.assumeLightBackground = m_videoLoader->getAssumeLightBackground();
+    
+    // Debug: Log the threshold settings being used
+    qDebug() << "MiniVideoLoader: Threshold settings - algorithm:" << static_cast<int>(settings.algorithm) 
+             << "globalThresholdValue:" << settings.globalThresholdValue
+             << "assumeLightBackground:" << settings.assumeLightBackground;
     settings.adaptiveBlockSize = m_videoLoader->getAdaptiveBlockSize();
     settings.adaptiveCValue = m_videoLoader->getAdaptiveCValue();
     settings.enableBlur = m_videoLoader->isBlurEnabled();

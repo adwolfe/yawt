@@ -1,5 +1,7 @@
 #include "mainwindow.h"
 #include <QTimer>
+#include <QShortcut>
+#include "debugutils.h"
 #include "ui_mainwindow.h"
 #include "annotationtablemodel.h"
 #include "blobtablemodel.h"
@@ -385,7 +387,7 @@ void MainWindow::setupConnections() {
     connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
 
     // Annotation table selection
-    connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableRowClicked);
+    connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
     // Connect header data changes to trigger UI update
     connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
@@ -402,6 +404,11 @@ void MainWindow::setupConnections() {
         initialItemIDs.insert(item.id);
     }
     ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
+    
+    // Debug control keyboard shortcut
+    QShortcut* debugToggle = new QShortcut(QKeySequence("Ctrl+D"), this);
+    connect(debugToggle, &QShortcut::activated, this, &MainWindow::toggleTrackingDebug);
+    
     // Connections for TrackingProgressDialog are made when it's created/shown
 }
 
@@ -920,7 +927,7 @@ void MainWindow::updatePlaybackSpeedComboBox(double speedMultiplier) {
     }
 }
 
-void MainWindow::onAnnotationTableRowClicked(const QModelIndex& index) {
+void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
     if (!index.isValid() || !m_annotationTableModel) {
         return;
     }
@@ -1064,4 +1071,13 @@ void MainWindow::performPostTrackingMemoryCleanup() {
         qDebug() << "MainWindow: Estimated" << QString::number(estimatedMBFreed, 'f', 1)
                  << "MB freed from VideoLoader cache reduction";
     }
+}
+
+// --- Debug Control ---
+void MainWindow::toggleTrackingDebug() {
+    bool currentState = DebugUtils::isTrackingDebugEnabled();
+    DebugUtils::setTrackingDebugEnabled(!currentState);
+    QString status = DebugUtils::isTrackingDebugEnabled() ? "enabled" : "disabled";
+    qDebug() << "MainWindow: Tracking debug messages" << status;
+    statusBar()->showMessage(QString("Tracking debug messages %1").arg(status), 2000);
 }

@@ -45,9 +45,14 @@ public slots:
     void updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame);
     void seekFrame(int frame);
     void frameSliderMoved(int value);
+
     void goToFirstFrame();
     void goToLastFrame();
-    void onAnnotationTableRowClicked(const QModelIndex& index);
+    void onAnnotationTableClicked(const QModelIndex& index);
+    
+public slots:
+    // Debug control slots
+    void toggleTrackingDebug();
 
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();

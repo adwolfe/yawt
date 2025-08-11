@@ -1,5 +1,6 @@
 // trackingmanager.cpp
 #include "trackingmanager.h"
+#include "debugutils.h"
 
 #include <QDebug>
 #include <QDir>
@@ -64,23 +65,23 @@ void TrackingManager::registerMetaTypes()
     qRegisterMetaType<QList<Tracking::DetectedBlob>>("QList<Tracking::DetectedBlob>");
     qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob");
     qRegisterMetaType<Tracking::TrackerState>("Tracking::TrackerState");
-    qDebug() << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
+    TRACKING_DEBUG() << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
 }
 
 // Destructor
 TrackingManager::~TrackingManager() {
-    qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
+    TRACKING_DEBUG() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
 
     // Ensure tracking is cancelled and resources are released
     if (m_isTrackingRunning) {
-        qDebug() << "TrackingManager Destructor: Tracking was running, requesting cancel.";
+        TRACKING_DEBUG() << "TrackingManager Destructor: Tracking was running, requesting cancel.";
         cancelTracking();
         QThread::msleep(300);
     }
 
     // Force a final cleanup to ensure all resources are released
     cleanupThreadsAndObjects();
-    qDebug() << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
+    TRACKING_DEBUG() << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
 }
 
 // Main entry point for tracking
@@ -88,7 +89,7 @@ void TrackingManager::startFullTrackingProcess(
     const QString& videoPath, const QString& dataDirectory, int keyFrameNum,
     const std::vector<Tracking::InitialWormInfo>& initialWorms,
     const Thresholding::ThresholdSettings& settings, int totalFramesInVideoHint) {
-    qDebug() << "TrackingManager (" << this << "): startFullTrackingProcess called.";
+    TRACKING_DEBUG() << "TrackingManager (" << this << "): startFullTrackingProcess called.";
     if (m_isTrackingRunning) {
         qWarning() << "TrackingManager: Attempted to start tracking while already running.";
         emit trackingFailed("Another tracking process is already running.");
@@ -115,7 +116,7 @@ void TrackingManager::startFullTrackingProcess(
         if (QFile::exists(thresholdFilePath)) {
             bool settingsMatch = compareThresholdSettings(thresholdFilePath, settings);
             if (!settingsMatch) {
-                qDebug() << "Current threshold settings differ from stored settings in" << thresholdFilePath;
+                TRACKING_DEBUG() << "Current threshold settings differ from stored settings in" << thresholdFilePath;
                 emit trackingStatusUpdate("Threshold settings differ from previous run");
             }
         }
@@ -223,7 +224,7 @@ void TrackingManager::startFullTrackingProcess(
     for (const auto& r : backwardFrameRanges) launch_chunk_processor(r.first, r.second, false);
 
     // Timer-based pause resolution has been eliminated in favor of direct resolution
-    qDebug() << "TM: Using direct split resolution instead of timer-based approach";
+    TRACKING_DEBUG() << "TM: Using direct split resolution instead of timer-based approach";
 }
 
 void TrackingManager::cancelTracking() {
@@ -249,12 +250,12 @@ void TrackingManager::cancelTracking() {
 }
 
 void TrackingManager::cleanupThreadsAndObjects() {
-    qDebug() << "TrackingManager: Starting aggressive memory cleanup...";
-    
+    TRACKING_DEBUG() << "TrackingManager: Starting aggressive memory cleanup...";
+
     // Calculate memory usage before cleanup for reporting
     size_t memoryBefore = getProcessedVideoMemoryUsage();
     size_t tracksMemoryBefore = m_finalTracks.size() * sizeof(Tracking::WormTrackPoint) * 100; // Rough estimate
-    
+
     // (Largely same as your version, ensuring QPointer safety and clearing new maps)
     QList<QPointer<QThread>> videoThreadsToClean = m_videoProcessorThreads;
     m_videoProcessorThreads.clear();
@@ -266,58 +267,58 @@ void TrackingManager::cleanupThreadsAndObjects() {
     for (QPointer<QThread> thread : trackerThreadsToClean) { /* ... quit, wait, delete ... */
         if (thread) { if (thread->isRunning()) { thread->requestInterruption(); thread->quit(); if (!thread->wait(1000)) { thread->terminate(); thread->wait();}} delete thread;}
     }
-    
+
     // Aggressively clear worm trackers and objects
-    m_wormTrackersList.clear(); 
-    m_wormIdToForwardTrackerInstanceMap.clear(); 
+    m_wormTrackersList.clear();
+    m_wormIdToForwardTrackerInstanceMap.clear();
     m_wormIdToBackwardTrackerInstanceMap.clear();
-    
+
     // Clear WormObject map with explicit deletion and memory hints
-    qDeleteAll(m_wormObjectsMap); 
+    qDeleteAll(m_wormObjectsMap);
     m_wormObjectsMap.clear();
     QMap<int, WormObject*>().swap(m_wormObjectsMap); // Force deallocation
-    
+
     // Aggressively clear processed video memory
     clearProcessedVideoMemory();
-    
+
     // Clear and shrink all chunk processing maps
     m_assembledForwardFrameChunks.clear();
     m_assembledBackwardFrameChunks.clear();
     QMap<int, std::vector<cv::Mat>>().swap(m_assembledForwardFrameChunks);
     QMap<int, std::vector<cv::Mat>>().swap(m_assembledBackwardFrameChunks);
-    
+
     m_videoChunkProgressMap.clear();
     QMap<int, int>().swap(m_videoChunkProgressMap);
-    
+
     // Aggressively clear final tracks with memory hints
-    m_finalTracks.clear(); 
+    m_finalTracks.clear();
     Tracking::AllWormTracks().swap(m_finalTracks);
-    
+
     m_individualTrackerProgress.clear();
     QMap<WormTracker*, int>().swap(m_individualTrackerProgress);
-    
+
     // Clear all data structures related to split resolution with forced deallocation
     m_frameMergeRecords.clear();
     QMap<int, QList<FrameSpecificPhysicalBlob>>().swap(m_frameMergeRecords);
-    
+
     m_splitResolutionMap.clear();
     QMap<int, QMap<int, Tracking::DetectedBlob>>().swap(m_splitResolutionMap);
-    
+
     m_wormToPhysicalBlobIdMap.clear();
     QMap<int, int>().swap(m_wormToPhysicalBlobIdMap);
 
     // Reset state flags
     m_isTrackingRunning = false;
     m_cancelRequested = false;
-    
+
     // Reset frame counters and IDs
     m_nextPhysicalBlobId = 1;
 
     // Calculate and report memory freed
     double memoryMB = (memoryBefore + tracksMemoryBefore) / (1024.0 * 1024.0);
-    qDebug() << "TrackingManager: Aggressive cleanup complete - freed approximately" 
+    TRACKING_DEBUG() << "TrackingManager: Aggressive cleanup complete - freed approximately"
              << QString::number(memoryMB, 'f', 1) << "MB of tracking data";
-    qDebug() << "TrackingManager: All data structures cleared and memory aggressively freed";
+    TRACKING_DEBUG() << "TrackingManager: All data structures cleared and memory aggressively freed";
 }
 
 // --- Video Processing Callbacks ---
@@ -403,14 +404,14 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
     int signedWormId = getSignedWormId(reportingConceptualWormId, direction);
 
     QString dmsg = QString("TM: WT %1 FN%2 | ").arg(signedWormId).arg(originalFrameNumber);
-    qDebug().noquote() << QString("TM: %1|FN%2|*** PROCESSING FRAME UPDATE *** State:").arg(signedWormId).arg(originalFrameNumber) << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid << "SplitCandidates:" << splitCandidates.size();
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** PROCESSING FRAME UPDATE *** State:").arg(signedWormId).arg(originalFrameNumber) << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid << "SplitCandidates:" << splitCandidates.size();
     // Note: WormObject update uses primaryBlob
     WormObject* wormObject = m_wormObjectsMap.value(reportingConceptualWormId, nullptr);
     if (wormObject) {
         Tracking::WormTrackPoint point;
         point.frameNumberOriginal = originalFrameNumber;
         point.roi = searchRoiUsed;
-        
+
         if (primaryBlob.isValid) {
             point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
             point.quality = (currentState == Tracking::TrackerState::TrackingSingle) ? Tracking::TrackPointQuality::Confident : Tracking::TrackPointQuality::Ambiguous;
@@ -418,7 +419,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
             point.position = cv::Point2f(0.0f, 0.0f);  // Placeholder (won't be used for display)
             point.quality = Tracking::TrackPointQuality::Lost;
         }
-        
+
         wormObject->updateTrackPoint(point);
     }
 
@@ -435,15 +436,15 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
             m_wormToPhysicalBlobIdMap[signedWormId] = -1;
         }
     } else if (currentState == Tracking::TrackerState::PausedForSplit) {
-        qDebug().noquote() << QString("TM: %1|FN%2|*** ENTERING SPLIT PROCESSING ***").arg(signedWormId).arg(originalFrameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** ENTERING SPLIT PROCESSING ***").arg(signedWormId).arg(originalFrameNumber);
         if (!splitCandidates.isEmpty() && reportingTrackerInstance) {
             // Find the chosen candidate (should be the primaryBlob if valid, otherwise first candidate)
             Tracking::DetectedBlob chosenCandidate = primaryBlob.isValid ? primaryBlob :
                                                     (!splitCandidates.isEmpty() ? splitCandidates.first() : Tracking::DetectedBlob());
-            qDebug().noquote() << QString("TM: %1|FN%2|Chosen candidate Area:").arg(signedWormId).arg(originalFrameNumber) << chosenCandidate.area << "Pos:" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y();
+            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Chosen candidate Area:").arg(signedWormId).arg(originalFrameNumber) << chosenCandidate.area << "Pos:" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y();
             processFrameSpecificSplit(signedWormId, originalFrameNumber, splitCandidates, chosenCandidate, reportingTrackerInstance);
         } else {
-             qDebug().noquote() << QString("TM: %1|FN%2|State PausedForSplit but no candidates/instance. Forcing lost.").arg(signedWormId).arg(originalFrameNumber);
+             TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|State PausedForSplit but no candidates/instance. Forcing lost.").arg(signedWormId).arg(originalFrameNumber);
             m_wormToPhysicalBlobIdMap[signedWormId] = -1;
             if(reportingTrackerInstance) QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         }
@@ -517,7 +518,7 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
                                                WormTracker* reportingTrackerInstance)
 {
     int conceptualWormId = getUnsignedWormId(signedWormId);
-    qDebug().noquote() << QString("TM: %1|FN%2|procFrameSpecSplit - Candidates:").arg(signedWormId).arg(frameNumber) << allSplitCandidates.size() << "Chosen @" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y() << "Area:" << chosenCandidate.area;
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|procFrameSpecSplit - Candidates:").arg(signedWormId).arg(frameNumber) << allSplitCandidates.size() << "Chosen @" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y() << "Area:" << chosenCandidate.area;
 
     // Get reference to current frame's physical blobs
     QList<FrameSpecificPhysicalBlob>& blobsOnThisFrame = m_frameMergeRecords[frameNumber];
@@ -547,7 +548,7 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             existingBlob->participatingWormTrackerIDs.insert(signedWormId);
             currentBlobId = existingBlob->uniqueId;
             candidatePhysicalBlobIds.append(currentBlobId);
-            qDebug().noquote() << QString("TM: %1|FN%2|Matched existing PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId;
+            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Matched existing PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId;
         } else {
             // Create new physical blob for this candidate
             FrameSpecificPhysicalBlob newPhysicalBlob;
@@ -562,32 +563,32 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             blobsOnThisFrame.append(newPhysicalBlob);
             currentBlobId = newPhysicalBlob.uniqueId;
             candidatePhysicalBlobIds.append(currentBlobId);
-            qDebug().noquote() << QString("TM: %1|FN%2|Created new PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId << "for split candidate";
+            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Created new PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId << "for split candidate";
         }
 
         // Check if this is the chosen candidate (by comparing centroids)
         if (qFuzzyCompare(candidate.centroid.x(), chosenCandidate.centroid.x()) &&
             qFuzzyCompare(candidate.centroid.y(), chosenCandidate.centroid.y())) {
             chosenCandidatePhysicalBlobId = currentBlobId;
-            qDebug().noquote() << QString("TM: %1|FN%2|Identified chosen candidate as PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId;
+            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Identified chosen candidate as PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId;
         }
     }
 
     // Set the preferred blob for this worm to be the chosen candidate
     if (chosenCandidatePhysicalBlobId != -1) {
         m_wormToPhysicalBlobIdMap[conceptualWormId] = chosenCandidatePhysicalBlobId;
-        qDebug().noquote() << QString("TM: %1|FN%2|*** SETTING PREFERRED BLOB *** Worm").arg(signedWormId).arg(frameNumber) << conceptualWormId 
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** SETTING PREFERRED BLOB *** Worm").arg(signedWormId).arg(frameNumber) << conceptualWormId
                           << "prefers PhysicalBlobID:" << chosenCandidatePhysicalBlobId;
     } else {
-        qDebug().noquote() << QString("TM: %1|FN%2|*** WARNING: Could not identify chosen candidate in physical blobs ***").arg(signedWormId).arg(frameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** WARNING: Could not identify chosen candidate in physical blobs ***").arg(signedWormId).arg(frameNumber);
     }
 
     // Try immediate resolution using our new method
     if (attemptImmediateSplitResolution(signedWormId, frameNumber, allSplitCandidates, chosenCandidate, reportingTrackerInstance)) {
-        qDebug().noquote() << QString("TM: %1|FN%2|Split successfully resolved immediately").arg(signedWormId).arg(frameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Split successfully resolved immediately").arg(signedWormId).arg(frameNumber);
     } else {
         // Fallback - assign the first valid blob or go lost
-        qDebug().noquote() << QString("TM: %1|FN%2|Immediate resolution failed, using fallback (go lost)").arg(signedWormId).arg(frameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Immediate resolution failed, using fallback (go lost)").arg(signedWormId).arg(frameNumber);
         QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         m_splitResolutionMap[frameNumber][signedWormId] = Tracking::DetectedBlob();
@@ -599,12 +600,12 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
                                                     const QList<Tracking::DetectedBlob>& allCandidates,
                                                     const Tracking::DetectedBlob& chosenCandidate,
                                                     WormTracker* trackerInstance) {
-    qDebug().noquote() << QString("TM: %1|FN%2|=== STARTING SPLIT RESOLUTION ===").arg(conceptualWormId).arg(frameNumber);
-    qDebug().noquote() << QString("TM: %1|FN%2|Chosen candidate Area:").arg(conceptualWormId).arg(frameNumber) << chosenCandidate.area 
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|=== STARTING SPLIT RESOLUTION ===").arg(conceptualWormId).arg(frameNumber);
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Chosen candidate Area:").arg(conceptualWormId).arg(frameNumber) << chosenCandidate.area
                       << "Pos:" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y();
 
     if (!trackerInstance) { qWarning() << QString("TM: %1|FN%2|No tracker instance.").arg(conceptualWormId).arg(frameNumber); return false; }
-    if (!chosenCandidate.isValid) { qDebug() << QString("TM: %1|FN%2|Invalid candidate. Forcing lost.").arg(conceptualWormId).arg(frameNumber); QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); return true; }
+    if (!chosenCandidate.isValid) { TRACKING_DEBUG() << QString("TM: %1|FN%2|Invalid candidate. Forcing lost.").arg(conceptualWormId).arg(frameNumber); QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob())); return true; }
 
     // Find physical blob IDs for this worm
     QList<int> thisWormPhysicalBlobIds;
@@ -617,19 +618,19 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
     }
 
     if (thisWormPhysicalBlobIds.isEmpty()) {
-        qDebug() << QString("TM: %1|FN%2|No PhysicalBlobIds found for this worm. Cannot proceed with resolution.").arg(conceptualWormId).arg(frameNumber);
+        TRACKING_DEBUG() << QString("TM: %1|FN%2|No PhysicalBlobIds found for this worm. Cannot proceed with resolution.").arg(conceptualWormId).arg(frameNumber);
         QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection,
                                  Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         m_splitResolutionMap[frameNumber][conceptualWormId] = Tracking::DetectedBlob();
         return true;
     }
 
-    qDebug().noquote() << QString("TM: %1|FN%2|This worm's PhysicalBlobIds:").arg(conceptualWormId).arg(frameNumber) << thisWormPhysicalBlobIds;
-    
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|This worm's PhysicalBlobIds:").arg(conceptualWormId).arg(frameNumber) << thisWormPhysicalBlobIds;
+
     // Show current blob assignments for debugging
     for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
-        qDebug().noquote() << QString("TM: %1|FN%2|PhysicalBlob").arg(conceptualWormId).arg(frameNumber) << blob.uniqueId 
-                          << "selectedBy:" << blob.selectedByWormTrackerId 
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|PhysicalBlob").arg(conceptualWormId).arg(frameNumber) << blob.uniqueId
+                          << "selectedBy:" << blob.selectedByWormTrackerId
                           << "participants:" << blob.participatingWormTrackerIDs;
     }
 
@@ -657,7 +658,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
 
             if (!otherWormBlobIds.isEmpty()) {
                 otherWormBlobAssignments[otherWormId] = otherWormBlobIds;
-                qDebug().noquote() << QString("TM: %1|FN%2|Worm").arg(conceptualWormId).arg(frameNumber) << otherWormId << "already has blobs assigned:" << otherWormBlobIds;
+                TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Worm").arg(conceptualWormId).arg(frameNumber) << otherWormId << "already has blobs assigned:" << otherWormBlobIds;
             }
         }
     }
@@ -670,7 +671,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
         for (auto it = otherWormBlobAssignments.begin(); it != otherWormBlobAssignments.end(); ++it) {
             if (it.value().contains(preferredBlobId)) {
                 blobTaken = true;
-                qDebug().noquote() << QString("TM: %1|FN%2|Preferred blob").arg(conceptualWormId).arg(frameNumber) << preferredBlobId << "already taken by worm" << it.key();
+                TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Preferred blob").arg(conceptualWormId).arg(frameNumber) << preferredBlobId << "already taken by worm" << it.key();
                 break;
             }
         }
@@ -688,8 +689,8 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
 
-                    qDebug().noquote() << QString("TM: %1|FN%2|*** CLAIMED PREFERRED BLOB ***").arg(conceptualWormId).arg(frameNumber) << preferredBlobId 
-                                      << "Area:" << blobToAssign.area 
+                    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** CLAIMED PREFERRED BLOB ***").arg(conceptualWormId).arg(frameNumber) << preferredBlobId
+                                      << "Area:" << blobToAssign.area
                                       << "Pos:" << blobToAssign.centroid.x() << "," << blobToAssign.centroid.y();
                     resolutionSuccess = true;
                     break;
@@ -700,8 +701,8 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
 
     // If we couldn't claim our preferred blob, look for any available alternative
     if (!blobToAssign.isValid) {
-        qDebug().noquote() << QString("TM: %1|FN%2|*** PREFERRED BLOB UNAVAILABLE - LOOKING FOR ALTERNATIVES ***").arg(conceptualWormId).arg(frameNumber);
-        qDebug().noquote() << QString("TM: %1|FN%2|PreferredBlobId was:").arg(conceptualWormId).arg(frameNumber) << preferredBlobId;
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** PREFERRED BLOB UNAVAILABLE - LOOKING FOR ALTERNATIVES ***").arg(conceptualWormId).arg(frameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|PreferredBlobId was:").arg(conceptualWormId).arg(frameNumber) << preferredBlobId;
 
         // Get the worm tracker instance to find its last known position
         //WormTracker* tracker = nullptr;
@@ -768,17 +769,17 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
                 blobToAssign.boundingBox = closestBlob->currentBoundingBox;
                 blobToAssign.area = closestBlob->currentArea;
 
-                qDebug().noquote() << QString("TM: %1|FN%2|*** CLAIMED ALTERNATIVE BLOB ***").arg(conceptualWormId).arg(frameNumber) << closestBlob->uniqueId
+                TRACKING_DEBUG() << QString("TM: %1|FN%2|*** CLAIMED ALTERNATIVE BLOB ***").arg(conceptualWormId).arg(frameNumber) << closestBlob->uniqueId
                                   << "Area:" << blobToAssign.area
                                   << "Pos:" << blobToAssign.centroid.x() << "," << blobToAssign.centroid.y()
                                   << "Distance:" << QString::number(std::sqrt(availableBlobs.first().distance), 'f', 2);
                 resolutionSuccess = true;
             } else {
-                qDebug().noquote() << QString("TM: %1|FN%2|No available alternative blobs found.").arg(conceptualWormId).arg(frameNumber);
+                TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|No available alternative blobs found.").arg(conceptualWormId).arg(frameNumber);
             }
         } else {
             // Fallback to original method if we can't find the tracker
-            qDebug().noquote() << QString("TM: %1|FN%2|Couldn't find tracker, using original method.").arg(conceptualWormId).arg(frameNumber);
+            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Couldn't find tracker, using original method.").arg(conceptualWormId).arg(frameNumber);
 
             // Find any unassigned blob that this worm is participating in
             for (FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
@@ -795,7 +796,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
 
-                    qDebug().noquote() << QString("TM: %1|FN%2|*** CLAIMED FALLBACK BLOB ***").arg(conceptualWormId).arg(frameNumber) << blob.uniqueId
+                    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** CLAIMED FALLBACK BLOB ***").arg(conceptualWormId).arg(frameNumber) << blob.uniqueId
                                       << "Area:" << blobToAssign.area
                                       << "Pos:" << blobToAssign.centroid.x() << "," << blobToAssign.centroid.y();
                     resolutionSuccess = true;
@@ -807,24 +808,24 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
 
     // Assign blob or go lost
     if (blobToAssign.isValid) {
-        qDebug().noquote() << QString("TM: %1|FN%2|*** FINAL ASSIGNMENT *** Worm").arg(conceptualWormId).arg(frameNumber) << conceptualWormId 
-                          << "gets blob Area:" << blobToAssign.area 
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** FINAL ASSIGNMENT *** Worm").arg(conceptualWormId).arg(frameNumber) << conceptualWormId
+                          << "gets blob Area:" << blobToAssign.area
                           << "Pos:" << blobToAssign.centroid.x() << "," << blobToAssign.centroid.y();
         QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, blobToAssign));
         m_splitResolutionMap[frameNumber][conceptualWormId] = blobToAssign;
     } else {
-        qDebug().noquote() << QString("TM: %1|FN%2|*** NO VALID BLOB - GOING LOST ***").arg(conceptualWormId).arg(frameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** NO VALID BLOB - GOING LOST ***").arg(conceptualWormId).arg(frameNumber);
         QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         m_splitResolutionMap[frameNumber][conceptualWormId] = Tracking::DetectedBlob();
     }
-    
+
     // Show final blob assignments after this worm's resolution
-    qDebug().noquote() << QString("TM: %1|FN%2|=== POST-RESOLUTION BLOB ASSIGNMENTS ===").arg(conceptualWormId).arg(frameNumber);
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|=== POST-RESOLUTION BLOB ASSIGNMENTS ===").arg(conceptualWormId).arg(frameNumber);
     for (const FrameSpecificPhysicalBlob& blob : m_frameMergeRecords[frameNumber]) {
-        qDebug().noquote() << QString("TM: %1|FN%2|PhysicalBlob").arg(conceptualWormId).arg(frameNumber) << blob.uniqueId 
-                          << "selectedBy:" << blob.selectedByWormTrackerId 
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|PhysicalBlob").arg(conceptualWormId).arg(frameNumber) << blob.uniqueId
+                          << "selectedBy:" << blob.selectedByWormTrackerId
                           << "Area:" << blob.currentArea;
     }
 
@@ -1004,13 +1005,13 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
     QDir videoSpecificDir(videoSpecificPath);
     if (!videoSpecificDir.exists()) {
         if (QDir().mkpath(videoSpecificPath)) {
-            qDebug() << "TrackingManager: Created video-specific directory:" << videoSpecificPath;
+            TRACKING_DEBUG() << "TrackingManager: Created video-specific directory:" << videoSpecificPath;
         } else {
             qWarning() << "TrackingManager: Failed to create video-specific directory:" << videoSpecificPath;
             return QString();
         }
     } else {
-        qDebug() << "TrackingManager: Using existing video-specific directory:" << videoSpecificPath;
+        TRACKING_DEBUG() << "TrackingManager: Using existing video-specific directory:" << videoSpecificPath;
     }
 
     return videoSpecificPath;
@@ -1030,7 +1031,7 @@ void TrackingManager::saveThresholdSettings(const QString& directoryPath, const 
     if (file.open(QIODevice::WriteOnly)) {
         file.write(doc.toJson());
         file.close();
-        qDebug() << "TrackingManager: Saved threshold settings to:" << filePath;
+        TRACKING_DEBUG() << "TrackingManager: Saved threshold settings to:" << filePath;
     } else {
         qWarning() << "TrackingManager: Failed to save threshold settings to:" << filePath;
     }
@@ -1057,7 +1058,7 @@ void TrackingManager::saveInputBlobs(const QString& directoryPath, const std::ve
     if (file.open(QIODevice::WriteOnly)) {
         file.write(doc.toJson());
         file.close();
-        qDebug() << "TrackingManager: Saved input blobs to:" << filePath;
+        TRACKING_DEBUG() << "TrackingManager: Saved input blobs to:" << filePath;
     } else {
         qWarning() << "TrackingManager: Failed to save input blobs to:" << filePath;
     }
@@ -1121,12 +1122,12 @@ bool TrackingManager::compareThresholdSettings(const QString& filePath, const Th
     }
 
     if (!match) {
-        qDebug() << "TrackingManager: Threshold settings differ:";
+        TRACKING_DEBUG() << "TrackingManager: Threshold settings differ:";
         for (const QString& diff : differences) {
-            qDebug() << "  " << diff;
+            TRACKING_DEBUG() << "  " << diff;
         }
     } else {
-        qDebug() << "TrackingManager: Threshold settings match stored values";
+        TRACKING_DEBUG() << "TrackingManager: Threshold settings match stored values";
     }
 
     return match;
@@ -1161,47 +1162,47 @@ QJsonObject TrackingManager::initialWormInfoToJson(const Tracking::InitialWormIn
 
 size_t TrackingManager::getProcessedVideoMemoryUsage() const {
     size_t totalBytes = 0;
-    
+
     // Calculate memory usage of forward frames
     for (const cv::Mat& frame : m_finalProcessedForwardFrames) {
         if (!frame.empty()) {
             totalBytes += frame.total() * frame.elemSize();
         }
     }
-    
+
     // Calculate memory usage of backward frames
     for (const cv::Mat& frame : m_finalProcessedReversedFrames) {
         if (!frame.empty()) {
             totalBytes += frame.total() * frame.elemSize();
         }
     }
-    
+
     return totalBytes;
 }
 
 void TrackingManager::clearProcessedVideoMemory() {
-    qDebug() << "TrackingManager: Clearing processed video memory...";
-    
+    TRACKING_DEBUG() << "TrackingManager: Clearing processed video memory...";
+
     // Calculate memory usage before clearing
     size_t memoryUsageBefore = getProcessedVideoMemoryUsage();
     size_t forwardSize = m_finalProcessedForwardFrames.size();
     size_t backwardSize = m_finalProcessedReversedFrames.size();
-    
+
     // Clear and shrink the vectors to free memory
     m_finalProcessedForwardFrames.clear();
     m_finalProcessedReversedFrames.clear();
     std::vector<cv::Mat>().swap(m_finalProcessedForwardFrames);
     std::vector<cv::Mat>().swap(m_finalProcessedReversedFrames);
-    
+
     // Also clear intermediate chunk storage if still present
     m_assembledForwardFrameChunks.clear();
     m_assembledBackwardFrameChunks.clear();
-    
+
     // Report memory savings
     double memoryMB = memoryUsageBefore / (1024.0 * 1024.0);
-    qDebug() << "TrackingManager: Cleared" << forwardSize << "forward frames and" << backwardSize 
+    TRACKING_DEBUG() << "TrackingManager: Cleared" << forwardSize << "forward frames and" << backwardSize
              << "backward frames from memory, freed" << QString::number(memoryMB, 'f', 1) << "MB";
-    
+
     QString statusMessage = QString("Processed video data cleared from memory (freed %1 MB)")
                            .arg(QString::number(memoryMB, 'f', 1));
     emit trackingStatusUpdate(statusMessage);
