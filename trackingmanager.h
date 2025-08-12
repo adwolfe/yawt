@@ -49,8 +49,37 @@ struct FrameSpecificPhysicalBlob {
 // No longer using pause mechanism - split resolution is immediate
 
 
-// Forward declaration
+// Forward declarations
 class TrackingDataStorage;
+
+// Worker class for saving thresholded video in background thread
+class VideoSaverWorker : public QObject {
+    Q_OBJECT
+
+public:
+    explicit VideoSaverWorker(QObject* parent = nullptr);
+
+public slots:
+    void receiveVideoData(std::vector<cv::Mat> reversedFrames,
+                         std::vector<cv::Mat> forwardFrames,
+                         const QString& outputPath,
+                         double fps,
+                         cv::Size frameSize);
+
+signals:
+    void savingComplete(const QString& savedVideoPath);
+    void savingError(const QString& errorMessage);
+    void savingProgress(int percentage);
+
+private:
+    void startSaving();
+    
+    std::vector<cv::Mat> m_reversedFrames;
+    std::vector<cv::Mat> m_forwardFrames;
+    QString m_outputPath;
+    double m_fps;
+    cv::Size m_frameSize;
+};
 
 class TrackingManager : public QObject {
     Q_OBJECT
@@ -94,7 +123,9 @@ private slots:
     void handleWormTrackerError(int reportingConceptualWormId, QString errorMessage);
     void handleWormTrackerProgress(int reportingConceptualWormId, int percentDone);
 
-
+    // Video saving slots
+    void handleVideoSavingComplete(const QString& savedVideoPath);
+    void handleVideoSavingError(const QString& errorMessage);
 
 signals:
     void overallTrackingProgress(int percentage);
@@ -103,6 +134,13 @@ signals:
     void trackingFinishedSuccessfully(const QString& outputPath);
     void trackingFailed(const QString& reason);
     void trackingCancelled();
+    
+    // Signal to send video data to background worker thread
+    void sendVideoDataToWorker(std::vector<cv::Mat> reversedFrames,
+                              std::vector<cv::Mat> forwardFrames,
+                              const QString& outputPath,
+                              double fps,
+                              cv::Size frameSize);
 
 
 private:
@@ -134,6 +172,9 @@ private:
     size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
     void clearProcessedVideoMemory(); // Clear processed video data from memory
     
+    // Video saving functionality
+    void startVideoSaving(); // Start background video saving process
+    
     // JSON storage methods
     QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
     void saveThresholdSettings(const QString& directoryPath, const Thresholding::ThresholdSettings& settings);
@@ -152,6 +193,7 @@ private:
     int m_totalFramesInVideoHint;
     bool m_isTrackingRunning;
     bool m_cancelRequested;
+    bool m_isVideoSaving;
 
     // Video processing members (for parallel processing)
     QList<QPointer<QThread>> m_videoProcessorThreads;
@@ -192,6 +234,10 @@ private:
     // This helps find which physical blob a worm belonged to in the previous frame when it pauses.
     QMap<int, int> m_wormToPhysicalBlobIdMap;
 
+
+    // Video saving members
+    QPointer<QThread> m_videoSaverThread;
+    QString m_savedVideoPath; // Path where the thresholded video will be saved
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures
