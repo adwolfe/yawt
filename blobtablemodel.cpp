@@ -105,6 +105,11 @@ QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
             if (static_cast<Column>(index.column()) == Column::Color) {
                 return item.color; // Provide color for basic swatch if no delegate or for other roles
             }
+        } else if (role == Qt::BackgroundRole) {
+            // Provide subtle background highlighting for Fix type blobs
+            if (item.type == TableItems::ItemType::Fix) {
+                return QColor(255, 245, 245); // Very light pink/red background for Fix blobs
+            }
         }
     } catch (const std::out_of_range& e) {
         qWarning() << "BlobTableModel: Error accessing item at index" << index.row() << ":" << e.what();

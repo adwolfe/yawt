@@ -85,7 +85,17 @@
            <bool>true</bool>
           </property>
           <property name="text">
-           <string>Clear</string>
+           <string>Clear All</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="clearFixButton">
+          <property name="enabled">
+           <bool>true</bool>
+          </property>
+          <property name="text">
+           <string>Clear Fix</string>
           </property>
          </widget>
         </item>

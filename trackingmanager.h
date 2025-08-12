@@ -88,6 +88,16 @@ public:
     explicit TrackingManager(QObject* parent = nullptr);
     explicit TrackingManager(TrackingDataStorage* storage, QObject* parent = nullptr);
     ~TrackingManager();
+    
+    // Retracking functionality
+    QString getSavedVideoPath() const; // Get path to saved thresholded video
+    bool startRetrackingProcess(const QString& thresholdedVideoPath,
+                               int fixBlobId,
+                               const QRectF& initialROI,
+                               int startFrame,
+                               int endFrame,
+                               bool replaceExisting,
+                               bool extendTrack);
 
 public slots:
     void startFullTrackingProcess(const QString& videoPath,

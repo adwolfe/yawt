@@ -13,8 +13,10 @@ class AnnotationTableModel;
 class ColorDelegate;
 class ItemTypeDelegate;
 class TrackingProgressDialog;
+class RetrackingDialog;
 class TrackingManager;
 class TrackingDataStorage;
+struct RetrackingParameters;
 
 // Include VideoLoader header for enums and QFlags type
 #include "videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
@@ -81,6 +83,12 @@ public slots:
     void handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData);
     void handleRemoveBlobsClicked();
     void handleDeleteSelectedBlobClicked();
+    void handleClearFixBlobsClicked(); // Clear only Fix type blobs
+    
+    // Retracking functionality
+    void handleRetrackButtonClicked();
+    void updateRetrackBlobCombo();
+    void performRetracking(const TableItems::ClickedItem& fixBlob, const RetrackingParameters& params);
 
     // Tracking Process
     void onStartTrackingActionTriggered();
@@ -122,6 +130,9 @@ private:
     TrackingDataStorage *m_trackingDataStorage; // Central data storage
 
     QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
+    
+    // Tracking state
+    bool m_hasCompletedTracking; // Whether initial tracking has been completed
     
     // ROI size factor spinbox
     double roiFactorSpinBoxD;

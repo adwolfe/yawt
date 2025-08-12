@@ -29,6 +29,7 @@ enum class ItemType {
     StartPoint,
     EndPoint,
     ControlPoint,
+    Fix, // For manual retracking of lost worms
     Undefined // Default or unassigned
 };
 
@@ -39,6 +40,7 @@ inline QString itemTypeToString(ItemType type) {
     case ItemType::StartPoint: return "Start Point";
     case ItemType::EndPoint: return "End Point";
     case ItemType::ControlPoint: return "Control Point";
+    case ItemType::Fix: return "Fix";
     case ItemType::Undefined: return "Undefined";
     default: return "Unknown";
     }
@@ -49,6 +51,7 @@ inline ItemType stringToItemType(const QString& typeStr) {
     if (typeStr == "Start Point") return ItemType::StartPoint;
     if (typeStr == "End Point") return ItemType::EndPoint;
     if (typeStr == "Control Point") return ItemType::ControlPoint;
+    if (typeStr == "Fix") return ItemType::Fix;
     return ItemType::Undefined;
 }
 

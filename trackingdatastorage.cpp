@@ -46,7 +46,14 @@ QColor TrackingDataStorage::getNextColor() {
 int TrackingDataStorage::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type) {
     TableItems::ClickedItem newItem;
     newItem.id = m_nextId++;
-    newItem.color = getNextColor();
+    
+    // Assign special colors for Fix type blobs
+    if (type == TableItems::ItemType::Fix) {
+        newItem.color = QColor(255, 0, 0, 180); // Semi-transparent red for Fix blobs
+    } else {
+        newItem.color = getNextColor();
+    }
+    
     newItem.type = type;
     newItem.initialCentroid = centroid;
     newItem.originalClickedBoundingBox = boundingBox;

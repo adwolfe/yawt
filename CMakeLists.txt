@@ -40,6 +40,7 @@ set(SOURCES
     trackingdatastorage.cpp
     trackingmanager.cpp
     trackingprogressdialog.cpp
+    retrackingdialog.cpp
     videofiletreeview.cpp
     videoloader.cpp
     videoprocessor.cpp
@@ -62,6 +63,7 @@ set(HEADERS
     trackingdatastorage.h
     trackingmanager.h
     trackingprogressdialog.h
+    retrackingdialog.h
     videofiletreeview.h
     videoloader.h
     videoprocessor.h
@@ -73,6 +75,7 @@ set(HEADERS
 set(UIS
     mainwindow.ui
     trackingprogressdialog.ui
+    retrackingdialog.ui
 )
 
 # Resources
