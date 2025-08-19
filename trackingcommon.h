@@ -26,6 +26,7 @@ namespace TableItems {
 // Enum for the type of tracked item
 enum class ItemType {
     Worm,
+    ROI,
     StartPoint,
     EndPoint,
     ControlPoint,
@@ -37,6 +38,7 @@ enum class ItemType {
 inline QString itemTypeToString(ItemType type) {
     switch (type) {
     case ItemType::Worm: return "Worm";
+    case ItemType::ROI: return "ROI";
     case ItemType::StartPoint: return "Start Point";
     case ItemType::EndPoint: return "End Point";
     case ItemType::ControlPoint: return "Control Point";
@@ -48,6 +50,7 @@ inline QString itemTypeToString(ItemType type) {
 
 inline ItemType stringToItemType(const QString& typeStr) {
     if (typeStr == "Worm") return ItemType::Worm;
+    if (typeStr == "ROI") return ItemType::ROI;
     if (typeStr == "Start Point") return ItemType::StartPoint;
     if (typeStr == "End Point") return ItemType::EndPoint;
     if (typeStr == "Control Point") return ItemType::ControlPoint;

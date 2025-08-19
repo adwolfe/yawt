@@ -102,6 +102,8 @@ public slots:
 
     // Table View and VideoLoader Sync
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);
+    // ROI handling: when the user draws an ROI in VideoLoader, add it to the BlobTableModel as an ROI item
+    void handleRoiDefined(const QRectF& roi);
 
     // Slots to react to VideoLoader mode changes (for UI sync)
     void syncInteractionModeButtons(VideoLoader::InteractionMode newMode);

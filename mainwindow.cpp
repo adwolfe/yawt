@@ -181,6 +181,8 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
+    // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
+    connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
 
     // Playback controls
     connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) {
@@ -693,6 +695,28 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
         statusBar()->showMessage(feedbackMessage, 3000);
         
     // No retrack combo functionality in this build
+    }
+}
+
+void MainWindow::handleRoiDefined(const QRectF& roi) {
+    if (!ui->videoLoader->isVideoLoaded()) return;
+    int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+
+    // Convert ROI rect to centroid and bounding box in video coords
+    QPointF centroid = QPointF(roi.x() + roi.width() / 2.0, roi.y() + roi.height() / 2.0);
+    QRectF boundingBox = roi;
+
+    // Add as ROI type to the model
+    bool added = m_blobTableModel->addItem(centroid, boundingBox, currentFrame, TableItems::ItemType::ROI);
+
+    if (added) {
+        ui->deleteButton->setEnabled(true);
+        int lastRow = m_blobTableModel->rowCount() - 1;
+        QModelIndex newIndex = m_blobTableModel->index(lastRow, 0);
+        ui->wormTableView->setCurrentIndex(newIndex);
+        ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        resizeTableColumns();
+        statusBar()->showMessage(QString("Added ROI at frame %1").arg(currentFrame), 3000);
     }
 }
 
