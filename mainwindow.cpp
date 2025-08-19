@@ -677,7 +677,9 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
 
     // Determine item type based on tracking state
-    TableItems::ItemType itemType = m_hasCompletedTracking ? TableItems::ItemType::Fix : TableItems::ItemType::Worm;
+    // Legacy behavior previously turned newly added items into 'Fix' blobs after tracking completed.
+    // That behavior is disabled: always add items as regular Worm blobs.
+    TableItems::ItemType itemType = TableItems::ItemType::Worm;
 
     // Now adding through the data storage via the model
     bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, itemType);
@@ -697,17 +699,12 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
         
         // Provide user feedback based on blob type
         QString feedbackMessage;
-        if (itemType == TableItems::ItemType::Fix) {
-            feedbackMessage = QString("Added Fix blob for retracking at frame %1").arg(currentFrame);
-        } else {
-            feedbackMessage = QString("Added Worm blob at frame %1").arg(currentFrame);
-        }
+        // Always report as a Worm blob since auto-Fix behavior is disabled
+        feedbackMessage = QString("Added Worm blob at frame %1").arg(currentFrame);
         statusBar()->showMessage(feedbackMessage, 3000);
         
         // Update retrack combo if a Fix blob was added
-        if (itemType == TableItems::ItemType::Fix) {
-            updateRetrackBlobCombo();
-        }
+        // No retrack combo update needed for regular Worm blobs
     }
 }
 
