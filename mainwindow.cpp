@@ -889,7 +889,14 @@ void MainWindow::onStartTrackingActionTriggered() {
         connect(m_trackingManager, &TrackingManager::trackingCancelled, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
     }
     //m_trackingProgressDialog->resetDialog();
-    m_trackingProgressDialog->setTrackingParameters(videoPath, keyFrame, settings, initialWorms.size(), totalFrames);
+    int wormsWithTracks = 0;
+    if (m_trackingDataStorage) {
+        QSet<int> itemsWithTracks = m_trackingDataStorage->getItemsWithTracks();
+        for (const auto& info : initialWorms) {
+            if (itemsWithTracks.contains(info.id)) ++wormsWithTracks;
+        }
+    }
+    m_trackingProgressDialog->setTrackingParameters(videoPath, keyFrame, settings, initialWorms.size(), totalFrames, wormsWithTracks);
     m_trackingProgressDialog->exec();
 }
 

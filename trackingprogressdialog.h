@@ -25,11 +25,14 @@ public:
     explicit TrackingProgressDialog(QWidget *parent = nullptr);
     ~TrackingProgressDialog();
 
+    // numberOfWormsWithTracks: optional count of how many of the provided items
+    // already have track data associated with them (default 0 for backward compatibility).
     void setTrackingParameters(const QString& videoPath,
                                int keyFrame,
                                const Thresholding::ThresholdSettings& settings,
                                int numberOfWorms,
-                               int totalFramesInVideo);
+                               int totalFramesInVideo,
+                               int numberOfWormsWithTracks = 0);
 
 public slots:
     void updateStatusMessage(const QString& message);
@@ -54,6 +57,12 @@ private:
     Thresholding::ThresholdSettings m_thresholdSettings;
     int m_numberOfWorms;
     int m_totalFramesInVideo;
+
+    // Number of provided items that already have track data associated with them.
+    // This is used to display quick diagnostics in the tracking dialog (e.g.
+    // "8 blobs detected — 0 have track data").
+    int m_numberOfWormsWithTracks;
+
     bool m_isTrackingRunning;
 
     QString formatThresholdSettings(const Thresholding::ThresholdSettings& settings) const;
