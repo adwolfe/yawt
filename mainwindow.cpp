@@ -234,7 +234,6 @@ void MainWindow::setupConnections() {
                 ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
             });
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
-    connect(ui->clearFixButton, &QPushButton::clicked, this, &MainWindow::handleClearFixBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
 
     // Retracking UI removed - no connections
@@ -436,7 +435,6 @@ void MainWindow::initializeUIStates() {
     ui->deleteButton->setEnabled(false);
     
     // Initialize Clear Fix button to disabled state until tracking is completed
-    ui->clearFixButton->setEnabled(false);
     
     // Retrack controls removed from UI
 
@@ -730,35 +728,6 @@ void MainWindow::handleRemoveBlobsClicked() {
     resizeTableColumns();
 }
 
-void MainWindow::handleClearFixBlobsClicked() {
-    // Get all items from storage
-    QList<TableItems::ClickedItem> allItems = m_trackingDataStorage->getAllItems();
-    
-    // Collect IDs of Fix type items to remove
-    QList<int> fixItemIds;
-    for (const auto& item : allItems) {
-        if (item.type == TableItems::ItemType::Fix) {
-            fixItemIds.append(item.id);
-        }
-    }
-    
-    // Remove Fix items
-    for (int itemId : fixItemIds) {
-        m_trackingDataStorage->removeItem(itemId);
-    }
-    
-    // Update UI feedback
-    if (!fixItemIds.isEmpty()) {
-        statusBar()->showMessage(QString("Cleared %1 Fix blob(s)").arg(fixItemIds.size()), 3000);
-    } else {
-        statusBar()->showMessage("No Fix blobs to clear", 2000);
-    }
-    
-    // Resize columns after potential changes
-    resizeTableColumns();
-    
-    // Retrack combo removed
-}
 
 void MainWindow::handleDeleteSelectedBlobClicked() {
     // Get the currently selected row
@@ -998,8 +967,6 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     // Mark that we have completed tracking
     m_hasCompletedTracking = true;
     
-    // Enable Clear Fix button now that tracking is complete
-    ui->clearFixButton->setEnabled(true);
     statusBar()->showMessage("Tracking completed", 4000);
 
     // Perform memory cleanup after tracking is complete

@@ -19,7 +19,7 @@
      <enum>QLayout::SizeConstraint::SetNoConstraint</enum>
     </property>
     <item>
-     <layout class="QVBoxLayout" name="leftLayout" stretch="0,0,3,0,0,0,0,0,0,0,0,3,0">
+     <layout class="QVBoxLayout" name="leftLayout" stretch="0,0,3,0,0,0,0,0,0,0,0,3">
       <property name="spacing">
        <number>5</number>
       </property>
@@ -266,16 +266,6 @@
         </property>
        </widget>
       </item>
-      <item>
-       <widget class="QPushButton" name="clearFixButton">
-        <property name="enabled">
-         <bool>true</bool>
-        </property>
-        <property name="text">
-         <string>Clear Fix</string>
-        </property>
-       </widget>
-      </item>
      </layout>
     </item>
     <item>
@@ -287,7 +277,7 @@
        <enum>QTabWidget::TabShape::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>0</number>
+       <number>1</number>
       </property>
       <widget class="QWidget" name="trackingTab">
        <attribute name="title">
@@ -1122,7 +1112,6 @@ QToolButton#lastFrameButton {
                </property>
               </widget>
              </item>
-             <!-- Retrack UI removed -->
              <item row="1" column="1">
               <widget class="QTableView" name="annoTableView"/>
              </item>

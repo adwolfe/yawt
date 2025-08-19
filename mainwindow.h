@@ -82,7 +82,7 @@ public slots:
     void handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData);
     void handleRemoveBlobsClicked();
     void handleDeleteSelectedBlobClicked();
-    void handleClearFixBlobsClicked(); // Clear only Fix type blobs
+
     
     // Retracking functionality
     // Retracking functionality removed
