@@ -1110,13 +1110,6 @@ QToolButton#lastFrameButton {
              <property name="rightMargin">
               <number>6</number>
              </property>
-             <item row="2" column="1">
-              <widget class="QPushButton" name="retrackButton">
-               <property name="text">
-                <string>Retrack</string>
-               </property>
-              </widget>
-             </item>
              <item row="0" column="0" colspan="2">
               <widget class="QLabel" name="label_10">
                <property name="font">
@@ -1129,13 +1122,7 @@ QToolButton#lastFrameButton {
                </property>
               </widget>
              </item>
-             <item row="2" column="0">
-              <widget class="QComboBox" name="comboRetrackBlobs">
-               <property name="modelColumn">
-                <number>0</number>
-               </property>
-              </widget>
-             </item>
+             <!-- Retrack UI removed -->
              <item row="1" column="1">
               <widget class="QTableView" name="annoTableView"/>
              </item>

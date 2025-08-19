@@ -7,7 +7,7 @@
 #include "blobtablemodel.h"
 #include "colordelegate.h"
 #include "itemtypedelegate.h"
-#include "retrackingdialog.h"
+// #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
 #include "trackingprogressdialog.h"
 #include "trackingmanager.h"
 #include "trackingdatastorage.h"
@@ -235,23 +235,14 @@ void MainWindow::setupConnections() {
     connect(ui->clearFixButton, &QPushButton::clicked, this, &MainWindow::handleClearFixBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
 
-    // Retracking connections
-    connect(ui->retrackButton, &QPushButton::clicked, this, &MainWindow::handleRetrackButtonClicked);
+    // Retracking UI removed - no connections
 
     // Auto-resize table columns when model data changes
     connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsRemoved, this, &MainWindow::resizeTableColumns);
     
-    // Update retrack combo when blob data changes
-    connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::updateRetrackBlobCombo);
-    connect(m_blobTableModel, &BlobTableModel::rowsRemoved, this, &MainWindow::updateRetrackBlobCombo);
-    connect(m_blobTableModel, &BlobTableModel::dataChanged, this, [this](const QModelIndex&, const QModelIndex&, const QList<int>& roles) {
-        // Only update if the type column might have changed
-        if (roles.isEmpty() || roles.contains(Qt::EditRole)) {
-            updateRetrackBlobCombo();
-        }
-    });
+    // Retracking combo removed
 
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -445,9 +436,7 @@ void MainWindow::initializeUIStates() {
     // Initialize Clear Fix button to disabled state until tracking is completed
     ui->clearFixButton->setEnabled(false);
     
-    // Initialize retrack controls to disabled state until Fix blobs are available
-    ui->comboRetrackBlobs->setEnabled(false);
-    ui->retrackButton->setEnabled(false);
+    // Retrack controls removed from UI
 
     ui->adaptiveTypeCombo->setCurrentIndex(0);
     setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
@@ -551,10 +540,10 @@ void MainWindow::editBlobsModeButtonClicked() {
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     }
     
-    // Provide mode-specific feedback
+        // Provide mode-specific feedback
     QString modeMessage;
     if (m_hasCompletedTracking) {
-        modeMessage = "Blob Edit Mode: Click on blobs to add Fix markers for retracking";
+        modeMessage = "Blob Edit Mode: Click on blobs to add Fix markers";
     } else {
         modeMessage = "Blob Edit Mode: Click on blobs to add Worms for tracking";
     }
@@ -703,8 +692,7 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
         feedbackMessage = QString("Added Worm blob at frame %1").arg(currentFrame);
         statusBar()->showMessage(feedbackMessage, 3000);
         
-        // Update retrack combo if a Fix blob was added
-        // No retrack combo update needed for regular Worm blobs
+    // No retrack combo functionality in this build
     }
 }
 
@@ -745,8 +733,7 @@ void MainWindow::handleClearFixBlobsClicked() {
     // Resize columns after potential changes
     resizeTableColumns();
     
-    // Update retrack combo since we removed Fix blobs
-    updateRetrackBlobCombo();
+    // Retrack combo removed
 }
 
 void MainWindow::handleDeleteSelectedBlobClicked() {
@@ -774,8 +761,7 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
         // Make sure the table layout is updated
         resizeTableColumns();
         
-        // Update retrack combo in case a Fix blob was deleted
-        updateRetrackBlobCombo();
+    // Retrack combo removed
     }
 }
 
@@ -990,10 +976,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     
     // Enable Clear Fix button now that tracking is complete
     ui->clearFixButton->setEnabled(true);
-    statusBar()->showMessage("Tracking completed - Fix blobs can now be added for retracking", 4000);
-    
-    // Update retrack blob combo box in case there are any Fix blobs
-    updateRetrackBlobCombo();
+    statusBar()->showMessage("Tracking completed", 4000);
 
     // Perform memory cleanup after tracking is complete
     performPostTrackingMemoryCleanup();
@@ -1205,144 +1188,4 @@ void MainWindow::toggleTrackingDebug() {
     statusBar()->showMessage(QString("Tracking debug messages %1").arg(status), 2000);
 }
 
-void MainWindow::updateRetrackBlobCombo() {
-    // Clear existing items
-    ui->comboRetrackBlobs->clear();
-    
-    // Get all items from storage
-    QList<TableItems::ClickedItem> allItems = m_trackingDataStorage->getAllItems();
-    
-    // Find Fix type blobs and add them to combo
-    QList<TableItems::ClickedItem> fixBlobs;
-    for (const auto& item : allItems) {
-        if (item.type == TableItems::ItemType::Fix) {
-            fixBlobs.append(item);
-        }
-    }
-    
-    if (fixBlobs.isEmpty()) {
-        ui->comboRetrackBlobs->addItem("No Fix blobs available");
-        ui->comboRetrackBlobs->setEnabled(false);
-        ui->retrackButton->setEnabled(false);
-    } else {
-        // Sort Fix blobs by ID for consistent display
-        std::sort(fixBlobs.begin(), fixBlobs.end(), 
-                  [](const TableItems::ClickedItem& a, const TableItems::ClickedItem& b) {
-                      return a.id < b.id;
-                  });
-        
-        // Add Fix blobs to combo box
-        for (const auto& fixBlob : fixBlobs) {
-            QString displayText = QString("Fix Blob ID %1 (Frame %2) at (%3, %4)")
-                                    .arg(fixBlob.id)
-                                    .arg(fixBlob.frameOfSelection)
-                                    .arg(QString::number(fixBlob.initialCentroid.x(), 'f', 1))
-                                    .arg(QString::number(fixBlob.initialCentroid.y(), 'f', 1));
-            ui->comboRetrackBlobs->addItem(displayText, fixBlob.id); // Store ID as data
-        }
-        
-        ui->comboRetrackBlobs->setEnabled(true);
-        ui->retrackButton->setEnabled(true);
-    }
-}
-
-void MainWindow::handleRetrackButtonClicked() {
-    if (ui->comboRetrackBlobs->currentIndex() < 0) {
-        statusBar()->showMessage("No Fix blob selected for retracking", 3000);
-        return;
-    }
-    
-    // Get the selected Fix blob ID
-    bool ok = false;
-    int fixBlobId = ui->comboRetrackBlobs->currentData().toInt(&ok);
-    
-    if (!ok) {
-        statusBar()->showMessage("Invalid Fix blob selection", 3000);
-        return;
-    }
-    
-    // Find the selected Fix blob
-    QList<TableItems::ClickedItem> allItems = m_trackingDataStorage->getAllItems();
-    TableItems::ClickedItem selectedFixBlob;
-    bool found = false;
-    
-    for (const auto& item : allItems) {
-        if (item.id == fixBlobId && item.type == TableItems::ItemType::Fix) {
-            selectedFixBlob = item;
-            found = true;
-            break;
-        }
-    }
-    
-    if (!found) {
-        statusBar()->showMessage("Selected Fix blob not found", 3000);
-        return;
-    }
-    
-    // Create and show retracking dialog
-    RetrackingDialog dialog(this);
-    int totalFrames = ui->videoLoader->getTotalFrames();
-    dialog.setFixBlobInfo(selectedFixBlob, totalFrames);
-    
-    if (dialog.exec() == QDialog::Accepted) {
-        RetrackingParameters params = dialog.getRetrackingParameters();
-        performRetracking(selectedFixBlob, params);
-    }
-}
-
-void MainWindow::performRetracking(const TableItems::ClickedItem& fixBlob, const RetrackingParameters& params)
-{
-    statusBar()->showMessage(QString("Starting retracking for Fix Blob ID %1...").arg(fixBlob.id), 3000);
-    
-    // Check if we have a saved thresholded video to work with
-    if (!m_trackingManager) {
-        statusBar()->showMessage("No tracking manager available for retracking", 3000);
-        return;
-    }
-    
-    QString savedVideoPath = m_trackingManager->getSavedVideoPath();
-    if (savedVideoPath.isEmpty()) {
-        statusBar()->showMessage("No saved thresholded video available for retracking", 4000);
-        QMessageBox::information(this, "Retracking Not Available", 
-                                 "Retracking requires a saved thresholded video from the initial tracking process.\n"
-                                 "Please run initial tracking first to enable retracking functionality.");
-        return;
-    }
-    
-    // Validate frame range
-    int totalFrames = ui->videoLoader->getTotalFrames();
-    if (params.startFrame >= totalFrames || params.endFrame >= totalFrames || 
-        params.startFrame > params.endFrame) {
-        statusBar()->showMessage("Invalid frame range for retracking", 3000);
-        return;
-    }
-    
-    qDebug() << "MainWindow: Starting retracking for Fix blob" << fixBlob.id 
-             << "from frame" << params.startFrame << "to" << params.endFrame
-             << "using saved video:" << savedVideoPath;
-    
-    // Create retracking parameters for the tracking manager
-    QRectF initialROI = fixBlob.initialBoundingBox;
-    
-    // Start retracking process using the tracking manager
-    bool retrackingStarted = m_trackingManager->startRetrackingProcess(
-        savedVideoPath,
-        fixBlob.id,
-        initialROI,
-        params.startFrame,
-        params.endFrame,
-        params.replaceExisting,
-        params.extendTrack
-    );
-    
-    if (retrackingStarted) {
-        statusBar()->showMessage(QString("Retracking initiated for Fix Blob ID %1 (frames %2-%3)")
-                                    .arg(fixBlob.id)
-                                    .arg(params.startFrame)
-                                    .arg(params.endFrame), 4000);
-    } else {
-        statusBar()->showMessage("Failed to start retracking process", 3000);
-        QMessageBox::warning(this, "Retracking Failed", 
-                             "Could not start the retracking process. Please check the console for error details.");
-    }
-}
+// Retracking UI and logic removed

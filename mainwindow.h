@@ -13,10 +13,9 @@ class AnnotationTableModel;
 class ColorDelegate;
 class ItemTypeDelegate;
 class TrackingProgressDialog;
-class RetrackingDialog;
 class TrackingManager;
 class TrackingDataStorage;
-struct RetrackingParameters;
+// Retracking forward declarations removed
 
 // Include VideoLoader header for enums and QFlags type
 #include "videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
@@ -86,9 +85,8 @@ public slots:
     void handleClearFixBlobsClicked(); // Clear only Fix type blobs
     
     // Retracking functionality
-    void handleRetrackButtonClicked();
-    void updateRetrackBlobCombo();
-    void performRetracking(const TableItems::ClickedItem& fixBlob, const RetrackingParameters& params);
+    // Retracking functionality removed
+
 
     // Tracking Process
     void onStartTrackingActionTriggered();
