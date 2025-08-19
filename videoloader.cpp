@@ -382,6 +382,21 @@ double VideoLoader::getBlurSigmaX() const { return m_blurSigmaX; }
 bool VideoLoader::loadVideo(const QString& filePath) {
     if (m_isPlaying) pause();
 
+    // If there are existing annotations in storage, prompt the user before clearing them.
+    // Loading a new video will remove all blobs, tracks, and annotations.
+    if (m_storage && m_storage->getItemCount() > 0) {
+        int resp = QMessageBox::question(this,
+                                         "Clear Annotations?",
+                                         "Loading a new video will remove all blobs, tracks, and annotations. Do you want to continue?",
+                                         QMessageBox::Yes | QMessageBox::No);
+        if (resp != QMessageBox::Yes) {
+            qDebug() << "VideoLoader::loadVideo - user cancelled loading due to existing annotations.";
+            return false;
+        }
+        // User confirmed: clear the central storage (this emits signals so models/views update)
+        m_storage->removeAllItems();
+    }
+
     qDebug() << "VideoLoader::loadVideo() - resetting zoom factor from" << m_zoomFactor << "to 1.0";
     m_zoomFactor = 1.0;
     m_panOffset = QPointF(0.0, 0.0);
