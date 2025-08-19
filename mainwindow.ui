@@ -6,29 +6,37 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1102</width>
-    <height>600</height>
+    <width>1197</width>
+    <height>686</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>MainWindow</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <layout class="QHBoxLayout" name="horizontalLayout_4" stretch="1,3,1">
+   <layout class="QHBoxLayout" name="horizontalLayout_4" stretch="1,4">
+    <property name="sizeConstraint">
+     <enum>QLayout::SizeConstraint::SetNoConstraint</enum>
+    </property>
     <item>
-     <layout class="QVBoxLayout" name="leftLayout" stretch="0,3,0,0,2">
+     <layout class="QVBoxLayout" name="leftLayout" stretch="0,0,3,0,0,0,0,0,0,0,0,3,0">
       <property name="spacing">
        <number>5</number>
       </property>
       <item>
+       <widget class="QLabel" name="label_11">
+        <property name="font">
+         <font>
+          <bold>true</bold>
+         </font>
+        </property>
+        <property name="text">
+         <string>Project Folder</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <layout class="QHBoxLayout" name="dirSelectLayout">
-        <item>
-         <widget class="QLabel" name="dirLabel">
-          <property name="text">
-           <string>Dir:</string>
-          </property>
-         </widget>
-        </item>
         <item>
          <widget class="QLineEdit" name="dirSelected"/>
         </item>
@@ -56,22 +64,176 @@
        </widget>
       </item>
       <item>
+       <widget class="QLabel" name="label_6">
+        <property name="font">
+         <font>
+          <bold>true</bold>
+         </font>
+        </property>
+        <property name="text">
+         <string>Video Information</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="videoNameLabel">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="text">
+         <string>(pick a video...)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_8">
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="label_7">
+          <property name="font">
+           <font>
+            <bold>false</bold>
+           </font>
+          </property>
+          <property name="text">
+           <string>Capture rate:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="fpsLabel">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="font">
+           <font>
+            <italic>false</italic>
+            <bold>false</bold>
+            <underline>false</underline>
+           </font>
+          </property>
+          <property name="text">
+           <string>0 fps</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_4">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_9">
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="label_8">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Pixel size:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="pixelSizeSpinBoxD">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>25</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+          <property name="suffix">
+           <string> pixels/um</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_5">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="Line" name="line_6">
+        <property name="orientation">
+         <enum>Qt::Orientation::Horizontal</enum>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_5">
+        <property name="font">
+         <font>
+          <bold>true</bold>
+         </font>
+        </property>
+        <property name="text">
+         <string>Selected Blobs</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <layout class="QHBoxLayout" name="horizontalLayout_6">
         <property name="spacing">
          <number>2</number>
         </property>
-        <item>
-         <widget class="QLabel" name="label_5">
-          <property name="font">
-           <font>
-            <bold>true</bold>
-           </font>
-          </property>
-          <property name="text">
-           <string>Blobs</string>
-          </property>
-         </widget>
-        </item>
         <item>
          <widget class="QPushButton" name="deleteButton">
           <property name="text">
@@ -86,16 +248,6 @@
           </property>
           <property name="text">
            <string>Clear All</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="clearFixButton">
-          <property name="enabled">
-           <bool>true</bool>
-          </property>
-          <property name="text">
-           <string>Clear Fix</string>
           </property>
          </widget>
         </item>
@@ -114,256 +266,282 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QPushButton" name="clearFixButton">
+        <property name="enabled">
+         <bool>true</bool>
+        </property>
+        <property name="text">
+         <string>Clear Fix</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </item>
     <item>
-     <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1,0,0">
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout">
-        <property name="spacing">
-         <number>2</number>
-        </property>
+     <widget class="QTabWidget" name="tabWidget">
+      <property name="tabPosition">
+       <enum>QTabWidget::TabPosition::North</enum>
+      </property>
+      <property name="tabShape">
+       <enum>QTabWidget::TabShape::Rounded</enum>
+      </property>
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <widget class="QWidget" name="trackingTab">
+       <attribute name="title">
+        <string>Tracking</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="5,1">
         <item>
-         <widget class="QToolButton" name="panModeButton">
-          <property name="toolTip">
-           <string>Pan/Drag</string>
-          </property>
-          <property name="statusTip">
-           <string>Pan, drag, and zoom</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/pan.svg</normaloff>:/resources/pan.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-          <property name="autoRaise">
-           <bool>false</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="roiModeButton">
-          <property name="enabled">
-           <bool>true</bool>
-          </property>
-          <property name="toolTip">
-           <string>Draw ROI</string>
-          </property>
-          <property name="statusTip">
-           <string>Draw ROI</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/roi.svg</normaloff>:/resources/roi.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-          <property name="autoRaise">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="cropModeButton">
-          <property name="statusTip">
-           <string>Crop to ROI</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="selectionModeButton">
-          <property name="statusTip">
-           <string>Detect</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="trackModeButton">
-          <property name="enabled">
-           <bool>true</bool>
-          </property>
-          <property name="toolTip">
-           <string>Show/Hide Tracks</string>
-          </property>
-          <property name="statusTip">
-           <string>Show/hide tracks</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <spacer name="horizontalSpacer">
-          <property name="orientation">
-           <enum>Qt::Orientation::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QToolButton" name="viewThreshButton">
-          <property name="statusTip">
-           <string>Show/Hide threshold</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/thresh_alt.svg</normaloff>:/resources/thresh_alt.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="viewBlobsButton">
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/poke_alt2.svg</normaloff>:/resources/poke_alt2.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="viewTracksButton">
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset resource="resources.qrc">
-            <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <widget class="VideoLoader" name="videoLoader" native="true"/>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_7">
-        <property name="spacing">
-         <number>-1</number>
-        </property>
-        <property name="bottomMargin">
-         <number>0</number>
-        </property>
-        <item>
-         <widget class="QComboBox" name="comboPlaybackSpeed">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-            <horstretch>0</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>0</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>80</width>
-            <height>16777215</height>
-           </size>
-          </property>
+         <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1,0,0">
           <item>
-           <property name="text">
-            <string>0.5x</string>
-           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout">
+            <property name="spacing">
+             <number>2</number>
+            </property>
+            <item>
+             <widget class="QToolButton" name="panModeButton">
+              <property name="toolTip">
+               <string>Pan/Drag</string>
+              </property>
+              <property name="statusTip">
+               <string>Pan, drag, and zoom</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/pan.svg</normaloff>:/resources/pan.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="autoRaise">
+               <bool>false</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="roiModeButton">
+              <property name="enabled">
+               <bool>true</bool>
+              </property>
+              <property name="toolTip">
+               <string>Draw ROI</string>
+              </property>
+              <property name="statusTip">
+               <string>Draw ROI</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/roi.svg</normaloff>:/resources/roi.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+              <property name="autoRaise">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="cropModeButton">
+              <property name="statusTip">
+               <string>Crop to ROI</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="selectionModeButton">
+              <property name="statusTip">
+               <string>Detect</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="trackModeButton">
+              <property name="enabled">
+               <bool>true</bool>
+              </property>
+              <property name="toolTip">
+               <string>Show/Hide Tracks</string>
+              </property>
+              <property name="statusTip">
+               <string>Show/hide tracks</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer">
+              <property name="orientation">
+               <enum>Qt::Orientation::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QToolButton" name="viewThreshButton">
+              <property name="statusTip">
+               <string>Show/Hide threshold</string>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/thresh_alt.svg</normaloff>:/resources/thresh_alt.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="viewBlobsButton">
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/poke_alt2.svg</normaloff>:/resources/poke_alt2.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="viewTracksButton">
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset resource="resources.qrc">
+                <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </item>
           <item>
-           <property name="text">
-            <string>1.0x</string>
-           </property>
+           <widget class="VideoLoader" name="videoLoader" native="true"/>
           </item>
           <item>
-           <property name="text">
-            <string>2.5x</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>5.0x</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>10.0x</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-        <item>
-         <spacer name="horizontalSpacer_2">
-          <property name="orientation">
-           <enum>Qt::Orientation::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QToolButton" name="firstFrameButton">
-          <property name="styleSheet">
-           <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+           <layout class="QHBoxLayout" name="horizontalLayout_7">
+            <property name="spacing">
+             <number>-1</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <item>
+             <widget class="QComboBox" name="comboPlaybackSpeed">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>0</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>80</width>
+                <height>16777215</height>
+               </size>
+              </property>
+              <item>
+               <property name="text">
+                <string>0.5x</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>1.0x</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>2.5x</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>5.0x</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>10.0x</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_2">
+              <property name="orientation">
+               <enum>Qt::Orientation::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QToolButton" name="firstFrameButton">
+              <property name="styleSheet">
+               <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#firstFrameButton {
     /* Make it round */
     border-radius: 12px; /* Half of the button's size (e.g., 50px / 2) */
@@ -383,19 +561,19 @@ QToolButton#firstFrameButton {
     icon-size: 18px 18px; /* Adjust as needed */
 }
 </string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::MediaSkipBackward"/>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="playPauseButton">
-          <property name="styleSheet">
-           <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset theme="QIcon::ThemeIcon::MediaSkipBackward"/>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="playPauseButton">
+              <property name="styleSheet">
+               <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#playPauseButton {
     /* Make it round */
     border-radius: 18px; /* Half of the button's size (e.g., 50px / 2) */
@@ -441,25 +619,25 @@ QToolButton#playPauseButton:checked:hover {
                                       stop: 0 #e8e8e8, stop: 1 #d8d8d8); /* Different hover look when checked */
      border-color: #666;
 }</string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
-          </property>
-          <property name="shortcut">
-           <string>Space</string>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QToolButton" name="lastFrameButton">
-          <property name="styleSheet">
-           <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
+              </property>
+              <property name="shortcut">
+               <string>Space</string>
+              </property>
+              <property name="checkable">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="lastFrameButton">
+              <property name="styleSheet">
+               <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#lastFrameButton {
     /* Make it round */
     border-radius: 12px; /* Half of the button's size (e.g., 50px / 2) */
@@ -479,75 +657,59 @@ QToolButton#lastFrameButton {
     icon-size: 18px 18px; /* Adjust as needed */
 }
 </string>
-          </property>
-          <property name="text">
-           <string>...</string>
-          </property>
-          <property name="icon">
-           <iconset theme="QIcon::ThemeIcon::MediaSkipForward"/>
-          </property>
-         </widget>
+              </property>
+              <property name="text">
+               <string>...</string>
+              </property>
+              <property name="icon">
+               <iconset theme="QIcon::ThemeIcon::MediaSkipForward"/>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="horizontalSpacer_3">
+              <property name="orientation">
+               <enum>Qt::Orientation::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="framePosition">
+              <property name="minimumSize">
+               <size>
+                <width>60</width>
+                <height>0</height>
+               </size>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1">
+            <property name="spacing">
+             <number>10</number>
+            </property>
+            <item>
+             <widget class="QSlider" name="frameSlider">
+              <property name="orientation">
+               <enum>Qt::Orientation::Horizontal</enum>
+              </property>
+              <property name="tickPosition">
+               <enum>QSlider::TickPosition::NoTicks</enum>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
         </item>
-        <item>
-         <spacer name="horizontalSpacer_3">
-          <property name="orientation">
-           <enum>Qt::Orientation::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item>
-         <widget class="QSpinBox" name="framePosition">
-          <property name="minimumSize">
-           <size>
-            <width>60</width>
-            <height>0</height>
-           </size>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1">
-        <property name="spacing">
-         <number>10</number>
-        </property>
-        <item>
-         <widget class="QSlider" name="frameSlider">
-          <property name="orientation">
-           <enum>Qt::Orientation::Horizontal</enum>
-          </property>
-          <property name="tickPosition">
-           <enum>QSlider::TickPosition::NoTicks</enum>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </item>
-    <item>
-     <widget class="QTabWidget" name="tabWidget">
-      <property name="tabPosition">
-       <enum>QTabWidget::TabPosition::North</enum>
-      </property>
-      <property name="tabShape">
-       <enum>QTabWidget::TabShape::Rounded</enum>
-      </property>
-      <property name="currentIndex">
-       <number>1</number>
-      </property>
-      <widget class="QWidget" name="trackingTab">
-       <attribute name="title">
-        <string>Tracking</string>
-       </attribute>
-       <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="0">
         <item>
          <widget class="QFrame" name="frame">
           <property name="frameShape">
@@ -556,7 +718,7 @@ QToolButton#lastFrameButton {
           <property name="frameShadow">
            <enum>QFrame::Shadow::Sunken</enum>
           </property>
-          <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+          <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
            <property name="leftMargin">
             <number>6</number>
            </property>
@@ -572,161 +734,14 @@ QToolButton#lastFrameButton {
            <property name="spacing">
             <number>0</number>
            </property>
-           <item row="4" column="0">
-            <widget class="QLabel" name="label_7">
-             <property name="font">
-              <font>
-               <bold>false</bold>
-              </font>
-             </property>
+           <item row="6" column="0">
+            <widget class="QLabel" name="label_9">
              <property name="text">
-              <string>Capture rate:</string>
+              <string>ROI Factor:</string>
              </property>
             </widget>
            </item>
-           <item row="13" column="0" colspan="3">
-            <widget class="Line" name="line">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-            </widget>
-           </item>
-           <item row="8" column="1">
-            <spacer name="verticalSpacer">
-             <property name="orientation">
-              <enum>Qt::Orientation::Vertical</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>20</width>
-               <height>40</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
-           <item row="10" column="0">
-            <widget class="QLabel" name="label">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="text">
-              <string>Background:</string>
-             </property>
-            </widget>
-           </item>
-           <item row="5" column="2">
-            <widget class="QDoubleSpinBox" name="pixelSizeSpinBoxD">
-             <property name="enabled">
-              <bool>false</bool>
-             </property>
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>25</width>
-               <height>0</height>
-              </size>
-             </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
-             </property>
-             <property name="suffix">
-              <string> pixels/um</string>
-             </property>
-            </widget>
-           </item>
-           <item row="11" column="2">
-            <widget class="QSpinBox" name="blurKernelSpin">
-             <property name="minimum">
-              <number>3</number>
-             </property>
-             <property name="singleStep">
-              <number>2</number>
-             </property>
-            </widget>
-           </item>
-           <item row="14" column="0" colspan="3">
-            <layout class="QHBoxLayout" name="horizontalLayout_5">
-             <property name="spacing">
-              <number>20</number>
-             </property>
-             <item>
-              <widget class="QRadioButton" name="globalRadio">
-               <property name="text">
-                <string>Global</string>
-               </property>
-               <property name="checked">
-                <bool>true</bool>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QRadioButton" name="adaptiveRadio">
-               <property name="text">
-                <string>Adaptive</string>
-               </property>
-               <property name="checked">
-                <bool>false</bool>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </item>
-           <item row="2" column="0" colspan="3">
-            <widget class="QLabel" name="label_6">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="font">
-              <font>
-               <bold>true</bold>
-              </font>
-             </property>
-             <property name="text">
-              <string>Video</string>
-             </property>
-            </widget>
-           </item>
-           <item row="5" column="0">
-            <widget class="QLabel" name="label_8">
-             <property name="enabled">
-              <bool>false</bool>
-             </property>
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>0</height>
-              </size>
-             </property>
-             <property name="text">
-              <string>Pixel size:</string>
-             </property>
-            </widget>
-           </item>
-           <item row="7" column="0" colspan="3">
-            <widget class="Line" name="line_4">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-            </widget>
-           </item>
-           <item row="18" column="0" colspan="3">
+           <item row="17" column="0" colspan="3">
             <widget class="QGroupBox" name="adaptiveGroupBox">
              <property name="title">
               <string>Adaptive parameters</string>
@@ -821,84 +836,17 @@ QToolButton#lastFrameButton {
              </layout>
             </widget>
            </item>
-           <item row="9" column="0" colspan="3">
-            <widget class="QLabel" name="labelThresholding">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="font">
-              <font>
-               <bold>true</bold>
-              </font>
-             </property>
-             <property name="text">
-              <string>Thresholding:</string>
-             </property>
-            </widget>
-           </item>
-           <item row="4" column="2">
-            <widget class="QLabel" name="fpsLabel">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="font">
-              <font>
-               <italic>false</italic>
-               <bold>false</bold>
-               <underline>false</underline>
-              </font>
-             </property>
-             <property name="text">
-              <string>0 fps</string>
-             </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
-             </property>
-            </widget>
-           </item>
-           <item row="19" column="0" colspan="3">
-            <widget class="QPushButton" name="trackingDialogButton">
-             <property name="text">
-              <string>Begin Tracking</string>
-             </property>
-            </widget>
-           </item>
            <item row="10" column="2">
-            <widget class="QComboBox" name="bgCombo">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
+            <widget class="QSpinBox" name="blurKernelSpin">
+             <property name="minimum">
+              <number>3</number>
              </property>
-             <property name="minimumSize">
-              <size>
-               <width>50</width>
-               <height>0</height>
-              </size>
+             <property name="singleStep">
+              <number>2</number>
              </property>
-             <property name="currentIndex">
-              <number>1</number>
-             </property>
-             <item>
-              <property name="text">
-               <string>Dark (worms are light)</string>
-              </property>
-             </item>
-             <item>
-              <property name="text">
-               <string>Light (worms are dark)</string>
-              </property>
-             </item>
             </widget>
            </item>
-           <item row="17" column="0" colspan="3">
+           <item row="16" column="0" colspan="3">
             <widget class="QGroupBox" name="globalGroupBox">
              <property name="title">
               <string>Global parameters</string>
@@ -967,30 +915,17 @@ QToolButton#lastFrameButton {
              </layout>
             </widget>
            </item>
-           <item row="11" column="0" colspan="2">
+           <item row="10" column="0" colspan="2">
             <widget class="QCheckBox" name="blurCheck">
              <property name="text">
               <string>Enable blur</string>
              </property>
             </widget>
            </item>
-           <item row="6" column="0">
-            <widget class="QLabel" name="label_9">
+           <item row="18" column="0" colspan="3">
+            <widget class="QPushButton" name="trackingDialogButton">
              <property name="text">
-              <string>ROI Factor:</string>
-             </property>
-            </widget>
-           </item>
-           <item row="3" column="0" colspan="3">
-            <widget class="QLabel" name="videoNameLabel">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="text">
-              <string>(pick a video...)</string>
+              <string>Begin Tracking</string>
              </property>
             </widget>
            </item>
@@ -1003,6 +938,116 @@ QToolButton#lastFrameButton {
               <double>1.500000000000000</double>
              </property>
             </widget>
+           </item>
+           <item row="2" column="0" colspan="3">
+            <widget class="MiniVideoLoader" name="miniVideoLoader" native="true"/>
+           </item>
+           <item row="9" column="2">
+            <widget class="QComboBox" name="bgCombo">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>50</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="currentIndex">
+              <number>0</number>
+             </property>
+             <item>
+              <property name="text">
+               <string>Light</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Dark</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item row="12" column="0" colspan="3">
+            <widget class="Line" name="line">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+            </widget>
+           </item>
+           <item row="13" column="0" colspan="3">
+            <layout class="QHBoxLayout" name="horizontalLayout_5">
+             <property name="spacing">
+              <number>20</number>
+             </property>
+             <item>
+              <widget class="QRadioButton" name="globalRadio">
+               <property name="text">
+                <string>Global</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QRadioButton" name="adaptiveRadio">
+               <property name="text">
+                <string>Adaptive</string>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="labelThresholding">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="font">
+              <font>
+               <bold>true</bold>
+              </font>
+             </property>
+             <property name="text">
+              <string>Thresholding:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="9" column="0">
+            <widget class="QLabel" name="label">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="text">
+              <string>Background:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0" colspan="3">
+            <spacer name="verticalSpacer">
+             <property name="orientation">
+              <enum>Qt::Orientation::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>40</height>
+              </size>
+             </property>
+            </spacer>
            </item>
           </layout>
          </widget>
@@ -1048,25 +1093,6 @@ QToolButton#lastFrameButton {
             <number>6</number>
            </property>
            <item>
-            <widget class="MiniVideoLoader" name="miniVideoLoader" native="true"/>
-           </item>
-           <item>
-            <widget class="QTableView" name="annoTableView"/>
-           </item>
-           <item>
-            <spacer name="verticalSpacer_2">
-             <property name="orientation">
-              <enum>Qt::Orientation::Vertical</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>20</width>
-               <height>40</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
-           <item>
             <widget class="Line" name="line_5">
              <property name="orientation">
               <enum>Qt::Orientation::Horizontal</enum>
@@ -1084,10 +1110,10 @@ QToolButton#lastFrameButton {
              <property name="rightMargin">
               <number>6</number>
              </property>
-             <item row="1" column="0">
-              <widget class="QComboBox" name="comboRetrackBlobs">
-               <property name="modelColumn">
-                <number>0</number>
+             <item row="2" column="1">
+              <widget class="QPushButton" name="retrackButton">
+               <property name="text">
+                <string>Retrack</string>
                </property>
               </widget>
              </item>
@@ -1103,12 +1129,15 @@ QToolButton#lastFrameButton {
                </property>
               </widget>
              </item>
-             <item row="1" column="1">
-              <widget class="QPushButton" name="retrackButton">
-               <property name="text">
-                <string>Retrack</string>
+             <item row="2" column="0">
+              <widget class="QComboBox" name="comboRetrackBlobs">
+               <property name="modelColumn">
+                <number>0</number>
                </property>
               </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QTableView" name="annoTableView"/>
              </item>
             </layout>
            </item>
@@ -1126,8 +1155,8 @@ QToolButton#lastFrameButton {
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1102</width>
-     <height>37</height>
+     <width>1197</width>
+     <height>24</height>
     </rect>
    </property>
   </widget>

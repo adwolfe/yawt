@@ -373,7 +373,7 @@ void TrackingManager::assembleProcessedFrames() {
         const auto& chunk = m_assembledForwardFrameChunks[key];
         m_finalProcessedForwardFrames.insert(m_finalProcessedForwardFrames.end(), chunk.begin(), chunk.end());
     }
-    
+
     // Assemble backward chunks in correct order (sorted by chunk key = start frame)
     std::vector<cv::Mat> tempBackwardFrames;
     QList<int> backwardKeys = m_assembledBackwardFrameChunks.keys();
@@ -975,13 +975,13 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                 // Fallback to video directory if video-specific directory is not available
                 csvPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
             }
-            if (outputTracksToCsv(m_finalTracks, csvPath)) { 
-                emit trackingStatusUpdate("Tracks saved: " + csvPath); 
-                
+            if (outputTracksToCsv(m_finalTracks, csvPath)) {
+                emit trackingStatusUpdate("Tracks saved: " + csvPath);
+
                 // Save thresholded video after successful tracking
                 startVideoSaving();
-                
-                emit trackingFinishedSuccessfully(csvPath); 
+
+                emit trackingFinishedSuccessfully(csvPath);
             }
             else { emit trackingStatusUpdate("Failed to save CSV: " + csvPath); emit trackingFailed("Failed to save CSV."); }
         }
@@ -1267,55 +1267,55 @@ void VideoSaverWorker::receiveVideoData(std::vector<cv::Mat> reversedFrames,
                                        double fps,
                                        cv::Size frameSize) {
     // Now running in background thread - safe to receive large data
-    qDebug() << "VideoSaverWorker: Received data - Reversed frames:" << reversedFrames.size() 
+    qDebug() << "VideoSaverWorker: Received data - Reversed frames:" << reversedFrames.size()
              << "Forward frames:" << forwardFrames.size() << "Output:" << outputPath;
-    
+
     // Validate input parameters before proceeding
     if (outputPath.isEmpty()) {
         emit savingError("Empty output path provided");
         return;
     }
-    
+
     if (fps <= 0) {
         emit savingError("Invalid FPS value: " + QString::number(fps));
         return;
     }
-    
+
     if (frameSize.width <= 0 || frameSize.height <= 0) {
         emit savingError("Invalid frame size: " + QString::number(frameSize.width) + "x" + QString::number(frameSize.height));
         return;
     }
-    
+
     if (reversedFrames.empty() && forwardFrames.empty()) {
         emit savingError("No frames provided for saving");
         return;
     }
-    
+
     // Validate frame consistency
     cv::Size expectedSize = frameSize;
     for (size_t i = 0; i < reversedFrames.size() && i < 5; ++i) {  // Check first 5 frames
         if (!reversedFrames[i].empty() && (reversedFrames[i].size() != expectedSize)) {
-            qWarning() << "VideoSaverWorker: Frame size mismatch in reversed frames at index" << i 
+            qWarning() << "VideoSaverWorker: Frame size mismatch in reversed frames at index" << i
                       << "Expected:" << expectedSize.width << "x" << expectedSize.height
                       << "Got:" << reversedFrames[i].size().width << "x" << reversedFrames[i].size().height;
         }
     }
-    
+
     for (size_t i = 0; i < forwardFrames.size() && i < 5; ++i) {  // Check first 5 frames
         if (!forwardFrames[i].empty() && (forwardFrames[i].size() != expectedSize)) {
-            qWarning() << "VideoSaverWorker: Frame size mismatch in forward frames at index" << i 
+            qWarning() << "VideoSaverWorker: Frame size mismatch in forward frames at index" << i
                       << "Expected:" << expectedSize.width << "x" << expectedSize.height
                       << "Got:" << forwardFrames[i].size().width << "x" << forwardFrames[i].size().height;
         }
     }
-    
+
     m_reversedFrames = std::move(reversedFrames);
     m_forwardFrames = std::move(forwardFrames);
     m_outputPath = outputPath;
     m_fps = fps;
     m_frameSize = frameSize;
-    
-    qDebug() << "VideoSaverWorker: Data move complete - Reversed frames:" << m_reversedFrames.size() 
+
+    qDebug() << "VideoSaverWorker: Data move complete - Reversed frames:" << m_reversedFrames.size()
              << "Forward frames:" << m_forwardFrames.size();
 
     // Start saving immediately
@@ -1327,23 +1327,23 @@ void VideoSaverWorker::startSaving() {
     try {
         qDebug() << "VideoSaverWorker: Starting video save process";
         qDebug() << "VideoSaverWorker: Video parameters - FPS:" << m_fps << "Size:" << m_frameSize.width << "x" << m_frameSize.height;
-        
+
         // Create video writer
         cv::VideoWriter writer;
         int fourcc = cv::VideoWriter::fourcc('M', 'J', 'P', 'G'); // MJPEG codec for better compatibility
-        
+
         if (!writer.open(m_outputPath.toStdString(), fourcc, m_fps, m_frameSize, false)) {
             qDebug() << "VideoSaverWorker: Failed to open video writer";
             emit savingError("Failed to open video writer for: " + m_outputPath);
             return;
         }
-        
+
         qDebug() << "VideoSaverWorker: Video writer opened successfully";
 
         // Calculate total frames for progress reporting
         size_t totalFrames = m_reversedFrames.size() + m_forwardFrames.size();
         size_t framesWritten = 0;
-        
+
         qDebug() << "VideoSaverWorker: Total frames to write:" << totalFrames;
 
         // Write reversed frames in reverse order (they represent frames 0->keyframe, but are stored keyframe->0)
@@ -1354,7 +1354,7 @@ void VideoSaverWorker::startSaving() {
             if (!frame.empty()) {
                 writer.write(frame);
                 framesWritten++;
-                
+
                 // Report progress every 25 frames for more frequent updates
                 if (framesWritten % 25 == 0) {
                     int progress = static_cast<int>((framesWritten * 100) / totalFrames);
@@ -1371,7 +1371,7 @@ void VideoSaverWorker::startSaving() {
             if (!frame.empty()) {
                 writer.write(frame);
                 framesWritten++;
-                
+
                 // Report progress every 25 frames for more frequent updates
                 if (framesWritten % 25 == 0) {
                     int progress = static_cast<int>((framesWritten * 100) / totalFrames);
@@ -1420,7 +1420,7 @@ void TrackingManager::startVideoSaving() {
     // Create worker and thread
     VideoSaverWorker* worker = new VideoSaverWorker();
     m_videoSaverThread = new QThread();
-    
+
     // Move worker to thread
     worker->moveToThread(m_videoSaverThread);
 
@@ -1437,30 +1437,30 @@ void TrackingManager::startVideoSaving() {
     TRACKING_DEBUG() << "TrackingManager: About to transfer video data - Reversed frames:" << m_finalProcessedReversedFrames.size()
                      << "Forward frames:" << m_finalProcessedForwardFrames.size()
                      << "Total memory:" << getProcessedVideoMemoryUsage() << "bytes";
-    
+
     // Start the thread first
     TRACKING_DEBUG() << "TrackingManager: Starting video saver thread";
     m_isVideoSaving = true; // Mark video saving as active
     m_videoSaverThread->start();
-    
+
     // Wait a brief moment to ensure thread is fully started
     QThread::msleep(10);
-    
+
     // Then send data via signal (worker is now in background thread)
     TRACKING_DEBUG() << "TrackingManager: Emitting sendVideoDataToWorker signal";
     emit sendVideoDataToWorker(std::move(m_finalProcessedReversedFrames), std::move(m_finalProcessedForwardFrames),
                               m_savedVideoPath, m_videoFps, m_videoFrameSize);
-    
-    TRACKING_DEBUG() << "TrackingManager: Data transfer signal emitted - local vectors now have sizes:" 
+
+    TRACKING_DEBUG() << "TrackingManager: Data transfer signal emitted - local vectors now have sizes:"
                      << m_finalProcessedReversedFrames.size() << "and" << m_finalProcessedForwardFrames.size();
 }
 
 void TrackingManager::handleVideoSavingComplete(const QString& savedVideoPath) {
     TRACKING_DEBUG() << "TrackingManager: Video saving completed successfully:" << savedVideoPath;
     emit trackingStatusUpdate("Thresholded video saved: " + QFileInfo(savedVideoPath).fileName());
-    
+
     m_isVideoSaving = false; // Mark video saving as complete
-    
+
     // Clean up thread and worker
     if (m_videoSaverThread) {
         m_videoSaverThread->quit();
@@ -1468,7 +1468,7 @@ void TrackingManager::handleVideoSavingComplete(const QString& savedVideoPath) {
         m_videoSaverThread->deleteLater();
         m_videoSaverThread = nullptr;
     }
-    
+
     // Now perform the deferred cleanup
     TRACKING_DEBUG() << "TrackingManager: Performing deferred memory cleanup after video save completion";
     QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
@@ -1477,9 +1477,9 @@ void TrackingManager::handleVideoSavingComplete(const QString& savedVideoPath) {
 void TrackingManager::handleVideoSavingError(const QString& errorMessage) {
     qWarning() << "TrackingManager: Video saving failed:" << errorMessage;
     emit trackingStatusUpdate("Warning: Failed to save thresholded video - " + errorMessage);
-    
+
     m_isVideoSaving = false; // Mark video saving as complete (even though it failed)
-    
+
     // Clean up thread and worker
     if (m_videoSaverThread) {
         m_videoSaverThread->quit();
@@ -1487,7 +1487,7 @@ void TrackingManager::handleVideoSavingError(const QString& errorMessage) {
         m_videoSaverThread->deleteLater();
         m_videoSaverThread = nullptr;
     }
-    
+
     // Still perform the deferred cleanup even on error
     TRACKING_DEBUG() << "TrackingManager: Performing deferred memory cleanup after video save error";
     QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
@@ -1507,42 +1507,42 @@ bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath
     TRACKING_DEBUG() << "TrackingManager: Starting retracking process for Fix blob" << fixBlobId
                      << "from frame" << startFrame << "to" << endFrame
                      << "using video:" << thresholdedVideoPath;
-    
+
     // Check if tracking is already running
     if (m_isTrackingRunning) {
         qWarning() << "TrackingManager: Cannot start retracking while main tracking is running";
         return false;
     }
-    
+
     // Validate parameters
     if (thresholdedVideoPath.isEmpty() || !QFileInfo::exists(thresholdedVideoPath)) {
         qWarning() << "TrackingManager: Thresholded video file does not exist:" << thresholdedVideoPath;
         return false;
     }
-    
+
     if (startFrame >= endFrame || startFrame < 0) {
         qWarning() << "TrackingManager: Invalid frame range for retracking:" << startFrame << "to" << endFrame;
         return false;
     }
-    
+
     if (initialROI.isEmpty()) {
         qWarning() << "TrackingManager: Invalid ROI for retracking";
         return false;
     }
-    
+
     // TODO: Implement the actual retracking logic here
     // This would involve:
     // 1. Opening the saved thresholded video
     // 2. Creating a specialized tracker for the frame range
     // 3. Running tracking on the specified frames
     // 4. Integrating results with existing track data
-    
+
     // For now, provide placeholder feedback
     qDebug() << "TrackingManager: Retracking process prepared but not yet fully implemented";
-    qDebug() << "TrackingManager: Parameters - ROI:" << initialROI 
+    qDebug() << "TrackingManager: Parameters - ROI:" << initialROI
              << "Replace:" << replaceExisting << "Extend:" << extendTrack;
-    
+
     emit trackingStatusUpdate(QString("Retracking for Fix Blob ID %1 completed (placeholder)").arg(fixBlobId));
-    
+
     return true;
 }

@@ -1114,15 +1114,19 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
     if (!isVideoLoaded()) { QWidget::mousePressEvent(event); return; }
 
     if (event->button() == Qt::LeftButton) {
-        if (m_currentInteractionMode == InteractionMode::PanZoom) {
-            m_isPanning = true; updateCursorShape(); event->accept();
-        } else if (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) {
+        // ROI/Crop remain exclusive drawing modes
+        if (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) {
             QPointF videoCoords = mapPointToVideo(event->position());
             if (videoCoords.x() >= 0) {
                 m_roiStartPointWidget = event->pos(); m_roiEndPointWidget = event->pos();
                 m_isDefiningRoi = true; update(); event->accept();
             } else { m_isDefiningRoi = false; }
-        } else if (m_currentInteractionMode == InteractionMode::EditBlobs) {
+            return;
+        }
+
+        // For other modes, first attempt mode-specific handling, otherwise fall back to panning.
+        if (m_currentInteractionMode == InteractionMode::EditBlobs) {
+            bool handled = false;
             if (!m_thresholdedFrame_mono.empty()) {
                 QPointF clickVideoPoint = mapPointToVideo(event->position());
                 if (clickVideoPoint.x() >= 0) {
@@ -1130,6 +1134,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                     if (blobData.isValid) {
                         qDebug() << "VideoLoader: Blob clicked for addition. Centroid:" << blobData.centroid;
                         emit blobClickedForAddition(blobData);
+                        handled = true;
                     } else {
                         qDebug() << "VideoLoader: No valid blob found at click point:" << clickVideoPoint;
                     }
@@ -1139,8 +1144,17 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             } else {
                 qDebug() << "VideoLoader: Cannot select blob, thresholded image is not available (and it should be if Threshold view is on).";
             }
-            event->accept();
-        } else if (m_currentInteractionMode == InteractionMode::EditTracks) {
+
+            if (!handled) {
+                // Fallback to panning
+                m_isPanning = true; updateCursorShape(); event->accept();
+            } else {
+                event->accept();
+            }
+            return;
+        }
+
+        if (m_currentInteractionMode == InteractionMode::EditTracks) {
             QPointF clickWidgetPoint = event->position();
             int bestTrackId = -1; int bestFrameNum = -1; QPointF bestVideoPoint;
             double minDistanceSq = TRACK_POINT_CLICK_TOLERANCE * TRACK_POINT_CLICK_TOLERANCE;
@@ -1163,7 +1177,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                     }
                 }
                 if (!isVisible) continue;
-                
+
                 if (m_allTracksToDisplay.count(trackId)) {
                     const auto& trackPoints = m_allTracksToDisplay.at(trackId);
                     for (const auto& pt : trackPoints) {
@@ -1171,7 +1185,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                         if (pt.quality == Tracking::TrackPointQuality::Lost) {
                             continue;
                         }
-                        
+
                         QPointF videoPt(pt.position.x, pt.position.y);
                         QPointF widgetPt = mapPointFromVideo(videoPt);
                         if (widgetPt.x() < 0) continue;
@@ -1188,9 +1202,16 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             if (bestTrackId != -1) {
                 qDebug() << "Track point clicked: Worm ID" << bestTrackId << "Frame" << bestFrameNum;
                 emit trackPointClicked(bestTrackId, bestFrameNum, bestVideoPoint);
+                event->accept();
+            } else {
+                // Fallback to panning
+                m_isPanning = true; updateCursorShape(); event->accept();
             }
-            event->accept();
+            return;
         }
+
+        // Default / PanZoom or any other modes: start panning
+        m_isPanning = true; updateCursorShape(); event->accept();
     } else {
         QWidget::mousePressEvent(event);
     }
@@ -1362,9 +1383,14 @@ void VideoLoader::updateCursorShape() {
         setCursor(Qt::ArrowCursor);
         return;
     }
+    // If panning is active in any interaction mode, show the hand cursor
+    if (m_isPanning) {
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
     switch (m_currentInteractionMode) {
     case InteractionMode::PanZoom:
-        setCursor(m_isPanning ? Qt::ClosedHandCursor : Qt::OpenHandCursor);
+        setCursor(Qt::OpenHandCursor);
         break;
     case InteractionMode::DrawROI:
     case InteractionMode::Crop:
