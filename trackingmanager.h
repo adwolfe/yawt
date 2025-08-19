@@ -38,6 +38,7 @@ struct FrameSpecificPhysicalBlob {
     QRectF currentBoundingBox;
     cv::Point2f currentCentroid;            // Centroid of currentBoundingBox
     double currentArea;
+    std::vector<cv::Point> contourPoints;   // Raw contour points in video coordinates (used for merge/split logic)
     QSet<int> participatingWormTrackerIDs;  // Conceptual IDs of WormTrackers in this blob on this frame
     int frameNumber;                        // The frame this blob exists on
     int selectedByWormTrackerId;            // Which WT has selected this blob as their target (-1 = unselected)

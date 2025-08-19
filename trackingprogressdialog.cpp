@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QPlainTextEdit>
 #include <QDialogButtonBox>
 #include <QDebug>
@@ -25,6 +26,40 @@ TrackingProgressDialog::TrackingProgressDialog(QWidget *parent) :
     ui->setupUi(this);
     setWindowTitle("Tracking Process");
     setModal(true);
+ 
+    // Ensure the "Only track missing worms" checkbox exists at runtime.
+    // Create and insert it into the UI's named verticalLayout when possible.
+    QCheckBox* cb = this->findChild<QCheckBox*>("onlyMissingCheckBox");
+    if (!cb) {
+        cb = new QCheckBox(QStringLiteral("Only track missing worms"), this);
+        cb->setObjectName(QStringLiteral("onlyMissingCheckBox"));
+        cb->setChecked(true);
+ 
+        // Prefer inserting into the ui's named verticalLayout if available.
+        if (ui && ui->verticalLayout) {
+            QWidget* statusWidget = this->findChild<QWidget*>("statusLabel");
+            int index = -1;
+            if (statusWidget) index = ui->verticalLayout->indexOf(statusWidget);
+            if (index >= 0) {
+                ui->verticalLayout->insertWidget(index, cb);
+            } else {
+                ui->verticalLayout->addWidget(cb);
+            }
+        } else {
+            // Fallback to dialog's top-level layout if it is a QBoxLayout (supports insertWidget).
+            QBoxLayout* box = qobject_cast<QBoxLayout*>(this->layout());
+            if (box) {
+                QWidget* statusWidget = this->findChild<QWidget*>("statusLabel");
+                int idx = -1;
+                if (statusWidget) idx = box->indexOf(statusWidget);
+                if (idx >= 0) box->insertWidget(idx, cb);
+                else box->addWidget(cb);
+            } else {
+                // Last resort: parent the checkbox to this widget so it becomes visible.
+                cb->setParent(this);
+            }
+        }
+    }
 
     QPushButton *beginButton = ui->buttonBox->button(QDialogButtonBox::Apply);
     if (beginButton) {
@@ -53,6 +88,15 @@ TrackingProgressDialog::TrackingProgressDialog(QWidget *parent) :
 
 TrackingProgressDialog::~TrackingProgressDialog() {
     delete ui;
+}
+
+bool TrackingProgressDialog::onlyTrackMissingChecked() const {
+    // Default to true if UI isn't ready.
+    if (!ui) return true;
+    // Use the dialog widget's findChild to locate the checkbox by objectName.
+    QCheckBox* cb = this->findChild<QCheckBox*>("onlyMissingCheckBox");
+    if (!cb) return true;
+    return cb->isChecked();
 }
 
 void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
@@ -149,7 +193,8 @@ void TrackingProgressDialog::onBeginButtonClicked() {
     qDebug() << "Begin Tracking button clicked.";
     m_isTrackingRunning = true;
     ui->overallProgressBar->setVisible(true);
-    ui->statusLabel->setText("Initiating tracking...");
+    QString modeMsg = (onlyTrackMissingChecked() ? "Only tracking missing worms." : "Tracking all selected worms.");
+    ui->statusLabel->setText("Initiating tracking... " + modeMsg);
 
     QPushButton *beginButton = ui->buttonBox->button(QDialogButtonBox::Apply);
     if (!beginButton) beginButton = findChild<QPushButton*>("beginButton");

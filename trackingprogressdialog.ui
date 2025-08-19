@@ -53,6 +53,16 @@
     </spacer>
    </item>
    <item>
+    <widget class="QCheckBox" name="onlyMissingCheckBox">
+     <property name="text">
+      <string>Only track missing worms</string>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="statusLabel">
      <property name="text">
       <string>Status: Ready</string>

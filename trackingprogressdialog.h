@@ -34,6 +34,11 @@ public:
                                int totalFramesInVideo,
                                int numberOfWormsWithTracks = 0);
 
+    // Returns whether the "Only track missing worms" checkbox is checked in the dialog.
+    // If true, callers should filter the provided worm list to include only items
+    // that do not already have existing track data.
+    bool onlyTrackMissingChecked() const;
+
 public slots:
     void updateStatusMessage(const QString& message);
     void updateOverallProgress(int percentage);

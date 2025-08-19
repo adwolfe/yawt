@@ -921,6 +921,24 @@ void MainWindow::handleBeginTrackingFromDialog() {
     if (initialWorms.empty()) {
         if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("No worms to track."); return;
     }
+
+    // If the dialog requests only missing worms, filter out those that already have tracks.
+    if (m_trackingProgressDialog && m_trackingProgressDialog->onlyTrackMissingChecked() && m_trackingDataStorage) {
+        QSet<int> itemsWithTracks = m_trackingDataStorage->getItemsWithTracks();
+        std::vector<Tracking::InitialWormInfo> filtered;
+        filtered.reserve(initialWorms.size());
+        for (const auto& iw : initialWorms) {
+            if (!itemsWithTracks.contains(iw.id)) {
+                filtered.push_back(iw);
+            }
+        }
+        if (filtered.empty()) {
+            if (m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("All selected worms already have tracks.");
+            return;
+        }
+        initialWorms.swap(filtered);
+    }
+
     QString dataDirectory = ui->videoLoader->getDataDirectory();
     m_trackingManager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
 }
@@ -949,7 +967,16 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
     // VideoLoader still needs direct track data for backward compatibility
     // It will also get data from storage now
-    ui->videoLoader->setTracksToDisplay(tracks);
+    //    ui->videoLoader->setTracksToDisplay(tracks);
+    // Use the union of all tracks in central storage so we don't overwrite previously saved tracks
+    if (m_trackingDataStorage) {
+        const auto& allTracks = m_trackingDataStorage->getAllTracks();
+        qDebug() << "MainWindow: Supplying VideoLoader with" << allTracks.size() << "total tracks from storage";
+        ui->videoLoader->setTracksToDisplay(allTracks);
+    } else {
+        // Fallback if storage not available
+        ui->videoLoader->setTracksToDisplay(tracks);
+    }
 
     if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);

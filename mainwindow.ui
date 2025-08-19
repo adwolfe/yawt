@@ -225,7 +225,7 @@
          </font>
         </property>
         <property name="text">
-         <string>Selected Blobs</string>
+         <string>Selections</string>
         </property>
        </widget>
       </item>
