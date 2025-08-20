@@ -211,6 +211,12 @@ private:
     std::vector<cv::Point> m_selectedBlobContour;  // Contour points for drawing the selected blob outline
     bool m_hasBlobSelection;       // Whether a blob is currently selected
 
+    // Detected blobs for the current cropped frame (used for overlay labeling)
+    // m_detectedBlobs holds basic blob info in video coordinates; m_detectedBlobContours
+    // stores the raw contour points in cropped image coordinates (cv::Point)
+    QList<Tracking::DetectedBlob> m_detectedBlobs;
+    std::vector<std::vector<cv::Point>> m_detectedBlobContours;
+
     // Overlay options
     bool m_showOtherWormOverlays; // If true, draw other worms in the crop
 

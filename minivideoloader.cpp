@@ -344,14 +344,51 @@ void MiniVideoLoader::updateCroppedImage()
             
             // Apply thresholding to the cropped cv::Mat
             qDebug() << "MiniVideoLoader: About to apply thresholding to cropped frame, size:" << m_croppedFrameCv.cols << "x" << m_croppedFrameCv.rows;
-            applyThresholdingToCrop();
-            qDebug() << "MiniVideoLoader: Thresholding completed, result size:" << m_thresholdedCropFrame.cols << "x" << m_thresholdedCropFrame.rows;
-            
-            // Convert cropped cv::Mat to QImage for display
-            convertCroppedCvMatToQImage();
-            
-            qDebug() << "MiniVideoLoader: Updated cropped cv::Mat and applied thresholding, crop rect:" << m_cropRect 
-                     << "cropped size:" << m_croppedFrame.size();
+            // First try to get tracker-derived contours from TrackingDataStorage for nearby frames
+            m_detectedBlobs.clear();
+            m_detectedBlobContours.clear();
+            bool loadedFromStorage = false;
+            if (m_trackingDataStorage && m_selectedWormId >= 0) {
+                // Only use tracker-provided contours for the current (central) frame to avoid drawing multiple frames' overlays
+                int f = m_currentFrameNumber;
+                if (f >= 0) {
+                    QMap<int, Tracking::DetectedBlob> blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(f);
+                    if (!blobMap.isEmpty()) {
+                        int unsignedId = m_selectedWormId;
+                        if (blobMap.contains(unsignedId)) {
+                            const Tracking::DetectedBlob& db = blobMap.value(unsignedId);
+                            if (db.isValid && !db.contourPoints.empty()) {
+                                // Convert stored contour points (full-frame coords) to cropped coords
+                                std::vector<cv::Point> contour;
+                                for (const cv::Point& pt : db.contourPoints) {
+                                    double cx = pt.x - m_cropRect.left();
+                                    double cy = pt.y - m_cropRect.top();
+                                    // Ensure point inside cropped image
+                                    if (cx >= 0 && cy >= 0 && cx < m_croppedFrameCv.cols && cy < m_croppedFrameCv.rows) {
+                                        contour.emplace_back(static_cast<int>(std::round(cx)), static_cast<int>(std::round(cy)));
+                                    }
+                                }
+                                if (!contour.empty()) {
+                                    m_detectedBlobContours.push_back(contour);
+                                    m_detectedBlobs.append(db);
+                                    loadedFromStorage = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!loadedFromStorage) {
+                applyThresholdingToCrop();
+                qDebug() << "MiniVideoLoader: Thresholding completed, result size:" << m_thresholdedCropFrame.cols << "x" << m_thresholdedCropFrame.rows;
+
+                // After thresholding, m_detectedBlobContours will be populated by applyThresholdingToCrop
+            } else {
+                // Convert cropped cv::Mat to QImage for display
+                convertCroppedCvMatToQImage();
+                qDebug() << "MiniVideoLoader: Loaded" << m_detectedBlobContours.size() << "contours from storage and updated cropped view";
+            }
         } else {
             qDebug() << "MiniVideoLoader: cv::Mat crop rect outside image bounds";
             m_croppedFrameCv = cv::Mat();
@@ -417,50 +454,10 @@ void MiniVideoLoader::resizeEvent(QResizeEvent *event)
 
 void MiniVideoLoader::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() != Qt::LeftButton) {
-        QWidget::mousePressEvent(event);
-        return;
-    }
-    
-    if (!m_hasValidData || m_croppedFrame.isNull()) {
-        // Clear selection if clicking when no valid data
-        if (m_hasBlobSelection) {
-            m_hasBlobSelection = false;
-            m_selectedBlob = Tracking::DetectedBlob();
-            m_selectedBlobContour.clear();
-            update();
-        }
-        return;
-    }
-    
-    // Convert widget coordinates to cropped image coordinates
-    QRectF drawRect = rect();
-    QSizeF croppedSize = m_croppedFrame.size();
-    
-    double scaleX = croppedSize.width() / drawRect.width();
-    double scaleY = croppedSize.height() / drawRect.height();
-    
-    QPointF cropCoords(
-        event->position().x() * scaleX,
-        event->position().y() * scaleY
-    );
-    
-    // Try to detect a blob at this position
-    if (detectBlobAtCropPosition(cropCoords)) {
-        qDebug() << "MiniVideoLoader: Blob selected at crop position:" << cropCoords;
-        update();
-    } else {
-        // Clear selection if no blob found
-        if (m_hasBlobSelection) {
-            m_hasBlobSelection = false;
-            m_selectedBlob = Tracking::DetectedBlob();
-            m_selectedBlobContour.clear();
-            qDebug() << "MiniVideoLoader: Blob selection cleared";
-            update();
-        }
-    }
-    
-    event->accept();
+    // Clicking to select blobs is disabled for the overlay instance.
+    // Ignore mouse presses so the overlay always shows detected blobs without requiring a click.
+    Q_UNUSED(event)
+    QWidget::mousePressEvent(event);
 }
 
 bool MiniVideoLoader::detectBlobAtCropPosition(const QPointF& cropCoords)
@@ -638,26 +635,8 @@ void MiniVideoLoader::drawCroppedView(QPainter& painter)
     painter.setPen(QPen(Qt::white, 1));
     painter.drawRect(targetRect);
     
-    // Draw selected blob outline if any
-    if (m_hasBlobSelection && m_selectedBlob.isValid && !m_selectedBlobContour.empty()) {
-        // Convert contour coordinates to widget coordinates
-        double scaleX = static_cast<double>(targetRect.width()) / m_croppedFrame.width();
-        double scaleY = static_cast<double>(targetRect.height()) / m_croppedFrame.height();
-        
-        QPolygonF contourPolygon;
-        for (const cv::Point& point : m_selectedBlobContour) {
-            QPointF widgetPoint(
-                targetRect.left() + point.x * scaleX,
-                targetRect.top() + point.y * scaleY
-            );
-            contourPolygon.append(widgetPoint);
-        }
-        
-        // Draw blob contour outline in bright green
-        painter.setPen(QPen(Qt::green, 2));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPolygon(contourPolygon);
-    }
+    // Previously we drew a user-selected blob outline here. For the overlay instance
+    // we now draw outlines for all detected blobs (below) and don't rely on click-selection.
     
     // Draw worm info overlay
     if (m_selectedWormId >= 0) {
@@ -675,6 +654,44 @@ void MiniVideoLoader::drawCroppedView(QPainter& painter)
         
         QRect textRect(5, 5, width() - 10, 60);
         painter.drawText(textRect, Qt::AlignLeft | Qt::AlignTop, info);
+    }
+
+    // If overlay mode is enabled, draw outlines and labels for detected blobs in the current cropped frame
+    if (m_showOtherWormOverlays && !m_detectedBlobContours.empty()) {
+        const QString letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        int n = (int)m_detectedBlobContours.size();
+        for (int i = 0; i < n; ++i) {
+            const auto &contour = m_detectedBlobContours[i];
+            if (contour.empty()) continue;
+
+            QPolygonF poly;
+            for (const cv::Point &p : contour) {
+                QPointF widgetPoint(
+                    targetRect.left() + p.x * (double)targetRect.width() / m_croppedFrame.width(),
+                    targetRect.top() + p.y * (double)targetRect.height() / m_croppedFrame.height()
+                );
+                poly.append(widgetPoint);
+            }
+
+            painter.setPen(QPen(QColor(220, 60, 60), 2));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolygon(poly);
+
+            // centroid label
+            cv::Moments mu = cv::moments(contour);
+            if (mu.m00 == 0) continue;
+            QPointF cropCentroid(mu.m10 / mu.m00, mu.m01 / mu.m00);
+            QPointF widgetCentroid(
+                targetRect.left() + cropCentroid.x() * (double)targetRect.width() / m_croppedFrame.width(),
+                targetRect.top() + cropCentroid.y() * (double)targetRect.height() / m_croppedFrame.height()
+            );
+
+            QString label = QString(letters.mid(i % letters.size(), 1));
+            if (i >= (int)letters.size()) label += QString::number(i / letters.size());
+            QFont f = painter.font(); f.setPointSize(12); f.setBold(true); painter.setFont(f);
+            painter.setPen(Qt::yellow);
+            painter.drawText(QRectF(widgetCentroid.x() - 10, widgetCentroid.y() - 10, 20, 20), Qt::AlignCenter, label);
+        }
     }
 }
 
@@ -717,6 +734,36 @@ void MiniVideoLoader::applyThresholdingToCrop()
         qDebug() << "MiniVideoLoader: Threshold analysis - total pixels:" << totalPixels 
                  << "foreground:" << foregroundPixels << "(" << QString::number(foregroundPercent, 'f', 1) << "%)"
                  << "background:" << backgroundPixels;
+    }
+
+    // After thresholding, extract contours to populate detected blobs for this cropped frame
+    m_detectedBlobs.clear();
+    m_detectedBlobContours.clear();
+    if (!m_thresholdedCropFrame.empty()) {
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(m_thresholdedCropFrame.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        for (const auto &c : contours) {
+            double area = cv::contourArea(c);
+            if (area < 5.0 || area > 100000.0) continue; // filter extremes
+            cv::Moments mu = cv::moments(c);
+            if (mu.m00 == 0) continue;
+            QPointF cropCentroid(mu.m10 / mu.m00, mu.m01 / mu.m00);
+            QPointF videoCentroid = mapCropToVideoCoords(cropCentroid);
+
+            cv::Rect bbox = cv::boundingRect(c);
+            QPointF topLeft = mapCropToVideoCoords(QPointF(bbox.x, bbox.y));
+            QPointF bottomRight = mapCropToVideoCoords(QPointF(bbox.x + bbox.width, bbox.y + bbox.height));
+
+            Tracking::DetectedBlob db;
+            db.isValid = true;
+            db.centroid = videoCentroid;
+            db.area = area;
+            db.boundingBox = QRectF(topLeft, bottomRight);
+
+            m_detectedBlobs.append(db);
+            m_detectedBlobContours.push_back(c);
+        }
+        qDebug() << "MiniVideoLoader: Detected" << m_detectedBlobs.size() << "blobs in cropped frame";
     }
 }
 

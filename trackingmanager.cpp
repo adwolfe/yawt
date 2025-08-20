@@ -837,6 +837,13 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
         }
     }
 
+    // Persist the full detected blob into storage (so UI can later read tracker-derived contours)
+    if (m_storage && fullBlob.isValid) {
+        // Store using the unsigned conceptual worm id (frame differentiates entries)
+        int unsignedWormId = getUnsignedWormId(signedWormId);
+        m_storage->setDetectedBlobForFrame(originalFrameNumber, unsignedWormId, fullBlob);
+    }
+
     // All split resolution is now immediate without any paused state
 }
 

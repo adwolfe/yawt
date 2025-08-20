@@ -283,6 +283,17 @@ QList<QList<int>> TrackingDataStorage::getMergeGroupsForFrame(int frameNumber) c
     return m_mergeHistory.value(frameNumber);
 }
 
+// --- Detected blob persistence API ---
+
+void TrackingDataStorage::setDetectedBlobForFrame(int frameNumber, int wormId, const Tracking::DetectedBlob& blob) {
+    if (frameNumber < 0) return;
+    m_detectedBlobsByFrame[frameNumber].insert(wormId, blob);
+}
+
+QMap<int, Tracking::DetectedBlob> TrackingDataStorage::getDetectedBlobsForFrame(int frameNumber) const {
+    return m_detectedBlobsByFrame.value(frameNumber);
+}
+
 
 // --- Data Access Methods ---
 

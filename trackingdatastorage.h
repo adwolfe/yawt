@@ -241,6 +241,21 @@ public:
      */
     double getMaxObservedAspectRatio() const;
 
+    /**
+     * @brief Store a DetectedBlob for a specific worm at a specific frame.
+     * @param frameNumber The frame index
+     * @param wormId The conceptual worm ID (signed as stored elsewhere)
+     * @param blob The DetectedBlob to store (copied)
+     */
+    void setDetectedBlobForFrame(int frameNumber, int wormId, const Tracking::DetectedBlob& blob);
+
+    /**
+     * @brief Retrieve detected blobs for a frame.
+     * @param frameNumber The frame index
+     * @return Map of wormId -> DetectedBlob for that frame (may be empty)
+     */
+    QMap<int, Tracking::DetectedBlob> getDetectedBlobsForFrame(int frameNumber) const;
+
     // --- Merge history API (per-frame groups)
     /**
      * @brief Store merge groups for a specific frame.
@@ -349,6 +364,9 @@ private:
     
     // Per-frame merge history storage: frameNumber -> list of groups (each group is a list of conceptual worm IDs)
     QMap<int, QList<QList<int>>> m_mergeHistory;
+
+    // Per-frame per-worm detected blob storage: frameNumber -> (wormId -> DetectedBlob)
+    QMap<int, QMap<int, Tracking::DetectedBlob>> m_detectedBlobsByFrame;
     
     // Helper methods
     QColor getNextColor();                                 // Get next color from palette
