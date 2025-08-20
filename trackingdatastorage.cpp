@@ -320,6 +320,17 @@ const Tracking::AllWormTracks& TrackingDataStorage::getAllTracks() const {
     return m_tracks;
 }
 
+bool TrackingDataStorage::getTrackPointQuality(int wormId, int frameNumber, Tracking::TrackPointQuality& outQuality) const {
+    auto wormIndexIt = m_frameIndex.find(wormId);
+    if (wormIndexIt == m_frameIndex.end()) return false;
+    auto frameIt = wormIndexIt.value().find(frameNumber);
+    if (frameIt == wormIndexIt.value().end()) return false;
+    const Tracking::WormTrackPoint* tp = frameIt.value();
+    if (!tp) return false;
+    outQuality = tp->quality;
+    return true;
+}
+
 QSet<int> TrackingDataStorage::getAllItemIds() const {
     QSet<int> ids;
     for (const auto& item : m_items) {

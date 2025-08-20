@@ -3,6 +3,7 @@
 #include <QShortcut>
 #include "debugutils.h"
 #include "ui_mainwindow.h"
+#include "miniloader.h"
 #include "annotationtablemodel.h"
 #include "blobtablemodel.h"
 #include "colordelegate.h"
@@ -22,6 +23,7 @@
 #include <QMessageBox>
 #include <QDebug>
 #include <QButtonGroup> // For m_interactionModeButtonGroup
+#include <QSet>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -62,6 +64,44 @@ MainWindow::MainWindow(QWidget *parent)
     ui->annoTableView->setModel(m_annotationTableModel);
     qDebug() << "MainWindow: AnnotationTableModel created and connected to annoTableView";
 
+    // Merge/Split events model and view
+    m_mergeSplitModel = new QStandardItemModel(this);
+    m_mergeSplitModel->setColumnCount(3);
+    m_mergeSplitModel->setHeaderData(0, Qt::Horizontal, "Frame");
+    m_mergeSplitModel->setHeaderData(1, Qt::Horizontal, "Event");
+    m_mergeSplitModel->setHeaderData(2, Qt::Horizontal, "Details");
+    ui->mergeSplitTableView->setModel(m_mergeSplitModel);
+    ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+
+    // Jump to frame when a merge/split row is clicked
+    connect(ui->mergeSplitTableView, &QTableView::clicked, this, [this](const QModelIndex &index){
+        if (!index.isValid()) return;
+        // Determine currently selected worm in the worm table (if any) so overlay shows correct worm
+        int selectedWormId = -1;
+        if (ui->wormTableView->selectionModel() && !ui->wormTableView->selectionModel()->selectedIndexes().isEmpty()) {
+            int selRow = ui->wormTableView->selectionModel()->selectedIndexes().first().row();
+            if (selRow >= 0 && selRow < m_blobTableModel->rowCount()) {
+                const TableItems::ClickedItem& it = m_blobTableModel->getItem(selRow);
+                selectedWormId = it.id;
+            }
+        }
+
+        // If overlay exists and we have a selected worm, ensure overlay is instructed to use it
+        if (ui->miniVideoLoaderOverlay && selectedWormId >= 0) {
+            ui->miniVideoLoaderOverlay->setSelectedWorm(selectedWormId);
+            ui->miniVideoLoaderOverlay->update();
+        }
+
+        // Frame number is in column 0
+        QModelIndex frameIdx = m_mergeSplitModel->index(index.row(), 0);
+        QVariant v = m_mergeSplitModel->data(frameIdx, Qt::DisplayRole);
+        bool ok = false;
+        int frame = v.toInt(&ok);
+        if (ok) seekFrame(frame);
+    });
+
     m_itemTypeDelegate = new ItemTypeDelegate(this);
     ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
 
@@ -93,12 +133,12 @@ MainWindow::MainWindow(QWidget *parent)
     ui->annoTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     ui->annoTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
-    
+
     // Set column resize modes for annotation table
     ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
     ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
     ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
-    
+
     // Add hover effects and cursor styling to indicate clickability
     ui->annoTableView->setMouseTracking(true);
     ui->annoTableView->viewport()->setCursor(Qt::PointingHandCursor);
@@ -112,7 +152,7 @@ MainWindow::MainWindow(QWidget *parent)
         "    color: #000; "
         "}"
     );
-    
+
     qDebug() << "MainWindow: Annotation table view configured successfully";
 
     resizeTableColumns();
@@ -187,6 +227,7 @@ void MainWindow::setupConnections() {
     // VideoLoader basic signals
     connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop);
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
@@ -271,12 +312,128 @@ void MainWindow::setupConnections() {
     connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsRemoved, this, &MainWindow::resizeTableColumns);
-    
+
     // Retracking combo removed
 
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &MainWindow::updateVisibleTracksInVideoLoader);
+
+    // When selection changes, update merge/split events table
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection &selected, const QItemSelection&) {
+        if (selected.isEmpty()) {
+            m_mergeSplitModel->removeRows(0, m_mergeSplitModel->rowCount());
+            return;
+        }
+        int row = selected.indexes().first().row();
+        if (row < 0 || row >= m_blobTableModel->rowCount()) return;
+        const TableItems::ClickedItem& sel = m_blobTableModel->getItem(row);
+        // Populate merge/split table for this worm
+        m_mergeSplitModel->removeRows(0, m_mergeSplitModel->rowCount());
+        // We'll iterate through stored merge history and split resolution maps in TrackingManager via storage/APIs
+        // For now, collect merge starts from storage's merge history and track point qualities for splits
+        // Iterate frames in ascending order and add the first merged frame before a split
+        QList<int> frames = m_trackingDataStorage->getMergeGroupsForFrame(0).isEmpty() ? QList<int>() : QList<int>();
+        // Simple (but potentially slow) approach: scan all frames present in merge history
+        for (auto it = m_trackingDataStorage->getMergeGroupsForFrame(0).begin(); it != m_trackingDataStorage->getMergeGroupsForFrame(0).end(); ++it) {
+            Q_UNUSED(it);
+        }
+        // Instead, we will query the entire merge history map directly via an accessor - but since none exists, read internal map via getAllTracks as a proxy
+        // Practical approach: scan frames from 0..currentFrame and check if this worm appears in merge groups
+        // Determine frame range from video loader
+        int maxFrame = ui->videoLoader->getTotalFrames();
+        // New approach: compare merge-group membership for the selected worm between consecutive frames.
+        // Whenever the group's membership changes we emit an event row (Merge / Split / Merge/Split).
+        QList<int> prevGroup; // empty means not merged on previous frame
+        for (int f = 0; f < maxFrame; ++f) {
+            QList<QList<int>> groups = m_trackingDataStorage->getMergeGroupsForFrame(f);
+            QList<int> currGroup;
+            for (const QList<int>& g : groups) {
+                if (g.contains(sel.id)) { currGroup = g; break; }
+            }
+
+            // Compare prevGroup and currGroup as sets
+            QSet<int> prevSet;
+            for (int id : prevGroup) prevSet.insert(id);
+            QSet<int> currSet;
+            for (int id : currGroup) currSet.insert(id);
+            if (prevSet == currSet) {
+                prevGroup = currGroup;
+                continue; // no change
+            }
+
+            // Membership changed - decide event type(s)
+            bool prevEmpty = prevSet.isEmpty();
+            bool currEmpty = currSet.isEmpty();
+
+            QString eventType;
+            QString details;
+
+            if (prevEmpty && !currEmpty) {
+                // Newly merged
+                eventType = "Merge";
+                QSet<int> others = currSet;
+                others.remove(sel.id);
+                if (others.isEmpty()) details = "Merged (no other ids)";
+                else {
+                    QStringList ids;
+                    for (int id : others) ids << QString::number(id);
+                    details = QString("Merged with worm(s) %1").arg(ids.join(", "));
+                }
+            } else if (!prevEmpty && currEmpty) {
+                // Split from previous merged group
+                eventType = "Split";
+                QSet<int> others = prevSet;
+                others.remove(sel.id);
+                if (others.isEmpty()) details = "Split (no other ids)";
+                else {
+                    QStringList ids;
+                    for (int id : others) ids << QString::number(id);
+                    details = QString("Split from worm(s) %1").arg(ids.join(", "));
+                }
+            } else {
+                // Both non-empty and different: detect additions/removals
+                QSet<int> added = currSet - prevSet;
+                QSet<int> removed = prevSet - currSet;
+                if (!added.isEmpty() && removed.isEmpty()) {
+                    eventType = "Merge";
+                    QSet<int> others = added;
+                    others.remove(sel.id);
+                    QStringList ids;
+                    for (int id : others) ids << QString::number(id);
+                    details = QString("Merged with worm(s) %1").arg(ids.join(", "));
+                } else if (added.isEmpty() && !removed.isEmpty()) {
+                    eventType = "Split";
+                    QSet<int> others = removed;
+                    others.remove(sel.id);
+                    QStringList ids;
+                    for (int id : others) ids << QString::number(id);
+                    details = QString("Split from worm(s) %1").arg(ids.join(", "));
+                } else {
+                    eventType = "Merge/Split";
+                    QStringList parts;
+                    if (!added.isEmpty()) {
+                        QStringList ids; for (int id : added) ids << QString::number(id);
+                        parts << QString("Added: %1").arg(ids.join(", "));
+                    }
+                    if (!removed.isEmpty()) {
+                        QStringList ids; for (int id : removed) ids << QString::number(id);
+                        parts << QString("Removed: %1").arg(ids.join(", "));
+                    }
+                    details = parts.join("; ");
+                }
+            }
+
+            QList<QStandardItem*> rowItems;
+            rowItems << new QStandardItem(QString::number(f));
+            rowItems << new QStandardItem(eventType);
+            rowItems << new QStandardItem(details);
+            m_mergeSplitModel->appendRow(rowItems);
+
+            prevGroup = currGroup;
+        }
+    });
 
     // Enable/disable delete button based on selection state
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -302,7 +459,7 @@ void MainWindow::setupConnections() {
                     const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
                     ui->miniVideoLoader->setSelectedWorm(selectedItem.id);
                     if (ui->miniVideoLoaderOverlay) ui->miniVideoLoaderOverlay->setSelectedWorm(selectedItem.id);
-                    
+
                     // Auto-center video on worm position if zoomed in
                     double currentZoom = ui->videoLoader->getZoomFactor();
                     qDebug() << "MainWindow: Blob selection - zoom factor:" << currentZoom << "worm ID:" << selectedItem.id;
@@ -313,9 +470,9 @@ void MainWindow::setupConnections() {
                         QRectF wormRoi;
                         bool centered = false;
                         QString statusMessage;
-                        
 
-                        
+
+
                         // Try to get worm position for current frame
                         qDebug() << "MainWindow: Trying to get worm data for frame" << currentFrame << "worm ID" << selectedItem.id;
                         if (m_trackingDataStorage->getWormDataForFrame(selectedItem.id, currentFrame, wormPosition, wormRoi)) {
@@ -331,7 +488,7 @@ void MainWindow::setupConnections() {
                                 qDebug() << "MainWindow: Worm position invalid:" << wormPosition;
                             }
                         }
-                        
+
                         if (!centered) {
                             // Try to get the last known position before this frame (for lost tracking)
                             qDebug() << "MainWindow: Trying to get last known position before frame" << currentFrame << "for worm" << selectedItem.id;
@@ -349,7 +506,7 @@ void MainWindow::setupConnections() {
                                 }
                             }
                         }
-                        
+
                         if (!centered) {
                             // If no tracking data, use initial position from blob as final fallback
                             QPointF initialPos = selectedItem.initialCentroid;
@@ -365,7 +522,7 @@ void MainWindow::setupConnections() {
                                 qDebug() << "MainWindow: Initial position also invalid:" << initialPos;
                             }
                         }
-                        
+
                         if (centered) {
                             statusBar()->showMessage(statusMessage, 3000);
                         } else {
@@ -384,6 +541,21 @@ void MainWindow::setupConnections() {
     // Main VideoLoader frame changes -> MiniVideoLoader
     connect(ui->videoLoader, &VideoLoader::frameChanged,
             ui->miniVideoLoader, static_cast<void(MiniVideoLoader::*)(int, const QImage&)>(&MiniVideoLoader::updateFrame));
+
+    // Table View Selection -> MiniLoader (update crop when selection changes)
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
+        Q_UNUSED(selected)
+        Q_UNUSED(deselected)
+        // When selection changes, update the miniLoader crop with current frame
+        if (ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
+            int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+            QImage currentImage = ui->videoLoader->getCurrentQImageFrame();
+            if (!currentImage.isNull()) {
+                updateMiniLoaderCrop(currentFrame, currentImage);
+            }
+        }
+    });
 
     // Playback speed control
     connect(ui->comboPlaybackSpeed, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -445,11 +617,11 @@ void MainWindow::setupConnections() {
     ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
     if (ui->miniVideoLoader) ui->miniVideoLoader->update();
     if (ui->miniVideoLoaderOverlay) ui->miniVideoLoaderOverlay->update();
-    
+
     // Debug control keyboard shortcut
     QShortcut* debugToggle = new QShortcut(QKeySequence("Ctrl+D"), this);
     connect(debugToggle, &QShortcut::activated, this, &MainWindow::toggleTrackingDebug);
-    
+
     // Connections for TrackingProgressDialog are made when it's created/shown
 }
 
@@ -466,9 +638,9 @@ void MainWindow::initializeUIStates() {
 
     // Initialize delete button to disabled state since there are no items selected initially
     ui->deleteButton->setEnabled(false);
-    
+
     // Initialize Clear Fix button to disabled state until tracking is completed
-    
+
     // Retrack controls removed from UI
 
     ui->adaptiveTypeCombo->setCurrentIndex(0);
@@ -572,7 +744,7 @@ void MainWindow::editBlobsModeButtonClicked() {
     if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Blobs)) {
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     }
-    
+
         // Provide mode-specific feedback
     QString modeMessage;
     if (m_hasCompletedTracking) {
@@ -718,13 +890,13 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
 
         // Resize columns to fit the new content
         resizeTableColumns();
-        
+
         // Provide user feedback based on blob type
         QString feedbackMessage;
         // Always report as a Worm blob since auto-Fix behavior is disabled
         feedbackMessage = QString("Added Worm blob at frame %1").arg(currentFrame);
         statusBar()->showMessage(feedbackMessage, 3000);
-        
+
     // No retrack combo functionality in this build
     }
 }
@@ -786,7 +958,7 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
 
         // Make sure the table layout is updated
         resizeTableColumns();
-        
+
     // Retrack combo removed
     }
 }
@@ -865,6 +1037,87 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
         }
         ui->mergeHistoryText->setPlainText(frameBlocks.join('\n'));
     }
+}
+
+void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
+    if (!ui->miniLoader || currentFrame.isNull()) {
+        return;
+    }
+
+    // Get the crop size from BlobTableModel
+    QSizeF cropSize = m_blobTableModel->getCurrentFixedRoiSize();
+    if (cropSize.isEmpty()) {
+        cropSize = QSizeF(100, 100); // fallback size
+    }
+
+    // Determine center point for cropping
+    QPointF centerPoint;
+    bool foundCenterPoint = false;
+
+    // First priority: if a worm is selected, use its centroid
+    QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
+    if (!selectedIndexes.isEmpty()) {
+        int selectedRow = selectedIndexes.first().row();
+        if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
+            const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
+            int wormId = selectedItem.id;
+
+            QPointF wormPosition;
+            QRectF wormRoi;
+            if (m_trackingDataStorage->getWormDataForFrame(wormId, currentFrameNumber, wormPosition, wormRoi)) {
+                centerPoint = wormPosition;
+                foundCenterPoint = true;
+            } else if (m_trackingDataStorage->getLastKnownPositionBefore(wormId, currentFrameNumber, wormPosition, wormRoi)) {
+                centerPoint = wormPosition;
+                foundCenterPoint = true;
+            }
+        }
+    }
+
+    // Second priority: use MiniLoader's last known center point
+    if (!foundCenterPoint) {
+       const QPointF lastCenter = ui->miniLoader->getLastCenterPoint();
+        if (!lastCenter.isNull() && lastCenter.x() >= 0 && lastCenter.y() >= 0) {
+            centerPoint = lastCenter;
+            foundCenterPoint = true;
+        }
+    }
+
+    // Third priority: use center of image
+    if (!foundCenterPoint) {
+        centerPoint = QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0);
+    }
+
+    // Calculate crop rectangle
+    double cropWidth = cropSize.width();
+    double cropHeight = cropSize.height();
+    double left = centerPoint.x() - cropWidth / 2.0;
+    double top = centerPoint.y() - cropHeight / 2.0;
+
+    // Clamp to image bounds
+    left = qBound(0.0, left, currentFrame.width() - cropWidth);
+    top = qBound(0.0, top, currentFrame.height() - cropHeight);
+
+    const QPointF cropOffset(left, top);
+    QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
+                   static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
+
+    // Intersect with image bounds
+    QRect imageBounds(0, 0, currentFrame.width(), currentFrame.height());
+    cropRect = cropRect.intersected(imageBounds);
+    const QSizeF newSize(cropRect.width(), cropRect.height());
+
+    if (cropRect.isEmpty()) {
+        return;
+    }
+
+    // Create the cropped image
+    const QImage croppedFrame = currentFrame.copy(cropRect);
+
+    // Send to MiniLoader
+    ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, croppedFrame,
+                                           cropOffset, newSize,
+                                           centerPoint);
 }
 
 void MainWindow::frameSliderMoved(int value) {
@@ -1048,7 +1301,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
     // Mark that we have completed tracking
     m_hasCompletedTracking = true;
-    
+
     statusBar()->showMessage("Tracking completed", 4000);
 
     // Perform memory cleanup after tracking is complete
@@ -1110,17 +1363,17 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
     if (!index.isValid() || !m_annotationTableModel) {
         return;
     }
-    
+
     const AnnotationTableModel::AnnotationEntry* annotation = m_annotationTableModel->getAnnotationAtRow(index.row());
     if (!annotation) {
         qWarning() << "MainWindow: Could not get annotation for row" << index.row();
         return;
     }
-    
+
     // DEBUG: Check zoom factor at start of annotation click
     double initialZoom = ui->videoLoader->getZoomFactor();
     qDebug() << "MainWindow: Annotation click START - zoom factor:" << initialZoom;
-    
+
     // Pause playback if it's currently playing
     if (ui->playPauseButton->isChecked()) {
         ui->playPauseButton->setChecked(false);
@@ -1128,32 +1381,32 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
         ui->playPauseButton->setIcon(QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png")));
         qDebug() << "MainWindow: Paused playback for annotation navigation";
     }
-    
+
     // Seek to the start frame of the annotation
     int targetFrame = annotation->startFrame;
     int targetWormId = annotation->wormId;
     qDebug() << "MainWindow: About to seek to frame" << targetFrame;
     qDebug() << "MainWindow: Seeking to annotation frame" << targetFrame << "for worm" << targetWormId;
-    
+
     seekFrame(targetFrame);
-    
+
     // DEBUG: Check zoom factor after seeking
     double zoomAfterSeek = ui->videoLoader->getZoomFactor();
     qDebug() << "MainWindow: After seekFrame - zoom factor:" << zoomAfterSeek;
     qDebug() << "MainWindow: About to find blob table row for worm" << targetWormId;
-    
+
     // Update the frame position display
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(targetFrame);
     }
-    
+
     // Select the corresponding worm in the blob table
     int blobTableRow = -1;
 
     // DEBUG: Check zoom factor before blob selection
     double zoomBeforeBlobSelection = ui->videoLoader->getZoomFactor();
     qDebug() << "MainWindow: Before blob selection - zoom factor:" << zoomBeforeBlobSelection;
-    
+
     // Find the row with matching worm ID
     for (int i = 0; i < m_blobTableModel->rowCount(); ++i) {
         const TableItems::ClickedItem& item = m_trackingDataStorage->getItemByIndex(i);
@@ -1162,7 +1415,7 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
             break;
         }
     }
-    
+
     // Select the row in the blob table if found
     if (blobTableRow >= 0) {
         QModelIndex blobIndex = m_blobTableModel->index(blobTableRow, 0);
@@ -1175,7 +1428,7 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
         ui->wormTableView->clearSelection();
         qDebug() << "MainWindow: Worm" << targetWormId << "not found in blob table, cleared selection";
     }
-    
+
     // Show status message
     QString statusMessage;
     if (annotation->startFrame == annotation->endFrame) {

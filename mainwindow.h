@@ -5,6 +5,7 @@
 #include <QItemSelection>
 #include <QButtonGroup> // For interaction modes
 #include <QResizeEvent>
+#include <QStandardItemModel>
 
 // Forward declarations
 namespace Ui { class MainWindow; }
@@ -44,6 +45,7 @@ public slots:
     // Video Playback and Frame Navigation
     void initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize);
     void updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame);
+    void updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame);
     void seekFrame(int frame);
     void frameSliderMoved(int value);
 
@@ -136,5 +138,8 @@ private:
     
     // ROI size factor spinbox
     double roiFactorSpinBoxD;
+    
+    // Model for merge/split events table
+    QStandardItemModel* m_mergeSplitModel;
 };
 #endif // MAINWINDOW_H

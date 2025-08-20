@@ -34,6 +34,7 @@ set(SOURCES
     itemtypedelegate.cpp
     main.cpp
     mainwindow.cpp
+    miniloader.cpp
     minivideoloader.cpp
     thresholdingutils.cpp
     trackingcommon.cpp
@@ -56,6 +57,7 @@ set(HEADERS
     #framecachemanager.h
     itemtypedelegate.h
     mainwindow.h
+    miniloader.h
     minivideoloader.h
     thresholdingutils.h
     trackingcommon.h

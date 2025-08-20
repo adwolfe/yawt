@@ -216,6 +216,15 @@ public:
      * @return Set of frame numbers where tracking quality is Lost
      */
     QSet<int> getLostTrackingFrames(int wormId) const;
+
+    /**
+     * @brief Retrieve the tracking quality for a given worm at a specific frame.
+     * @param wormId The worm/item ID
+     * @param frameNumber The frame number to query
+     * @param outQuality Output parameter populated with the quality if found
+     * @return True if a track point exists for that worm/frame and outQuality is valid; false otherwise
+     */
+    bool getTrackPointQuality(int wormId, int frameNumber, Tracking::TrackPointQuality& outQuality) const;
     
     /**
      * @brief Get minimum observed area

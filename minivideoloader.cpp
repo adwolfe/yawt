@@ -246,7 +246,6 @@ bool MiniVideoLoader::pollWormPosition()
         m_wormPosition = position;
         m_wormRoi = roi;
         m_hasValidData = true;
-        return true;
     } else {
         qDebug() << "MiniVideoLoader: No current frame data, trying to get last known position before frame" << m_currentFrameNumber;
         // Try to get last known position before this frame (for lost tracking)
@@ -255,14 +254,45 @@ bool MiniVideoLoader::pollWormPosition()
             m_wormPosition = position;
             m_wormRoi = roi;
             m_hasValidData = true;
-            return true;
         } else {
             qDebug() << "MiniVideoLoader: No last known position found either";
             m_hasValidData = false;
             return false;
         }
     }
-    
+
+    // If tracking storage also has a stored detected blob for this worm at this frame,
+    // expand the stored ROI to include the blob's full contour bounding box. This ensures
+    // the crop computed from m_wormRoi will include any contour pixels that extend
+    // beyond the nominal ROI and avoids doing another crop calculation later.
+    if (m_trackingDataStorage && m_selectedWormId >= 0 && m_currentFrameNumber >= 0) {
+        QMap<int, Tracking::DetectedBlob> blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(m_currentFrameNumber);
+        if (!blobMap.isEmpty() && blobMap.contains(m_selectedWormId)) {
+            const Tracking::DetectedBlob &db = blobMap.value(m_selectedWormId);
+            if (db.isValid && !db.contourPoints.empty()) {
+                int minx = std::numeric_limits<int>::max();
+                int miny = std::numeric_limits<int>::max();
+                int maxx = std::numeric_limits<int>::min();
+                int maxy = std::numeric_limits<int>::min();
+                for (const cv::Point &p : db.contourPoints) {
+                    minx = std::min(minx, p.x);
+                    miny = std::min(miny, p.y);
+                    maxx = std::max(maxx, p.x);
+                    maxy = std::max(maxy, p.y);
+                }
+                if (minx <= maxx && miny <= maxy) {
+                    // Add a small margin so we don't clip contour edges
+                    const int MARGIN = 4;
+                    QRectF contourBbox((double)minx - MARGIN, (double)miny - MARGIN,
+                                       (double)(maxx - minx + 1) + 2.0 * MARGIN,
+                                       (double)(maxy - miny + 1) + 2.0 * MARGIN);
+                    qDebug() << "MiniVideoLoader: Expanding worm ROI to include stored contour bbox:" << contourBbox;
+                    m_wormRoi = m_wormRoi.united(contourBbox);
+                }
+            }
+        }
+    }
+
     // Clear any previous blob selection when worm position changes
     if (m_hasBlobSelection) {
         m_hasBlobSelection = false;
@@ -270,7 +300,7 @@ bool MiniVideoLoader::pollWormPosition()
         m_selectedBlobContour.clear();
     }
     
-    return false;
+    return true;
 }
 
 QRectF MiniVideoLoader::calculateCropRect() const
@@ -295,12 +325,45 @@ QRectF MiniVideoLoader::calculateCropRect() const
         cropHeight
     );
     
-    // Clamp to image bounds
+    // Determine image bounds from available frame representation (prefer QImage, otherwise cv::Mat)
+    double imgW = 0.0, imgH = 0.0;
     if (!m_currentFrame.isNull()) {
-        QRectF imageBounds(0, 0, m_currentFrame.width(), m_currentFrame.height());
-        cropRect = cropRect.intersected(imageBounds);
+        imgW = m_currentFrame.width();
+        imgH = m_currentFrame.height();
+    } else if (!m_currentFrameCv.empty()) {
+        imgW = m_currentFrameCv.cols;
+        imgH = m_currentFrameCv.rows;
     }
-    
+
+    if (imgW > 0 && imgH > 0) {
+        QRectF imageBounds(0.0, 0.0, imgW, imgH);
+        QRectF intersected = cropRect.intersected(imageBounds);
+
+        // If intersection produced an extremely small rect (due to being at the edge),
+        // attempt to expand to at least MIN_CROP_SIZE while keeping inside image bounds.
+        double minW = MIN_CROP_SIZE;
+        double minH = MIN_CROP_SIZE;
+
+        if (intersected.width() < minW || intersected.height() < minH) {
+            // Center desired crop on worm position, but clamp to image bounds
+            double desiredW = qMax(minW, cropRect.width());
+            double desiredH = qMax(minH, cropRect.height());
+
+            double left = m_wormPosition.x() - desiredW / 2.0;
+            double top = m_wormPosition.y() - desiredH / 2.0;
+
+            // Clamp left/top so crop stays within image
+            left = qBound(0.0, left, imgW - desiredW);
+            top = qBound(0.0, top, imgH - desiredH);
+
+            intersected = QRectF(left, top, desiredW, desiredH).intersected(imageBounds);
+            qDebug() << "MiniVideoLoader: calculateCropRect adjusted small edge crop to" << intersected;
+        }
+
+        // Final clamp to image bounds and return
+        cropRect = intersected;
+    }
+
     return cropRect;
 }
 
@@ -332,12 +395,19 @@ void MiniVideoLoader::updateCroppedImage()
     
     // Handle cv::Mat cropping if available
     if (hasCvMat) {
-        // Ensure the crop rectangle is within cv::Mat bounds
-        cv::Rect cvImageBounds(0, 0, m_currentFrameCv.cols, m_currentFrameCv.rows);
-        cv::Rect cvCropRect(cropRectInt.x(), cropRectInt.y(), cropRectInt.width(), cropRectInt.height());
+    // Ensure the crop rectangle is within cv::Mat bounds
+    cv::Rect cvImageBounds(0, 0, m_currentFrameCv.cols, m_currentFrameCv.rows);
+    cv::Rect cvCropRect(cropRectInt.x(), cropRectInt.y(), cropRectInt.width(), cropRectInt.height());
         
-        // Intersect with image bounds
-        cvCropRect &= cvImageBounds;  // OpenCV intersection operator
+    // Log the computed crop rect before intersect (print cv::Rect fields explicitly)
+    qDebug() << "MiniVideoLoader: Computed cropRect (int)" << cropRectInt
+         << "cv image bounds: x=" << cvImageBounds.x << "y=" << cvImageBounds.y
+         << "w=" << cvImageBounds.width << "h=" << cvImageBounds.height;
+
+    // Intersect with image bounds
+    cvCropRect &= cvImageBounds;  // OpenCV intersection operator
+    qDebug() << "MiniVideoLoader: cvCropRect after intersection: x=" << cvCropRect.x << "y=" << cvCropRect.y
+         << "w=" << cvCropRect.width << "h=" << cvCropRect.height << "area:" << cvCropRect.area();
         
         if (cvCropRect.area() > 0) {
             m_croppedFrameCv = m_currentFrameCv(cvCropRect).clone();
@@ -349,32 +419,45 @@ void MiniVideoLoader::updateCroppedImage()
             m_detectedBlobContours.clear();
             bool loadedFromStorage = false;
             if (m_trackingDataStorage && m_selectedWormId >= 0) {
-                // Only use tracker-provided contours for the current (central) frame to avoid drawing multiple frames' overlays
+                // Only use tracker-provided contours for the current frame
                 int f = m_currentFrameNumber;
                 if (f >= 0) {
                     QMap<int, Tracking::DetectedBlob> blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(f);
                     if (!blobMap.isEmpty()) {
+                        QList<int> keys = blobMap.keys();
+                        qDebug() << "MiniVideoLoader: Tracker-provided blobs for frame" << f << "keys:" << keys;
                         int unsignedId = m_selectedWormId;
                         if (blobMap.contains(unsignedId)) {
                             const Tracking::DetectedBlob& db = blobMap.value(unsignedId);
+                            qDebug() << "MiniVideoLoader: Found stored DetectedBlob for worm" << unsignedId
+                                     << "isValid:" << db.isValid << "contourPoints.size():" << db.contourPoints.size();
                             if (db.isValid && !db.contourPoints.empty()) {
                                 // Convert stored contour points (full-frame coords) to cropped coords
                                 std::vector<cv::Point> contour;
+                                int kept = 0;
                                 for (const cv::Point& pt : db.contourPoints) {
                                     double cx = pt.x - m_cropRect.left();
                                     double cy = pt.y - m_cropRect.top();
                                     // Ensure point inside cropped image
                                     if (cx >= 0 && cy >= 0 && cx < m_croppedFrameCv.cols && cy < m_croppedFrameCv.rows) {
                                         contour.emplace_back(static_cast<int>(std::round(cx)), static_cast<int>(std::round(cy)));
+                                        ++kept;
                                     }
                                 }
+                                qDebug() << "MiniVideoLoader: Converted contour points kept:" << kept << "of" << db.contourPoints.size();
                                 if (!contour.empty()) {
                                     m_detectedBlobContours.push_back(contour);
                                     m_detectedBlobs.append(db);
                                     loadedFromStorage = true;
+                                } else {
+                                    qDebug() << "MiniVideoLoader: Stored contour exists but no points fall inside crop - skipping storage overlay and falling back to thresholding";
                                 }
                             }
+                        } else {
+                            qDebug() << "MiniVideoLoader: No stored blob for selected worm id" << unsignedId << "in blobMap";
                         }
+                    } else {
+                        qDebug() << "MiniVideoLoader: No tracker-provided blobs stored for frame" << f;
                     }
                 }
             }

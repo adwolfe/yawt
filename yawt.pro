@@ -21,6 +21,7 @@ SOURCES += \
     itemtypedelegate.cpp \
     main.cpp \
     mainwindow.cpp \
+    miniloader.cpp \
     thresholdingutils.cpp \
     trackingcommon.cpp \
     trackingdatastorage.cpp \
@@ -38,6 +39,7 @@ HEADERS += \
     folderfirstsortproxymodel.h \
     itemtypedelegate.h \
     mainwindow.h \
+    miniloader.h \
     thresholdingutils.h \
     trackingcommon.h \
     trackingdatastorage.h \

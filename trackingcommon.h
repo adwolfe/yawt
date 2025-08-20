@@ -171,10 +171,10 @@ struct DetectedBlob {
 };
 
 enum class TrackPointQuality {
-    Confident,
-    Ambiguous,
+    Single,     // Single (confident) tracking
+    Merged,     // Part of a merged blob (ambiguous)
+    Split,      // Frame where a split was detected/resolved (functionally like Single for display)
     Lost        // Tracking was lost - position data is invalid
-
 };
 Q_ENUM_NS(TrackPointQuality)
 

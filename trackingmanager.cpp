@@ -801,7 +801,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
 
         if (primaryBlob.isValid) {
             point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
-            point.quality = (currentState == Tracking::TrackerState::TrackingSingle) ? Tracking::TrackPointQuality::Confident : Tracking::TrackPointQuality::Ambiguous;
+            point.quality = (currentState == Tracking::TrackerState::TrackingSingle) ? Tracking::TrackPointQuality::Single : Tracking::TrackPointQuality::Merged;
         } else {
             point.position = cv::Point2f(0.0f, 0.0f);  // Placeholder (won't be used for display)
             point.quality = Tracking::TrackPointQuality::Lost;
@@ -1208,6 +1208,16 @@ bool TrackingManager::attemptImmediateSplitResolution(int conceptualWormId, int 
         QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget",
                                  Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, blobToAssign));
         m_splitResolutionMap[frameNumber][conceptualWormId] = blobToAssign;
+        // Annotate this worm's track point for this frame as a Split for downstream storage/visualization
+        WormObject* wobj = m_wormObjectsMap.value(conceptualWormId, nullptr);
+        if (wobj) {
+            Tracking::WormTrackPoint splitPoint;
+            splitPoint.frameNumberOriginal = frameNumber;
+            splitPoint.position = cv::Point2f(static_cast<float>(blobToAssign.centroid.x()), static_cast<float>(blobToAssign.centroid.y()));
+            splitPoint.roi = blobToAssign.boundingBox;
+            splitPoint.quality = Tracking::TrackPointQuality::Split;
+            wobj->updateTrackPoint(splitPoint);
+        }
     } else {
         TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** NO VALID BLOB - GOING LOST ***").arg(conceptualWormId).arg(frameNumber);
         QMetaObject::invokeMethod(trackerInstance, "resumeTrackingWithAssignedTarget",

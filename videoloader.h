@@ -44,9 +44,9 @@ struct CachedFrame {
     cv::Mat thresholdedFrame;
     QDateTime lastAccessed;
     bool isValid;
-    
+
     CachedFrame() : frameNumber(-1), isValid(false) {}
-    CachedFrame(int fn, const cv::Mat& raw) 
+    CachedFrame(int fn, const cv::Mat& raw)
         : frameNumber(fn), rawFrame(raw.clone()), isValid(true), lastAccessed(QDateTime::currentDateTime()) {}
 };
 
@@ -55,23 +55,23 @@ class FrameCache {
 public:
     explicit FrameCache(int maxCacheSize = 50);
     ~FrameCache();
-    
+
     // Cache operations
     void insertFrame(int frameNumber, const cv::Mat& frame);
     bool getFrame(int frameNumber, cv::Mat& outFrame);
     bool hasFrame(int frameNumber) const;
     void clear();
     void setMaxSize(int maxSize);
-    
+
     // Statistics
     int size() const;
     int maxSize() const;
     double hitRate() const;
-    
+
 private:
     void evictLRU();
     void updateAccessTime(int frameNumber);
-    
+
     mutable QMutex m_mutex;
     QMap<int, CachedFrame> m_frames;
     int m_maxSize;
@@ -84,15 +84,15 @@ struct FrameLoadRequest {
     int frameNumber;
     int priority; // Higher number = higher priority
     QDateTime requestTime;
-    
-    FrameLoadRequest(int fn, int prio = 1) 
+
+    FrameLoadRequest(int fn, int prio = 1)
         : frameNumber(fn), priority(prio), requestTime(QDateTime::currentDateTime()) {}
-        
+
     bool operator<(const FrameLoadRequest& other) const {
         if (priority != other.priority) return priority < other.priority;
         return requestTime > other.requestTime; // Newer requests first for same priority
     }
-    
+
     bool operator>(const FrameLoadRequest& other) const {
         if (priority != other.priority) return priority > other.priority;
         return requestTime < other.requestTime; // Older requests last for same priority
@@ -102,11 +102,11 @@ struct FrameLoadRequest {
 // Background frame loader worker
 class FrameLoader : public QObject {
     Q_OBJECT
-    
+
 public:
     explicit FrameLoader(QObject* parent = nullptr);
     ~FrameLoader();
-    
+
     void setVideoPath(const QString& path);
     void requestFrames(const QList<int>& frameNumbers, int priority = 1);
     void requestSingleFrame(int frameNumber, int priority = 1);
@@ -119,10 +119,10 @@ signals:
 
 public slots:
     void processRequests();
-    
+
 private:
     void loadFrame(int frameNumber);
-    
+
     QString m_videoPath;
     cv::VideoCapture m_videoCapture;
     QQueue<FrameLoadRequest> m_requestQueue;
@@ -176,6 +176,7 @@ public:
     int getTotalFrames() const;
     double getFPS() const;
     int getCurrentFrameNumber() const;
+    QImage getCurrentQImageFrame() const;
     QSize getVideoFrameSize() const;
     double getZoomFactor() const;
     QRectF getCurrentRoi() const; // The general purpose ROI (e.g., for processing)
@@ -184,7 +185,7 @@ public:
     double getPlaybackSpeed() const;
     QString getCurrentVideoPath() const;
     QString getDataDirectory() const;
-    
+
     // Frame cache management
     void setCacheSize(int maxFrames);
     int getCacheSize() const;
@@ -321,7 +322,7 @@ private:
     void emitThresholdParametersChanged();
     QColor getTrackColor(int trackId) const; // Used for drawing tracks
     QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
-    
+
     // Frame caching and loading helpers
     bool getCachedFrame(int frameNumber, cv::Mat& outFrame);
     void preloadAdjacentFrames(int centerFrame, int radius = 5);
@@ -386,10 +387,10 @@ private:
     bool m_enableBlur;
     int m_blurKernelSize;
     double m_blurSigmaX;
-    
+
     // --- Data Directory ---
     QString m_dataDirectory;  // Path to the "yawt" directory for data storage
-    
+
     // --- Frame Caching and Background Loading ---
     FrameCache* m_frameCache;                  // Thread-safe frame cache
     FrameLoader* m_frameLoader;                // Background frame loader
