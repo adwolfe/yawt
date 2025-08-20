@@ -12,6 +12,13 @@
 #include <opencv2/imgcodecs.hpp>
 #include <algorithm>
 
+// Helper struct for presence info (local to this file)
+struct WormPresenceInfo {
+    QList<int> framesPresent;
+    QMap<int, QPointF> posByFrame;
+    QMap<int, QRectF> roiByFrame;
+};
+
 MiniVideoLoader::MiniVideoLoader(QWidget *parent)
     : QWidget(parent)
     , m_currentFrameNumber(-1)
@@ -21,6 +28,7 @@ MiniVideoLoader::MiniVideoLoader(QWidget *parent)
     , m_videoLoader(nullptr)
     , m_hasValidData(false)
     , m_hasBlobSelection(false)
+    , m_showOtherWormOverlays(false)
 {
     // Set up widget appearance
     setAutoFillBackground(true);
@@ -170,6 +178,44 @@ void MiniVideoLoader::setSelectedWorm(int wormId)
     }
     
     emit selectedWormChanged(m_selectedWormId);
+}
+
+void MiniVideoLoader::setShowOtherWormOverlays(bool show)
+{
+    if (m_showOtherWormOverlays == show) return;
+    m_showOtherWormOverlays = show;
+    update();
+}
+
+bool MiniVideoLoader::showOtherWormOverlays() const
+{
+    return m_showOtherWormOverlays;
+}
+
+// Find worms visible in the current crop across frames [current-radius .. current+radius]
+QMap<int, WormPresenceInfo> findWormsInCrop(TrackingDataStorage* storage, const QRectF& cropRect, int centerFrame, int radius)
+{
+    QMap<int, WormPresenceInfo> result;
+    if (!storage) return result;
+
+    QSet<int> candidates = storage->getItemsWithTracks();
+    if (candidates.isEmpty()) candidates = storage->getAllItemIds();
+
+    for (int f = centerFrame - radius; f <= centerFrame + radius; ++f) {
+        if (f < 0) continue;
+        for (int wid : candidates) {
+            QPointF pos; QRectF roi;
+            if (!storage->getWormDataForFrame(wid, f, pos, roi)) continue;
+            // membership: centroid inside crop OR ROI intersects crop
+            bool inside = cropRect.contains(pos) || cropRect.intersects(roi);
+            if (!inside) continue;
+            WormPresenceInfo &info = result[wid];
+            info.framesPresent.append(f);
+            info.posByFrame.insert(f, pos);
+            info.roiByFrame.insert(f, roi);
+        }
+    }
+    return result;
 }
 
 void MiniVideoLoader::clearSelection()
@@ -349,7 +395,7 @@ void MiniVideoLoader::paintEvent(QPaintEvent *event)
         drawNoSelectionMessage(painter);
     } else if (!m_croppedFrame.isNull()) {
         qDebug() << "MiniVideoLoader: Drawing cropped view, crop size:" << m_croppedFrame.size();
-        drawCroppedView(painter);
+    drawCroppedView(painter);
     } else {
         qDebug() << "MiniVideoLoader: Drawing 'not visible' message";
         // Show "worm not visible" message
@@ -360,6 +406,8 @@ void MiniVideoLoader::paintEvent(QPaintEvent *event)
                         .arg(m_currentFrameNumber));
     }
 }
+
+
 
 void MiniVideoLoader::resizeEvent(QResizeEvent *event)
 {

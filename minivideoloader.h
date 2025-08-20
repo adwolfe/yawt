@@ -66,6 +66,12 @@ public:
      */
     bool hasValidCrop() const;
 
+    /**
+     * @brief Enable/disable drawing other-worm overlays inside this mini view instance.
+     */
+    void setShowOtherWormOverlays(bool show);
+    bool showOtherWormOverlays() const;
+
 public slots:
     /**
      * @brief Updates the display with a new frame from the main VideoLoader.
@@ -204,6 +210,9 @@ private:
     Tracking::DetectedBlob m_selectedBlob;  // Currently selected blob (if any)
     std::vector<cv::Point> m_selectedBlobContour;  // Contour points for drawing the selected blob outline
     bool m_hasBlobSelection;       // Whether a blob is currently selected
+
+    // Overlay options
+    bool m_showOtherWormOverlays; // If true, draw other worms in the crop
 
     // Constants
     static constexpr double DEFAULT_CROP_MULTIPLIER = 1.5;
