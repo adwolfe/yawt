@@ -241,6 +241,21 @@ public:
      */
     double getMaxObservedAspectRatio() const;
 
+    // --- Merge history API (per-frame groups)
+    /**
+     * @brief Store merge groups for a specific frame.
+     * @param frameNumber Frame index (>=0)
+     * @param groups List of groups; each group is a list of conceptual worm IDs
+     */
+    void setMergeGroupsForFrame(int frameNumber, const QList<QList<int>>& groups);
+
+    /**
+     * @brief Retrieve merge groups for a frame.
+     * @param frameNumber Frame index
+     * @return List of groups for that frame, or empty list if none
+     */
+    QList<QList<int>> getMergeGroupsForFrame(int frameNumber) const;
+
 signals:
     /**
      * @brief Emitted when an item is added
@@ -332,12 +347,17 @@ private:
     QSizeF m_currentFixedRoiSize;                          // Standard ROI size
     double m_roiSizeMultiplier;                            // User-adjustable multiplier
     
+    // Per-frame merge history storage: frameNumber -> list of groups (each group is a list of conceptual worm IDs)
+    QMap<int, QList<QList<int>>> m_mergeHistory;
+    
     // Helper methods
     QColor getNextColor();                                 // Get next color from palette
     void initializeColors();                               // Initialize color palette
     void recalculateGlobalMetricsAndROIs();                // Update metrics and ROIs
     void updateIdToIndexMap();                             // Rebuild ID-to-index map
     void buildFrameIndex();                                // Build frame index for fast lookups
+    
+    // Merge history API
 };
 
 #endif // TRACKINGDATASTORAGE_H

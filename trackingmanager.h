@@ -253,6 +253,9 @@ private:
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures
     
+    // Populate per-frame merge groups into TrackingDataStorage (batch write at end of tracking)
+    void populateMergeHistoryInStorage();
+    
     // Helper method to register meta types
     void registerMetaTypes();
 };

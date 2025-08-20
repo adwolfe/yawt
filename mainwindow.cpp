@@ -783,6 +783,55 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
         ui->frameSlider->setValue(currentFrameNumber);
     }
     ui->framePosition->setValue(currentFrameNumber);
+
+    // Update merge history text widget with a +/-2 frame window
+    if (m_trackingDataStorage && ui->mergeHistoryText) {
+        const int radius = 2;
+        QStringList frameBlocks;
+        for (int f = currentFrameNumber - radius; f <= currentFrameNumber + radius; ++f) {
+            if (f < 0) continue;
+            QList<QList<int>> groups = m_trackingDataStorage->getMergeGroupsForFrame(f);
+            QString header = QString("MERGES (FRAME %1)").arg(f);
+            QStringList lines;
+            if (groups.isEmpty()) {
+                lines << "  No merges";
+            } else {
+                // Build partner map: wormId -> list of partners
+                QMap<int, QList<int>> partners;
+                for (const QList<int>& g : groups) {
+                    for (int i = 0; i < g.size(); ++i) {
+                        int wid = g.at(i);
+                        for (int j = 0; j < g.size(); ++j) {
+                            if (i == j) continue;
+                            int other = g.at(j);
+                            if (!partners[wid].contains(other)) partners[wid].append(other);
+                        }
+                    }
+                }
+                // If partners map empty (shouldn't happen), state no merges
+                if (partners.isEmpty()) {
+                    lines << "  No merges";
+                } else {
+                    QList<int> wormIds = partners.keys();
+                    std::sort(wormIds.begin(), wormIds.end());
+                    for (int wid : wormIds) {
+                        const QList<int>& ps = partners.value(wid);
+                        if (ps.isEmpty()) {
+                            lines << QString("  Worm %1 --- None").arg(wid);
+                        } else {
+                            QStringList partnersStr;
+                            for (int p : ps) partnersStr << QString::number(p);
+                            lines << QString("  Worm %1 --- %2").arg(wid).arg(partnersStr.join(", "));
+                        }
+                    }
+                }
+            }
+            frameBlocks << header;
+            frameBlocks << lines;
+            frameBlocks << ""; // spacer line
+        }
+        ui->mergeHistoryText->setPlainText(frameBlocks.join('\n'));
+    }
 }
 
 void MainWindow::frameSliderMoved(int value) {

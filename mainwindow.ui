@@ -1048,7 +1048,7 @@ QToolButton#lastFrameButton {
        <attribute name="title">
         <string>Cleanup</string>
        </attribute>
-       <layout class="QGridLayout" name="gridLayout_4">
+  <layout class="QGridLayout" name="gridLayout_4">
         <property name="leftMargin">
          <number>10</number>
         </property>
@@ -1061,8 +1061,18 @@ QToolButton#lastFrameButton {
         <property name="bottomMargin">
          <number>10</number>
         </property>
-        <item row="0" column="0">
-         <widget class="QFrame" name="frame_2">
+  <item row="0" column="0">
+   <widget class="QTextEdit" name="mergeHistoryText">
+    <property name="placeholderText">
+     <string>Merge history will appear here</string>
+    </property>
+    <property name="readOnly">
+     <bool>true</bool>
+    </property>
+   </widget>
+  </item>
+  <item row="1" column="0">
+   <widget class="QFrame" name="frame_2">
           <property name="frameShape">
            <enum>QFrame::Shape::StyledPanel</enum>
           </property>
@@ -1143,7 +1153,6 @@ QToolButton#lastFrameButton {
    <class>VideoLoader</class>
    <extends>QWidget</extends>
    <header>videoloader.h</header>
-   <container>1</container>
   </customwidget>
   <customwidget>
    <class>VideoFileTreeView</class>

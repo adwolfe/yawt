@@ -272,6 +272,18 @@ void TrackingDataStorage::clearAndCompactTrackData() {
     emit allDataChanged();
 }
 
+// --- Merge History Methods ---
+
+void TrackingDataStorage::setMergeGroupsForFrame(int frameNumber, const QList<QList<int>>& groups) {
+    if (frameNumber < 0) return; // silently ignore invalid frame numbers
+    m_mergeHistory.insert(frameNumber, groups);
+}
+
+QList<QList<int>> TrackingDataStorage::getMergeGroupsForFrame(int frameNumber) const {
+    return m_mergeHistory.value(frameNumber);
+}
+
+
 // --- Data Access Methods ---
 
 const QList<TableItems::ClickedItem>& TrackingDataStorage::getAllItems() const {

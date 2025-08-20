@@ -1332,6 +1332,9 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
             if (outputTracksToCsv(m_finalTracks, csvPath)) {
                 emit trackingStatusUpdate("Tracks saved: " + csvPath);
 
+                // Populate merge history storage in one batch before saving JSON state
+                populateMergeHistoryInStorage();
+
                 // Save frame-atomic JSON state instead of thresholded video
                 saveFrameAtomicStateToJson(m_videoSpecificDirectory,
                                            m_nextPhysicalBlobId,
@@ -1420,6 +1423,34 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
 
     return videoSpecificPath;
 }
+
+// Batch-populate merge groups into the central TrackingDataStorage.
+// Converts FrameSpecificPhysicalBlob records (m_frameMergeRecords) into
+// the storage representation: QMap<int, QList<QList<int>>> (frame -> list of groups).
+void TrackingManager::populateMergeHistoryInStorage() {
+    if (!m_storage) return;
+    QMutexLocker locker(&m_dataMutex);
+    // Iterate frames in m_frameMergeRecords and convert each FrameSpecificPhysicalBlob.participatingWormTrackerIDs
+    // into a QList<int> group of unsigned conceptual IDs, then write to storage.
+    for (auto it = m_frameMergeRecords.constBegin(); it != m_frameMergeRecords.constEnd(); ++it) {
+        int frameNum = it.key();
+        const QList<FrameSpecificPhysicalBlob>& blobs = it.value();
+        QList<QList<int>> groups;
+        groups.reserve(blobs.size());
+        for (const FrameSpecificPhysicalBlob& pb : blobs) {
+            QList<int> group;
+            group.reserve(pb.participatingWormTrackerIDs.size());
+            for (int signedId : pb.participatingWormTrackerIDs) {
+                int unsignedId = getUnsignedWormId(signedId);
+                if (unsignedId >= 0 && !group.contains(unsignedId)) group.append(unsignedId);
+            }
+            if (!group.isEmpty()) groups.append(group);
+        }
+        // Write to storage (storage will silently ignore invalid frames)
+        m_storage->setMergeGroupsForFrame(frameNum, groups);
+    }
+}
+
 
 void TrackingManager::saveThresholdSettings(const QString& directoryPath, const Thresholding::ThresholdSettings& settings) {
     if (directoryPath.isEmpty()) {
