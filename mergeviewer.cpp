@@ -4,6 +4,7 @@
 #include <QPaintEvent>
 #include <QFontMetrics>
 #include <QLinearGradient>
+#include <QDebug>
 #include <algorithm>
 
 MergeViewer::MergeViewer(QWidget* parent)
@@ -38,6 +39,34 @@ void MergeViewer::setVisibleByFrame(const QMap<int, QSet<int>>& visibleByFrame)
 {
     // Provide an explicit per-frame visibility map so bars can be drawn partially per-segment.
     m_visibleByFrame = visibleByFrame;
+
+    // Build the union of all IDs present across all frames so the viewer's labels and color map
+    // reflect every worm that appears anywhere in the supplied per-frame map.
+    QSet<int> unionIds;
+    for (auto it = m_visibleByFrame.constBegin(); it != m_visibleByFrame.constEnd(); ++it) {
+        unionIds.unite(it.value());
+    }
+
+    // Cache the unioned IDs for rendering (used when m_visibleWormColors is empty or incomplete).
+    m_visibleIdsCache = unionIds;
+
+    // Ensure there's at least a fallback color entry for each visible id so colorForId() and
+    // label rendering have consistent behavior. Do not override existing explicit colors.
+    for (int id : unionIds) {
+        if (!m_visibleWormColors.contains(id)) {
+            m_visibleWormColors.insert(id, m_defaultColor);
+        }
+    }
+
+    // If the supplied map contains consecutive frames, derive the center frame from its keys so the
+    // viewer aligns segments correctly even if the global videoLoader current frame changes concurrently.
+    if (!m_visibleByFrame.isEmpty()) {
+        QList<int> keys = m_visibleByFrame.keys();
+        std::sort(keys.begin(), keys.end());
+        int mid = keys.size() / 2;
+        m_currentFrame = keys[mid];
+    }
+
     updateGeometry();
     update();
 }
@@ -232,18 +261,32 @@ void MergeViewer::paintEvent(QPaintEvent* ev)
             p.setPen(border);
             p.drawRoundedRect(barRect, 4, 4);
         } else {
-            // Draw per-segment rectangles that stop at separators where the worm is visible in that frame.
+            // Build per-segment visibility vector and log it for debugging.
+            QVector<bool> visibleVec(segments, false);
+            QList<int> frameNums;
+            frameNums.reserve(segments);
             for (int i = 0; i < segments; ++i) {
                 int frameNum = m_currentFrame - m_radius + i;
-                bool visibleHere = false;
+                frameNums.append(frameNum);
                 auto it = m_visibleByFrame.find(frameNum);
                 if (it != m_visibleByFrame.end()) {
-                    visibleHere = it.value().contains(id);
+                    visibleVec[i] = it.value().contains(id);
                 } else {
-                    // If a frame is not present in the map, treat as not visible in that frame
-                    visibleHere = false;
+                    visibleVec[i] = false;
                 }
-                if (!visibleHere) continue;
+            }
+
+            // Build a human-readable string for the visibility vector (e.g. "10110")
+            QStringList visParts;
+            visParts.reserve(segments);
+            for (int i = 0; i < segments; ++i) {
+                visParts << (visibleVec[i] ? QStringLiteral("1") : QStringLiteral("0"));
+            }
+            qDebug() << "MergeViewer: ID" << id << "frames" << frameNums << "visiblePerSegment" << visParts.join("");
+
+            // Draw per-segment rectangles based on the computed visibility vector.
+            for (int i = 0; i < segments; ++i) {
+                if (!visibleVec[i]) continue;
 
                 int sx = segStart[i] + 1;
                 int sw = std::max(1, segWidthVec[i] - 2);

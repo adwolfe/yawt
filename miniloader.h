@@ -9,6 +9,7 @@
 #include <QList>
 #include <QMap>
 #include <QSet>
+#include <QColor>
 #include "trackingcommon.h"
 
 // Forward declarations
@@ -105,19 +106,24 @@ public slots:
     void clearSelection();
 
     /**
-     * @brief Update with multiple pre-cropped frames (centered around centerFrameNumber).
+     * @brief Update with multiple pre-cropped frames.
      *
      * The lists of frames/offsets/sizes must be the same length and correspond to consecutive frames
-     * (e.g. center-radius .. center+radius). The MiniLoader will display the central frame but will
-     * compute visibility across all supplied frames and emit per-frame visibility via the signal below.
+     * starting at @p startFrameNumber. The MiniLoader will display the central frame (computed as
+     * startFrameNumber + floor(n/2)) but will compute visibility across all supplied frames and emit
+     * a single per-frame visibility map via the signal below.
      *
-     * @param centerFrameNumber Absolute frame index corresponding to the central image in the lists.
-     * @param croppedFrames List of cropped QImage frames ordered left-to-right (center-radius .. center+radius).
+     * Sending placeholder images (e.g. black QImage of crop size) for missing frames is recommended
+     * so the ordering and frame-to-index mapping remains stable.
+     *
+     * @param startFrameNumber Absolute frame index corresponding to the first image in the lists.
+     * @param croppedFrames List of cropped QImage frames ordered by ascending frame number
+     *                      (startFrameNumber .. startFrameNumber + n - 1).
      * @param cropOffsets Top-left offsets in video coordinates for each cropped frame (same order).
      * @param cropSizes Sizes (video coordinates) for each cropped frame (same order).
      * @param centerPoint The center point used for the central crop (video coords).
      */
-    void updateWithCroppedFrames(int centerFrameNumber,
+    void updateWithCroppedFrames(int startFrameNumber,
                                  const QList<QImage>& croppedFrames,
                                  const QList<QPointF>& cropOffsets,
                                  const QList<QSizeF>& cropSizes,
@@ -137,10 +143,24 @@ signals:
     void visibleWormsUpdated(const QList<int>& visibleIds);
 
     /**
+     * @brief Emitted when the MiniLoader computes the union of visible worm IDs across the supplied frames.
+     * @param centerFrame The absolute frame number corresponding to the central image in the batch.
+     * @param unionIds List of worm IDs that appear in any frame of the supplied batch (union across frames).
+     */
+    void visibleWormsUnionUpdated(int centerFrame, const QList<int>& unionIds);
+
+    /**
      * @brief Emitted when the MiniLoader computes per-frame visibility for a set of supplied cropped frames.
      * The map key is the absolute frame number and the value is the set of visible worm IDs in that frame.
+     * @param centerFrame The absolute frame number corresponding to the central image in the batch.
+     * @param idColors Map from worm ID to QColor representing the colors used in the MiniLoader overlay.
+     *
+     * The signal carries:
+     *  - centerFrame: the absolute frame number of the central image
+     *  - visibleByFrame: mapping frame -> set of visible worm IDs
+     *  - idColors: mapping worm ID -> QColor to match the overlay's displayed colors
      */
-    void visibleWormsUpdatedPerFrame(const QMap<int, QSet<int>>& visibleByFrame);
+    void visibleWormsUpdatedPerFrame(int centerFrame, const QMap<int, QSet<int>>& visibleByFrame, const QMap<int, QColor>& idColors);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

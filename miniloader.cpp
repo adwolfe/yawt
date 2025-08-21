@@ -509,7 +509,7 @@ void MiniLoader::setVisibleWormsByFrame(const QMap<int, QSet<int>>& map)
     m_visibleWormsByFrame = map;
 }
 
-void MiniLoader::updateWithCroppedFrames(int centerFrameNumber,
+void MiniLoader::updateWithCroppedFrames(int startFrameNumber,
                                          const QList<QImage>& croppedFrames,
                                          const QList<QPointF>& cropOffsets,
                                          const QList<QSizeF>& cropSizes,
@@ -520,10 +520,10 @@ void MiniLoader::updateWithCroppedFrames(int centerFrameNumber,
     int n = croppedFrames.size();
     if (cropOffsets.size() != n || cropSizes.size() != n) return;
 
-    // Determine start frame assuming the supplied frames are consecutive and centered on centerFrameNumber.
-    int half = n / 2;
-    int startFrame = centerFrameNumber - half;
-    int centerIndex = half; // integer division; for even n this picks the upper-middle, but caller should supply odd-length lists
+    // The caller supplies the absolute frame number corresponding to the first image in the list.
+    // Determine the center index and corresponding center frame number.
+    int centerIndex = n / 2; // integer division; caller should supply odd-length lists when possible
+    int centerFrameNumber = startFrameNumber + centerIndex;
 
     // Store/display the central frame as the widget's current cropped frame
     m_currentFrameNumber = centerFrameNumber;
@@ -540,7 +540,7 @@ void MiniLoader::updateWithCroppedFrames(int centerFrameNumber,
     const double AREA_EPS = 0.5;
 
     for (int i = 0; i < n; ++i) {
-        int frameNum = startFrame + i;
+        int frameNum = startFrameNumber + i;
         QSet<int> visibleSet;
 
         if (!m_trackingDataStorage || frameNum < 0) {
@@ -607,9 +607,42 @@ void MiniLoader::updateWithCroppedFrames(int centerFrameNumber,
         }
     } // end frames loop
 
-    // Emit per-frame visibility map (single signal containing visibility for all supplied frames).
-    emit visibleWormsUpdatedPerFrame(m_visibleWormsByFrame);
+// Emit the single-frame visible IDs (center frame) so listeners depending on the current crop get notified.
+// m_visibleWormIds was populated above for the center frame.
+qDebug() << "MiniLoader::updateWithCroppedFrames emitting center-frame visible ids:" << m_visibleWormIds;
+emit visibleWormsUpdated(m_visibleWormIds);
 
-    // Trigger a repaint (central frame was updated above)
-    update();
+// Compute the union of all visible worm IDs across the supplied frames so we can build a consistent
+// id->color map to accompany the per-frame visibility signal.
+QSet<int> unionSet;
+for (auto it = m_visibleWormsByFrame.constBegin(); it != m_visibleWormsByFrame.constEnd(); ++it) {
+    unionSet.unite(it.value());
+}
+QList<int> unionList = unionSet.values();
+
+// Build a map from worm ID -> QColor using the TrackingDataStorage (so colors match the overlay).
+QMap<int, QColor> idColors;
+for (int id : unionSet) {
+    const TableItems::ClickedItem* item = nullptr;
+    if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(id);
+    if (item) {
+        idColors.insert(id, item->color);
+    } else {
+        // Fallback color matches MergeViewer's default gray
+        idColors.insert(id, QColor(160, 160, 160));
+    }
+}
+
+// Emit the per-frame visibility map including the center frame and the id->color map so consumers
+// (e.g. MergeViewer) can align segments correctly and use consistent colors matching the overlay.
+int centerFrame = centerFrameNumber;
+qDebug() << "MiniLoader::updateWithCroppedFrames emitting per-frame map center:" << centerFrame << " ids:" << unionList;
+emit visibleWormsUpdatedPerFrame(centerFrame, m_visibleWormsByFrame, idColors);
+
+// Also emit the union list along with the center frame for backward-compatible consumers that need it.
+qDebug() << "MiniLoader::updateWithCroppedFrames emitting union ids:" << unionList;
+emit visibleWormsUnionUpdated(centerFrame, unionList);
+
+// Trigger a repaint (central frame was updated above)
+update();
 }

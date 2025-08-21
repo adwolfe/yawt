@@ -664,20 +664,31 @@ void MainWindow::setupConnections() {
         {
             MergeViewer* mv = findChild<MergeViewer*>("mergeViewer");
             if (mv) {
-                QMetaObject::Connection c2_mv = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdated,
-                    this, [this, mv](const QList<int>& visibleIds){
-                        QMap<int, QColor> colors;
-                        for (int id : visibleIds) colors.insert(id, QColor(160, 160, 160));
-                        int currentFrame = 0;
-                        if (ui->videoLoader) currentFrame = ui->videoLoader->getCurrentFrameNumber();
-                        mv->updateVisibleAndFrame(colors, currentFrame);
-                    });
-                qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> mergeViewer, connection valid:" << bool(c2_mv);
-
+               // QMetaObject::Connection c2_mv = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdated,
+               //     this, [this, mv](const QList<int>& visibleIds){
+               //         QMap<int, QColor> colors;
+               //         for (int id : visibleIds) colors.insert(id, QColor(160, 160, 160));
+               //         // Only update the MergeViewer's color map here. Do NOT set its current frame from this signal.
+               //         // The MergeViewer will derive frame alignment from per-frame maps (visibleWormsUpdatedPerFrame)
+               //         // to avoid races between signals and the global videoLoader current frame.
+               //         mv->setVisibleWormColors(colors);
+               //     });
+               // qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> mergeViewer.setVisibleWormColors, connection valid:" << bool(c2_mv);
+               
                 // Also connect the overlay's per-frame visibility map to MergeViewer so it can draw partial bars.
+                // New MiniLoader::visibleWormsUpdatedPerFrame signature includes (centerFrame, visibleByFrame, idColors).
+                // Update MergeViewer's colors first (so labels/colors match the overlay), then supply the per-frame map
+                // and explicit center frame for robust segment alignment.
                 QMetaObject::Connection c2_mv_pf = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdatedPerFrame,
-                    mv, &MergeViewer::setVisibleByFrame);
-                qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdatedPerFrame -> mergeViewer.setVisibleByFrame, connection valid:" << bool(c2_mv_pf);
+                    this, [mv](int centerFrame, const QMap<int, QSet<int>>& visibleByFrame, const QMap<int, QColor>& idColors){
+                        // Apply colors coming from MiniLoader so the MergeViewer uses the same palette as the overlay
+                        mv->setVisibleWormColors(idColors);
+                        // Then give it the per-frame visibility map
+                        mv->setVisibleByFrame(visibleByFrame);
+                        // Explicitly align the MergeViewer to the reported center frame
+                        mv->setCurrentFrame(centerFrame);
+                    });
+                qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdatedPerFrame -> mergeviewer.setVisibleByFrame/setVisibleWormColors, connection valid:" << bool(c2_mv_pf);
             }
         }
     }
@@ -1195,20 +1206,32 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
 
         for (int frameNum : framesToRequest) {
             const QImage img = imgs.value(frameNum);
-            if (img.isNull()) {
-                // Missing image -> skip this frame (MiniLoader will treat absent frames as not visible)
-                continue;
+
+            // Start from the nominal crop rect computed earlier. If we have an actual image for this frame,
+            // intersect the crop with the image bounds; otherwise keep the nominal crop so we can create a
+            // placeholder image of the correct size. This preserves ordering and indexing for the batch.
+            QRect localCrop = cropRect;
+            if (!img.isNull()) {
+                QRect imgBounds(0, 0, img.width(), img.height());
+                localCrop = localCrop.intersected(imgBounds);
             }
 
-            // Clamp cropRect to this particular image size just in case (should be same dims normally)
-            QRect localCrop = cropRect;
-            QRect imgBounds(0, 0, img.width(), img.height());
-            localCrop = localCrop.intersected(imgBounds);
-            if (localCrop.isEmpty()) continue;
+            // If localCrop ended up empty for some reason, use the nominal cropRect so we still provide a placeholder frame.
+            // This preserves ordering/indexing of the batch sent to MiniLoader (placeholders keep the mapping stable).
+            if (localCrop.isEmpty()) localCrop = cropRect;
 
-            QImage cf = img.copy(localCrop);
+            // Build either the real cropped image or a placeholder (black) image for missing frames so
+            // the sequence length and ordering remain intact when sent to MiniLoader.
+            QImage cf;
+            if (!img.isNull()) {
+                cf = img.copy(localCrop);
+            } else {
+                cf = QImage(localCrop.size(), QImage::Format_RGB32);
+                cf.fill(Qt::black);
+            }
+
             croppedFrames.append(cf);
-            cropOffsets.append(QPointF(localCrop.left() + 0.0, localCrop.top() + 0.0)); // offsets are already video coords relative to video; but here we keep same cropOffset for all frames
+            cropOffsets.append(QPointF(localCrop.left() + 0.0, localCrop.top() + 0.0)); // offsets are in video coords
             cropSizes.append(QSizeF(localCrop.width(), localCrop.height()));
         }
 
@@ -1219,15 +1242,21 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
 
             // Update primary miniLoader with only the center frame (display-only).
             if (ui->miniLoader) {
-                ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, croppedFrames.value(centerIndex),
+                // Determine the absolute frame number that corresponds to the center image in the batch
+                // (startFrame + centerIndex) and send that to the primary miniLoader so its internal
+                // current-frame reference matches the batch indexing used by the overlay.
+                int primaryCenterFrame = startFrame + centerIndex;
+                ui->miniLoader->updateWithCroppedFrame(primaryCenterFrame, croppedFrames.value(centerIndex),
                                                       cropOffsets.value(centerIndex), cropSizes.value(centerIndex),
                                                       centerPoint);
-                qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
+                qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << primaryCenterFrame;
             }
 
             // Send the full batch to the overlay so it performs visibility computations and emits per-frame map.
             if (ui->miniLoaderOverlay) {
-                ui->miniLoaderOverlay->updateWithCroppedFrames(currentFrameNumber, croppedFrames, cropOffsets, cropSizes, centerPoint);
+                // Important: pass the absolute start frame corresponding to the first image in the list so
+                // MiniLoader can build a correct per-frame map (startFrame -> startFrame + n - 1).
+                ui->miniLoaderOverlay->updateWithCroppedFrames(startFrame, croppedFrames, cropOffsets, cropSizes, centerPoint);
                 qDebug() << "MainWindow::updateMiniLoaderCrop - sent batch of" << croppedFrames.size() << "cropped frames to miniLoaderOverlay, center:" << currentFrameNumber;
             } else {
                 qDebug() << "MainWindow::updateMiniLoaderCrop - no overlay present; only primary miniLoader updated with center frame";
@@ -1308,14 +1337,14 @@ void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
     }
 
     // Update MergeViewer: convert visible IDs into a color map (fallback gray for now).
-    // In future we can pull actual colors from the blob table model and supply them here.
+    // We intentionally DO NOT set the MergeViewer's current frame here to avoid races with per-frame maps.
     {
         MergeViewer* mv = findChild<MergeViewer*>("mergeViewer");
-        if (mv && ui->videoLoader) {
+        if (mv) {
             QMap<int, QColor> colors;
             for (int id : visibleIds) colors.insert(id, QColor(160, 160, 160));
-            int currentFrame = ui->videoLoader->getCurrentFrameNumber();
-            mv->updateVisibleAndFrame(colors, currentFrame);
+            // Only update colors here. The per-frame map will set the correct current frame/segments.
+            mv->setVisibleWormColors(colors);
         }
     }
 }
