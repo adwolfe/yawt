@@ -95,6 +95,16 @@ public slots:
     void onWormSelectionChanged(const QList<TableItems::ClickedItem>& selectedItems);
 
     /**
+     * @brief Updates the MiniLoader's id->color map and triggers a repaint.
+     * This slot accepts the bulk item list emitted by TrackingDataStorage::itemsChanged
+     * / BlobTableModel::itemsChanged and rebuilds the internal color mapping so overlays
+     * use the authoritative colors.
+     *
+     * @param items List of all ClickedItem objects (complete current list)
+     */
+    void updateItemsToDisplay(const QList<TableItems::ClickedItem>& items);
+
+    /**
      * @brief Sets the selected worm directly by ID.
      * @param wormId The ID of the worm to focus on (-1 for none)
      */
@@ -202,6 +212,10 @@ private:
     // Optional per-frame visibility map computed when multiple frames are supplied via updateWithCroppedFrames.
     // Key = absolute frame number; value = set of visible worm IDs for that frame.
     QMap<int, QSet<int>> m_visibleWormsByFrame;
+
+    // Cache of item colors (worm ID -> QColor) rebuilt from the authoritative items list
+    // supplied by TrackingDataStorage::itemsChanged / BlobTableModel::itemsChanged.
+    QMap<int, QColor> m_idColors;
 };
 
 #endif // MINILOADER_H

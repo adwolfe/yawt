@@ -30,7 +30,44 @@ QPointF MiniLoader::getLastCenterPoint() const
 
 void MiniLoader::setTrackingDataStorage(TrackingDataStorage* storage)
 {
+    // Avoid reconnecting if the same storage pointer is provided
+    if (m_trackingDataStorage == storage) {
+        return;
+    }
+
+    // If we previously had a storage pointer, disconnect any signals from it to avoid duplicate connections
+    if (m_trackingDataStorage) {
+        // Disconnect all connections from the old storage to this MiniLoader
+        disconnect(m_trackingDataStorage, nullptr, this, nullptr);
+    }
+
     m_trackingDataStorage = storage;
+
+    // Connect to the authoritative bulk itemsChanged signal so we can rebuild our id->color map.
+    if (m_trackingDataStorage) {
+        connect(m_trackingDataStorage, &TrackingDataStorage::itemsChanged,
+                this, &MiniLoader::updateItemsToDisplay);
+    }
+}
+
+/**
+ * @brief Update the MiniLoader's id->color cache from the authoritative list of items
+ * and trigger a repaint.
+ *
+ * This slot is intended to be connected to TrackingDataStorage::itemsChanged /
+ * BlobTableModel::itemsChanged so the MiniLoader uses the canonical colors.
+ */
+void MiniLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& items)
+{
+    m_idColors.clear();
+    for (const TableItems::ClickedItem& item : items) {
+        if (item.color.isValid()) {
+            m_idColors.insert(item.id, item.color);
+        }
+    }
+
+    // Trigger a redraw so overlays use the new colors
+    update();
 }
 
 void MiniLoader::setShowOverlays(bool show)
