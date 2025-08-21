@@ -338,8 +338,16 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
 {
     qDebug() << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
 
-    // Clear previous visible IDs each draw; we'll repopulate below
-    m_visibleWormIds.clear();
+    // If updateWithCroppedFrames precomputed a per-frame visibility map, use it for this draw so
+    // painting is consistent with the emitted per-frame signal. Do not emit visibility signals from paint().
+    bool havePerFrame = (!m_visibleWormsByFrame.isEmpty() && m_visibleWormsByFrame.contains(m_currentFrameNumber));
+    if (havePerFrame) {
+        QSet<int> s = m_visibleWormsByFrame.value(m_currentFrameNumber);
+        m_visibleWormIds = s.values();
+    } else {
+        // Clear previous visible IDs each draw; we'll repopulate below
+        m_visibleWormIds.clear();
+    }
 
     if (!m_trackingDataStorage || m_currentFrameNumber < 0) {
         qDebug() << "MiniLoader::drawOverlays early return - no storage or bad frame";
@@ -470,9 +478,8 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
 
     // Debug: list visible worm IDs found this draw
     qDebug() << "MiniLoader::drawOverlays visible worm IDs:" << m_visibleWormIds;
-    // Emit a signal so other UI components (e.g. MainWindow) can react to the updated visible set.
-    // Always emit (even if empty) to keep listeners in sync with the latest draw.
-    emit visibleWormsUpdated(m_visibleWormIds);
+    // Do not emit visibleWormsUpdated from paint anymore. Per-frame visibility is emitted from updateWithCroppedFrames
+    // via visibleWormsUpdatedPerFrame so listeners get the full multi-frame map in one signal.
 }
 
 QPointF MiniLoader::mapVideoToCropCoords(const QPointF& videoCoords) const
@@ -490,4 +497,119 @@ QList<int> MiniLoader::getVisibleWormIds() const
 void MiniLoader::setVisibleWormIds(const QList<int>& ids)
 {
     m_visibleWormIds = ids;
+}
+
+QMap<int, QSet<int>> MiniLoader::getVisibleWormsByFrame() const
+{
+    return m_visibleWormsByFrame;
+}
+
+void MiniLoader::setVisibleWormsByFrame(const QMap<int, QSet<int>>& map)
+{
+    m_visibleWormsByFrame = map;
+}
+
+void MiniLoader::updateWithCroppedFrames(int centerFrameNumber,
+                                         const QList<QImage>& croppedFrames,
+                                         const QList<QPointF>& cropOffsets,
+                                         const QList<QSizeF>& cropSizes,
+                                         QPointF centerPoint)
+{
+    // Basic validation
+    if (croppedFrames.isEmpty()) return;
+    int n = croppedFrames.size();
+    if (cropOffsets.size() != n || cropSizes.size() != n) return;
+
+    // Determine start frame assuming the supplied frames are consecutive and centered on centerFrameNumber.
+    int half = n / 2;
+    int startFrame = centerFrameNumber - half;
+    int centerIndex = half; // integer division; for even n this picks the upper-middle, but caller should supply odd-length lists
+
+    // Store/display the central frame as the widget's current cropped frame
+    m_currentFrameNumber = centerFrameNumber;
+    m_croppedFrame = croppedFrames.value(centerIndex);
+    m_cropOffset = cropOffsets.value(centerIndex);
+    m_cropSize = cropSizes.value(centerIndex);
+    m_centerPoint = centerPoint;
+
+    // Compute per-frame visibility using the same intersection logic as drawOverlays (but without painting)
+    m_visibleWormsByFrame.clear();
+    m_visibleWormIds.clear();
+
+    // Small epsilon area threshold to match drawOverlays behavior
+    const double AREA_EPS = 0.5;
+
+    for (int i = 0; i < n; ++i) {
+        int frameNum = startFrame + i;
+        QSet<int> visibleSet;
+
+        if (!m_trackingDataStorage || frameNum < 0) {
+            m_visibleWormsByFrame.insert(frameNum, visibleSet);
+            continue;
+        }
+
+        // Get all detected blobs for this frame
+        QMap<int, Tracking::DetectedBlob> blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(frameNum);
+        if (blobMap.isEmpty()) {
+            m_visibleWormsByFrame.insert(frameNum, visibleSet);
+            continue;
+        }
+
+        // Build crop rectangle in video coordinates for this supplied frame
+        QRectF cropRectVid = QRectF(cropOffsets[i], cropSizes[i]);
+        if (cropRectVid.isEmpty()) {
+            m_visibleWormsByFrame.insert(frameNum, visibleSet);
+            continue;
+        }
+
+        // For each blob, test intersection with crop (using the same contour->crop-local conversion)
+        for (auto it = blobMap.constBegin(); it != blobMap.constEnd(); ++it) {
+            int wormId = it.key();
+            const Tracking::DetectedBlob& blob = it.value();
+
+            if (!blob.isValid || blob.contourPoints.empty()) continue;
+
+            // Quick reject by bounding box (video coords)
+            if (!cropRectVid.intersects(blob.boundingBox)) continue;
+
+            // Convert blob contour to crop-local polygon (video -> crop-local for this frame)
+            QPolygonF blobCropPoly = contourToCropPolygon(blob.contourPoints, cropOffsets[i]);
+
+            // Build QPainterPath for blob and for crop rectangle (crop-local coords)
+            QPainterPath blobPath;
+            blobPath.addPolygon(blobCropPoly);
+
+            QPainterPath cropPath;
+            cropPath.addRect(QRectF(0.0, 0.0, croppedFrames[i].width(), croppedFrames[i].height()));
+
+            // Intersect the two paths
+            QPainterPath inter = blobPath.intersected(cropPath);
+
+            // Convert intersection to fill polygon(s)
+            QPolygonF interPoly = inter.toFillPolygon();
+
+            double interArea = polygonArea(interPoly);
+
+            if (interArea <= AREA_EPS) {
+                // No meaningful intersection
+                continue;
+            }
+
+            visibleSet.insert(wormId);
+        } // end blob loop
+
+        m_visibleWormsByFrame.insert(frameNum, visibleSet);
+
+        // If this is the center frame also populate the single-frame visible list used elsewhere
+        if (i == centerIndex) {
+            // Convert QSet -> QList preserving arbitrary order (caller normalizes if needed)
+            m_visibleWormIds = visibleSet.values();
+        }
+    } // end frames loop
+
+    // Emit per-frame visibility map (single signal containing visibility for all supplied frames).
+    emit visibleWormsUpdatedPerFrame(m_visibleWormsByFrame);
+
+    // Trigger a repaint (central frame was updated above)
+    update();
 }

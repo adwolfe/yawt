@@ -7,6 +7,8 @@
 #include <QSizeF>
 #include <QRectF>
 #include <QList>
+#include <QMap>
+#include <QSet>
 #include "trackingcommon.h"
 
 // Forward declarations
@@ -79,6 +81,11 @@ public:
     QList<int> getVisibleWormIds() const;
     void setVisibleWormIds(const QList<int>& ids);
 
+    // Per-frame visibility map computed by the MiniLoader when multiple cropped frames are provided.
+    // Key = absolute frame number, Value = set of visible worm IDs for that frame.
+    QMap<int, QSet<int>> getVisibleWormsByFrame() const;
+    void setVisibleWormsByFrame(const QMap<int, QSet<int>>& map);
+
 public slots:
     /**
      * @brief Handles worm selection changes from the BlobTableModel.
@@ -97,6 +104,25 @@ public slots:
      */
     void clearSelection();
 
+    /**
+     * @brief Update with multiple pre-cropped frames (centered around centerFrameNumber).
+     *
+     * The lists of frames/offsets/sizes must be the same length and correspond to consecutive frames
+     * (e.g. center-radius .. center+radius). The MiniLoader will display the central frame but will
+     * compute visibility across all supplied frames and emit per-frame visibility via the signal below.
+     *
+     * @param centerFrameNumber Absolute frame index corresponding to the central image in the lists.
+     * @param croppedFrames List of cropped QImage frames ordered left-to-right (center-radius .. center+radius).
+     * @param cropOffsets Top-left offsets in video coordinates for each cropped frame (same order).
+     * @param cropSizes Sizes (video coordinates) for each cropped frame (same order).
+     * @param centerPoint The center point used for the central crop (video coords).
+     */
+    void updateWithCroppedFrames(int centerFrameNumber,
+                                 const QList<QImage>& croppedFrames,
+                                 const QList<QPointF>& cropOffsets,
+                                 const QList<QSizeF>& cropSizes,
+                                 QPointF centerPoint);
+
 signals:
     /**
      * @brief Emitted when the selected worm changes.
@@ -109,6 +135,12 @@ signals:
      * @param visibleIds List of worm IDs that are present (whole or partially) in the last drawn crop.
      */
     void visibleWormsUpdated(const QList<int>& visibleIds);
+
+    /**
+     * @brief Emitted when the MiniLoader computes per-frame visibility for a set of supplied cropped frames.
+     * The map key is the absolute frame number and the value is the set of visible worm IDs in that frame.
+     */
+    void visibleWormsUpdatedPerFrame(const QMap<int, QSet<int>>& visibleByFrame);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -146,6 +178,10 @@ private:
 
     // Simple storage of currently visible worm IDs (updated each paint/draw)
     QList<int> m_visibleWormIds;
+
+    // Optional per-frame visibility map computed when multiple frames are supplied via updateWithCroppedFrames.
+    // Key = absolute frame number; value = set of visible worm IDs for that frame.
+    QMap<int, QSet<int>> m_visibleWormsByFrame;
 };
 
 #endif // MINILOADER_H

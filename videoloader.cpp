@@ -1705,6 +1705,33 @@ bool VideoLoader::getCachedFrame(int frameNumber, cv::Mat& outFrame) {
     return m_frameCache->getFrame(frameNumber, outFrame);
 }
 
+QImage VideoLoader::getQImageForFrame(int frameNumber) const {
+    // Return a QImage for an arbitrary frame number if available in the cache.
+    // This does not attempt to synchronously load from disk; it only consults the in-memory cache.
+    if (frameNumber < 0 || (totalFramesCount > 0 && frameNumber >= totalFramesCount)) {
+        return QImage();
+    }
+
+    cv::Mat mat;
+    if (m_frameCache && m_frameCache->getFrame(frameNumber, mat)) {
+        QImage qimg;
+        // convertCvMatToQImage is non-const; safe to call via const_cast here.
+        const_cast<VideoLoader*>(this)->convertCvMatToQImage(mat, qimg);
+        return qimg;
+    }
+
+    // Not present in cache -> return null QImage
+    return QImage();
+}
+
+QMap<int, QImage> VideoLoader::getQImagesForFrames(const QList<int>& frameNumbers) const {
+    QMap<int, QImage> result;
+    for (int fn : frameNumbers) {
+        result.insert(fn, getQImageForFrame(fn));
+    }
+    return result;
+}
+
 void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
     if (!m_frameLoader || !m_frameCache || centerFrame < 0) {
         return;

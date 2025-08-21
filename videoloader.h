@@ -177,6 +177,14 @@ public:
     double getFPS() const;
     int getCurrentFrameNumber() const;
     QImage getCurrentQImageFrame() const;
+    // Return a QImage for an arbitrary frame number. This may consult the internal cache
+    // and, if implemented in the .cpp, may synchronously convert a cached cv::Mat to QImage.
+    // If the frame is not available this should return a null QImage.
+    QImage getQImageForFrame(int frameNumber) const;
+    // Convenience helper: return a map of frameNumber -> QImage for the provided list of frames.
+    // Frames that cannot be retrieved will map to a null QImage. Useful for callers that need
+    // multiple cropped frames to send to MiniLoader in one batch.
+    QMap<int, QImage> getQImagesForFrames(const QList<int>& frameNumbers) const;
     QSize getVideoFrameSize() const;
     double getZoomFactor() const;
     QRectF getCurrentRoi() const; // The general purpose ROI (e.g., for processing)
