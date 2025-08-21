@@ -300,12 +300,9 @@ void VideoLoader::setTrackingDataStorage(TrackingDataStorage* storage) {
     // If we have valid storage, connect to its signals
     if (m_storage) {
         // Connect to storage's signals to update display when data changes
-        connect(m_storage, &TrackingDataStorage::itemsChanged, this, [this]() {
-            // Update from storage when items change
-            if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
-                update(); // Trigger repaint
-            }
-        });
+        // Use the bulk itemsChanged signal to receive the full items list so we can
+        // update our internal color map via updateItemsToDisplay(...)
+        connect(m_storage, &TrackingDataStorage::itemsChanged, this, &VideoLoader::updateItemsToDisplay);
 
         connect(m_storage, &TrackingDataStorage::allDataChanged, this, [this]() {
             // Full refresh when all data changes
@@ -790,42 +787,16 @@ void VideoLoader::clearDisplayedTracks() {
     qDebug() << "VideoLoader: All displayed tracks (data) cleared.";
 }
 
-void VideoLoader::updateWormColor(int wormId, const QColor& color) {
-    if (color.isValid()) {
-        m_trackColors[wormId] = color;
-        qDebug() << "VideoLoader: Updated color for worm ID" << wormId << "to" << color.name();
-        bool needsRepaint = false;
-        if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
-            // Check if this wormId is relevant for current frame blob display
-            if (m_storage) {
-                // Use optimized lookup instead of linear search
-                QPointF position;
-                QRectF roi;
-                if (m_storage->getWormDataForFrame(wormId, currentFrameIdx, position, roi)) {
-                    needsRepaint = true;
-                }
-            } else if (!m_allTracksToDisplay.empty() && m_allTracksToDisplay.count(wormId)) {
-                // Fallback to linear search if no storage available
-                const std::vector<Tracking::WormTrackPoint>& trackPoints = m_allTracksToDisplay.at(wormId);
-                auto it = std::find_if(trackPoints.begin(), trackPoints.end(),
-                                       [this](const Tracking::WormTrackPoint& pt) {
-                                           return pt.frameNumberOriginal == currentFrameIdx;
-                                       });
-                if (it != trackPoints.end()) needsRepaint = true;
-            } else { // Fallback to m_itemsToDisplay if no tracks
-                for (const auto& item : std::as_const(m_itemsToDisplay)) {
-                    if (item.id == wormId) { needsRepaint = true; break; }
-                }
-            }
-        }
-        if (!needsRepaint && m_activeViewModes.testFlag(ViewModeOption::Tracks) && m_visibleTrackIDs.contains(wormId)) {
-            needsRepaint = true;
-        }
-        if (needsRepaint) {
-            update();
-        }
-    }
-}
+/* Per-item color update slot removed.
+ *
+ * Color updates are now propagated via the bulk `itemsChanged(const QList<TableItems::ClickedItem>&)`
+ * signal emitted by `TrackingDataStorage` / `BlobTableModel`. Consumers (including VideoLoader)
+ * should rebuild their id->color maps from that list (see setTrackingDataStorage() where the
+ * `itemsChanged` connection triggers updates/repaints).
+ *
+ * The previous per-item `updateWormColor` implementation has been removed to centralize and
+ * simplify color propagation.
+ */
 
 // --- Frame Processing and Display ---
 void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {

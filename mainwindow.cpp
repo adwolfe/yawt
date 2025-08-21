@@ -305,7 +305,6 @@ void MainWindow::setupConnections() {
 
     // BlobTableModel -> VideoLoader
     connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
-    connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->videoLoader, &VideoLoader::updateWormColor);
     connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged,
             [this](int id, bool visible) {
                 // When an item's visibility changes, update the VideoLoader with current items
@@ -315,8 +314,7 @@ void MainWindow::setupConnections() {
     if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) {
         // When the blob list changes, instruct overlay to repaint
         connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
-        // Item color/visibility changes should also trigger a repaint
-        connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
+        // Item visibility changes should also trigger a repaint
         connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
 
         // Allow the overlay to respond to selection changes

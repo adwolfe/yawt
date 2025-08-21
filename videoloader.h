@@ -264,8 +264,9 @@ public slots:
 
     void clearDisplayedTracks(); // Clears m_allTracksToDisplay and m_visibleTrackIDs
 
-    // --- Slot for Worm Color Updates (from BlobTableModel, if still needed directly) ---
-    void updateWormColor(int wormId, const QColor& color);
+    // Slot for per-item Worm Color Updates removed.
+    // Consumers should use the bulk `itemsChanged(const QList<TableItems::ClickedItem>&)` signal
+    // from `TrackingDataStorage` / `BlobTableModel` and rebuild id->color maps from that list.
 
 
 signals:

@@ -307,11 +307,16 @@ signals:
     void itemVisibilityChanged(int itemId, bool visible);
     
     /**
-     * @brief Emitted when an item's color is changed
-     * @param itemId ID of the item
-     * @param color New color
+     * @brief Per-item color change signal removed.
+     *
+     * Color changes are now propagated via the bulk
+     * `itemsChanged(const QList<TableItems::ClickedItem>& allItems)` signal.
+     * Consumers should rebuild any id->color maps from the supplied list.
+     *
+     * The per-item `itemColorChanged` signal previously declared here was
+     * intentionally removed to centralize state propagation and avoid
+     * redundant per-item wiring.
      */
-    void itemColorChanged(int itemId, const QColor& color);
     
     /**
      * @brief Emitted when the list of items changes (for compatibility with BlobTableModel)

@@ -103,16 +103,11 @@ signals:
      * @brief Emitted when the list of items in the model changes (add, remove, data modification).
      * This is the primary signal VideoLoader should connect to for display updates.
      * @param allItems The complete current list of TrackedItems in the model.
+     *
+     * NOTE: Color changes are now propagated via this bulk signal (itemsChanged) rather than a per-item
+     * itemColorChanged signal. Consumers should rebuild any id->color maps from the supplied list.
      */
     void itemsChanged(const QList<TableItems::ClickedItem>& allItems);
-
-    /**
-     * @brief Emitted specifically when a new item's color is first assigned or changed by user.
-     * Useful for components that only care about individual color updates without needing the whole list.
-     * @param id The ID of the item.
-     * @param color The new color of the item.
-     */
-    void itemColorChanged(int id, const QColor& color);
 
     /**
      * @brief Emitted when an item's visibility is changed.
@@ -157,7 +152,6 @@ private:
         void onStorageItemRemoved(int itemId);
         void onStorageItemChanged(int itemId);
         void onStorageItemVisibilityChanged(int itemId, bool visible);
-        void onStorageItemColorChanged(int itemId, const QColor& color);
         void onStorageAllDataChanged();
         void onStorageGlobalMetricsUpdated(double minArea, double maxArea,
                                           double minAspectRatio, double maxAspectRatio,

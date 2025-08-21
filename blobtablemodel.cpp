@@ -13,7 +13,7 @@ BlobTableModel::BlobTableModel(TrackingDataStorage* storage, QObject *parent)
     connect(m_storage, &TrackingDataStorage::itemRemoved, this, &BlobTableModel::onStorageItemRemoved);
     connect(m_storage, &TrackingDataStorage::itemChanged, this, &BlobTableModel::onStorageItemChanged);
     connect(m_storage, &TrackingDataStorage::itemVisibilityChanged, this, &BlobTableModel::onStorageItemVisibilityChanged);
-    connect(m_storage, &TrackingDataStorage::itemColorChanged, this, &BlobTableModel::onStorageItemColorChanged);
+    // Per-item color signal removed; consumers receive color updates via bulk itemsChanged emitted by storage.
     connect(m_storage, &TrackingDataStorage::allDataChanged, this, &BlobTableModel::onStorageAllDataChanged);
     connect(m_storage, &TrackingDataStorage::globalMetricsUpdated, this, &BlobTableModel::onStorageGlobalMetricsUpdated);
 }
@@ -338,24 +338,10 @@ void BlobTableModel::onStorageItemVisibilityChanged(int itemId, bool visible) {
     }
 }
 
-void BlobTableModel::onStorageItemColorChanged(int itemId, const QColor& color) {
-    // Forward the signal
-    emit itemColorChanged(itemId, color);
-    
-    // Find the row and update the color cell
-    int row = -1;
-    for (int i = 0; i < m_storage->getItemCount(); ++i) {
-        if (m_storage->getItemByIndex(i).id == itemId) {
-            row = i;
-            break;
-        }
-    }
-    
-    if (row >= 0) {
-        QModelIndex colorIndex = index(row, Column::Color);
-        emit dataChanged(colorIndex, colorIndex, {Qt::DisplayRole, Qt::EditRole, Qt::DecorationRole});
-    }
-}
+/* Per-item color slot removed.
+   TrackingDataStorage now emits the bulk `itemsChanged(...)` when colors change.
+   Consumers should rebuild their id->color maps from the supplied list.
+*/
 
 void BlobTableModel::onStorageAllDataChanged() {
     // Full model reset

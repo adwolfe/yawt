@@ -168,7 +168,9 @@ void TrackingDataStorage::setItemColor(int itemId, const QColor& color) {
     
     if (m_items[index].color != color) {
         m_items[index].color = color;
-        emit itemColorChanged(itemId, color);
+        // Emit the bulk itemsChanged so consumers rebuild any id->color maps
+        // from the authoritative list instead of relying on a per-item signal.
+        emit itemsChanged(m_items);
         emit itemChanged(itemId);
     }
 }
