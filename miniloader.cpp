@@ -386,14 +386,21 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
         m_visibleWormIds.clear();
     }
 
-    if (!m_trackingDataStorage || m_currentFrameNumber < 0) {
-        qDebug() << "MiniLoader::drawOverlays early return - no storage or bad frame";
+    if (m_currentFrameNumber < 0) {
+        qDebug() << "MiniLoader::drawOverlays early return - bad frame";
         return;
     }
 
-    // Get all detected blobs for the current frame
-    QMap<int, Tracking::DetectedBlob> blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(m_currentFrameNumber);
-    qDebug() << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
+    // Get all detected blobs for the current frame (requires storage). If storage is missing,
+    // we can't draw blob outlines so skip drawing; color lookups are preferred from m_idColors.
+    QMap<int, Tracking::DetectedBlob> blobMap;
+    if (m_trackingDataStorage) {
+        blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(m_currentFrameNumber);
+        qDebug() << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
+    } else {
+        qDebug() << "MiniLoader::drawOverlays: no storage available; skipping blob overlay drawing";
+        return;
+    }
 
     if (blobMap.isEmpty()) {
         qDebug() << "MiniLoader::drawOverlays no blobs for frame" << m_currentFrameNumber;
@@ -452,13 +459,21 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
             m_visibleWormIds.append(wormId);
         }
 
-        // Determine color to draw: try to use the item's color from storage if available
+        // Determine color to draw: prefer the cached color map (m_idColors) rebuilt via itemsChanged.
+        // Fall back to storage only if the cached color is not present.
         QColor fillColor(220, 60, 60, 100); // default semi-transparent red
-        const TableItems::ClickedItem* item = m_trackingDataStorage->getItem(wormId);
-        if (item) {
-            QColor c = item->color;
+        if (m_idColors.contains(wormId)) {
+            QColor c = m_idColors.value(wormId);
             c.setAlpha(120);
             fillColor = c;
+        } else {
+            const TableItems::ClickedItem* item = nullptr;
+            if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(wormId);
+            if (item) {
+                QColor c = item->color;
+                c.setAlpha(120);
+                fillColor = c;
+            }
         }
 
         // Convert intersection polygon (crop-local) -> widget coords, then draw
@@ -660,13 +675,19 @@ QList<int> unionList = unionSet.values();
 // Build a map from worm ID -> QColor using the TrackingDataStorage (so colors match the overlay).
 QMap<int, QColor> idColors;
 for (int id : unionSet) {
-    const TableItems::ClickedItem* item = nullptr;
-    if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(id);
-    if (item) {
-        idColors.insert(id, item->color);
+    // Prefer the authority-provided cached color map (m_idColors). If not available, fall back
+    // to storage lookup; if neither yields a color, use a default gray fallback.
+    if (m_idColors.contains(id)) {
+        idColors.insert(id, m_idColors.value(id));
     } else {
-        // Fallback color matches MergeViewer's default gray
-        idColors.insert(id, QColor(160, 160, 160));
+        const TableItems::ClickedItem* item = nullptr;
+        if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(id);
+        if (item) {
+            idColors.insert(id, item->color);
+        } else {
+            // Fallback color matches MergeViewer's default gray
+            idColors.insert(id, QColor(160, 160, 160));
+        }
     }
 }
 
