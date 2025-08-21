@@ -277,7 +277,7 @@
        <enum>QTabWidget::TabShape::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>1</number>
+       <number>2</number>
       </property>
       <widget class="QWidget" name="trackingTab">
        <attribute name="title">
@@ -1051,100 +1051,140 @@ QToolButton#lastFrameButton {
         </item>
        </layout>
       </widget>
+      <widget class="QWidget" name="backupTab">
+       <attribute name="title">
+        <string>Cleanup</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="4">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_10" stretch="0,1">
+          <item>
+           <layout class="QVBoxLayout" name="verticalLayout_3" stretch="">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_4">
+            <item>
+             <widget class="QTableView" name="annoTableView"/>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
       <widget class="QWidget" name="cleanupTab">
        <attribute name="title">
         <string>Cleanup</string>
        </attribute>
-       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="4,1,2">
+       <layout class="QVBoxLayout" name="verticalLayout_4" stretch="5,1,5,5">
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_10" stretch="0,1">
+         <layout class="QHBoxLayout" name="horizontalLayout_12">
+          <property name="leftMargin">
+           <number>20</number>
+          </property>
+          <property name="rightMargin">
+           <number>20</number>
+          </property>
           <item>
-           <layout class="QVBoxLayout" name="verticalLayout_3" stretch="3,1">
-            <property name="leftMargin">
-             <number>0</number>
+           <widget class="MiniLoader" name="mlon2" native="true"/>
+          </item>
+          <item>
+           <widget class="MiniLoader" name="mlon1" native="true"/>
+          </item>
+          <item>
+           <widget class="MiniLoader" name="miniLoaderOverlay" native="true">
+            <property name="minimumSize">
+             <size>
+              <width>100</width>
+              <height>100</height>
+             </size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="MiniLoader" name="mlop1" native="true"/>
+          </item>
+          <item>
+           <widget class="MiniLoader" name="mlop2" native="true"/>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_11">
+          <property name="spacing">
+           <number>-1</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <spacer name="horizontalSpacer_2b">
+            <property name="orientation">
+             <enum>Qt::Orientation::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QComboBox" name="comboPlaybackSpeed_2">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>80</width>
+              <height>16777215</height>
+             </size>
             </property>
             <item>
-             <widget class="MiniLoader" name="miniLoaderOverlay" native="true">
-              <property name="minimumSize">
-               <size>
-                <width>100</width>
-                <height>100</height>
-               </size>
-              </property>
-             </widget>
+             <property name="text">
+              <string>0.5x</string>
+             </property>
             </item>
             <item>
-             <layout class="QHBoxLayout" name="horizontalLayout_11">
-              <property name="spacing">
-               <number>-1</number>
-              </property>
-              <property name="bottomMargin">
-               <number>0</number>
-              </property>
-              <item>
-               <widget class="QComboBox" name="comboPlaybackSpeed_2">
-                <property name="sizePolicy">
-                 <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                  <horstretch>0</horstretch>
-                  <verstretch>0</verstretch>
-                 </sizepolicy>
-                </property>
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>0</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>80</width>
-                  <height>16777215</height>
-                 </size>
-                </property>
-                <item>
-                 <property name="text">
-                  <string>0.5x</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>1.0x</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>2.5x</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>5.0x</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>10.0x</string>
-                 </property>
-                </item>
-               </widget>
-              </item>
-              <item>
-               <spacer name="horizontalSpacer_2b">
-                <property name="orientation">
-                 <enum>Qt::Orientation::Horizontal</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>40</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
-              </item>
-              <item>
-               <widget class="QToolButton" name="firstFrameButton_2">
-                <property name="styleSheet">
-                 <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+             <property name="text">
+              <string>1.0x</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>2.5x</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>5.0x</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>10.0x</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="firstFrameButton_2">
+            <property name="styleSheet">
+             <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#firstFrameButton_2 {
     /* Make it round */
     border-radius: 12px; /* Half of the button's size (e.g., 50px / 2) */
@@ -1164,19 +1204,19 @@ QToolButton#firstFrameButton_2 {
     icon-size: 18px 18px; /* Adjust as needed */
 }
 </string>
-                </property>
-                <property name="text">
-                 <string>...</string>
-                </property>
-                <property name="icon">
-                 <iconset theme="QIcon::ThemeIcon::MediaSkipBackward"/>
-                </property>
-               </widget>
-              </item>
-              <item>
-               <widget class="QToolButton" name="playPauseButton_2">
-                <property name="styleSheet">
-                 <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+            </property>
+            <property name="text">
+             <string>...</string>
+            </property>
+            <property name="icon">
+             <iconset theme="QIcon::ThemeIcon::MediaSkipBackward"/>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="playPauseButton_2">
+            <property name="styleSheet">
+             <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#playPauseButton_2 {
     /* Make it round */
     border-radius: 18px; /* Half of the button's size (e.g., 50px / 2) */
@@ -1222,25 +1262,25 @@ QToolButton#playPauseButton_2:checked:hover {
                                       stop: 0 #e8e8e8, stop: 1 #d8d8d8); /* Different hover look when checked */
      border-color: #666;
 }</string>
-                </property>
-                <property name="text">
-                 <string>...</string>
-                </property>
-                <property name="icon">
-                 <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
-                </property>
-                <property name="shortcut">
-                 <string>Space</string>
-                </property>
-                <property name="checkable">
-                 <bool>true</bool>
-                </property>
-               </widget>
-              </item>
-              <item>
-               <widget class="QToolButton" name="lastFrameButton_2">
-                <property name="styleSheet">
-                 <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+            </property>
+            <property name="text">
+             <string>...</string>
+            </property>
+            <property name="icon">
+             <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
+            </property>
+            <property name="shortcut">
+             <string>Space</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QToolButton" name="lastFrameButton_2">
+            <property name="styleSheet">
+             <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#lastFrameButton_2 {
     /* Make it round */
     border-radius: 12px; /* Half of the button's size (e.g., 50px / 2) */
@@ -1260,73 +1300,77 @@ QToolButton#lastFrameButton_2 {
     icon-size: 18px 18px; /* Adjust as needed */
 }
 </string>
-                </property>
-                <property name="text">
-                 <string>...</string>
-                </property>
-                <property name="icon">
-                 <iconset theme="QIcon::ThemeIcon::MediaSkipForward"/>
-                </property>
-               </widget>
-              </item>
-              <item>
-               <spacer name="horizontalSpacer_3b">
-                <property name="orientation">
-                 <enum>Qt::Orientation::Horizontal</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>40</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
-              </item>
-              <item>
-               <widget class="QSpinBox" name="framePosition_2">
-                <property name="minimumSize">
-                 <size>
-                  <width>60</width>
-                  <height>0</height>
-                 </size>
-                </property>
-               </widget>
-              </item>
-             </layout>
-            </item>
-           </layout>
+            </property>
+            <property name="text">
+             <string>...</string>
+            </property>
+            <property name="icon">
+             <iconset theme="QIcon::ThemeIcon::MediaSkipForward"/>
+            </property>
+           </widget>
           </item>
           <item>
-           <layout class="QHBoxLayout" name="horizontalLayout_4">
-            <item>
-             <widget class="QTableView" name="mergeSplitTableView"/>
-            </item>
-            <item>
-             <widget class="QTableView" name="annoTableView"/>
-            </item>
-           </layout>
+           <widget class="QSpinBox" name="framePosition_2">
+            <property name="minimumSize">
+             <size>
+              <width>60</width>
+              <height>0</height>
+             </size>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer_3b">
+            <property name="orientation">
+             <enum>Qt::Orientation::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
           </item>
          </layout>
         </item>
         <item>
-         <widget class="QTextEdit" name="mergeHistoryText">
-          <property name="readOnly">
-           <bool>true</bool>
+         <layout class="QHBoxLayout" name="horizontalLayout_13">
+          <property name="leftMargin">
+           <number>20</number>
           </property>
-          <property name="placeholderText">
-           <string>Merge history will appear here</string>
+          <property name="topMargin">
+           <number>0</number>
           </property>
-         </widget>
+          <property name="rightMargin">
+           <number>20</number>
+          </property>
+          <item>
+           <widget class="QWidget" name="mmn2" native="true"/>
+          </item>
+          <item>
+           <widget class="QWidget" name="mmn1" native="true"/>
+          </item>
+          <item>
+           <widget class="QWidget" name="mergeMap" native="true"/>
+          </item>
+          <item>
+           <widget class="QWidget" name="mmp1" native="true"/>
+          </item>
+          <item>
+           <widget class="QWidget" name="mmp2" native="true"/>
+          </item>
+         </layout>
         </item>
         <item>
-         <widget class="MergeViewer" name="mergeViewer" native="true">
-          <property name="minimumSize">
-           <size>
-            <width>200</width>
-            <height>80</height>
-           </size>
+         <layout class="QHBoxLayout" name="horizontalLayout_14">
+          <property name="topMargin">
+           <number>0</number>
           </property>
-         </widget>
+          <item>
+           <widget class="QTableView" name="mergeSplitTableView"/>
+          </item>
+         </layout>
         </item>
        </layout>
       </widget>
@@ -1362,12 +1406,6 @@ QToolButton#lastFrameButton_2 {
    <class>MiniLoader</class>
    <extends>QWidget</extends>
    <header>miniloader.h</header>
-   <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>MergeViewer</class>
-   <extends>QWidget</extends>
-   <header>mergeviewer.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

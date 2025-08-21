@@ -19,7 +19,6 @@ class ItemTypeDelegate;
 class TrackingProgressDialog;
 class TrackingManager;
 class TrackingDataStorage;
-class MergeViewer;
 // Retracking forward declarations removed
 
 // Include VideoLoader header for enums and QFlags type
@@ -154,15 +153,13 @@ private:
     
     // Model for merge/split events table
     QStandardItemModel* m_mergeSplitModel;
-    // Currently visible worm IDs inside MiniLoader crop (updated via signal)
-    QSet<int> m_miniLoaderVisibleIds;
-
     // Polling fallback: timer to query mini loaders periodically and update visible IDs if changed
     QTimer* m_miniLoaderPollTimer;
     // Last polled set to detect changes and avoid redundant UI updates
     QSet<int> m_lastPolledVisibleIds;
 
-    // Helper to rebuild the merge history text widget for a given frame using a provided visible set
-    QString buildMergeHistoryText(int currentFrameNumber, const QSet<int>& visibleSet) const;
+    // Note: references to MergeViewer and the mergeHistoryText widget have been removed from this header.
+    // Any merge-visualization or textual history UI should be reintroduced by the caller when needed.
+
 };
 #endif // MAINWINDOW_H
