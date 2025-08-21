@@ -338,6 +338,9 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
 {
     qDebug() << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
 
+    // Clear previous visible IDs each draw; we'll repopulate below
+    m_visibleWormIds.clear();
+
     if (!m_trackingDataStorage || m_currentFrameNumber < 0) {
         qDebug() << "MiniLoader::drawOverlays early return - no storage or bad frame";
         return;
@@ -397,6 +400,11 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
         if (interArea <= AREA_EPS) {
             // No meaningful intersection
             continue;
+        }
+
+        // Record this worm ID as visible (avoid duplicates)
+        if (!m_visibleWormIds.contains(wormId)) {
+            m_visibleWormIds.append(wormId);
         }
 
         // Determine color to draw: try to use the item's color from storage if available
@@ -459,6 +467,12 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
             }
         }
     }
+
+    // Debug: list visible worm IDs found this draw
+    qDebug() << "MiniLoader::drawOverlays visible worm IDs:" << m_visibleWormIds;
+    // Emit a signal so other UI components (e.g. MainWindow) can react to the updated visible set.
+    // Always emit (even if empty) to keep listeners in sync with the latest draw.
+    emit visibleWormsUpdated(m_visibleWormIds);
 }
 
 QPointF MiniLoader::mapVideoToCropCoords(const QPointF& videoCoords) const
@@ -466,4 +480,14 @@ QPointF MiniLoader::mapVideoToCropCoords(const QPointF& videoCoords) const
     double cropX = videoCoords.x() - m_cropOffset.x();
     double cropY = videoCoords.y() - m_cropOffset.y();
     return QPointF(cropX, cropY);
+}
+
+QList<int> MiniLoader::getVisibleWormIds() const
+{
+    return m_visibleWormIds;
+}
+
+void MiniLoader::setVisibleWormIds(const QList<int>& ids)
+{
+    m_visibleWormIds = ids;
 }

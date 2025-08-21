@@ -6,6 +6,9 @@
 #include <QButtonGroup> // For interaction modes
 #include <QResizeEvent>
 #include <QStandardItemModel>
+#include <QList>
+#include <QSet>
+#include <QTimer>
 
 // Forward declarations
 namespace Ui { class MainWindow; }
@@ -110,6 +113,11 @@ public slots:
     // Slots to react to VideoLoader mode changes (for UI sync)
     void syncInteractionModeButtons(VideoLoader::InteractionMode newMode);
     void syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes); // Updated for QFlags
+    // Slot: receive list of visible worm IDs from MiniLoader and update merge history/filtering
+    void onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds);
+
+    // Poll timer tick: periodically poll MiniLoader(s) for visible IDs (fallback if signal missed)
+    void onMiniLoaderPollTimeout();
 
 
 
@@ -145,5 +153,15 @@ private:
     
     // Model for merge/split events table
     QStandardItemModel* m_mergeSplitModel;
+    // Currently visible worm IDs inside MiniLoader crop (updated via signal)
+    QSet<int> m_miniLoaderVisibleIds;
+
+    // Polling fallback: timer to query mini loaders periodically and update visible IDs if changed
+    QTimer* m_miniLoaderPollTimer;
+    // Last polled set to detect changes and avoid redundant UI updates
+    QSet<int> m_lastPolledVisibleIds;
+
+    // Helper to rebuild the merge history text widget for a given frame using a provided visible set
+    QString buildMergeHistoryText(int currentFrameNumber, const QSet<int>& visibleSet) const;
 };
 #endif // MAINWINDOW_H

@@ -644,6 +644,31 @@ void MainWindow::setupConnections() {
     ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
     if (ui->miniLoaderOverlay) ui->miniLoaderOverlay->update();
 
+    // Connect MiniLoader visible worms signal to MainWindow so we can filter merge history live.
+    // Also connect the overlay instance if present so we receive visible updates from either widget.
+    // Always check ui->miniLoader presence since some UI permutations may not include it.
+    if (ui->miniLoader) {
+        QMetaObject::Connection c = connect(ui->miniLoader, &MiniLoader::visibleWormsUpdated,
+                this, &MainWindow::onMiniLoaderVisibleWormsUpdated);
+        qDebug() << "MainWindow: connect miniLoader visibleWormsUpdated -> slot, miniLoader ptr=" << ui->miniLoader
+                 << " connection valid:" << bool(c);
+    }
+    // If an overlay widget exists, connect its visibleWormsUpdated signal as well so we don't miss updates.
+    if (ui->miniLoaderOverlay) {
+        QMetaObject::Connection c2 = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdated,
+                this, &MainWindow::onMiniLoaderVisibleWormsUpdated);
+        qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> slot, overlay ptr=" << ui->miniLoaderOverlay
+                 << " connection valid:" << bool(c2);
+    }
+
+    // Start a short polling timer as a fallback in case signals are missed or paint() hasn't yet emitted.
+    // This keeps the mergeHistoryText in sync with miniLoader(s) reliably.
+    m_miniLoaderPollTimer = new QTimer(this);
+    connect(m_miniLoaderPollTimer, &QTimer::timeout, this, &MainWindow::onMiniLoaderPollTimeout);
+    m_miniLoaderPollTimer->setInterval(100); // 100 ms poll interval
+    m_miniLoaderPollTimer->start();
+    qDebug() << "MainWindow: started miniLoader poll timer (100ms)";
+
     // Debug control keyboard shortcut
     QShortcut* debugToggle = new QShortcut(QKeySequence("Ctrl+D"), this);
     connect(debugToggle, &QShortcut::activated, this, &MainWindow::toggleTrackingDebug);
@@ -1023,53 +1048,11 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
     // Keep the duplicated frame position in sync
     ui->framePosition_2->setValue(currentFrameNumber);
 
-    // Update merge history text widget with a +/-2 frame window
+    // Update merge history text widget using the cached visible IDs from MiniLoader (if any)
     if (m_trackingDataStorage && ui->mergeHistoryText) {
-        const int radius = 2;
-        QStringList frameBlocks;
-        for (int f = currentFrameNumber - radius; f <= currentFrameNumber + radius; ++f) {
-            if (f < 0) continue;
-            QList<QList<int>> groups = m_trackingDataStorage->getMergeGroupsForFrame(f);
-            QString header = QString("MERGES (FRAME %1)").arg(f);
-            QStringList lines;
-            if (groups.isEmpty()) {
-                lines << "  No merges";
-            } else {
-                // Build partner map: wormId -> list of partners
-                QMap<int, QList<int>> partners;
-                for (const QList<int>& g : groups) {
-                    for (int i = 0; i < g.size(); ++i) {
-                        int wid = g.at(i);
-                        for (int j = 0; j < g.size(); ++j) {
-                            if (i == j) continue;
-                            int other = g.at(j);
-                            if (!partners[wid].contains(other)) partners[wid].append(other);
-                        }
-                    }
-                }
-                // If partners map empty (shouldn't happen), state no merges
-                if (partners.isEmpty()) {
-                    lines << "  No merges";
-                } else {
-                    QList<int> wormIds = partners.keys();
-                    std::sort(wormIds.begin(), wormIds.end());
-                    for (int wid : wormIds) {
-                        const QList<int>& ps = partners.value(wid);
-                        if (ps.isEmpty()) {
-                            lines << QString("  Worm %1 --- None").arg(wid);
-                        } else {
-                            QStringList partnersStr;
-                            for (int p : ps) partnersStr << QString::number(p);
-                            lines << QString("  Worm %1 --- %2").arg(wid).arg(partnersStr.join(", "));
-                        }
-                    }
-                }
-            }
-            frameBlocks << header;
-            frameBlocks << lines;
-            frameBlocks << ""; // spacer line
-        }
-        ui->mergeHistoryText->setPlainText(frameBlocks.join('\n'));
+        // buildMergeHistoryText will treat an empty visibleSet as \"no filtering\" (show all)
+        QString text = buildMergeHistoryText(currentFrameNumber, m_miniLoaderVisibleIds);
+        ui->mergeHistoryText->setPlainText(text);
     }
 }
 
@@ -1156,6 +1139,11 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
                                            cropOffset, newSize,
                                            centerPoint);
     qDebug() << "MainWindow::updateMiniLoaderCrop - sent to miniLoader";
+    // Proactively invoke the visible-worms handler immediately after updating the mini loader.
+    // This ensures mergeHistoryText is updated even if the paint/update signal hasn't fired yet.
+    if (ui->miniLoader) {
+        onMiniLoaderVisibleWormsUpdated(ui->miniLoader->getVisibleWormIds());
+    }
     
     // Also send to MiniLoaderOverlay if it exists
     if (ui->miniLoaderOverlay) {
@@ -1163,6 +1151,8 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
                                                       cropOffset, newSize,
                                                       centerPoint);
         qDebug() << "MainWindow::updateMiniLoaderCrop - sent to miniLoaderOverlay";
+        // Also call the slot for the overlay instance to cover cases where the overlay performs the overlay draw.
+        onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
     } else {
         qDebug() << "MainWindow::updateMiniLoaderCrop - miniLoaderOverlay is null!";
     }
@@ -1174,9 +1164,129 @@ void MainWindow::frameSliderMoved(int value) {
         ui->framePosition->setValue(value);
     }
     // Also update the mirrored spinbox if it's not being edited
-    if (!ui->framePosition_2->hasFocus()) {
-        ui->framePosition_2->setValue(value);
+}
+ 
+// Slot: receive visible worm IDs from MiniLoader. Update cached set and rebuild merge history text.
+// Emitted frequently (on repaint), so keep this lightweight.
+void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
+    // Debug: log received visible IDs so we can verify the signal arrived here
+    qDebug() << "MainWindow::onMiniLoaderVisibleWormsUpdated received visibleIds:" << visibleIds;
+
+    m_miniLoaderVisibleIds.clear();
+    for (int id : visibleIds) m_miniLoaderVisibleIds.insert(id);
+
+    // Rebuild merge history for the current frame immediately so UI remains in sync with miniLoader.
+    if (m_trackingDataStorage && ui->mergeHistoryText && ui->videoLoader) {
+        int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+        ui->mergeHistoryText->setPlainText(buildMergeHistoryText(currentFrame, m_miniLoaderVisibleIds));
     }
+}
+
+// Poll timer fallback handler: periodically query any MiniLoader instances for visible IDs and update
+// MainWindow state if the polled set changes. This complements the signal-based updates and prevents
+// missed updates due to paint/emit ordering differences.
+void MainWindow::onMiniLoaderPollTimeout() {
+    QSet<int> polledSet;
+    // Query primary miniLoader instance if present
+    if (ui->miniLoader) {
+        const QList<int> vis = ui->miniLoader->getVisibleWormIds();
+        for (int id : vis) polledSet.insert(id);
+    }
+    // Query overlay miniLoader instance if present
+    if (ui->miniLoaderOverlay) {
+        const QList<int> vis = ui->miniLoaderOverlay->getVisibleWormIds();
+        for (int id : vis) polledSet.insert(id);
+    }
+
+    // If polled set differs from the last polled set, invoke the visible-IDs handler to update UI.
+    if (polledSet != m_lastPolledVisibleIds) {
+        m_lastPolledVisibleIds = polledSet;
+        QList<int> list;
+        list.reserve(polledSet.size());
+        for (int id : polledSet) list.append(id);
+        qDebug() << "MainWindow::onMiniLoaderPollTimeout polled visible IDs:" << list;
+        onMiniLoaderVisibleWormsUpdated(list);
+    }
+}
+
+// Helper: build the textual merge history block for a given frame using a provided visible set.
+// If visibleSet is empty, treat it as \"no filtering\" (show all merges).
+QString MainWindow::buildMergeHistoryText(int currentFrameNumber, const QSet<int>& visibleSet) const {
+    const int radius = 2;
+    QStringList frameBlocks;
+
+    // Debug: log visible set when building the merge history text so we can trace use of the cached IDs.
+    qDebug() << "MainWindow::buildMergeHistoryText - visibleSet:" << visibleSet;
+
+    // Debug header: show visible worm IDs reported by MiniLoader.
+    // If visibleSet is empty this indicates "no visible worms" (we treat empty as none).
+    if (visibleSet.isEmpty()) {
+        frameBlocks << QString("Visible Worms: (none)");
+    } else {
+        QList<int> vis = visibleSet.values();
+        std::sort(vis.begin(), vis.end());
+        QStringList vs;
+        for (int id : vis) vs << QString::number(id);
+        frameBlocks << QString("Visible Worms: %1").arg(vs.join(", "));
+    }
+    frameBlocks << ""; // spacer line after debug header
+    for (int f = currentFrameNumber - radius; f <= currentFrameNumber + radius; ++f) {
+        if (f < 0) continue;
+        QList<QList<int>> groups = m_trackingDataStorage->getMergeGroupsForFrame(f);
+        QString header = QString("MERGES (FRAME %1)").arg(f);
+        QStringList lines;
+        if (groups.isEmpty()) {
+            lines << "  No merges";
+        } else {
+            // Build partner map but only include worms that are visible (filter by visibleSet).
+            // Also skip groups that contain no visible members.
+            QMap<int, QList<int>> partners;
+            for (const QList<int>& g : groups) {
+                bool groupHasVisible = false;
+                // visibleSet.empty() now means \"no visible worms\". Only mark groupHasVisible
+                // true if the group actually contains one of the visible IDs.
+                for (int wid : g) {
+                    if (visibleSet.contains(wid)) { groupHasVisible = true; break; }
+                }
+                if (!groupHasVisible) continue;
+
+                // Add partner entries but only for visible worms and visible partners
+                for (int i = 0; i < g.size(); ++i) {
+                    int wid = g.at(i);
+                    // If visibleSet is empty -> no visible worms -> skip all entries.
+                    if (visibleSet.isEmpty() || !visibleSet.contains(wid)) continue;
+                    for (int j = 0; j < g.size(); ++j) {
+                        if (i == j) continue;
+                        int other = g.at(j);
+                        if (visibleSet.isEmpty() || !visibleSet.contains(other)) continue;
+                        if (!partners[wid].contains(other)) partners[wid].append(other);
+                    }
+                }
+            }
+
+            // If partners map empty after filtering, show no merges (visible)
+            if (partners.isEmpty()) {
+                lines << "  No merges";
+            } else {
+                QList<int> wormIds = partners.keys();
+                std::sort(wormIds.begin(), wormIds.end());
+                for (int wid : wormIds) {
+                    const QList<int>& ps = partners.value(wid);
+                    if (ps.isEmpty()) {
+                        lines << QString("  Worm %1 --- None").arg(wid);
+                    } else {
+                        QStringList partnersStr;
+                        for (int p : ps) partnersStr << QString::number(p);
+                        lines << QString("  Worm %1 --- %2").arg(wid).arg(partnersStr.join(", "));
+                    }
+                }
+            }
+        }
+        frameBlocks << header;
+        frameBlocks << lines;
+        frameBlocks << ""; // spacer line
+    }
+    return frameBlocks.join('\n');
 }
 
 void MainWindow::seekFrame(int frame) {

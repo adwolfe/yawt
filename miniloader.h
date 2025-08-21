@@ -75,6 +75,10 @@ public:
     QPointF getCurrentCropOffset() const;
     QSizeF getCurrentCropSize() const;
 
+    // Visible worm IDs in the currently displayed crop (updated each draw)
+    QList<int> getVisibleWormIds() const;
+    void setVisibleWormIds(const QList<int>& ids);
+
 public slots:
     /**
      * @brief Handles worm selection changes from the BlobTableModel.
@@ -99,6 +103,12 @@ signals:
      * @param wormId The new selected worm ID (-1 if none)
      */
     void selectedWormChanged(int wormId);
+
+    /**
+     * @brief Emitted whenever the set of visible worm IDs in the miniLoader's current crop/frame is updated.
+     * @param visibleIds List of worm IDs that are present (whole or partially) in the last drawn crop.
+     */
+    void visibleWormsUpdated(const QList<int>& visibleIds);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -132,7 +142,10 @@ private:
     // Overlay functionality
     TrackingDataStorage* m_trackingDataStorage;  // Reference to tracking data storage
     bool m_showOverlays;                         // Whether to draw overlays
-    int m_selectedWormId;                        // Currently selected worm ID (-1 if none)
+    int m_selectedWormId;                        // Currently selected worm ID (-1 for none)
+
+    // Simple storage of currently visible worm IDs (updated each paint/draw)
+    QList<int> m_visibleWormIds;
 };
 
 #endif // MINILOADER_H
