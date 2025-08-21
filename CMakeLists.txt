@@ -35,7 +35,6 @@ set(SOURCES
     main.cpp
     mainwindow.cpp
     miniloader.cpp
-    minivideoloader.cpp
     thresholdingutils.cpp
     trackingcommon.cpp
     trackingdatastorage.cpp
@@ -58,7 +57,6 @@ set(HEADERS
     itemtypedelegate.h
     mainwindow.h
     miniloader.h
-    minivideoloader.h
     thresholdingutils.h
     trackingcommon.h
     trackingdatastorage.h

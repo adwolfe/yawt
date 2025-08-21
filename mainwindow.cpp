@@ -43,39 +43,15 @@ MainWindow::MainWindow(QWidget *parent)
     // Initialize central data storage
     m_trackingDataStorage = new TrackingDataStorage(this);
 
-    // Set up MiniVideoLoader with tracking data storage
-    ui->miniVideoLoader->setTrackingDataStorage(m_trackingDataStorage);
-    ui->miniVideoLoader->setVideoLoader(ui->videoLoader);
-    // New overlay instance in Cleanup tab - separate instance with overlays enabled
-    if (ui->miniVideoLoaderOverlay) {
-        ui->miniVideoLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
-        ui->miniVideoLoaderOverlay->setVideoLoader(ui->videoLoader);
-        ui->miniVideoLoaderOverlay->setShowOtherWormOverlays(true);
-        connect(ui->videoLoader, &VideoLoader::frameChanged,
-                ui->miniVideoLoaderOverlay, static_cast<void(MiniVideoLoader::*)(int, const QImage&)>(&MiniVideoLoader::updateFrame));
-    }
 
+
+    // Set up MiniLoader instances
     ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
-    // Also wire the regular miniLoader to the same model for overlays
-    if (ui->miniLoader->showOverlays()) {
-        // When the blob list changes, instruct miniLoader to repaint
-        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->miniLoader, qOverload<>(&MiniLoader::update));
-        // Item color/visibility changes should also trigger a repaint
-        connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->miniLoader, qOverload<>(&MiniLoader::update));
-        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniLoader, qOverload<>(&MiniLoader::update));
-
-        // Allow the miniLoader to respond to selection changes
-        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
-                ui->miniLoader, [this](const QItemSelection &selected, const QItemSelection&) {
-                    // Build the list of selected ClickedItem(s) and call miniLoader's handler
-                    QList<TableItems::ClickedItem> selItems;
-                    QModelIndexList indexes = selected.indexes();
-                    if (!indexes.isEmpty()) {
-                        int row = indexes.first().row();
-                        if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
-                    }
-                    ui->miniLoader->onWormSelectionChanged(selItems);
-                });
+    ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
+    
+    if (ui->miniLoaderOverlay) {
+        ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
+        ui->miniLoaderOverlay->setShowOverlays(true);  // Overlays enabled on overlay instance
     }
 
 
@@ -112,11 +88,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
         }
 
-        // If overlay exists and we have a selected worm, ensure overlay is instructed to use it
-        if (ui->miniVideoLoaderOverlay && selectedWormId >= 0) {
-            ui->miniVideoLoaderOverlay->setSelectedWorm(selectedWormId);
-            ui->miniVideoLoaderOverlay->update();
-        }
+
 
         // Frame number is in column 0
         QModelIndex frameIdx = m_mergeSplitModel->index(index.row(), 0);
@@ -306,17 +278,17 @@ void MainWindow::setupConnections() {
                 // When an item's visibility changes, update the VideoLoader with current items
                 ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
             });
-    // Also wire the overlay mini loader to the same model if present
-    if (ui->miniVideoLoaderOverlay) {
-        // When the blob list changes, instruct overlay to repaint (it will poll storage when drawing)
-        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->miniVideoLoaderOverlay, qOverload<>(&MiniVideoLoader::update));
-        // Item color/visibility changes should also trigger a repaint so overlay reflects current colors
-        connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->miniVideoLoaderOverlay, qOverload<>(&MiniVideoLoader::update));
-        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniVideoLoaderOverlay, qOverload<>(&MiniVideoLoader::update));
+    // Wire the overlay mini loader to the same model if present
+    if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) {
+        // When the blob list changes, instruct overlay to repaint
+        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
+        // Item color/visibility changes should also trigger a repaint
+        connect(m_blobTableModel, &BlobTableModel::itemColorChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
+        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
 
-        // Also allow the overlay to respond to selection changes via the existing onWormSelectionChanged slot
+        // Allow the overlay to respond to selection changes
         connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
-                ui->miniVideoLoaderOverlay, [this](const QItemSelection &selected, const QItemSelection&) {
+                ui->miniLoaderOverlay, [this](const QItemSelection &selected, const QItemSelection&) {
                     // Build the list of selected ClickedItem(s) and call overlay's handler
                     QList<TableItems::ClickedItem> selItems;
                     QModelIndexList indexes = selected.indexes();
@@ -324,7 +296,7 @@ void MainWindow::setupConnections() {
                         int row = indexes.first().row();
                         if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
                     }
-                    ui->miniVideoLoaderOverlay->onWormSelectionChanged(selItems);
+                    ui->miniLoaderOverlay->onWormSelectionChanged(selItems);
                 });
     }
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
@@ -465,16 +437,14 @@ void MainWindow::setupConnections() {
         ui->deleteButton->setEnabled(!selected.isEmpty());
     });
 
-    // Table View Selection -> MiniVideoLoader
+    // Table View Selection -> MiniLoader Overlays
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         Q_UNUSED(deselected)
 
         if (selected.isEmpty()) {
-            // No selection - clear the mini video loader
-            ui->miniVideoLoader->clearSelection();
-            if (ui->miniVideoLoaderOverlay) ui->miniVideoLoaderOverlay->clearSelection();
-            if (ui->miniLoader->showOverlays()) ui->miniLoader->clearSelection();  // Add this line
+            // No selection - clear the mini loaders
+            if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) ui->miniLoaderOverlay->clearSelection();
         } else {
             // Get the first selected row and extract the worm ID
             QModelIndexList selectedIndexes = selected.indexes();
@@ -482,9 +452,7 @@ void MainWindow::setupConnections() {
                 int selectedRow = selectedIndexes.first().row();
                 if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
                     const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
-                    ui->miniVideoLoader->setSelectedWorm(selectedItem.id);
-                    if (ui->miniVideoLoaderOverlay) ui->miniVideoLoaderOverlay->setSelectedWorm(selectedItem.id);
-                    if (ui->miniLoader->showOverlays()) ui->miniLoader->setSelectedWorm(selectedItem.id);  // Add this line
+                    if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) ui->miniLoaderOverlay->setSelectedWorm(selectedItem.id);
 
                     // Auto-center video on worm position if zoomed in
                     double currentZoom = ui->videoLoader->getZoomFactor();
@@ -564,9 +532,7 @@ void MainWindow::setupConnections() {
 
 
 
-    // Main VideoLoader frame changes -> MiniVideoLoader
-    connect(ui->videoLoader, &VideoLoader::frameChanged,
-            ui->miniVideoLoader, static_cast<void(MiniVideoLoader::*)(int, const QImage&)>(&MiniVideoLoader::updateFrame));
+
 
     // Table View Selection -> MiniLoader (update crop when selection changes)
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -641,8 +607,7 @@ void MainWindow::setupConnections() {
         initialItemIDs.insert(item.id);
     }
     ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
-    if (ui->miniVideoLoader) ui->miniVideoLoader->update();
-    if (ui->miniVideoLoaderOverlay) ui->miniVideoLoaderOverlay->update();
+    if (ui->miniLoaderOverlay) ui->miniLoaderOverlay->update();
 
     // Debug control keyboard shortcut
     QShortcut* debugToggle = new QShortcut(QKeySequence("Ctrl+D"), this);
@@ -1322,7 +1287,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
 
-    // Keep track data in storage for MiniVideoLoader and other components
+    // Keep track data in storage for MiniLoader overlays and other components
     // Memory cleanup will be handled elsewhere if needed
 
     // Mark that we have completed tracking
