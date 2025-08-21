@@ -1,5 +1,6 @@
 #include "miniloader.h"
 #include <QPainter>
+#include <QPainterPath>
 #include <QDebug>
 #include "trackingdatastorage.h"
 
@@ -292,93 +293,171 @@ QSizeF MiniLoader::getCurrentCropSize() const
     return m_cropSize;
 }
 
+/**
+ * Helper: compute absolute polygon area using shoelace formula
+ */
+static double polygonArea(const QPolygonF& poly) {
+    if (poly.isEmpty()) return 0.0;
+    double area = 0.0;
+    int n = poly.size();
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        area += (poly[j].x() * poly[i].y()) - (poly[i].x() * poly[j].y());
+    }
+    return qAbs(area) * 0.5;
+}
+
+/**
+ * Helper: convert cv::contour to QPolygonF in crop-local coordinates by subtracting m_cropOffset.
+ * (video coordinates -> crop-local)
+ */
+static QPolygonF contourToCropPolygon(const std::vector<cv::Point>& contour, const QPointF& cropOffset) {
+    QPolygonF p;
+    p.reserve(static_cast<int>(contour.size()));
+    for (const cv::Point& pt : contour) {
+        p.append(QPointF(pt.x - cropOffset.x(), pt.y - cropOffset.y()));
+    }
+    return p;
+}
+
+/**
+ * Convert a polygon expressed in crop-local coords to widget coords (targetRect mapping)
+ */
+static QPolygonF cropPolygonToWidget(const QPolygonF& cropPoly, const QRect& targetRect, const QImage& croppedFrame) {
+    QPolygonF widgetPoly;
+    if (croppedFrame.width() <= 0 || croppedFrame.height() <= 0) return widgetPoly;
+    double sx = static_cast<double>(targetRect.width()) / croppedFrame.width();
+    double sy = static_cast<double>(targetRect.height()) / croppedFrame.height();
+    for (const QPointF& pt : cropPoly) {
+        widgetPoly.append(QPointF(targetRect.left() + pt.x() * sx,
+                                  targetRect.top()  + pt.y() * sy));
+    }
+    return widgetPoly;
+}
+
 void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
 {
-    qDebug() << "MiniLoader::drawOverlays called - wormId:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
-    
-    if (!m_trackingDataStorage || m_selectedWormId < 0 || m_currentFrameNumber < 0) {
-        qDebug() << "MiniLoader::drawOverlays early return - no data";
+    qDebug() << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
+
+    if (!m_trackingDataStorage || m_currentFrameNumber < 0) {
+        qDebug() << "MiniLoader::drawOverlays early return - no storage or bad frame";
         return;
     }
 
-    // Get blob data for the selected worm at current frame
+    // Get all detected blobs for the current frame
     QMap<int, Tracking::DetectedBlob> blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(m_currentFrameNumber);
-    
     qDebug() << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
-    
-    if (!blobMap.contains(m_selectedWormId)) {
-        qDebug() << "MiniLoader::drawOverlays no blob found for worm" << m_selectedWormId;
+
+    if (blobMap.isEmpty()) {
+        qDebug() << "MiniLoader::drawOverlays no blobs for frame" << m_currentFrameNumber;
         return;
     }
 
-    const Tracking::DetectedBlob& blob = blobMap.value(m_selectedWormId);
-    if (!blob.isValid || blob.contourPoints.empty()) {
-        qDebug() << "MiniLoader::drawOverlays blob invalid or empty - isValid:" << blob.isValid << "contourSize:" << blob.contourPoints.size();
+    // Crop rect in video coordinates
+    QRectF cropRectVid = getCurrentCropRectVideo();
+    if (cropRectVid.isEmpty()) {
+        qDebug() << "MiniLoader::drawOverlays crop rect empty";
         return;
     }
-    
-    qDebug() << "MiniLoader::drawOverlays found valid blob with" << blob.contourPoints.size() << "contour points";
-    qDebug() << "MiniLoader::drawOverlays crop info - offset:" << m_cropOffset << "size:" << m_cropSize << "targetRect:" << targetRect;
 
-    // Convert blob contour points from video coordinates to widget coordinates
-    QPolygonF poly;
-    int pointsKept = 0;
-    int pointsTotal = blob.contourPoints.size();
-    
-    for (const cv::Point& pt : blob.contourPoints) {
-        // Convert video coordinates to cropped coordinates
-        QPointF cropCoords = mapVideoToCropCoords(QPointF(pt.x, pt.y));
-        
-        // Check if point is within the cropped area
-        if (cropCoords.x() < 0 || cropCoords.y() < 0 || 
-            cropCoords.x() >= m_croppedFrame.width() || cropCoords.y() >= m_croppedFrame.height()) {
+    // We'll use a small epsilon area (in crop pixels) to avoid tiny numeric intersections
+    const double AREA_EPS = 0.5;
+
+    // Iterate all blobs and draw their intersection with the crop (if any)
+    for (auto it = blobMap.constBegin(); it != blobMap.constEnd(); ++it) {
+        int wormId = it.key();
+        const Tracking::DetectedBlob& blob = it.value();
+
+        if (!blob.isValid || blob.contourPoints.empty()) {
             continue;
         }
-        
-        // Convert cropped coordinates to widget coordinates
-        QPointF widgetPoint(
-            targetRect.left() + cropCoords.x() * static_cast<double>(targetRect.width()) / m_croppedFrame.width(),
-            targetRect.top() + cropCoords.y() * static_cast<double>(targetRect.height()) / m_croppedFrame.height()
-        );
-        poly.append(widgetPoint);
-        pointsKept++;
-    }
-    
-    qDebug() << "MiniLoader::drawOverlays kept" << pointsKept << "of" << pointsTotal << "contour points";
 
-    if (!poly.isEmpty()) {
-        qDebug() << "MiniLoader::drawOverlays drawing polygon with" << poly.size() << "points";
-        qDebug() << "MiniLoader::drawOverlays first few points:" << (poly.size() > 0 ? poly[0] : QPointF()) 
-                 << (poly.size() > 1 ? poly[1] : QPointF()) << (poly.size() > 2 ? poly[2] : QPointF());
-        
-        // Draw contour outline
-        painter.setPen(QPen(QColor(220, 60, 60), 2));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawPolygon(poly);
+        // Quick reject by bounding box (video coords)
+        if (!cropRectVid.intersects(blob.boundingBox)) {
+            continue;
+        }
 
-        // Draw worm ID label at centroid
-        QPointF videoCentroid(blob.centroid.x(), blob.centroid.y());
-        QPointF cropCentroid = mapVideoToCropCoords(videoCentroid);
+        // Convert blob contour to crop-local polygon (video -> crop-local)
+        QPolygonF blobCropPoly = contourToCropPolygon(blob.contourPoints, m_cropOffset);
 
-        if (cropCentroid.x() >= 0 && cropCentroid.y() >= 0 &&
-            cropCentroid.x() < m_croppedFrame.width() && cropCentroid.y() < m_croppedFrame.height()) {
+        // Build QPainterPath for blob and for crop rectangle (crop-local coords)
+        QPainterPath blobPath;
+        blobPath.addPolygon(blobCropPoly);
 
-            QPointF widgetCentroid(
-                targetRect.left() + cropCentroid.x() * static_cast<double>(targetRect.width()) / m_croppedFrame.width(),
-                targetRect.top() + cropCentroid.y() * static_cast<double>(targetRect.height()) / m_croppedFrame.height()
+        QPainterPath cropPath;
+        cropPath.addRect(QRectF(0.0, 0.0, m_croppedFrame.width(), m_croppedFrame.height())); // crop-local dims
+
+        // Intersect the two paths
+        QPainterPath inter = blobPath.intersected(cropPath);
+
+        // Convert intersection to fill polygon(s)
+        QPolygonF interPoly = inter.toFillPolygon();
+
+        double interArea = polygonArea(interPoly);
+
+        if (interArea <= AREA_EPS) {
+            // No meaningful intersection
+            continue;
+        }
+
+        // Determine color to draw: try to use the item's color from storage if available
+        QColor fillColor(220, 60, 60, 100); // default semi-transparent red
+        const TableItems::ClickedItem* item = m_trackingDataStorage->getItem(wormId);
+        if (item) {
+            QColor c = item->color;
+            c.setAlpha(120);
+            fillColor = c;
+        }
+
+        // Convert intersection polygon (crop-local) -> widget coords, then draw
+        QPolygonF widgetPoly = cropPolygonToWidget(interPoly, targetRect, m_croppedFrame);
+
+        if (!widgetPoly.isEmpty()) {
+            // Filled intersection
+            painter.setPen(QPen(fillColor.lighter(130), 1));
+            painter.setBrush(QBrush(fillColor));
+            painter.drawPolygon(widgetPoly);
+
+            // Draw an outline for clarity
+            QColor outline = fillColor.darker(120);
+            outline.setAlpha(200);
+            painter.setPen(QPen(outline, 1.5));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolygon(widgetPoly);
+
+            // Draw the worm ID label at the centroid of intersection polygon (in crop coords)
+            QPointF centroidCrop(0,0);
+            for (const QPointF& p : interPoly) centroidCrop += p;
+            centroidCrop /= static_cast<double>(interPoly.size());
+
+            // Convert centroid to widget coords
+            QPointF centroidWidget(
+                targetRect.left() + centroidCrop.x() * static_cast<double>(targetRect.width()) / m_croppedFrame.width(),
+                targetRect.top()  + centroidCrop.y() * static_cast<double>(targetRect.height()) / m_croppedFrame.height()
             );
 
-            QString label = QString::number(m_selectedWormId);
+            QString label = QString::number(wormId);
             QFont f = painter.font();
-            f.setPointSize(12);
+            f.setPointSize(10);
             f.setBold(true);
             painter.setFont(f);
             painter.setPen(Qt::yellow);
-            painter.drawText(QRectF(widgetCentroid.x() - 15, widgetCentroid.y() - 15, 30, 30), Qt::AlignCenter, label);
-            qDebug() << "MiniLoader::drawOverlays drew label" << label << "at" << widgetCentroid;
+            painter.drawText(QRectF(centroidWidget.x() - 12, centroidWidget.y() - 12, 24, 24), Qt::AlignCenter, label);
         }
-    } else {
-        qDebug() << "MiniLoader::drawOverlays polygon was empty - no overlay drawn";
+    }
+
+    // If a specific selected worm is set, draw its full contour outline on top for emphasis (optional)
+    if (m_selectedWormId >= 0 && blobMap.contains(m_selectedWormId)) {
+        const Tracking::DetectedBlob& selBlob = blobMap.value(m_selectedWormId);
+        if (selBlob.isValid && !selBlob.contourPoints.empty()) {
+            // Convert contour to crop-local polygon and then to widget coords for the full outline
+            QPolygonF fullCropPoly = contourToCropPolygon(selBlob.contourPoints, m_cropOffset);
+            QPolygonF fullWidgetPoly = cropPolygonToWidget(fullCropPoly, targetRect, m_croppedFrame);
+            if (!fullWidgetPoly.isEmpty()) {
+                painter.setPen(QPen(QColor(255, 200, 60), 2));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawPolygon(fullWidgetPoly);
+            }
+        }
     }
 }
 
