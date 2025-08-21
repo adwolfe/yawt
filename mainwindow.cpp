@@ -16,6 +16,7 @@
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
 // #include "videoloader.h"
 // #include "trackingcommon.h"
+#include "mergeviewer.h"
 
 #include <QStandardPaths>
 #include <QFileDialog>
@@ -48,7 +49,7 @@ MainWindow::MainWindow(QWidget *parent)
     // Set up MiniLoader instances
     ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
     ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
-    
+
     if (ui->miniLoaderOverlay) {
         ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
         ui->miniLoaderOverlay->setShowOverlays(true);  // Overlays enabled on overlay instance
@@ -652,6 +653,24 @@ void MainWindow::setupConnections() {
                 this, &MainWindow::onMiniLoaderVisibleWormsUpdated);
         qDebug() << "MainWindow: connect miniLoader visibleWormsUpdated -> slot, miniLoader ptr=" << ui->miniLoader
                  << " connection valid:" << bool(c);
+
+        // Also connect the MiniLoader visible update to the MergeViewer so it can update its visual
+        // summary immediately. Use fallback gray colors here; later we can supply actual per-worm colors
+        // from the blob table model when available.
+        {
+            MergeViewer* mv = findChild<MergeViewer*>("mergeViewer");
+            if (mv) {
+                QMetaObject::Connection c_mv = connect(ui->miniLoader, &MiniLoader::visibleWormsUpdated,
+                    this, [this, mv](const QList<int>& visibleIds){
+                        QMap<int, QColor> colors;
+                        for (int id : visibleIds) colors.insert(id, QColor(160, 160, 160));
+                        int currentFrame = 0;
+                        if (ui->videoLoader) currentFrame = ui->videoLoader->getCurrentFrameNumber();
+                        mv->updateVisibleAndFrame(colors, currentFrame);
+                    });
+                qDebug() << "MainWindow: connect miniLoader visibleWormsUpdated -> mergeViewer, connection valid:" << bool(c_mv);
+            }
+        }
     }
     // If an overlay widget exists, connect its visibleWormsUpdated signal as well so we don't miss updates.
     if (ui->miniLoaderOverlay) {
@@ -659,6 +678,22 @@ void MainWindow::setupConnections() {
                 this, &MainWindow::onMiniLoaderVisibleWormsUpdated);
         qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> slot, overlay ptr=" << ui->miniLoaderOverlay
                  << " connection valid:" << bool(c2);
+
+        // Mirror the overlay's visible updates to the MergeViewer as well.
+        {
+            MergeViewer* mv = findChild<MergeViewer*>("mergeViewer");
+            if (mv) {
+                QMetaObject::Connection c2_mv = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdated,
+                    this, [this, mv](const QList<int>& visibleIds){
+                        QMap<int, QColor> colors;
+                        for (int id : visibleIds) colors.insert(id, QColor(160, 160, 160));
+                        int currentFrame = 0;
+                        if (ui->videoLoader) currentFrame = ui->videoLoader->getCurrentFrameNumber();
+                        mv->updateVisibleAndFrame(colors, currentFrame);
+                    });
+                qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> mergeViewer, connection valid:" << bool(c2_mv);
+            }
+        }
     }
 
     // Start a short polling timer as a fallback in case signals are missed or paint() hasn't yet emitted.
@@ -1054,6 +1089,17 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
         QString text = buildMergeHistoryText(currentFrameNumber, m_miniLoaderVisibleIds);
         ui->mergeHistoryText->setPlainText(text);
     }
+
+    // Also update the visual MergeViewer (if present). For now we supply fallback colors
+    // (a later change can provide actual per-worm colors from the blob table model).
+    {
+        MergeViewer* mv = findChild<MergeViewer*>("mergeViewer");
+        if (mv) {
+            QMap<int, QColor> colors;
+            for (int id : m_miniLoaderVisibleIds) colors.insert(id, QColor(160, 160, 160));
+            mv->updateVisibleAndFrame(colors, currentFrameNumber);
+        }
+    }
 }
 
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
@@ -1130,8 +1176,8 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
 
     // Create the cropped image
     const QImage croppedFrame = currentFrame.copy(cropRect);
-    
-    qDebug() << "MainWindow::updateMiniLoaderCrop - created cropped frame, size:" << croppedFrame.size() 
+
+    qDebug() << "MainWindow::updateMiniLoaderCrop - created cropped frame, size:" << croppedFrame.size()
              << "frame:" << currentFrameNumber << "cropOffset:" << cropOffset << "centerPoint:" << centerPoint;
 
     // Send to MiniLoader
@@ -1144,7 +1190,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     if (ui->miniLoader) {
         onMiniLoaderVisibleWormsUpdated(ui->miniLoader->getVisibleWormIds());
     }
-    
+
     // Also send to MiniLoaderOverlay if it exists
     if (ui->miniLoaderOverlay) {
         ui->miniLoaderOverlay->updateWithCroppedFrame(currentFrameNumber, croppedFrame,
@@ -1165,7 +1211,7 @@ void MainWindow::frameSliderMoved(int value) {
     }
     // Also update the mirrored spinbox if it's not being edited
 }
- 
+
 // Slot: receive visible worm IDs from MiniLoader. Update cached set and rebuild merge history text.
 // Emitted frequently (on repaint), so keep this lightweight.
 void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
@@ -1179,6 +1225,18 @@ void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
     if (m_trackingDataStorage && ui->mergeHistoryText && ui->videoLoader) {
         int currentFrame = ui->videoLoader->getCurrentFrameNumber();
         ui->mergeHistoryText->setPlainText(buildMergeHistoryText(currentFrame, m_miniLoaderVisibleIds));
+    }
+
+    // Update MergeViewer: convert visible IDs into a color map (fallback gray for now).
+    // In future we can pull actual colors from the blob table model and supply them here.
+    {
+        MergeViewer* mv = findChild<MergeViewer*>("mergeViewer");
+        if (mv && ui->videoLoader) {
+            QMap<int, QColor> colors;
+            for (int id : visibleIds) colors.insert(id, QColor(160, 160, 160));
+            int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+            mv->updateVisibleAndFrame(colors, currentFrame);
+        }
     }
 }
 

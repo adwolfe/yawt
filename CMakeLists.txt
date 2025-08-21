@@ -33,6 +33,7 @@ set(SOURCES
     #framecachemanager.cpps
     itemtypedelegate.cpp
     main.cpp
+    mergeviewer.cpp
     mainwindow.cpp
     miniloader.cpp
     thresholdingutils.cpp
@@ -56,6 +57,7 @@ set(HEADERS
     #framecachemanager.h
     itemtypedelegate.h
     mainwindow.h
+    mergeviewer.h
     miniloader.h
     thresholdingutils.h
     trackingcommon.h

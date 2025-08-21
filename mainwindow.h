@@ -19,6 +19,7 @@ class ItemTypeDelegate;
 class TrackingProgressDialog;
 class TrackingManager;
 class TrackingDataStorage;
+class MergeViewer;
 // Retracking forward declarations removed
 
 // Include VideoLoader header for enums and QFlags type

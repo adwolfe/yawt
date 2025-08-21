@@ -1055,7 +1055,7 @@ QToolButton#lastFrameButton {
        <attribute name="title">
         <string>Cleanup</string>
        </attribute>
-       <layout class="QVBoxLayout" name="verticalLayout_2">
+       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="4,1,2">
         <item>
          <layout class="QHBoxLayout" name="horizontalLayout_10" stretch="0,1">
           <item>
@@ -1318,6 +1318,16 @@ QToolButton#lastFrameButton_2 {
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="MergeViewer" name="mergeViewer" native="true">
+          <property name="minimumSize">
+           <size>
+            <width>200</width>
+            <height>80</height>
+           </size>
+          </property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </widget>
@@ -1330,7 +1340,7 @@ QToolButton#lastFrameButton_2 {
      <x>0</x>
      <y>0</y>
      <width>1197</width>
-     <height>37</height>
+     <height>24</height>
     </rect>
    </property>
   </widget>
@@ -1352,6 +1362,13 @@ QToolButton#lastFrameButton_2 {
    <class>MiniLoader</class>
    <extends>QWidget</extends>
    <header>miniloader.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>MergeViewer</class>
+   <extends>QWidget</extends>
+   <header>mergeviewer.h</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources>
