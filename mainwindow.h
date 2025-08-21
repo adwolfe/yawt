@@ -120,7 +120,11 @@ private:
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
 
-
+    // Helper to keep the pair of play/pause buttons in sync.
+    // Implemented in the .cpp file. Use this everywhere instead of duplicating logic.
+    void setPlayButtonsState(bool playing, bool blockSignals = true);
+    // Convenience: query whether either of the mirrored play buttons is checked.
+    bool arePlayButtonsChecked() const;
 
     Ui::MainWindow *ui;
     BlobTableModel *m_blobTableModel;
