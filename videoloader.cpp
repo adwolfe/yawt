@@ -15,6 +15,15 @@
 #define DEFAULT_CROP_EXTENSION ".mp4"
 #define DEFAULT_CROP_FOURCC cv::VideoWriter::fourcc('H', '2', '6', '4')
 
+// Aggressive preload settings (tunable)
+// Default number of frames to preload on each side of the current frame.
+// Increase this if you want more aggressive caching (e.g., 50).
+static int s_preloadRadiusDefault = 50; // frames per side
+// Initial frame cache size used when creating the FrameCache instance.
+static int s_initialCacheSizeDefault = 200;
+// Active preload radius used by the VideoLoader implementation; can be changed at runtime.
+static int s_preloadRadius = s_preloadRadiusDefault;
+
 // ============================================================================
 // FrameCache Implementation
 // ============================================================================
@@ -289,8 +298,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     setMouseTracking(true);
     updateCursorShape();
 
-    // Initialize frame caching system
-    m_frameCache = new FrameCache(50); // Default cache size of 50 frames
+    // Initialize frame caching system (use a larger default cache to support aggressive preload)
+    m_frameCache = new FrameCache(s_initialCacheSizeDefault); // Increased default cache size
     startFrameLoader();
 }
 
@@ -322,6 +331,17 @@ VideoLoader::~VideoLoader() {
     if (videoCapture.isOpened()) {
         videoCapture.release();
     }
+}
+
+// Set the preload radius (number of frames on each side to request)
+void VideoLoader::setPreloadRadius(int radius) {
+    if (radius < 1) radius = 1;
+    s_preloadRadius = radius;
+    qDebug() << "VideoLoader: Preload radius set to" << s_preloadRadius;
+}
+
+int VideoLoader::getPreloadRadius() const {
+    return s_preloadRadius;
 }
 
 // --- Public Methods & Getters ---
@@ -498,6 +518,29 @@ void VideoLoader::pause() {
 void VideoLoader::seekToFrame(int frameNumber, bool suppressEmit) {
     if (!isVideoLoaded()) return;
     frameNumber = qBound(0, frameNumber, totalFramesCount > 0 ? totalFramesCount - 1 : 0);
+
+    // Immediately request an aggressive preload around the seek target so adjacent thumbnails (e.g., +1/+2)
+    // are more likely to be available quickly. This is asynchronous.
+    // Additionally: request a small urgent neighborhood at very high priority so UI thumbnails appear
+    // almost immediately after a jump/seek. The broad preload still runs in background.
+    int urgentRadius = qMin(10, s_preloadRadius); // urgent neighborhood for immediate thumbnails
+    if (m_frameLoader && m_frameCache) {
+        for (int d = 1; d <= urgentRadius; ++d) {
+            int prev = frameNumber - d;
+            if (prev >= 0 && prev < totalFramesCount && !m_frameCache->hasFrame(prev)) {
+                // High priority for immediate neighbor frames
+                m_frameLoader->requestSingleFrame(prev, 100);
+            }
+            int next = frameNumber + d;
+            if (next >= 0 && next < totalFramesCount && !m_frameCache->hasFrame(next)) {
+                m_frameLoader->requestSingleFrame(next, 100);
+            }
+        }
+    }
+
+    // Also enqueue a broader preload (lower priority) to fill out the larger radius.
+    preloadAdjacentFrames(frameNumber, s_preloadRadius);
+
     displayFrame(frameNumber, suppressEmit);
 }
 
@@ -850,7 +893,10 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
         static QDateTime lastPreloadTime;
         QDateTime now = QDateTime::currentDateTime();
         if (lastPreloadTime.msecsTo(now) > 100) { // Throttle preloading
-            preloadAdjacentFrames(frameNumber, m_isPlaying ? 10 : 5);
+            int radiusToUse = s_preloadRadius;
+            // When playing, cap radius to avoid overwhelming IO; when paused/seeked we use the full aggressive radius.
+            if (m_isPlaying) radiusToUse = qMin(s_preloadRadius, 20);
+            preloadAdjacentFrames(frameNumber, radiusToUse);
             lastPreloadTime = now;
         }
     }
@@ -1708,11 +1754,33 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
         return;
     }
 
-    // Avoid redundant preloading
+    // If the center hasn't changed since last preload, we still need to check whether
+    // there are any missing frames within the requested radius. In the previous logic
+    // we returned early if center == m_lastPreloadCenter which caused no-op on jumps
+    // where some frames in the new region were not yet cached. Here we only skip if
+    // all frames in the radius are already present in the cache.
     if (centerFrame == m_lastPreloadCenter) {
-        return;
+        bool anyMissing = false;
+        for (int distance = 1; distance <= radius; ++distance) {
+            int prevFrame = centerFrame - distance;
+            if (prevFrame >= 0 && prevFrame < totalFramesCount && !m_frameCache->hasFrame(prevFrame)) {
+                anyMissing = true;
+                break;
+            }
+            int nextFrame = centerFrame + distance;
+            if (nextFrame >= 0 && nextFrame < totalFramesCount && !m_frameCache->hasFrame(nextFrame)) {
+                anyMissing = true;
+                break;
+            }
+        }
+        if (!anyMissing) {
+            qDebug() << "VideoLoader: preloadAdjacentFrames - nothing missing around center" << centerFrame << "for radius" << radius;
+            return;
+        }
+        // else fall through to request only missing frames
     }
 
+    // Remember the center we last attempted to preload (helps avoid redundant full scans)
     m_lastPreloadCenter = centerFrame;
 
     // Create list of frames to preload
@@ -1720,13 +1788,13 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
 
     // Add frames in priority order: closest to center first
     for (int distance = 1; distance <= radius; distance++) {
-        // Add frame before center
+        // Add frame before center if missing
         int prevFrame = centerFrame - distance;
         if (prevFrame >= 0 && prevFrame < totalFramesCount && !m_frameCache->hasFrame(prevFrame)) {
             framesToLoad.append(prevFrame);
         }
 
-        // Add frame after center
+        // Add frame after center if missing
         int nextFrame = centerFrame + distance;
         if (nextFrame >= 0 && nextFrame < totalFramesCount && !m_frameCache->hasFrame(nextFrame)) {
             framesToLoad.append(nextFrame);
@@ -1737,7 +1805,9 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
         // Higher priority for closer frames
         int priority = 10 - qMin(radius, 9); // Priority 1-10
         m_frameLoader->requestFrames(framesToLoad, priority);
-        qDebug() << "VideoLoader: Requested preload of" << framesToLoad.size() << "frames around" << centerFrame;
+        qDebug() << "VideoLoader: Requested preload of" << framesToLoad.size() << "missing frames around" << centerFrame << "radius:" << radius;
+    } else {
+        qDebug() << "VideoLoader: preloadAdjacentFrames - no missing frames to request around" << centerFrame << "radius:" << radius;
     }
 }
 

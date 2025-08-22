@@ -199,6 +199,13 @@ public:
     int getCacheSize() const;
     double getCacheHitRate() const;
 
+    // Control preload aggressiveness
+    // Allows callers (e.g., MainWindow) to request a more aggressive preload radius
+    // around the current frame. The radius is the number of frames to request on
+    // each side (e.g., 50 means preload -50..+50).
+    void setPreloadRadius(int radius);
+    int getPreloadRadius() const;
+
     // --- Thresholding and Pre-processing Status Getters ---
     // bool isThresholdViewEnabled() const; // This will be controlled by ViewMode::Threshold
     Thresholding::ThresholdSettings getCurrentThresholdSettings() const;
