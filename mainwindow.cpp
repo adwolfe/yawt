@@ -1126,146 +1126,92 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         return;
     }
 
-    // Attempt to collect a small neighborhood of frames around the current one and send them in one batch.
-    // This allows the MiniLoader to compute per-frame visibility (e.g. +/-2 frames).
-    const int radius = 2; // +/- 2 frames => 5 frames total
-    QList<int> framesToRequest;
-    framesToRequest.reserve(2 * radius + 1);
-    int totalFrames = 0;
-    if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
+    // Send one cropped frame to each of the five mini loaders instead of batching +/-2 frames to a single overlay.
+    // Mapping:
+    //   mlon2 -> currentFrameNumber - 2
+    //   mlon1 -> currentFrameNumber - 1
+    //   miniLoaderOverlay -> currentFrameNumber
+    //   mlop1 -> currentFrameNumber + 1
+    //   mlop2 -> currentFrameNumber + 2
+    {
+        int offsets[5] = { -2, -1, 0, 1, 2 };
+        int totalFrames = 0;
+        if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
 
-    for (int f = currentFrameNumber - radius; f <= currentFrameNumber + radius; ++f) {
-        if (f < 0) continue;
-        if (totalFrames > 0 && f >= totalFrames) continue;
-        framesToRequest.append(f);
-    }
-
-    bool sentBatch = false;
-
-    if (!framesToRequest.isEmpty() && ui->videoLoader) {
-        // Request QImages for the requested frames (may return null images for frames not cached)
-        QMap<int, QImage> imgs = ui->videoLoader->getQImagesForFrames(framesToRequest);
-
-        // Build lists of cropped frames/offsets/sizes for those frames we actually have images for.
-        QList<QImage> croppedFrames;
-        QList<QPointF> cropOffsets;
-        QList<QSizeF> cropSizes;
-        croppedFrames.reserve(imgs.size());
-        cropOffsets.reserve(imgs.size());
-        cropSizes.reserve(imgs.size());
-
-        // Determine central index relative to the supplied list (for updateWithCroppedFrames)
-        // We will compute startFrame as the lowest frame in framesToRequest; the MiniLoader expects
-        // the list ordered left-to-right (ascending frame numbers).
-        int startFrame = framesToRequest.isEmpty() ? currentFrameNumber : framesToRequest.first();
-
-        for (int frameNum : framesToRequest) {
-            const QImage img = imgs.value(frameNum);
-
-            // Start from the nominal crop rect computed earlier. If we have an actual image for this frame,
-            // intersect the crop with the image bounds; otherwise keep the nominal crop so we can create a
-            // placeholder image of the correct size. This preserves ordering and indexing for the batch.
+        // Helper lambda to get a cropped frame (real or black placeholder) for a specific absolute frame.
+        auto buildCroppedForFrame = [&](int frameNum) -> std::tuple<QImage, QPointF, QSizeF> {
             QRect localCrop = cropRect;
+            QImage img;
+            if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
+                img = ui->videoLoader->getQImageForFrame(frameNum);
+            }
             if (!img.isNull()) {
                 QRect imgBounds(0, 0, img.width(), img.height());
                 localCrop = localCrop.intersected(imgBounds);
             }
-
-            // If localCrop ended up empty for some reason, use the nominal cropRect so we still provide a placeholder frame.
-            // This preserves ordering/indexing of the batch sent to MiniLoader (placeholders keep the mapping stable).
             if (localCrop.isEmpty()) localCrop = cropRect;
-
-            // Build either the real cropped image or a placeholder (black) image for missing frames so
-            // the sequence length and ordering remain intact when sent to MiniLoader.
             QImage cf;
-            if (!img.isNull()) {
-                cf = img.copy(localCrop);
-            } else {
+            if (!img.isNull()) cf = img.copy(localCrop);
+            else {
                 cf = QImage(localCrop.size(), QImage::Format_RGB32);
                 cf.fill(Qt::black);
             }
+            QPointF offset(localCrop.left() + 0.0, localCrop.top() + 0.0);
+            QSizeF size(localCrop.width(), localCrop.height());
+            return std::make_tuple(cf, offset, size);
+        };
 
-            croppedFrames.append(cf);
-            cropOffsets.append(QPointF(localCrop.left() + 0.0, localCrop.top() + 0.0)); // offsets are in video coords
-            cropSizes.append(QSizeF(localCrop.width(), localCrop.height()));
+        // Map offsets to UI widget pointers (if present)
+        MiniLoader* widgetTargets[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+        widgetTargets[0] = (ui->mlon2) ? ui->mlon2 : nullptr;
+        widgetTargets[1] = (ui->mlon1) ? ui->mlon1 : nullptr;
+        widgetTargets[2] = (ui->miniLoaderOverlay) ? ui->miniLoaderOverlay : nullptr;
+        widgetTargets[3] = (ui->mlop1) ? ui->mlop1 : nullptr;
+        widgetTargets[4] = (ui->mlop2) ? ui->mlop2 : nullptr;
+
+        // Send one frame to each target
+        for (int i = 0; i < 5; ++i) {
+            int targetFrame = currentFrameNumber + offsets[i];
+            if (targetFrame < 0) continue;
+            if (totalFrames > 0 && targetFrame >= totalFrames) continue;
+
+            MiniLoader* target = widgetTargets[i];
+            if (!target) continue;
+
+            QImage cf;
+            QPointF off;
+            QSizeF sz;
+            std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
+
+            // Use the MiniLoader single-frame API
+            target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
+            qDebug() << "MainWindow::updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
+                     << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("miniLoaderOverlay"):(i==3?QString("mlop1"):QString("mlop2")))))
+                     << "size:" << cf.size();
         }
 
-        if (!croppedFrames.isEmpty()) {
-            // The primary miniLoader is a simple zoom view and only needs the center frame.
-            // The overlay (if present) should receive the full batch so it can compute per-frame visibility.
-            int centerIndex = croppedFrames.size() / 2;
-
-            // Update primary miniLoader with only the center frame (display-only).
-            if (ui->miniLoader) {
-                // Determine the absolute frame number that corresponds to the center image in the batch
-                // (startFrame + centerIndex) and send that to the primary miniLoader so its internal
-                // current-frame reference matches the batch indexing used by the overlay.
-                int primaryCenterFrame = startFrame + centerIndex;
-                ui->miniLoader->updateWithCroppedFrame(primaryCenterFrame, croppedFrames.value(centerIndex),
-                                                      cropOffsets.value(centerIndex), cropSizes.value(centerIndex),
-                                                      centerPoint);
-                qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << primaryCenterFrame;
-            }
-
-            // Send the full batch to the overlay so it performs visibility computations and emits per-frame map.
-            if (ui->miniLoaderOverlay) {
-                // Important: pass the absolute start frame corresponding to the first image in the list so
-                // MiniLoader can build a correct per-frame map (startFrame -> startFrame + n - 1).
-                ui->miniLoaderOverlay->updateWithCroppedFrames(startFrame, croppedFrames, cropOffsets, cropSizes, centerPoint);
-                qDebug() << "MainWindow::updateMiniLoaderCrop - sent batch of" << croppedFrames.size() << "cropped frames to miniLoaderOverlay, center:" << currentFrameNumber;
-            } else {
-                qDebug() << "MainWindow::updateMiniLoaderCrop - no overlay present; only primary miniLoader updated with center frame";
-            }
-
-            // Do NOT call onMiniLoaderVisibleWormsUpdated using primary miniLoader - overlay will emit signals that MainWindow listens to.
-            sentBatch = true;
-        } else {
-            qDebug() << "MainWindow::updateMiniLoaderCrop - no cached images for neighbor frames; falling back to single-frame send";
+        // Primary miniLoader (zoom-only) should receive the central frame for display consistency
+        if (ui->miniLoader) {
+            QImage cf_center;
+            QPointF off_center;
+            QSizeF sz_center;
+            std::tie(cf_center, off_center, sz_center) = buildCroppedForFrame(currentFrameNumber);
+            ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, cf_center, off_center, sz_center, centerPoint);
+            qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
         }
-    }
 
-    // Fallback: if batch send didn't occur, behave as before and send only the provided central cropped frame.
-    if (!sentBatch) {
-        const QImage croppedFrame = currentFrame.copy(cropRect);
-
-        qDebug() << "MainWindow::updateMiniLoaderCrop - created cropped frame, size:" << croppedFrame.size()
-                 << "frame:" << currentFrameNumber << "cropOffset:" << cropOffset << "centerPoint:" << centerPoint;
-
-        // Send to primary MiniLoader (single-frame API) for display only.
-        ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, croppedFrame,
-                                               cropOffset, newSize,
-                                               centerPoint);
-        qDebug() << "MainWindow::updateMiniLoaderCrop - sent single cropped frame to primary miniLoader (display-only)";
-
-        // For visibility/filtering we prefer the overlay's computed set. If an overlay exists, send the same single frame to it
-        // and use its visible set. If overlay is absent, clear the cached visible set so UI shows unfiltered history.
+        // If we sent to an overlay, let it emit visibility signals as before. If no overlay, clear visible set.
         if (ui->miniLoaderOverlay) {
-            ui->miniLoaderOverlay->updateWithCroppedFrame(currentFrameNumber, croppedFrame,
-                                                          cropOffset, newSize,
-                                                          centerPoint);
-            qDebug() << "MainWindow::updateMiniLoaderCrop - sent single cropped frame to miniLoaderOverlay";
+            // Allow overlay to compute visibility for its single frame and emit signals as needed.
             onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
         } else {
-            qDebug() << "MainWindow::updateMiniLoaderCrop - miniLoaderOverlay is null; clearing visible set";
-            onMiniLoaderVisibleWormsUpdated(QList<int>()); // clear visible set so merge history shows all
-        }
-    } else {
-        // If we sent a batch, also mirror to overlay if available by sending the center frame only to overlay
-        // (overlay does not yet implement multi-frame API).
-        if (ui->miniLoaderOverlay) {
-            // Try to retrieve center frame image to send to overlay
-            QImage centerImg;
-            if (ui->videoLoader) centerImg = ui->videoLoader->getQImageForFrame(currentFrameNumber);
-            if (!centerImg.isNull()) {
-                QRect localCrop = cropRect;
-                QRect imgBounds(0, 0, centerImg.width(), centerImg.height());
-                localCrop = localCrop.intersected(imgBounds);
-                if (!localCrop.isEmpty()) {
-                    // No-op here: batch (or center) has already been sent above. Keep this block empty to avoid duplicate sends.
-                }
-            }
+            onMiniLoaderVisibleWormsUpdated(QList<int>()); // clear visible set so merge history shows all (or callers adapt)
         }
     }
+
+    // The batching path has been replaced above. No additional fallback logic required here.
+    // All five mini loader widgets (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2) were handled.
+    // No-op placeholder to preserve function structure.
 }
 
 void MainWindow::frameSliderMoved(int value) {
