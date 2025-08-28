@@ -14,15 +14,20 @@
 #include <vector>
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
+#include "trackingcommon.h"
 
 // Forward declaration of FrameLoadRequest from videoloader.cpp
 struct FrameLoadRequest {
     int frameNumber;
     int priority;
     QDateTime requestTime;
+    Thresholding::ThresholdSettings thresholdSettings; // Snapshot of threshold settings for async processing
 
-    FrameLoadRequest(int frame = -1, int prio = 1)
-        : frameNumber(frame), priority(prio), requestTime(QDateTime::currentDateTime()) {}
+    FrameLoadRequest(int frame = -1, int prio = 1, const Thresholding::ThresholdSettings& settings = Thresholding::ThresholdSettings())
+        : frameNumber(frame),
+          priority(prio),
+          requestTime(QDateTime::currentDateTime()),
+          thresholdSettings(settings) {}
 
     bool operator<(const FrameLoadRequest& other) const {
         return priority < other.priority;
@@ -46,14 +51,16 @@ public:
     void stop();
 
 signals:
-    void frameLoaded(int frameNumber, cv::Mat frame);
+    // Emit both original and pre-processed (thresholded) frames so VideoLoader can cache both
+    void frameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded);
     void frameLoadError(int frameNumber, QString error);
 
 public slots:
     void processRequests();
 
 private:
-    void loadFrame(int frameNumber);
+    // loadFrame now accepts the full request (including threshold settings snapshot)
+    void loadFrame(const FrameLoadRequest& request);
 
     std::priority_queue<FrameLoadRequest, std::vector<FrameLoadRequest>, std::greater<FrameLoadRequest>>* m_sharedQueue;
     QMutex* m_queueMutex;
@@ -87,7 +94,8 @@ public:
     void stopAllLoaders();
 
 signals:
-    void frameLoaded(int frameNumber, cv::Mat frame);
+    // Manager forwards both original and thresholded mats
+    void frameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded);
     void frameLoadError(int frameNumber, QString error);
 
 private:

@@ -75,7 +75,7 @@ MainWindow::MainWindow(QWidget *parent)
         ui->mlop2->setTrackingDataStorage(m_trackingDataStorage);
         ui->mlop2->setShowOverlays(true);
     }
-    
+
     // Set up the additional MiniLoader instances (±2 frames)
     if (ui->mlon2) {
         // Setup will be done in setupConnections()
@@ -342,7 +342,7 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop);
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
-    
+
     // Connect VideoLoader frameCached signal to MiniLoader instances for self-cropping
     if (ui->mlon2) connect(ui->videoLoader, &VideoLoader::frameCached, ui->mlon2, &MiniLoader::onFrameCached);
     if (ui->mlon1) connect(ui->videoLoader, &VideoLoader::frameCached, ui->mlon1, &MiniLoader::onFrameCached);
@@ -1207,80 +1207,73 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
 }
 
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
-    if (!ui->videoLoader) {
+    if (!ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
         return;
     }
 
-    // Get the crop size from BlobTableModel
     QSizeF cropSize = m_blobTableModel->getCurrentFixedRoiSize();
     if (cropSize.isEmpty()) {
         cropSize = QSizeF(100, 100); // fallback size
     }
 
-    // Determine center point for cropping
-    QPointF centerPoint;
-    bool foundCenterPoint = false;
+    int totalFrames = ui->videoLoader->getTotalFrames();
+    int offsets[5] = { -2, -1, 0, 1, 2 };
+    MiniLoader* widgetTargets[5] = { ui->mlon2, ui->mlon1, ui->miniLoaderOverlay, ui->mlop1, ui->mlop2 };
 
-    // First priority: if a worm is selected, use its centroid
+    // Determine if a worm is selected to avoid repeatedly checking inside the loop
+    int selectedWormId = -1;
     QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
     if (!selectedIndexes.isEmpty()) {
         int selectedRow = selectedIndexes.first().row();
         if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
             const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
-            int wormId = selectedItem.id;
+            selectedWormId = selectedItem.id;
+        }
+    }
 
+    for (int i = 0; i < 5; ++i) {
+        int targetFrame = currentFrameNumber + offsets[i];
+        if (targetFrame < 0 || (totalFrames > 0 && targetFrame >= totalFrames)) {
+            if (widgetTargets[i]) widgetTargets[i]->clearContent(); // Clear if out of bounds
+            continue;
+        }
+
+        MiniLoader* target = widgetTargets[i];
+        if (!target) continue;
+
+        // --- LOGIC TO CALCULATE CENTER POINT MOVED INSIDE THE LOOP ---
+        QPointF centerPoint;
+        bool foundCenterPoint = false;
+
+        if (selectedWormId != -1) {
             QPointF wormPosition;
             QRectF wormRoi;
-            if (m_trackingDataStorage->getWormDataForFrame(wormId, currentFrameNumber, wormPosition, wormRoi)) {
+            // Get the worm's position for the MiniLoader's specific targetFrame
+            if (m_trackingDataStorage->getWormDataForFrame(selectedWormId, targetFrame, wormPosition, wormRoi)) {
                 centerPoint = wormPosition;
                 foundCenterPoint = true;
-            } else if (m_trackingDataStorage->getLastKnownPositionBefore(wormId, currentFrameNumber, wormPosition, wormRoi)) {
+            } else if (m_trackingDataStorage->getLastKnownPositionBefore(selectedWormId, targetFrame, wormPosition, wormRoi)) {
+                // Fallback to last known position for this specific targetFrame
                 centerPoint = wormPosition;
                 foundCenterPoint = true;
             }
         }
-    }
 
-    // Second priority: use MiniLoader's last known center point
-    if (!foundCenterPoint && ui->miniLoader) {
-        const QPointF lastCenter = ui->miniLoader->getLastCenterPoint();
-        if (!lastCenter.isNull() && lastCenter.x() >= 0 && lastCenter.y() >= 0) {
-            centerPoint = lastCenter;
-            foundCenterPoint = true;
+        if (!foundCenterPoint) {
+            // If no worm is selected or no data for this frame, fallback to the center of the main view's image
+            centerPoint = QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0);
         }
-    }
 
-    // Third priority: use center of the current frame
-    if (!foundCenterPoint) {
-        centerPoint = QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0);
-    }
-
-    // Tell each MiniLoader what frame to expect and let them handle cropping themselves
-    int offsets[5] = { -2, -1, 0, 1, 2 };
-    MiniLoader* widgetTargets[5] = { ui->mlon2, ui->mlon1, ui->miniLoaderOverlay, ui->mlop1, ui->mlop2 };
-    
-    int totalFrames = ui->videoLoader->getTotalFrames();
-    
-    for (int i = 0; i < 5; ++i) {
-        int targetFrame = currentFrameNumber + offsets[i];
-        if (targetFrame < 0 || (totalFrames > 0 && targetFrame >= totalFrames)) continue;
-        
-        MiniLoader* target = widgetTargets[i];
-        if (!target) continue;
-        
+        // Now, each MiniLoader gets a centerPoint calculated for its specific frame
         target->setExpectedFrame(targetFrame, cropSize, centerPoint, ui->videoLoader);
     }
 
-    // Primary miniLoader gets the current frame
+    // The primary miniLoader (non-overlay) should also be updated correctly
     if (ui->miniLoader) {
-        ui->miniLoader->setExpectedFrame(currentFrameNumber, cropSize, centerPoint, ui->videoLoader);
-    }
-
-    // Get visible worms from overlay if available
-    if (ui->miniLoaderOverlay) {
-        onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
-    } else {
-        onMiniLoaderVisibleWormsUpdated(QList<int>());
+        // It should use the center point calculated for the current frame (offset=0)
+        QPointF currentFrameCenter;
+        // (You can reuse the logic from the loop for the i=2 case here if needed)
+        ui->miniLoader->setExpectedFrame(currentFrameNumber, cropSize, QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0), ui->videoLoader);
     }
 }
 

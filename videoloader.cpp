@@ -19,7 +19,7 @@
 // Aggressive preload settings (tunable)
 // Default number of frames to preload on each side of the current frame.
 // Increase this if you want more aggressive caching (e.g., 50).
-static int s_preloadRadiusDefault = 20; // frames per side
+static int s_preloadRadiusDefault = 50; // frames per side
 // Initial frame cache size used when creating the FrameCache instance.
 static int s_initialCacheSizeDefault = 2000;
 // Active preload radius used by the VideoLoader implementation; can be changed at runtime.
@@ -78,7 +78,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     updateCursorShape();
 
     // Initialize frame cache and background loader
-    m_frameCache = new QCache<int, cv::Mat>(s_initialCacheSizeDefault);
+    // Cache now stores CachedFrame objects (original + precomputed thresholded)
+    m_frameCache = new QCache<int, CachedFrame>(s_initialCacheSizeDefault);
     startFrameLoader();
 }
 
@@ -457,12 +458,37 @@ void VideoLoader::setPlaybackSpeed(double multiplier) {
 void VideoLoader::setThresholdAlgorithm(Thresholding::ThresholdAlgorithm algorithm) {
     if (m_thresholdAlgorithm == algorithm) return;
     m_thresholdAlgorithm = algorithm;
+
     if (isVideoLoaded() && currentFrameIdx >= 0) {
-        applyThresholding();
+        // Invalidate precomputed thresholded frames in the cache
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        // Clear current in-memory thresholded buffer to avoid showing stale data
+        m_thresholdedFrame_mono = cv::Mat();
+
+        // Request background reprocessing for a neighborhood around current frame so that thresholded
+        // frames become available using the new settings.
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
+            // Trigger an immediate redisplay (will show original image until background processing completes)
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
@@ -470,24 +496,66 @@ void VideoLoader::setThresholdValue(int value) {
     value = qBound(0, value, 255);
     if (m_thresholdValue == value) return;
     m_thresholdValue = value;
+
     if (isVideoLoaded() && currentFrameIdx >= 0 && m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::Global) {
-        applyThresholding();
+        // Invalidate precomputed thresholded frames and request reprocessing in background
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
 void VideoLoader::setAssumeLightBackground(bool isLight) {
     if (m_assumeLightBackground == isLight) return;
     m_assumeLightBackground = isLight;
+
     if (isVideoLoaded() && currentFrameIdx >= 0) {
-        applyThresholding();
+        // Invalidate cached thresholded frames and request background reprocessing
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
@@ -496,14 +564,35 @@ void VideoLoader::setAdaptiveThresholdBlockSize(int blockSize) {
     if (blockSize % 2 == 0) blockSize += 1;
     if (m_adaptiveBlockSize == blockSize) return;
     m_adaptiveBlockSize = blockSize;
+
     if (isVideoLoaded() && currentFrameIdx >= 0 &&
         (m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveMean ||
          m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveGaussian)) {
-        applyThresholding();
+        // Invalidate cached thresholded frames and request reprocessing
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
@@ -511,26 +600,68 @@ void VideoLoader::setAdaptiveThresholdC(double cValue) {
     cValue = qBound(-50.0, cValue, 50.0);
     if (qFuzzyCompare(m_adaptiveC, cValue)) return;
     m_adaptiveC = cValue;
+
     if (isVideoLoaded() && currentFrameIdx >= 0 &&
         (m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveMean ||
          m_thresholdAlgorithm == Thresholding::ThresholdAlgorithm::AdaptiveGaussian)) {
-        applyThresholding();
+        // Invalidate cached thresholded frames and request reprocessing
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
 void VideoLoader::setEnableBlur(bool enabled) {
     if (m_enableBlur == enabled) return;
     m_enableBlur = enabled;
+
     if (isVideoLoaded() && currentFrameIdx >= 0) {
-        applyThresholding();
+        // Invalidate cached thresholded frames and request reprocessing
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
@@ -539,12 +670,33 @@ void VideoLoader::setBlurKernelSize(int kernelSize) {
     if (kernelSize % 2 == 0) kernelSize += 1;
     if (m_blurKernelSize == kernelSize) return;
     m_blurKernelSize = kernelSize;
+
     if (isVideoLoaded() && currentFrameIdx >= 0 && m_enableBlur) {
-        applyThresholding();
+        // Invalidate cached thresholded frames and request reprocessing
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
@@ -552,12 +704,33 @@ void VideoLoader::setBlurSigmaX(double sigmaX) {
     sigmaX = qMax(0.0, sigmaX);
     if (qFuzzyCompare(m_blurSigmaX, sigmaX)) return;
     m_blurSigmaX = sigmaX;
+
     if (isVideoLoaded() && currentFrameIdx >= 0 && m_enableBlur) {
-        applyThresholding();
+        // Invalidate cached thresholded frames and request reprocessing
+        if (m_frameCache) {
+            QList<int> keys = m_frameCache->keys();
+            for (int k : keys) {
+                CachedFrame* cf = m_frameCache->object(k);
+                if (cf) cf->thresholded.clear();
+            }
+        }
+        m_thresholdedFrame_mono = cv::Mat();
+
+        if (m_frameLoaderManager) {
+            QList<FrameLoadRequest> reqs;
+            int r = s_preloadRadius;
+            for (int d = -r; d <= r; ++d) {
+                int fn = currentFrameIdx + d;
+                if (fn >= 0 && fn < totalFramesCount) reqs.append(FrameLoadRequest(fn, 100, getCurrentThresholdSettings()));
+            }
+            if (!reqs.isEmpty()) m_frameLoaderManager->requestFrames(reqs);
+        }
+
         if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
             displayFrame(currentFrameIdx, true);
         }
     }
+
     emitThresholdParametersChanged();
 }
 
@@ -627,55 +800,98 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
     }
 
     // Try to get frame from cache first
-    cv::Mat* cachedFrame = m_frameCache ? m_frameCache->object(frameNumber) : nullptr;
+    CachedFrame* cached = m_frameCache ? m_frameCache->object(frameNumber) : nullptr;
     bool frameFromCache = false;
 
-    if (cachedFrame) {
-        // Frame found in cache - use it directly
-        currentCvFrame = cachedFrame->clone();
+    if (cached && cached->original) {
+        // Found cached original frame. Use it directly (cheap pointer assignment).
+        currentCvFrame = cached->original;
+        // If a thresholded precomputed mat exists and threshold view is active, use it as the
+        // in-memory threshold buffer for EditBlobs / other ops.
+        if (cached->thresholded && !cached->thresholded->empty()) {
+            m_thresholdedFrame_mono = *cached->thresholded;
+        } else {
+            m_thresholdedFrame_mono = cv::Mat();
+        }
         frameFromCache = true;
     } else {
-        // Frame not in cache - load from disk
+        // Frame not in cache - load from disk synchronously (only when necessary).
         int currentPos = static_cast<int>(videoCapture.get(cv::CAP_PROP_POS_FRAMES));
         if (currentPos != frameNumber && !(currentPos == frameNumber - 1 && m_isPlaying)) {
             if (!videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
                 // If direct loading fails, try background loading
                 m_pendingSeekFrame = frameNumber;
                 if (m_frameLoaderManager) {
-                    m_frameLoaderManager->requestSingleFrame(frameNumber, 100); // High priority
+                    // Create a request that carries the current threshold settings snapshot
+                    QList<FrameLoadRequest> reqs;
+                    reqs.append(FrameLoadRequest(frameNumber, 100, getCurrentThresholdSettings()));
+                    m_frameLoaderManager->requestFrames(reqs); // High priority with threshold settings snapshot
                 }
                 return;
             }
         }
 
-        if (videoCapture.read(currentCvFrame)) {
-            if (!currentCvFrame.empty()) {
-                // Cache the newly loaded frame
-                if (m_frameCache) {
-                    m_frameCache->insert(frameNumber, new cv::Mat(currentCvFrame.clone()));
-                }
-            } else {
-                currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
+        // Allocate a new Mat and read into it
+        currentCvFrame = QSharedPointer<cv::Mat>(new cv::Mat());
+        if (videoCapture.read(*currentCvFrame)) {
+            if (currentCvFrame->empty()) {
+                currentCvFrame.clear();
+                m_thresholdedFrame_mono = cv::Mat();
                 return;
             }
+            // Immediately create a cache entry with the original frame and leave thresholded empty.
+            // Background workers will compute the thresholded version and update the cache.
+            if (m_frameCache) {
+                CachedFrame* cf = new CachedFrame();
+                cf->original = QSharedPointer<cv::Mat>(new cv::Mat(currentCvFrame->clone()));
+                cf->thresholded.clear();
+                // Insert/update cache with original only
+                m_frameCache->insert(frameNumber, cf);
+            }
+            // Request background reprocessing for thresholded version of this frame (using current settings)
+            if (m_frameLoaderManager) {
+                QList<FrameLoadRequest> reqs;
+                reqs.append(FrameLoadRequest(frameNumber, 100, getCurrentThresholdSettings()));
+                m_frameLoaderManager->requestFrames(reqs);
+            }
         } else {
-            currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
+            currentCvFrame.clear();
+            m_thresholdedFrame_mono = cv::Mat();
             if (m_isPlaying) pause();
             return;
         }
     }
 
-    if (!currentCvFrame.empty()) {
+    if (currentCvFrame && !currentCvFrame->empty()) {
         currentFrameIdx = frameNumber;
-        applyThresholding();
+
+        // Note: thresholding is no longer performed synchronously on the UI thread.
+        // If a thresholded version is already cached, use it; otherwise leave the
+        // threshold buffer empty and rely on background workers to compute it.
+        if (m_frameCache) {
+            CachedFrame* cf = m_frameCache->object(frameNumber);
+            if (cf && cf->thresholded && !cf->thresholded->empty()) {
+                m_thresholdedFrame_mono = *cf->thresholded;
+            } else {
+                m_thresholdedFrame_mono = cv::Mat();
+                // If we don't have thresholded data yet, request background processing for this frame.
+                if (m_frameLoaderManager) {
+                    QList<FrameLoadRequest> reqs;
+                    reqs.append(FrameLoadRequest(frameNumber, 100, getCurrentThresholdSettings()));
+                    m_frameLoaderManager->requestFrames(reqs);
+                }
+            }
+        }
 
         // No broader preloading - only load what's explicitly requested
     }
 
     if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
+        // Prefer precomputed thresholded image when available
         convertCvMatToQImage(m_thresholdedFrame_mono, currentQImageFrame);
-    } else if (!currentCvFrame.empty()) {
-        convertCvMatToQImage(currentCvFrame, currentQImageFrame);
+    } else if (currentCvFrame && !currentCvFrame->empty()) {
+        // Fallback to original frame
+        convertCvMatToQImage(*currentCvFrame, currentQImageFrame);
     } else {
         currentQImageFrame = QImage(originalFrameSize, QImage::Format_RGB888);
         currentQImageFrame.fill(Qt::darkGray);
@@ -744,24 +960,56 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     QRectF targetRect = calculateTargetRect();
     painter.drawImage(targetRect, currentQImageFrame, currentQImageFrame.rect());
 
-    // Draw general purpose ROI if active
-    if (!m_activeRoiRect.isNull() && m_activeRoiRect.isValid() &&
-        (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop)) {
-        QPointF roiTopLeftWidget = mapPointFromVideo(m_activeRoiRect.topLeft());
-        QPointF roiBottomRightWidget = mapPointFromVideo(m_activeRoiRect.bottomRight());
-        if (roiTopLeftWidget.x() >= 0 && roiBottomRightWidget.x() >= 0) {
-            painter.setPen(QPen(Qt::red, 2, Qt::DashLine));
-            painter.drawRect(QRectF(roiTopLeftWidget, roiBottomRightWidget).normalized());
+    // Prepare to draw overlays in VIDEO COORDINATES by transforming the painter.
+    painter.save();
+
+    bool transformed = false;
+    double scaleX = 1.0, scaleY = 1.0, inverseScale = 1.0;
+    if (!targetRect.isEmpty() && !originalFrameSize.isEmpty()) {
+        scaleX = targetRect.width() / originalFrameSize.width();
+        scaleY = targetRect.height() / originalFrameSize.height();
+        if (scaleX > 0.0 && scaleY > 0.0) {
+            painter.translate(targetRect.topLeft());
+            painter.scale(scaleX, scaleY);
+            inverseScale = 1.0 / qMax(scaleX, scaleY);
+            transformed = true;
         }
     }
 
-    // Draw temporary ROI during definition
-    if ((m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) && m_isDefiningRoi) {
-        painter.setPen(QPen(Qt::cyan, 1, Qt::SolidLine));
-        painter.drawRect(QRect(m_roiStartPointWidget, m_roiEndPointWidget).normalized());
+    // Draw general purpose ROI if active (in video coordinates when transformed)
+    if (!m_activeRoiRect.isNull() && m_activeRoiRect.isValid() &&
+        (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop)) {
+        if (transformed) {
+            QPen roiPen(Qt::red);
+            roiPen.setStyle(Qt::DashLine);
+            roiPen.setWidthF(2.0 * inverseScale);
+            painter.setPen(roiPen);
+            painter.drawRect(m_activeRoiRect.normalized());
+        } else {
+            // Fallback to widget-coordinate drawing
+            QPointF roiTopLeftWidget = mapPointFromVideo(m_activeRoiRect.topLeft());
+            QPointF roiBottomRightWidget = mapPointFromVideo(m_activeRoiRect.bottomRight());
+            if (roiTopLeftWidget.x() >= 0 && roiBottomRightWidget.x() >= 0) {
+                painter.setPen(QPen(Qt::red, 2, Qt::DashLine));
+                painter.drawRect(QRectF(roiTopLeftWidget, roiBottomRightWidget).normalized());
+            }
+        }
     }
 
-    // --- MODIFIED BLOB DRAWING LOGIC ---
+    // Draw temporary ROI during definition (this is in widget coords and should remain there)
+    if ((m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) && m_isDefiningRoi) {
+        painter.restore(); // ensure we're back in widget coords for interactive rectangle
+        painter.setPen(QPen(Qt::cyan, 1, Qt::SolidLine));
+        painter.drawRect(QRect(m_roiStartPointWidget, m_roiEndPointWidget).normalized());
+        painter.save();
+        // Re-apply the transform for subsequent overlay drawing
+        if (transformed) {
+            painter.translate(targetRect.topLeft());
+            painter.scale(scaleX, scaleY);
+        }
+    }
+
+    // --- OPTIMIZED BLOB DRAWING LOGIC (DRAW IN VIDEO COORDS) ---
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
         if (!m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
             // Tracking has run, display current frame's blob positions from tracks
@@ -770,159 +1018,110 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     // Check if this track's item is set to visible
                     bool isVisible = false;
                     if (m_storage) {
-                        // Get item from storage if available
                         const TableItems::ClickedItem* item = m_storage->getItem(trackId);
-                        if (item) {
-                            isVisible = item->visible;
-                        }
+                        if (item) isVisible = item->visible;
                     } else {
-                        // Fallback to legacy method
                         for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                            if (item.id == trackId) {
-                                isVisible = item.visible;
-                                break;
-                            }
+                            if (item.id == trackId) { isVisible = item.visible; break; }
                         }
                     }
                     if (!isVisible) continue;
 
-                    // Use optimized lookup instead of linear search
                     QPointF wormPosition;
                     QRectF wormRoi;
                     if (m_storage && m_storage->getWormDataForFrame(trackId, currentFrameIdx, wormPosition, wormRoi)) {
                         QColor itemColor = getTrackColor(trackId);
 
-                        // Draw Bounding Box for current frame from track data
+                        // Draw Bounding Box for current frame from track data (video coords)
                         QRectF bboxVideo = wormRoi;
                         if (bboxVideo.isValid()) {
-                            QPointF bbTopLeftWidget = mapPointFromVideo(bboxVideo.topLeft());
-                            QPointF bbBottomRightWidget = mapPointFromVideo(bboxVideo.bottomRight());
-                            if (bbTopLeftWidget.x() >= 0 && bbBottomRightWidget.x() >= 0) { // Check if on screen
-                                QPen blobPen(itemColor); // Create a pen with the item's color
-                                blobPen.setStyle(Qt::DotLine); // Set style for bounding box
-                                blobPen.setWidth(1);          // Set width for bounding box
-                                painter.setPen(blobPen);
-                                painter.drawRect(QRectF(bbTopLeftWidget, bbBottomRightWidget).normalized());
-                            }
+                            QPen blobPen(itemColor);
+                            blobPen.setStyle(Qt::DotLine);
+                            blobPen.setWidthF(1.0 * inverseScale);
+                            painter.setPen(blobPen);
+                            painter.drawRect(bboxVideo.normalized());
                         }
 
-                        // Draw Centroid for current frame from track data
+                        // Draw Centroid for current frame from track data (video coords)
                         QPointF centroidVideo = wormPosition;
-                        QPointF centroidWidget = mapPointFromVideo(centroidVideo);
-                        if (centroidWidget.x() >= 0) { // Check if on screen
-                            painter.setPen(QPen(itemColor, 2)); // Outline for centroid
-                            painter.setBrush(itemColor);        // Fill for centroid
-                            painter.drawEllipse(centroidWidget, 3, 3); // Draw a small circle for the centroid
-                            painter.setBrush(Qt::NoBrush);      // Reset brush
-                        }
+                        painter.setPen(QPen(itemColor, 2.0 * inverseScale));
+                        painter.setBrush(itemColor);
+                        painter.drawEllipse(centroidVideo, 3.0 * inverseScale, 3.0 * inverseScale);
+                        painter.setBrush(Qt::NoBrush);
                     }
                 }
             }
         } else if ((m_storage && m_storage->getItemCount() > 0) || !m_itemsToDisplay.isEmpty()) {
-            // Fallback: Tracking not run or no tracks, display initial blob selections
-
-            // If storage is available, use it
+            // Fallback: display initial blob selections (video coords)
             const QList<TableItems::ClickedItem>& itemsToDisplay =
                 m_storage ? m_storage->getAllItems() : m_itemsToDisplay;
 
             for (const TableItems::ClickedItem& item : std::as_const(itemsToDisplay)) {
-                // Only show items with visible checkbox checked
                 if (!item.visible) continue;
-
-                // No need to filter by selection - visibility is controlled only by the checkbox
-
                 QColor itemColor = getTrackColor(item.id);
 
-                // Draw Initial Bounding Box
                 QRectF bboxVideo = item.initialBoundingBox;
-                QPointF bbTopLeftWidget = mapPointFromVideo(bboxVideo.topLeft());
-                QPointF bbBottomRightWidget = mapPointFromVideo(bboxVideo.bottomRight());
-                if (bbTopLeftWidget.x() >= 0 && bbBottomRightWidget.x() >= 0) {
+                if (bboxVideo.isValid()) {
                     QPen blobPen(itemColor);
-                    blobPen.setStyle(Qt::SolidLine); // Solid line for initial selections
-                    blobPen.setWidth(1);
+                    blobPen.setStyle(Qt::SolidLine);
+                    blobPen.setWidthF(1.0 * inverseScale);
                     painter.setPen(blobPen);
-                    painter.drawRect(QRectF(bbTopLeftWidget, bbBottomRightWidget).normalized());
+                    painter.drawRect(bboxVideo.normalized());
                 }
 
-                // Draw Initial Centroid
                 QPointF centroidVideo = item.initialCentroid;
-                QPointF centroidWidget = mapPointFromVideo(centroidVideo);
-                if (centroidWidget.x() >= 0) {
-                    painter.setPen(QPen(itemColor, 2));
-                    painter.setBrush(itemColor);
-                    painter.drawEllipse(centroidWidget, 3, 3);
-                    painter.setBrush(Qt::NoBrush);
-                }
+                painter.setPen(QPen(itemColor, 2.0 * inverseScale));
+                painter.setBrush(itemColor);
+                painter.drawEllipse(centroidVideo, 3.0 * inverseScale, 3.0 * inverseScale);
+                painter.setBrush(Qt::NoBrush);
             }
         }
     }
-    // --- END OF MODIFIED BLOB DRAWING LOGIC ---
+    // --- END OF OPTIMIZED BLOB DRAWING LOGIC ---
 
 
-    // Draw Tracks if ViewMode is Tracks
+    // Draw Tracks if ViewMode is Tracks (drawing in video coordinates)
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
-        // Paint tracks for all worms
-        // For each track, paint its path
-        for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
+        for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) {
             int trackId = it_map->first;
             const std::vector<Tracking::WormTrackPoint>& trackPoints = it_map->second;
 
-            // Only show tracks for items with visible checkbox checked
             bool isVisible = false;
             if (m_storage) {
-                // Get item from storage if available
                 const TableItems::ClickedItem* item = m_storage->getItem(trackId);
-                if (item) {
-                    isVisible = item->visible;
-                }
+                if (item) isVisible = item->visible;
             } else {
-                // Fallback to legacy method
                 for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                    if (item.id == trackId) {
-                        isVisible = item.visible;
-                        break;
-                    }
+                    if (item.id == trackId) { isVisible = item.visible; break; }
                 }
             }
 
             if (!isVisible || !m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
 
             QPainterPath path;
-            QColor trackColorWithAlpha = getTrackColor(trackId); // Assuming getTrackColor provides color with desired alpha
-            // If getTrackColor returns opaque, set alpha here:
-            // trackColorWithAlpha.setAlphaF(0.5); // Example: 50% opacity for lines
-
-            QPen trackPen(trackColorWithAlpha, 2); // Pen width of 2
+            QColor trackColorWithAlpha = getTrackColor(trackId);
+            QPen trackPen(trackColorWithAlpha, 2.0 * inverseScale);
             painter.setPen(trackPen);
 
             bool firstPoint = true;
             for (const Tracking::WormTrackPoint& pt : trackPoints) {
-                // Skip lost tracking points - they create gaps in the track display
-                if (pt.quality == Tracking::TrackPointQuality::Lost) {
-                    continue;
-                }
+                if (pt.quality == Tracking::TrackPointQuality::Lost) continue;
 
                 QPointF currentPointVideo(pt.position.x, pt.position.y);
-                QPointF currentPointWidget = mapPointFromVideo(currentPointVideo);
-                if (currentPointWidget.x() < 0) continue; // Skip points not visible on screen
-
                 if (firstPoint) {
-                    path.moveTo(currentPointWidget);
+                    path.moveTo(currentPointVideo);
                     firstPoint = false;
                 } else {
-                    path.lineTo(currentPointWidget);
+                    path.lineTo(currentPointVideo);
                 }
-                // To make points less obtrusive if lines are the focus:
-                // painter.setBrush(trackColorWithAlpha);
-                // painter.drawEllipse(currentPointWidget, 1, 1); // Smaller points
-                // painter.setBrush(Qt::NoBrush);
             }
-            if (!firstPoint) { // If path has content
-                painter.strokePath(path, trackPen); // Draw the continuous line
+            if (!firstPoint) {
+                painter.strokePath(path, trackPen);
             }
         }
     }
+
+    painter.restore(); // Restore painter state back to widget coordinates
 } // End of paintEvent
 
 void VideoLoader::mousePressEvent(QMouseEvent* event) {
@@ -971,25 +1170,33 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
         }
 
         if (m_currentInteractionMode == InteractionMode::EditTracks) {
-            QPointF clickWidgetPoint = event->position();
-            int bestTrackId = -1; int bestFrameNum = -1; QPointF bestVideoPoint;
-            double minDistanceSq = TRACK_POINT_CLICK_TOLERANCE * TRACK_POINT_CLICK_TOLERANCE;
+            // Map click once into VIDEO coordinates (fast) and compare in video-space distances.
+            QPointF clickVideoPoint = mapPointToVideo(event->position());
+            if (clickVideoPoint.x() < 0) {
+                // Click not on video area -> fallback to panning
+                m_isPanning = true; updateCursorShape(); event->accept();
+                return;
+            }
+
+            // Compute tolerance in video pixels based on current target rect scale
+            QRectF tr = calculateTargetRect();
+            double scaleX = (tr.width() > 0 && !originalFrameSize.isEmpty()) ? (tr.width() / originalFrameSize.width()) : m_zoomFactor;
+            double tolVideo = (scaleX > 0.0) ? (TRACK_POINT_CLICK_TOLERANCE / scaleX) : TRACK_POINT_CLICK_TOLERANCE;
+            double minDistanceSq = tolVideo * tolVideo;
+
+            int bestTrackId = -1;
+            int bestFrameNum = -1;
+            QPointF bestVideoPoint;
+
             for (int trackId : std::as_const(m_visibleTrackIDs)) {
                 // Only interact with tracks for items with visible checkbox checked
                 bool isVisible = false;
                 if (m_storage) {
-                    // Get item from storage if available
                     const TableItems::ClickedItem* item = m_storage->getItem(trackId);
-                    if (item) {
-                        isVisible = item->visible;
-                    }
+                    if (item) isVisible = item->visible;
                 } else {
-                    // Fallback to legacy method
                     for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                        if (item.id == trackId) {
-                            isVisible = item.visible;
-                            break;
-                        }
+                        if (item.id == trackId) { isVisible = item.visible; break; }
                     }
                 }
                 if (!isVisible) continue;
@@ -997,24 +1204,22 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 if (m_allTracksToDisplay.count(trackId)) {
                     const auto& trackPoints = m_allTracksToDisplay.at(trackId);
                     for (const auto& pt : trackPoints) {
-                        // Skip lost tracking points for mouse interaction
-                        if (pt.quality == Tracking::TrackPointQuality::Lost) {
-                            continue;
-                        }
+                        if (pt.quality == Tracking::TrackPointQuality::Lost) continue;
 
-                        QPointF videoPt(pt.position.x, pt.position.y);
-                        QPointF widgetPt = mapPointFromVideo(videoPt);
-                        if (widgetPt.x() < 0) continue;
-                        double dx = widgetPt.x() - clickWidgetPoint.x();
-                        double dy = widgetPt.y() - clickWidgetPoint.y();
+                        // Compare directly in video coordinate space (faster - no repeated mapping)
+                        double dx = pt.position.x - clickVideoPoint.x();
+                        double dy = pt.position.y - clickVideoPoint.y();
                         double distSq = dx * dx + dy * dy;
                         if (distSq < minDistanceSq) {
-                            minDistanceSq = distSq; bestTrackId = trackId;
-                            bestFrameNum = pt.frameNumberOriginal; bestVideoPoint = videoPt;
+                            minDistanceSq = distSq;
+                            bestTrackId = trackId;
+                            bestFrameNum = pt.frameNumberOriginal;
+                            bestVideoPoint = QPointF(pt.position.x, pt.position.y);
                         }
                     }
                 }
             }
+
             if (bestTrackId != -1) {
                 qDebug() << "Track point clicked: Worm ID" << bestTrackId << "Frame" << bestFrameNum;
                 emit trackPointClicked(bestTrackId, bestFrameNum, bestVideoPoint);
@@ -1368,15 +1573,15 @@ bool VideoLoader::performVideoCrop(
 }
 
 void VideoLoader::applyThresholding() {
-    if (currentCvFrame.empty()) {
+    if (!currentCvFrame || currentCvFrame->empty()) {
         m_thresholdedFrame_mono = cv::Mat();
         return;
     }
     cv::Mat grayFrame;
-    if (currentCvFrame.channels() >= 3)
-        cv::cvtColor(currentCvFrame, grayFrame, cv::COLOR_BGR2GRAY);
+    if (currentCvFrame->channels() >= 3)
+        cv::cvtColor(*currentCvFrame, grayFrame, cv::COLOR_BGR2GRAY);
     else
-        grayFrame = currentCvFrame.clone();
+        grayFrame = currentCvFrame->clone();
     if (m_enableBlur && m_blurKernelSize >= 3) {
         try {
             cv::GaussianBlur(grayFrame, grayFrame,
@@ -1471,11 +1676,18 @@ QImage VideoLoader::getQImageForFrame(int frameNumber) const {
 
     // Only check cache - no disk fallback to avoid blocking UI thread
     if (m_frameCache) {
-        cv::Mat* cachedFrame = m_frameCache->object(frameNumber);
-        if (cachedFrame) {
-            QImage qimg;
-            const_cast<VideoLoader*>(this)->convertCvMatToQImage(*cachedFrame, qimg);
-            return qimg;
+        CachedFrame* cached = m_frameCache->object(frameNumber);
+        if (cached) {
+            // Prefer thresholded version if caller expects threshold view; otherwise return original.
+            if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && cached->thresholded) {
+                QImage qimg;
+                const_cast<VideoLoader*>(this)->convertCvMatToQImage(*cached->thresholded, qimg);
+                return qimg;
+            } else if (cached->original) {
+                QImage qimg;
+                const_cast<VideoLoader*>(this)->convertCvMatToQImage(*cached->original, qimg);
+                return qimg;
+            }
         }
     }
 
@@ -1505,19 +1717,19 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
 
     // Include the center frame itself as high priority if missing
     if (centerFrame >= 0 && centerFrame < totalFramesCount && !m_frameCache->contains(centerFrame)) {
-        framesToLoad.append(FrameLoadRequest(centerFrame, 100));
+        framesToLoad.append(FrameLoadRequest(centerFrame, 100, getCurrentThresholdSettings()));
     }
 
     // Add frames before and after center with high priority (100) within the full radius.
     for (int distance = 1; distance <= radius; ++distance) {
         int prevFrame = centerFrame - distance;
         if (prevFrame >= 0 && prevFrame < totalFramesCount && !m_frameCache->contains(prevFrame)) {
-            framesToLoad.append(FrameLoadRequest(prevFrame, 100));
+            framesToLoad.append(FrameLoadRequest(prevFrame, 100, getCurrentThresholdSettings()));
         }
 
         int nextFrame = centerFrame + distance;
         if (nextFrame >= 0 && nextFrame < totalFramesCount && !m_frameCache->contains(nextFrame)) {
-            framesToLoad.append(FrameLoadRequest(nextFrame, 100));
+            framesToLoad.append(FrameLoadRequest(nextFrame, 100, getCurrentThresholdSettings()));
         }
     }
 
@@ -1526,14 +1738,23 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
     }
 }
 
-void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat frame) {
+void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded) {
     if (m_frameCache) {
         // Capture keys before insertion so we can detect evictions caused by QCache when capacity is reached.
         QList<int> beforeKeys = m_frameCache->keys();
         QSet<int> beforeSet;
         for (int k : beforeKeys) beforeSet.insert(k);
 
-        m_frameCache->insert(frameNumber, new cv::Mat(frame.clone()));
+        // Build cached frame (store clones so cache owns its data)
+        CachedFrame cf;
+        cf.original = QSharedPointer<cv::Mat>(new cv::Mat(original.clone()));
+        if (!thresholded.empty()) {
+            cf.thresholded = QSharedPointer<cv::Mat>(new cv::Mat(thresholded.clone()));
+        } else {
+            cf.thresholded.clear();
+        }
+
+        m_frameCache->insert(frameNumber, new CachedFrame(cf));
 
         QList<int> afterKeys = m_frameCache->keys();
         QSet<int> afterSet;
@@ -1554,15 +1775,27 @@ void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat frame) {
         if (m_pendingSeekFrame == frameNumber) {
             m_pendingSeekFrame = -1;
 
-            // Update the display with the newly loaded frame
-            currentCvFrame = frame.clone();
+            // Use cached/precomputed data to update display
+            if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !thresholded.empty()) {
+                // Use thresholded frame as current
+                currentCvFrame = QSharedPointer<cv::Mat>(new cv::Mat(thresholded.clone()));
+                m_thresholdedFrame_mono = thresholded.clone();
+            } else {
+                // Use original frame as current; keep threshold buffer updated if available
+                currentCvFrame = QSharedPointer<cv::Mat>(new cv::Mat(original.clone()));
+                if (!thresholded.empty()) {
+                    m_thresholdedFrame_mono = thresholded.clone();
+                } else {
+                    m_thresholdedFrame_mono = cv::Mat();
+                }
+            }
+
             currentFrameIdx = frameNumber;
-            applyThresholding();
 
             if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
                 convertCvMatToQImage(m_thresholdedFrame_mono, currentQImageFrame);
-            } else if (!currentCvFrame.empty()) {
-                convertCvMatToQImage(currentCvFrame, currentQImageFrame);
+            } else if (currentCvFrame && !currentCvFrame->empty()) {
+                convertCvMatToQImage(*currentCvFrame, currentQImageFrame);
             }
 
             emit frameChanged(currentFrameIdx, currentQImageFrame);
@@ -1586,7 +1819,7 @@ void VideoLoader::startFrameLoader() {
     }
 
     m_frameLoaderManager = new FrameLoaderManager(3); // Use 3 worker threads
-    
+
     // Connect signals
     connect(m_frameLoaderManager, &FrameLoaderManager::frameLoaded, this, &VideoLoader::onFrameLoaded);
     connect(m_frameLoaderManager, &FrameLoaderManager::frameLoadError, this, &VideoLoader::onFrameLoadError);

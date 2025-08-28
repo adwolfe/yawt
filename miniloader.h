@@ -97,6 +97,12 @@ public:
     QMap<int, QSet<int>> getVisibleWormsByFrame() const;
     void setVisibleWormsByFrame(const QMap<int, QSet<int>>& map);
 
+    /**
+     * @brief Clears the currently displayed content so the MiniLoader shows a blank/placeholder state.
+     * This sets the internal cropped frame to a null QImage and triggers a repaint.
+     */
+    void clearContent();
+
 public slots:
     /**
      * @brief Handles worm selection changes from the BlobTableModel.

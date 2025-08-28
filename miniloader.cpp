@@ -82,6 +82,25 @@ void MiniLoader::setShowOverlays(bool show)
     update();
 }
 
+void MiniLoader::clearContent()
+{
+    // Reset the displayed image to a null QImage so paintEvent shows the "No crop available" state.
+    m_croppedFrame = QImage(); // null image
+    m_currentFrameNumber = -1;
+
+    // Reset crop metadata to sensible defaults
+    m_cropOffset = QPointF(0, 0);
+    m_cropSize = QSizeF(0, 0);
+    m_centerPoint = QPointF(0, 0);
+
+    // Clear any per-frame visibility info
+    m_visibleWormsByFrame.clear();
+    m_visibleWormIds.clear();
+
+    // Trigger a repaint to reflect the cleared content immediately
+    update();
+}
+
 void MiniLoader::onWormSelectionChanged(const QList<TableItems::ClickedItem>& selectedItems)
 {
     if (selectedItems.isEmpty()) {
@@ -203,7 +222,7 @@ void MiniLoader::onFrameCached(int frameNumber)
 
     // Crop the image
     QImage croppedFrame = fullFrame.copy(cropRect);
-    
+
     // Update with the cropped frame
     m_currentFrameNumber = frameNumber;
     m_croppedFrame = croppedFrame;

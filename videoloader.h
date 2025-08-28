@@ -28,6 +28,7 @@
 #include <QDateTime>
 #include <QAtomicInt>
 #include <QCache>
+#include <QSharedPointer>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -40,8 +41,12 @@
 class TrackingDataStorage;
 class FrameLoaderManager;
 
-
-
+// CachedFrame holds both the original frame and a pre-processed (thresholded) version.
+// Workers will produce both and VideoLoader will cache them together for instant view switching.
+struct CachedFrame {
+    QSharedPointer<cv::Mat> original;
+    QSharedPointer<cv::Mat> thresholded;
+};
 
 
 
@@ -256,7 +261,7 @@ private:
     void stopFrameLoader();
 
 private slots:
-    void onFrameLoaded(int frameNumber, cv::Mat frame);
+    void onFrameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded);
     void onFrameLoadError(int frameNumber, QString error);
 
 
@@ -264,7 +269,7 @@ private slots:
 private:
     // --- OpenCV Video Members ---
     cv::VideoCapture videoCapture;
-    cv::Mat currentCvFrame;          // Holds the raw/original current frame from video
+    QSharedPointer<cv::Mat> currentCvFrame;          // Holds the raw/original current frame from video (shared pointer)
     cv::Mat m_thresholdedFrame_mono; // Holds the binary thresholded version of currentCvFrame
 
     // --- Qt Display Members ---
@@ -320,7 +325,7 @@ private:
     QString m_dataDirectory;  // Path to the "yawt" directory for data storage
 
     // --- Frame Caching and Background Loading ---
-    QCache<int, cv::Mat>* m_frameCache;        // Fast frame cache using QCache
+    QCache<int, CachedFrame>* m_frameCache;        // Fast frame cache storing cached frames (original + thresholded)
     FrameLoaderManager* m_frameLoaderManager;  // Multi-threaded frame loader manager
     int m_lastPreloadCenter;                   // Last center frame for preloading
     mutable QAtomicInt m_pendingSeekFrame;     // Frame number for pending seek operation
