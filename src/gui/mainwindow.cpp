@@ -10,7 +10,7 @@
 #include "delegates/itemtypedelegate.h"
 // #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
 #include "trackingprogressdialog.h"
-#include "../core/trackingmanager.h"
+#include "../core/appcontroller.h"
 #include "../data/trackingdatastorage.h"
 #include "version.h"
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
@@ -44,14 +44,17 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Initialize central data storage
-    m_trackingDataStorage = new TrackingDataStorage(this);
+    // Create application controller which owns storage, models, and TrackingManager
+    m_appController = new AppController(this);
 
+    // Retrieve storage from controller and keep a local pointer for legacy code paths in MainWindow
+    m_trackingDataStorage = m_appController->trackingDataStorage();
 
-
-    // Set up MiniLoader instances
-    ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
-    ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
+    // Set up MiniLoader instances with the storage obtained from AppController
+    if (ui->miniLoader) {
+        ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
+        ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
+    }
 
     if (ui->miniLoaderOverlay) {
         ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
@@ -81,14 +84,14 @@ MainWindow::MainWindow(QWidget *parent)
         // Setup will be done in setupConnections()
     }
 
-    // Model and Delegates
-    m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
-    ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
+    // Model and Delegates - obtain models from AppController
+    m_blobTableModel = m_appController->blobTableModel();
+    ui->wormTableView->setModel(m_blobTableModel);
 
-    // Annotation Table Model
-    m_annotationTableModel = new AnnotationTableModel(m_trackingDataStorage, this);
+    // Annotation Table Model from controller
+    m_annotationTableModel = m_appController->annotationTableModel();
     ui->annoTableView->setModel(m_annotationTableModel);
-    qDebug() << "MainWindow: AnnotationTableModel created and connected to annoTableView";
+    qDebug() << "MainWindow: AnnotationTableModel connected to annoTableView via AppController";
 
     // Merge/Split events model and view
     m_mergeSplitModel = new QStandardItemModel(this);
@@ -179,8 +182,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     resizeTableColumns();
 
-    // Tracking Manager - pass data storage
-    m_trackingManager = new TrackingManager(m_trackingDataStorage, this);
+    // TrackingManager is now owned by AppController; MainWindow keeps the pointer field null to avoid accidental direct usage.
+    m_trackingManager = nullptr;
 
     // Pass data storage to VideoLoader
     ui->videoLoader->setTrackingDataStorage(m_trackingDataStorage);
@@ -773,7 +776,8 @@ void MainWindow::setupConnections() {
 
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
-    connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
+    // Listen for tracksUpdated from AppController (controller stores tracks into storage and emits this)
+    connect(m_appController, &AppController::tracksUpdated, this, &MainWindow::acceptTracksFromManager);
 
     // Annotation table selection
     connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
@@ -1404,11 +1408,12 @@ void MainWindow::onStartTrackingActionTriggered() {
         m_trackingProgressDialog = new TrackingProgressDialog(this);
         connect(m_trackingProgressDialog, &TrackingProgressDialog::beginTrackingRequested, this, &MainWindow::handleBeginTrackingFromDialog);
         connect(m_trackingProgressDialog, &TrackingProgressDialog::cancelTrackingRequested, this, &MainWindow::handleCancelTrackingFromDialog);
-        connect(m_trackingManager, &TrackingManager::trackingStatusUpdate, m_trackingProgressDialog, &TrackingProgressDialog::updateStatusMessage);
-        connect(m_trackingManager, &TrackingManager::overallTrackingProgress, m_trackingProgressDialog, &TrackingProgressDialog::updateOverallProgress);
-        connect(m_trackingManager, &TrackingManager::trackingFinishedSuccessfully, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
-        connect(m_trackingManager, &TrackingManager::trackingFailed, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingFailed);
-        connect(m_trackingManager, &TrackingManager::trackingCancelled, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
+        // Wire dialog updates to AppController signals instead of direct TrackingManager signals
+        connect(m_appController, &AppController::trackingStatusMessage, m_trackingProgressDialog, &TrackingProgressDialog::updateStatusMessage);
+        connect(m_appController, &AppController::trackingProgress, m_trackingProgressDialog, &TrackingProgressDialog::updateOverallProgress);
+        connect(m_appController, &AppController::trackingFinished, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
+        connect(m_appController, &AppController::trackingFailed, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingFailed);
+        connect(m_appController, &AppController::trackingCancelled, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
     }
     //m_trackingProgressDialog->resetDialog();
     int wormsWithTracks = 0;
@@ -1423,7 +1428,7 @@ void MainWindow::onStartTrackingActionTriggered() {
 }
 
 void MainWindow::handleBeginTrackingFromDialog() {
-    if (!m_trackingManager || !ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
+    if (!m_appController || !ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
         if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("Internal error: Components missing.");
         return;
     }
@@ -1462,24 +1467,26 @@ void MainWindow::handleBeginTrackingFromDialog() {
     }
 
     QString dataDirectory = ui->videoLoader->getDataDirectory();
-    m_trackingManager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
+    // Delegate tracking start request to AppController (which owns the TrackingManager)
+    if (m_appController) {
+        m_appController->requestStartTracking(videoPath, keyFrame, settings, initialWorms, totalFrames);
+    } else {
+        if (m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("Internal error: Controller missing.");
+    }
 }
 
 void MainWindow::handleCancelTrackingFromDialog() {
-    if (m_trackingManager) m_trackingManager->cancelTracking();
+    if (m_appController) m_appController->cancelTracking();
 }
 
 void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {
-    qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
+    qDebug() << "MainWindow: Received" << tracks.size() << "tracks (assumed stored by AppController).";
 
-    // Store tracks in the central data storage
-    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        qDebug() << "MainWindow: Storing track for worm" << it->first << "with" << it->second.size() << "points";
-        m_trackingDataStorage->setTrackForItem(it->first, it->second);
+    // AppController is responsible for storing the tracks into TrackingDataStorage.
+    // Here we simply refresh UI components from the central storage.
+    if (m_trackingDataStorage) {
+        qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
     }
-
-    // Debug: Verify tracks were stored
-    qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
 
     // Refresh annotation table to show lost tracking events
     if (m_annotationTableModel) {

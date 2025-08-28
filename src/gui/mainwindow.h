@@ -19,6 +19,7 @@ class ItemTypeDelegate;
 class TrackingProgressDialog;
 class TrackingManager;
 class TrackingDataStorage;
+class AppController; // Application controller (non-GUI) introduced to own core models and manager
 // Retracking forward declarations removed
 
 // Include VideoLoader header for enums and QFlags type
@@ -142,6 +143,7 @@ private:
     TrackingProgressDialog *m_trackingProgressDialog;
     TrackingManager *m_trackingManager;
     TrackingDataStorage *m_trackingDataStorage; // Central data storage
+    AppController *m_appController; // Controller owning storage, manager and models
 
     QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
     
