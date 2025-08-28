@@ -18,6 +18,9 @@
 // #include "trackingcommon.h"
 // MergeViewer removed from MainWindow implementation
 
+// Cache status visualization widget (small status-bar indicator for cached frames)
+#include "cachestatuswidget.h"
+
 #include <QStandardPaths>
 #include <QFileDialog>
 #include <QIcon>
@@ -198,6 +201,66 @@ MainWindow::MainWindow(QWidget *parent)
 
     qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
     ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !", 10000);
+
+    // --- Cache status widget: visualize frames currently present in the VideoLoader cache ---
+    // Create widget and add to status bar as a permanent (right-most) widget.
+    CacheStatusWidget* cacheStatusWidget = new CacheStatusWidget(this);
+    statusBar()->addPermanentWidget(cacheStatusWidget, 0);
+
+    // When VideoLoader emits that a frame was cached, mark it in the widget.
+    connect(ui->videoLoader, &VideoLoader::frameCached, cacheStatusWidget, &CacheStatusWidget::onFrameCached);
+    // Also listen for explicit eviction notifications so the widget can remove frames immediately.
+    connect(ui->videoLoader, &VideoLoader::frameEvicted, cacheStatusWidget, &CacheStatusWidget::onFrameEvicted);
+
+    // When a new video is loaded, update the widget with total frame count.
+    connect(ui->videoLoader, &VideoLoader::videoLoaded, this, [cacheStatusWidget](const QString&, int totalFrames, double, QSize) {
+        cacheStatusWidget->setTotalFrames(totalFrames);
+    });
+
+    // Highlight the current frame as VideoLoader updates.
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, [cacheStatusWidget](int frameNumber, const QImage&) {
+        cacheStatusWidget->setCurrentFrame(frameNumber);
+    });
+
+    // Clicks on the cache strip will seek the main video to that frame.
+    connect(cacheStatusWidget, &CacheStatusWidget::frameClicked, this, [this](int frame) {
+        seekFrame(frame);
+    });
+
+    // Periodic poll to detect evictions / reconcile cache differences.
+    // We sample a window around the current frame (preload radius + margin) and query VideoLoader::getQImageForFrame()
+    // for presence. This allows the widget to accurately remove frames as they are evicted.
+    QTimer* cachePollTimer = new QTimer(this);
+    cachePollTimer->setInterval(500); // 500 ms
+    connect(cachePollTimer, &QTimer::timeout, this, [this, cacheStatusWidget]() {
+        if (!ui || !ui->videoLoader) return;
+        if (!ui->videoLoader->isVideoLoaded()) {
+            cacheStatusWidget->clear();
+            return;
+        }
+        int total = ui->videoLoader->getTotalFrames();
+        if (total <= 0) {
+            cacheStatusWidget->clear();
+            return;
+        }
+        int center = ui->videoLoader->getCurrentFrameNumber();
+        if (center < 0) center = 0;
+        int preload = ui->videoLoader->getPreloadRadius();
+        // scan radius: cover the preload radius plus a margin, with a reasonable minimum window
+        int scanRadius = qMax(preload + 50, 200);
+        int start = qMax(0, center - scanRadius);
+        int end = qMin(total - 1, center + scanRadius);
+
+        QSet<int> present;
+        // Query VideoLoader for frames available in cache (getQImageForFrame returns null if not cached)
+        for (int f = start; f <= end; ++f) {
+            QImage qi = ui->videoLoader->getQImageForFrame(f);
+            if (!qi.isNull()) present.insert(f);
+        }
+
+        cacheStatusWidget->setCachedFrames(present);
+    });
+    cachePollTimer->start();
 }
 
 MainWindow::~MainWindow()

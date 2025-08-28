@@ -43,9 +43,11 @@ set(SOURCES
     trackingprogressdialog.cpp
     videofiletreeview.cpp
     videoloader.cpp
+    frameloader_internal.cpp
     videoprocessor.cpp
     wormobject.cpp
     wormtracker.cpp
+    cachestatuswidget.cpp
 )
 
 # List of headers
@@ -66,9 +68,11 @@ set(HEADERS
     trackingprogressdialog.h
     videofiletreeview.h
     videoloader.h
+    frameloader_internal.h
     videoprocessor.h
     wormobject.h
     wormtracker.h
+    cachestatuswidget.h
 )
 
 # UI files

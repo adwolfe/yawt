@@ -16,6 +16,7 @@
 #include <QSet>
 #include <vector>
 #include <QColor>
+#include "cachestatuswidget.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -37,6 +38,7 @@
 
 // Forward declarations
 class TrackingDataStorage;
+class FrameLoaderManager;
 
 
 
@@ -193,6 +195,7 @@ signals:
     void playbackStateChanged(bool isPlaying, double currentSpeed);
     void roiDefined(const QRectF &roi); // For the general purpose ROI
     void frameCached(int frameNumber); // Emitted when a frame is loaded and cached in background
+    void frameEvicted(int frameNumber); // Emitted when a frame is removed/evicted from the cache
     void zoomFactorChanged(double newZoomFactor);
 
     void interactionModeChanged(InteractionMode newMode);
@@ -318,8 +321,7 @@ private:
 
     // --- Frame Caching and Background Loading ---
     QCache<int, cv::Mat>* m_frameCache;        // Fast frame cache using QCache
-    class FrameLoader* m_frameLoader;          // Background frame loader
-    QThread* m_frameLoaderThread;              // Thread for background loading
+    FrameLoaderManager* m_frameLoaderManager;  // Multi-threaded frame loader manager
     int m_lastPreloadCenter;                   // Last center frame for preloading
     mutable QAtomicInt m_pendingSeekFrame;     // Frame number for pending seek operation
 };
