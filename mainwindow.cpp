@@ -55,6 +55,28 @@ MainWindow::MainWindow(QWidget *parent)
         ui->miniLoaderOverlay->setShowOverlays(true);  // Overlays enabled on overlay instance
     }
 
+    // Set up all other MiniLoader instances with TrackingDataStorage
+    if (ui->mlon2) {
+        ui->mlon2->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlon2->setShowOverlays(true);
+    }
+    if (ui->mlon1) {
+        ui->mlon1->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlon1->setShowOverlays(true);
+    }
+    if (ui->mlop1) {
+        ui->mlop1->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlop1->setShowOverlays(true);
+    }
+    if (ui->mlop2) {
+        ui->mlop2->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlop2->setShowOverlays(true);
+    }
+    
+    // Set up the additional MiniLoader instances (±2 frames)
+    if (ui->mlon2) {
+        // Setup will be done in setupConnections()
+    }
 
     // Model and Delegates
     m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
@@ -257,6 +279,14 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop);
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
+    
+    // Connect VideoLoader frameCached signal to MiniLoader instances for self-cropping
+    if (ui->mlon2) connect(ui->videoLoader, &VideoLoader::frameCached, ui->mlon2, &MiniLoader::onFrameCached);
+    if (ui->mlon1) connect(ui->videoLoader, &VideoLoader::frameCached, ui->mlon1, &MiniLoader::onFrameCached);
+    if (ui->miniLoaderOverlay) connect(ui->videoLoader, &VideoLoader::frameCached, ui->miniLoaderOverlay, &MiniLoader::onFrameCached);
+    if (ui->mlop1) connect(ui->videoLoader, &VideoLoader::frameCached, ui->mlop1, &MiniLoader::onFrameCached);
+    if (ui->mlop2) connect(ui->videoLoader, &VideoLoader::frameCached, ui->mlop2, &MiniLoader::onFrameCached);
+    if (ui->miniLoader) connect(ui->videoLoader, &VideoLoader::frameCached, ui->miniLoader, &MiniLoader::onFrameCached);
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
 
@@ -330,6 +360,65 @@ void MainWindow::setupConnections() {
                     ui->miniLoaderOverlay->onWormSelectionChanged(selItems);
                 });
     }
+
+    // Connect all other MiniLoaders to model and selection changes
+    if (ui->mlon2 && ui->mlon2->showOverlays()) {
+        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->mlon2, qOverload<>(&MiniLoader::update));
+        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->mlon2, qOverload<>(&MiniLoader::update));
+        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+                ui->mlon2, [this](const QItemSelection &selected, const QItemSelection&) {
+                    QList<TableItems::ClickedItem> selItems;
+                    QModelIndexList indexes = selected.indexes();
+                    if (!indexes.isEmpty()) {
+                        int row = indexes.first().row();
+                        if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
+                    }
+                    ui->mlon2->onWormSelectionChanged(selItems);
+                });
+    }
+    if (ui->mlon1 && ui->mlon1->showOverlays()) {
+        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->mlon1, qOverload<>(&MiniLoader::update));
+        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->mlon1, qOverload<>(&MiniLoader::update));
+        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+                ui->mlon1, [this](const QItemSelection &selected, const QItemSelection&) {
+                    QList<TableItems::ClickedItem> selItems;
+                    QModelIndexList indexes = selected.indexes();
+                    if (!indexes.isEmpty()) {
+                        int row = indexes.first().row();
+                        if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
+                    }
+                    ui->mlon1->onWormSelectionChanged(selItems);
+                });
+    }
+    if (ui->mlop1 && ui->mlop1->showOverlays()) {
+        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->mlop1, qOverload<>(&MiniLoader::update));
+        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->mlop1, qOverload<>(&MiniLoader::update));
+        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+                ui->mlop1, [this](const QItemSelection &selected, const QItemSelection&) {
+                    QList<TableItems::ClickedItem> selItems;
+                    QModelIndexList indexes = selected.indexes();
+                    if (!indexes.isEmpty()) {
+                        int row = indexes.first().row();
+                        if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
+                    }
+                    ui->mlop1->onWormSelectionChanged(selItems);
+                });
+    }
+    if (ui->mlop2 && ui->mlop2->showOverlays()) {
+        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->mlop2, qOverload<>(&MiniLoader::update));
+        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->mlop2, qOverload<>(&MiniLoader::update));
+        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+                ui->mlop2, [this](const QItemSelection &selected, const QItemSelection&) {
+                    QList<TableItems::ClickedItem> selItems;
+                    QModelIndexList indexes = selected.indexes();
+                    if (!indexes.isEmpty()) {
+                        int row = indexes.first().row();
+                        if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
+                    }
+                    ui->mlop2->onWormSelectionChanged(selItems);
+                });
+    }
+
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
 
@@ -1055,7 +1144,7 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
 }
 
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
-    if (!ui->miniLoader || currentFrame.isNull()) {
+    if (!ui->videoLoader) {
         return;
     }
 
@@ -1065,11 +1154,11 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         cropSize = QSizeF(100, 100); // fallback size
     }
 
-    // Determine center point for cropping (use only the central frame to pick center)
+    // Determine center point for cropping
     QPointF centerPoint;
     bool foundCenterPoint = false;
 
-    // First priority: if a worm is selected, use its centroid (for the current/central frame)
+    // First priority: if a worm is selected, use its centroid
     QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
     if (!selectedIndexes.isEmpty()) {
         int selectedRow = selectedIndexes.first().row();
@@ -1090,128 +1179,46 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     }
 
     // Second priority: use MiniLoader's last known center point
-    if (!foundCenterPoint) {
-       const QPointF lastCenter = ui->miniLoader->getLastCenterPoint();
+    if (!foundCenterPoint && ui->miniLoader) {
+        const QPointF lastCenter = ui->miniLoader->getLastCenterPoint();
         if (!lastCenter.isNull() && lastCenter.x() >= 0 && lastCenter.y() >= 0) {
             centerPoint = lastCenter;
             foundCenterPoint = true;
         }
     }
 
-    // Third priority: use center of the provided (central) image
+    // Third priority: use center of the current frame
     if (!foundCenterPoint) {
         centerPoint = QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0);
     }
 
-    // Calculate the crop rectangle (same for all frames we will send)
-    double cropWidth = cropSize.width();
-    double cropHeight = cropSize.height();
-    double left = centerPoint.x() - cropWidth / 2.0;
-    double top = centerPoint.y() - cropHeight / 2.0;
-
-    // Clamp to image bounds (use currentFrame dimensions as reference)
-    left = qBound(0.0, left, currentFrame.width() - cropWidth);
-    top = qBound(0.0, top, currentFrame.height() - cropHeight);
-
-    const QPointF cropOffset(left, top);
-    QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
-                   static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
-
-    // Intersect with image bounds
-    QRect imageBounds(0, 0, currentFrame.width(), currentFrame.height());
-    cropRect = cropRect.intersected(imageBounds);
-    const QSizeF newSize(cropRect.width(), cropRect.height());
-
-    if (cropRect.isEmpty()) {
-        return;
+    // Tell each MiniLoader what frame to expect and let them handle cropping themselves
+    int offsets[5] = { -2, -1, 0, 1, 2 };
+    MiniLoader* widgetTargets[5] = { ui->mlon2, ui->mlon1, ui->miniLoaderOverlay, ui->mlop1, ui->mlop2 };
+    
+    int totalFrames = ui->videoLoader->getTotalFrames();
+    
+    for (int i = 0; i < 5; ++i) {
+        int targetFrame = currentFrameNumber + offsets[i];
+        if (targetFrame < 0 || (totalFrames > 0 && targetFrame >= totalFrames)) continue;
+        
+        MiniLoader* target = widgetTargets[i];
+        if (!target) continue;
+        
+        target->setExpectedFrame(targetFrame, cropSize, centerPoint, ui->videoLoader);
     }
 
-    // Send one cropped frame to each of the five mini loaders instead of batching +/-2 frames to a single overlay.
-    // Mapping:
-    //   mlon2 -> currentFrameNumber - 2
-    //   mlon1 -> currentFrameNumber - 1
-    //   miniLoaderOverlay -> currentFrameNumber
-    //   mlop1 -> currentFrameNumber + 1
-    //   mlop2 -> currentFrameNumber + 2
-    {
-        int offsets[5] = { -2, -1, 0, 1, 2 };
-        int totalFrames = 0;
-        if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
-
-        // Helper lambda to get a cropped frame (real or black placeholder) for a specific absolute frame.
-        auto buildCroppedForFrame = [&](int frameNum) -> std::tuple<QImage, QPointF, QSizeF> {
-            QRect localCrop = cropRect;
-            QImage img;
-            if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
-                img = ui->videoLoader->getQImageForFrame(frameNum);
-            }
-            if (!img.isNull()) {
-                QRect imgBounds(0, 0, img.width(), img.height());
-                localCrop = localCrop.intersected(imgBounds);
-            }
-            if (localCrop.isEmpty()) localCrop = cropRect;
-            QImage cf;
-            if (!img.isNull()) cf = img.copy(localCrop);
-            else {
-                cf = QImage(localCrop.size(), QImage::Format_RGB32);
-                cf.fill(Qt::black);
-            }
-            QPointF offset(localCrop.left() + 0.0, localCrop.top() + 0.0);
-            QSizeF size(localCrop.width(), localCrop.height());
-            return std::make_tuple(cf, offset, size);
-        };
-
-        // Map offsets to UI widget pointers (if present)
-        MiniLoader* widgetTargets[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-        widgetTargets[0] = (ui->mlon2) ? ui->mlon2 : nullptr;
-        widgetTargets[1] = (ui->mlon1) ? ui->mlon1 : nullptr;
-        widgetTargets[2] = (ui->miniLoaderOverlay) ? ui->miniLoaderOverlay : nullptr;
-        widgetTargets[3] = (ui->mlop1) ? ui->mlop1 : nullptr;
-        widgetTargets[4] = (ui->mlop2) ? ui->mlop2 : nullptr;
-
-        // Send one frame to each target
-        for (int i = 0; i < 5; ++i) {
-            int targetFrame = currentFrameNumber + offsets[i];
-            if (targetFrame < 0) continue;
-            if (totalFrames > 0 && targetFrame >= totalFrames) continue;
-
-            MiniLoader* target = widgetTargets[i];
-            if (!target) continue;
-
-            QImage cf;
-            QPointF off;
-            QSizeF sz;
-            std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
-
-            // Use the MiniLoader single-frame API
-            target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
-            qDebug() << "MainWindow::updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
-                     << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("miniLoaderOverlay"):(i==3?QString("mlop1"):QString("mlop2")))))
-                     << "size:" << cf.size();
-        }
-
-        // Primary miniLoader (zoom-only) should receive the central frame for display consistency
-        if (ui->miniLoader) {
-            QImage cf_center;
-            QPointF off_center;
-            QSizeF sz_center;
-            std::tie(cf_center, off_center, sz_center) = buildCroppedForFrame(currentFrameNumber);
-            ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, cf_center, off_center, sz_center, centerPoint);
-            qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
-        }
-
-        // If we sent to an overlay, let it emit visibility signals as before. If no overlay, clear visible set.
-        if (ui->miniLoaderOverlay) {
-            // Allow overlay to compute visibility for its single frame and emit signals as needed.
-            onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
-        } else {
-            onMiniLoaderVisibleWormsUpdated(QList<int>()); // clear visible set so merge history shows all (or callers adapt)
-        }
+    // Primary miniLoader gets the current frame
+    if (ui->miniLoader) {
+        ui->miniLoader->setExpectedFrame(currentFrameNumber, cropSize, centerPoint, ui->videoLoader);
     }
 
-    // The batching path has been replaced above. No additional fallback logic required here.
-    // All five mini loader widgets (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2) were handled.
-    // No-op placeholder to preserve function structure.
+    // Get visible worms from overlay if available
+    if (ui->miniLoaderOverlay) {
+        onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
+    } else {
+        onMiniLoaderVisibleWormsUpdated(QList<int>());
+    }
 }
 
 void MainWindow::frameSliderMoved(int value) {

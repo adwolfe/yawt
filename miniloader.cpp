@@ -3,6 +3,7 @@
 #include <QPainterPath>
 #include <QDebug>
 #include "trackingdatastorage.h"
+#include "videoloader.h"
 
 MiniLoader::MiniLoader(QWidget* parent)
     : QWidget(parent)
@@ -10,6 +11,10 @@ MiniLoader::MiniLoader(QWidget* parent)
     , m_centerPoint(0, 0)
     , m_cropOffset(0, 0)
     , m_cropSize(100, 100)
+    , m_expectedFrameNumber(-1)
+    , m_expectedCropSize(100, 100)
+    , m_expectedCenterPoint(0, 0)
+    , m_videoLoader(nullptr)
     , m_trackingDataStorage(nullptr)
     , m_showOverlays(true)
     , m_selectedWormId(-1)
@@ -136,6 +141,75 @@ void MiniLoader::updateWithCroppedFrame(int frameNumber, const QImage& croppedFr
     m_cropOffset = cropOffset;
     m_cropSize = cropSize;
     m_centerPoint = centerPoint;
+
+    update();
+}
+
+void MiniLoader::setExpectedFrame(int frameNumber, QSizeF cropSize, QPointF centerPoint, VideoLoader* videoLoader)
+{
+    m_expectedFrameNumber = frameNumber;
+    m_expectedCropSize = cropSize;
+    m_expectedCenterPoint = centerPoint;
+    m_videoLoader = videoLoader;
+
+    // Try to get the frame immediately if it's already cached
+    onFrameCached(frameNumber);
+}
+
+#include <QDebug>
+
+void MiniLoader::onFrameCached(int frameNumber)
+{
+    qDebug() << "MiniLoader" << this << "received frameCached for frame" << frameNumber
+             << "expecting frame" << m_expectedFrameNumber;
+
+    // Check if this is the frame we're waiting for
+    if (frameNumber != m_expectedFrameNumber || !m_videoLoader) {
+        qDebug() << "MiniLoader" << this << "frameCached ignored (frame mismatch or no videoLoader)";
+        return;
+    }
+
+    // Try to get the cached frame from VideoLoader
+    QImage fullFrame = m_videoLoader->getQImageForFrame(frameNumber);
+    if (fullFrame.isNull()) {
+        qDebug() << "MiniLoader" << this << "cached frame is null for frame" << frameNumber;
+        return; // Frame not available yet
+    }
+
+    qDebug() << "MiniLoader" << this << "got cached frame of size"
+             << fullFrame.size() << "for frame" << frameNumber;
+
+    // Calculate crop rectangle
+    double cropWidth = m_expectedCropSize.width();
+    double cropHeight = m_expectedCropSize.height();
+    double left = m_expectedCenterPoint.x() - cropWidth / 2.0;
+    double top = m_expectedCenterPoint.y() - cropHeight / 2.0;
+
+    // Clamp to image bounds
+    left = qBound(0.0, left, fullFrame.width() - cropWidth);
+    top = qBound(0.0, top, fullFrame.height() - cropHeight);
+
+    QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
+                   static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
+
+    // Intersect with image bounds
+    QRect imageBounds(0, 0, fullFrame.width(), fullFrame.height());
+    cropRect = cropRect.intersected(imageBounds);
+
+    if (cropRect.isEmpty()) {
+        qDebug() << "MiniLoader" << this << "cropRect is empty, skipping update";
+        return;
+    }
+
+    // Crop the image
+    QImage croppedFrame = fullFrame.copy(cropRect);
+    
+    // Update with the cropped frame
+    m_currentFrameNumber = frameNumber;
+    m_croppedFrame = croppedFrame;
+    m_cropOffset = QPointF(cropRect.left(), cropRect.top());
+    m_cropSize = QSizeF(cropRect.width(), cropRect.height());
+    m_centerPoint = m_expectedCenterPoint;
 
     update();
 }

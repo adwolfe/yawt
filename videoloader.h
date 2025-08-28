@@ -26,6 +26,7 @@
 #include <QQueue>
 #include <QDateTime>
 #include <QAtomicInt>
+#include <QCache>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -37,100 +38,6 @@
 // Forward declarations
 class TrackingDataStorage;
 
-// Cached frame structure
-struct CachedFrame {
-    int frameNumber;
-    cv::Mat rawFrame;
-    cv::Mat thresholdedFrame;
-    QDateTime lastAccessed;
-    bool isValid;
-
-    CachedFrame() : frameNumber(-1), isValid(false) {}
-    CachedFrame(int fn, const cv::Mat& raw)
-        : frameNumber(fn), rawFrame(raw.clone()), isValid(true), lastAccessed(QDateTime::currentDateTime()) {}
-};
-
-// Thread-safe LRU frame cache
-class FrameCache {
-public:
-    explicit FrameCache(int maxCacheSize = 50);
-    ~FrameCache();
-
-    // Cache operations
-    void insertFrame(int frameNumber, const cv::Mat& frame);
-    bool getFrame(int frameNumber, cv::Mat& outFrame);
-    bool hasFrame(int frameNumber) const;
-    void clear();
-    void setMaxSize(int maxSize);
-
-    // Statistics
-    int size() const;
-    int maxSize() const;
-    double hitRate() const;
-
-private:
-    void evictLRU();
-    void updateAccessTime(int frameNumber);
-
-    mutable QMutex m_mutex;
-    QMap<int, CachedFrame> m_frames;
-    int m_maxSize;
-    mutable QAtomicInt m_hits;
-    mutable QAtomicInt m_requests;
-};
-
-// Frame loading request structure
-struct FrameLoadRequest {
-    int frameNumber;
-    int priority; // Higher number = higher priority
-    QDateTime requestTime;
-
-    FrameLoadRequest(int fn, int prio = 1)
-        : frameNumber(fn), priority(prio), requestTime(QDateTime::currentDateTime()) {}
-
-    bool operator<(const FrameLoadRequest& other) const {
-        if (priority != other.priority) return priority < other.priority;
-        return requestTime > other.requestTime; // Newer requests first for same priority
-    }
-
-    bool operator>(const FrameLoadRequest& other) const {
-        if (priority != other.priority) return priority > other.priority;
-        return requestTime < other.requestTime; // Older requests last for same priority
-    }
-};
-
-// Background frame loader worker
-class FrameLoader : public QObject {
-    Q_OBJECT
-
-public:
-    explicit FrameLoader(QObject* parent = nullptr);
-    ~FrameLoader();
-
-    void setVideoPath(const QString& path);
-    void requestFrames(const QList<int>& frameNumbers, int priority = 1);
-    void requestSingleFrame(int frameNumber, int priority = 1);
-    void clearRequests();
-    void stop();
-
-signals:
-    void frameLoaded(int frameNumber, cv::Mat frame);
-    void frameLoadError(int frameNumber, QString error);
-
-public slots:
-    void processRequests();
-
-private:
-    void loadFrame(int frameNumber);
-
-    QString m_videoPath;
-    cv::VideoCapture m_videoCapture;
-    QQueue<FrameLoadRequest> m_requestQueue;
-    mutable QMutex m_queueMutex;
-    QWaitCondition m_waitCondition;
-    bool m_stopRequested;
-    bool m_isProcessing;
-};
 
 
 
@@ -285,6 +192,7 @@ signals:
     void frameChanged(int currentFrameNumber, const QImage& currentFrame); // QImage is current frame (raw or thresholded based on ViewMode)
     void playbackStateChanged(bool isPlaying, double currentSpeed);
     void roiDefined(const QRectF &roi); // For the general purpose ROI
+    void frameCached(int frameNumber); // Emitted when a frame is loaded and cached in background
     void zoomFactorChanged(double newZoomFactor);
 
     void interactionModeChanged(InteractionMode newMode);
@@ -340,7 +248,6 @@ private:
     QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
 
     // Frame caching and loading helpers
-    bool getCachedFrame(int frameNumber, cv::Mat& outFrame);
     void preloadAdjacentFrames(int centerFrame, int radius = 5);
     void startFrameLoader();
     void stopFrameLoader();
@@ -348,6 +255,8 @@ private:
 private slots:
     void onFrameLoaded(int frameNumber, cv::Mat frame);
     void onFrameLoadError(int frameNumber, QString error);
+
+
 
 private:
     // --- OpenCV Video Members ---
@@ -408,8 +317,8 @@ private:
     QString m_dataDirectory;  // Path to the "yawt" directory for data storage
 
     // --- Frame Caching and Background Loading ---
-    FrameCache* m_frameCache;                  // Thread-safe frame cache
-    FrameLoader* m_frameLoader;                // Background frame loader
+    QCache<int, cv::Mat>* m_frameCache;        // Fast frame cache using QCache
+    class FrameLoader* m_frameLoader;          // Background frame loader
     QThread* m_frameLoaderThread;              // Thread for background loading
     int m_lastPreloadCenter;                   // Last center frame for preloading
     mutable QAtomicInt m_pendingSeekFrame;     // Frame number for pending seek operation
