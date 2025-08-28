@@ -1,6 +1,7 @@
 // wormtracker.cpp
 #include "wormtracker.h" // Lowercase include
-#include "debugutils.h"
+#include "../utils/debugutils.h"
+#include "../data/trackingcommon.h"
 #include <QDebug>
 #include <QtMath>       // For qSqrt, qPow, qAbs
 #include <algorithm>    // For std::sort, std::min_element etc. if needed

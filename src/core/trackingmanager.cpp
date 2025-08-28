@@ -1,6 +1,6 @@
 // trackingmanager.cpp
 #include "trackingmanager.h"
-#include "debugutils.h"
+#include "../utils/debugutils.h"
 
 #include <QDebug>
 #include <QDir>

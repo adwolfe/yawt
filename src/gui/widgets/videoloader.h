@@ -34,8 +34,8 @@
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "trackingcommon.h" // Contains TrackedItem, DetectedBlob, etc.
-#include "trackingdatastorage.h" // Central data storage
+#include "../../data/trackingcommon.h" // Contains TrackedItem, DetectedBlob, etc.
+#include "../../data/trackingdatastorage.h" // Central data storage
 
 // Forward declarations
 class TrackingDataStorage;

@@ -3,6 +3,8 @@
 #include <QDebug>
 #include <QThread> // For interruption check
 #include <algorithm> // For std::reverse
+#include "../../data/trackingcommon.h"
+#include "../../utils/thresholdingutils.h"
 
 VideoProcessor::VideoProcessor(QObject *parent)
     : QObject(parent)

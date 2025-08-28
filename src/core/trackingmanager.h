@@ -20,11 +20,11 @@
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 
-#include "trackingcommon.h"
-#include "wormobject.h"
-#include "videoprocessor.h" // For VideoProcessor type, not direct instantiation here
+#include "../data/trackingcommon.h"
+#include "../data/wormobject.h"
+#include "processing/videoprocessor.h" // For VideoProcessor type, not direct instantiation here
 #include "wormtracker.h"    // For WormTracker type and enums
-#include "trackingdatastorage.h" // Central data storage
+#include "../data/trackingdatastorage.h" // Central data storage
 
 // Constants for matching physical blobs on a frame
 const double PHYSICAL_BLOB_IOU_THRESHOLD = 0.5; // Higher threshold for matching same physical blob

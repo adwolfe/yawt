@@ -10,7 +10,7 @@
 #include <QMap>
 #include <QSet>
 #include <QColor>
-#include "trackingcommon.h"
+#include "../../data/trackingcommon.h"
 
 // Forward declarations
 class TrackingDataStorage;

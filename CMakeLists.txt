@@ -12,10 +12,19 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-
-
-# Add source directory includes
-include_directories(${CMAKE_SOURCE_DIR})
+# Make sure the top-level source dir and new src/ tree are visible to the compiler
+include_directories(
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets
+    ${CMAKE_SOURCE_DIR}/src/gui/delegates
+    ${CMAKE_SOURCE_DIR}/src/models
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/processing
+    ${CMAKE_SOURCE_DIR}/src/data
+    ${CMAKE_SOURCE_DIR}/src/utils
+)
 
 # Find Qt modules
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
@@ -23,87 +32,113 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
 # Include OpenCV
 find_package(OpenCV REQUIRED PATHS /opt/homebrew)
 
-# List of sources
+# List of sources (updated to reflect new organization under src/)
 set(SOURCES
-    annotationtablemodel.cpp
-    blobtablemodel.cpp
-    colordelegate.cpp
-    debugutils.cpp
-    folderfirstsortproxymodel.cpp
-    #framecachemanager.cpps
-    itemtypedelegate.cpp
     main.cpp
-    mergeviewer.cpp
-    mainwindow.cpp
-    miniloader.cpp
-    thresholdingutils.cpp
-    trackingcommon.cpp
-    trackingdatastorage.cpp
-    trackingmanager.cpp
-    trackingprogressdialog.cpp
-    videofiletreeview.cpp
-    videoloader.cpp
-    frameloader_internal.cpp
-    videoprocessor.cpp
-    wormobject.cpp
-    wormtracker.cpp
-    cachestatuswidget.cpp
+
+    # Models
+    src/models/annotationtablemodel.cpp
+    src/models/blobtablemodel.cpp
+    src/models/folderfirstsortproxymodel.cpp
+
+    # GUI (top-level)
+    src/gui/mainwindow.cpp
+    src/gui/trackingprogressdialog.cpp
+
+    # GUI widgets and delegates
+    src/gui/widgets/mergeviewer.cpp
+    src/gui/widgets/miniloader.cpp
+    src/gui/widgets/cachestatuswidget.cpp
+    src/gui/widgets/videofiletreeview.cpp
+    src/gui/widgets/videoloader.cpp
+
+    src/gui/delegates/colordelegate.cpp
+    src/gui/delegates/itemtypedelegate.cpp
+
+    # Core tracking
+    src/core/trackingmanager.cpp
+    src/core/wormtracker.cpp
+
+    # Core processing
+    src/core/processing/videoprocessor.cpp
+    src/core/processing/frameloader_internal.cpp
+
+    # Data
+    src/data/trackingdatastorage.cpp
+    src/data/trackingcommon.cpp
+    src/data/wormobject.cpp
+
+    # Utils
+    src/utils/debugutils.cpp
+    src/utils/thresholdingutils.cpp
 )
 
-# List of headers
+# List of headers (updated to new locations)
 set(HEADERS
-    annotationtablemodel.h
-    blobtablemodel.h
-    colordelegate.h
-    folderfirstsortproxymodel.h
-    #framecachemanager.h
-    itemtypedelegate.h
-    mainwindow.h
-    mergeviewer.h
-    miniloader.h
-    thresholdingutils.h
-    trackingcommon.h
-    trackingdatastorage.h
-    trackingmanager.h
-    trackingprogressdialog.h
-    videofiletreeview.h
-    videoloader.h
-    frameloader_internal.h
-    videoprocessor.h
-    wormobject.h
-    wormtracker.h
-    cachestatuswidget.h
+    # Models
+    src/models/annotationtablemodel.h
+    src/models/blobtablemodel.h
+    src/models/folderfirstsortproxymodel.h
+
+    # GUI
+    src/gui/mainwindow.h
+    src/gui/trackingprogressdialog.h
+
+    # GUI widgets / delegates
+    src/gui/widgets/mergeviewer.h
+    src/gui/widgets/miniloader.h
+    src/gui/widgets/cachestatuswidget.h
+    src/gui/widgets/videofiletreeview.h
+    src/gui/widgets/videoloader.h
+
+    src/gui/delegates/colordelegate.h
+    src/gui/delegates/itemtypedelegate.h
+
+    # Core
+    src/core/trackingmanager.h
+    src/core/wormtracker.h
+
+    # Core processing
+    src/core/processing/videoprocessor.h
+    src/core/processing/frameloader_internal.h
+
+    # Data
+    src/data/trackingdatastorage.h
+    src/data/trackingcommon.h
+    src/data/wormobject.h
+
+    # Utils
+    src/utils/debugutils.h
+    src/utils/thresholdingutils.h
 )
 
-# UI files
+# UI files (moved)
 set(UIS
-    mainwindow.ui
-    trackingprogressdialog.ui
+    src/gui/mainwindow.ui
+    src/gui/trackingprogressdialog.ui
 )
 
 # Resources
 set(RESOURCES
     resources.qrc
 )
-# macOS app bundle icon
+
+# macOS app bundle icon (keep same behavior as before)
 set(MACOSX_BUNDLE_ICON_FILE icon.icns)
 set_source_files_properties(${CMAKE_SOURCE_DIR}/resources/icon.icns PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources")
 
 set(APP_ICON_MAC ${CMAKE_SOURCE_DIR}/resources/icon.icns)
-# Optional: Windows .ico icon resource
+
+# Create the executable
 if(WIN32)
     set(APP_ICON_RESOURCE_WINDOWS resources/icon_tr.ico)
     add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_RESOURCE_WINDOWS})
 else()
     add_executable(${PROJECT_NAME} MACOSX_BUNDLE
-    ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_MAC}
-)
+        ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_MAC}
+    )
 endif()
-
-
-
-
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     MACOSX_BUNDLE TRUE
@@ -119,6 +154,7 @@ target_link_libraries(${PROJECT_NAME}
     ${OpenCV_LIBS}
 )
 
+# Generate version header into the build directory
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/version.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/version.h"

@@ -2,7 +2,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QDebug>
-#include "trackingdatastorage.h"
+#include "../../data/trackingdatastorage.h"
 #include "videoloader.h"
 
 MiniLoader::MiniLoader(QWidget* parent)

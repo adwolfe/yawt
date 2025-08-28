@@ -22,9 +22,9 @@ class TrackingDataStorage;
 // Retracking forward declarations removed
 
 // Include VideoLoader header for enums and QFlags type
-#include "videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
-#include "trackingcommon.h" // For AllWormTracks and Tracking::DetectedBlob
-#include "trackingdatastorage.h" // Central data storage
+#include "widgets/videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
+#include "../data/trackingcommon.h" // For AllWormTracks and Tracking::DetectedBlob
+#include "../data/trackingdatastorage.h" // Central data storage
 
 QT_BEGIN_NAMESPACE
 QT_END_NAMESPACE

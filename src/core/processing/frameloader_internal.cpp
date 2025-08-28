@@ -1,7 +1,7 @@
 #include "frameloader_internal.h"
 #include <QDebug>
 #include <QMutexLocker>
-#include "thresholdingutils.h"
+#include "../../utils/thresholdingutils.h"
 
 // Get the preload radius from videoloader.cpp static variables
 extern int s_preloadRadius;

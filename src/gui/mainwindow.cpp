@@ -1,17 +1,17 @@
 #include "mainwindow.h"
 #include <QTimer>
 #include <QShortcut>
-#include "debugutils.h"
+#include "../utils/debugutils.h"
 #include "ui_mainwindow.h"
-#include "miniloader.h"
-#include "annotationtablemodel.h"
-#include "blobtablemodel.h"
-#include "colordelegate.h"
-#include "itemtypedelegate.h"
+#include "widgets/miniloader.h"
+#include "../models/annotationtablemodel.h"
+#include "../models/blobtablemodel.h"
+#include "delegates/colordelegate.h"
+#include "delegates/itemtypedelegate.h"
 // #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
 #include "trackingprogressdialog.h"
-#include "trackingmanager.h"
-#include "trackingdatastorage.h"
+#include "../core/trackingmanager.h"
+#include "../data/trackingdatastorage.h"
 #include "version.h"
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
 // #include "videoloader.h"
@@ -19,7 +19,7 @@
 // MergeViewer removed from MainWindow implementation
 
 // Cache status visualization widget (small status-bar indicator for cached frames)
-#include "cachestatuswidget.h"
+#include "widgets/cachestatuswidget.h"
 
 #include <QStandardPaths>
 #include <QFileDialog>

@@ -1,4 +1,5 @@
 #include "itemtypedelegate.h"
+#include "../../data/trackingcommon.h"
 #include <QComboBox>
 #include <QStringList>
 

@@ -14,7 +14,7 @@
 #include <vector>
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
-#include "trackingcommon.h"
+#include "../../data/trackingcommon.h"
 
 // Forward declaration of FrameLoadRequest from videoloader.cpp
 struct FrameLoadRequest {

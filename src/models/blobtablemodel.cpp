@@ -4,6 +4,10 @@
 #include <QtMath> // For qMax, qMin, qSqrt, etc.
 #include <limits> // For std::numeric_limits
 
+// Adjusted includes for refactored layout
+#include "../data/trackingdatastorage.h"
+#include "../data/trackingcommon.h"
+
 BlobTableModel::BlobTableModel(TrackingDataStorage* storage, QObject *parent)
     : QAbstractTableModel(parent),
     m_storage(storage)
