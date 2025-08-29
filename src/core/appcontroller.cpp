@@ -4,6 +4,8 @@
 #include "../data/trackingdatastorage.h"
 #include "../models/blobtablemodel.h"
 #include "../models/annotationtablemodel.h"
+#include "../gui/trackingprogressdialog.h"
+#include <QWidget>
 
 #include <QDebug>
 
@@ -254,4 +256,183 @@ void AppController::onTrackingManagerFailed(const QString& reason)
 void AppController::onTrackingManagerCancelled()
 {
     emit trackingCancelled();
+}
+
+// Build vector<InitialWormInfo> from BlobTableModel, optionally filtering out items that already have tracks.
+std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel(bool onlyTrackMissing) const
+{
+    std::vector<Tracking::InitialWormInfo> result;
+    if (!m_blobModel) {
+        qWarning() << "AppController::buildInitialWormsFromModel: blob model not available";
+        return result;
+    }
+
+    // If requested, collect the set of item ids that already have tracks.
+    QSet<int> itemsWithTracks;
+    if (onlyTrackMissing && m_storage) {
+        itemsWithTracks = m_storage->getItemsWithTracks();
+    }
+
+    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
+    result.reserve(items.size());
+    for (const TableItems::ClickedItem& it : items) {
+        if (it.type != TableItems::ItemType::Worm) continue;
+        if (onlyTrackMissing && itemsWithTracks.contains(it.id)) continue;
+
+        Tracking::InitialWormInfo info;
+        info.id = it.id;
+        info.initialRoi = it.initialBoundingBox;
+        info.color = it.color;
+        result.push_back(info);
+    }
+
+    return result;
+}
+
+void AppController::beginTrackingFromModel(const QString& videoPath,
+                                          int keyFrame,
+                                          const Thresholding::ThresholdSettings& settings,
+                                          bool onlyTrackMissing,
+                                          int totalFrames)
+{
+    if (!m_manager) {
+        qWarning() << "AppController::beginTrackingFromModel: TrackingManager not available";
+        emit trackingFailed("Internal error: TrackingManager missing");
+        return;
+    }
+    if (!m_blobModel) {
+        qWarning() << "AppController::beginTrackingFromModel: BlobTableModel not available";
+        emit trackingFailed("Internal error: Blob model missing");
+        return;
+    }
+
+    std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(onlyTrackMissing);
+    if (initialWorms.empty()) {
+        emit trackingFailed("No worm items available to track.");
+        return;
+    }
+
+    emit trackingStarted();
+
+    // Data directory currently empty - MainWindow may extend to pass an explicit directory if needed.
+    QString dataDirectory;
+    m_manager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
+}
+
+int AppController::countWormItems() const
+{
+    if (!m_blobModel) return 0;
+    int cnt = 0;
+    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
+    for (const TableItems::ClickedItem& it : items) {
+        if (it.type == TableItems::ItemType::Worm) ++cnt;
+    }
+    return cnt;
+}
+
+int AppController::countItemsWithTracks() const
+{
+    if (!m_storage) return 0;
+    return m_storage->getItemsWithTracks().size();
+}
+
+bool AppController::hasWormItems() const
+{
+    return countWormItems() > 0;
+}
+
+// ---- Dialog orchestration: controller-owned TrackingProgressDialog ----
+
+void AppController::showTrackingDialog(const QString& videoPath,
+                                       int keyFrame,
+                                       const Thresholding::ThresholdSettings& settings,
+                                       bool onlyTrackMissing,
+                                       int totalFrames,
+                                       QWidget* parent)
+{
+    // Store provided parameters so the dialog begin handler can use them.
+    m_dialogVideoPath = videoPath;
+    m_dialogKeyFrame = keyFrame;
+    m_dialogSettings = settings;
+    m_dialogOnlyTrackMissing = onlyTrackMissing;
+    m_dialogTotalFrames = totalFrames;
+
+    if (!m_trackingDialog) {
+        // Create dialog parented to provided widget or to nullptr (will use application's top-level)
+        m_trackingDialog = new TrackingProgressDialog(parent);
+
+        // Connect dialog requests to controller handlers
+        connect(m_trackingDialog, &TrackingProgressDialog::beginTrackingRequested,
+                this, &AppController::onDialogBeginRequested);
+        connect(m_trackingDialog, &TrackingProgressDialog::cancelTrackingRequested,
+                this, &AppController::onDialogCancelRequested);
+
+        // Connect controller signals to update dialog UI
+        connect(this, &AppController::trackingStatusMessage, m_trackingDialog, &TrackingProgressDialog::updateStatusMessage);
+        connect(this, &AppController::trackingProgress, m_trackingDialog, &TrackingProgressDialog::updateOverallProgress);
+        connect(this, &AppController::trackingFinished, m_trackingDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
+        connect(this, &AppController::trackingFailed, m_trackingDialog, &TrackingProgressDialog::onTrackingFailed);
+        connect(this, &AppController::trackingCancelled, m_trackingDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
+    }
+
+    // Provide the dialog with accurate context using the parameters passed in and model/storage counts.
+    int wormCount = countWormItems();
+    int wormsWithTracks = countItemsWithTracks();
+
+    m_trackingDialog->setTrackingParameters(m_dialogVideoPath, m_dialogKeyFrame, m_dialogSettings,
+                                            wormCount, m_dialogTotalFrames, wormsWithTracks);
+
+    // Execute the dialog modally. The dialog will emit begin/cancel signals which the controller handles.
+    m_trackingDialog->exec();
+
+    // Dialog closed - ensure teardown and avoid dangling pointer.
+    m_trackingDialog->deleteLater();
+    m_trackingDialog = nullptr;
+}
+
+void AppController::onDialogBeginRequested()
+{
+    // Use stored dialog parameters (set via showTrackingDialog) to start tracking.
+    if (!m_manager) {
+        qWarning() << "AppController::onDialogBeginRequested: TrackingManager not available";
+        emit trackingFailed("Internal error: TrackingManager missing");
+        if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: TrackingManager missing");
+        return;
+    }
+    if (!m_blobModel) {
+        qWarning() << "AppController::onDialogBeginRequested: BlobTableModel not available";
+        emit trackingFailed("Internal error: Blob model missing");
+        if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: Blob model missing");
+        return;
+    }
+
+    // Build initial worm list from model, respecting the dialog's only-missing preference.
+    std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(m_dialogOnlyTrackMissing);
+    if (initialWorms.empty()) {
+        qDebug() << "AppController::onDialogBeginRequested: no worm items to track (after filtering).";
+        emit trackingFailed("No worm items available to track.");
+        if (m_trackingDialog) m_trackingDialog->onTrackingFailed("No worms to track.");
+        return;
+    }
+
+    // Start tracking via the manager using stored dialog parameters.
+    emit trackingStarted();
+    QString dataDirectory; // left empty for now; could be exposed in the dialog API later
+    m_manager->startFullTrackingProcess(m_dialogVideoPath, dataDirectory, m_dialogKeyFrame,
+                                        initialWorms, m_dialogSettings, m_dialogTotalFrames);
+
+    // Leave the dialog open — progress/status signals from the manager will be forwarded to it.
+}
+
+void AppController::onDialogCancelRequested()
+{
+    // Forward cancellation to the manager
+    cancelTracking();
+
+    // Update dialog UI if present
+    if (m_trackingDialog) {
+        m_trackingDialog->onTrackingCancelledByManager();
+        // Close the dialog (will cause exec() to return)
+        m_trackingDialog->reject();
+    }
 }

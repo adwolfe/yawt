@@ -58,6 +58,7 @@ set(SOURCES
     # Core tracking
     src/core/trackingmanager.cpp
     src/core/wormtracker.cpp
+    src/core/appcontroller.cpp
 
     # Core processing
     src/core/processing/videoprocessor.cpp
@@ -97,6 +98,7 @@ set(HEADERS
     # Core
     src/core/trackingmanager.h
     src/core/wormtracker.h
+    src/core/appcontroller.h
 
     # Core processing
     src/core/processing/videoprocessor.h

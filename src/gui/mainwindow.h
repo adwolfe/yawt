@@ -96,8 +96,6 @@ public slots:
 
     // Tracking Process
     void onStartTrackingActionTriggered();
-    void handleBeginTrackingFromDialog();
-    void handleCancelTrackingFromDialog();
     void acceptTracksFromManager(const Tracking::AllWormTracks& tracks);
     void performPostTrackingMemoryCleanup();
     
@@ -140,7 +138,6 @@ private:
     AnnotationTableModel *m_annotationTableModel;
     ColorDelegate *m_colorDelegate;
     ItemTypeDelegate *m_itemTypeDelegate;
-    TrackingProgressDialog *m_trackingProgressDialog;
     TrackingManager *m_trackingManager;
     TrackingDataStorage *m_trackingDataStorage; // Central data storage
     AppController *m_appController; // Controller owning storage, manager and models
