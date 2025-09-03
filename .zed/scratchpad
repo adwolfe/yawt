@@ -1,162 +1,271 @@
-AppController refactor - scratchpad
-==================================
+Playback & Seek call-trace (from UI events -> functions/signals/slots)
+Project: yawt
+Date: (generated automatically in scratchpad)
+Purpose: Step-through call sequences for two sources:
+  1) User changes current frame via UI spinbox (`framePosition`) or slider.
+  2) Frame advancing during playback (pressing `playPauseButton` -> `play()`).
 
-Purpose
--------
-Create an `AppController` class in `src/core` to take responsibility for the non-UI application logic
-currently owned by `MainWindow`. The goal is to reduce MainWindow's responsibilities to pure UI/view
-concerns and simple glue (connect UI widgets and forward user interactions), while the controller
-manages models, the TrackingManager, and higher-level flows.
+Notes:
+ - I list the calls, signals and slots in the order they occur.
+ - When a branch exists I show both paths (labelled Path A / Path B).
+ - I include important `suppressEmit` and cache/pending-seek behavior.
+ - I include connected recipients observed in code (MainWindow, CacheStatusWidget, MiniLoaders, etc).
 
-High-level goals
-----------------
-- `MainWindow` keeps ownership of UI widgets and dialogs (e.g. `TrackingProgressDialog`).
-- `AppController` owns:
-  - `TrackingDataStorage`
-  - `TrackingManager`
-  - `BlobTableModel`
-  - `AnnotationTableModel`
-- `AppController` exposes models to `MainWindow` for view binding.
-- `AppController` provides high-level commands (slots / Q_INVOKABLE) such as `startTracking`, `cancelTracking`,
-  `addBlobFromVideo`, `addRoi`, `deleteBlob`, `removeAllBlobs`.
-- `AppController` emits signals about tracking progress/results that the UI subscribes to.
-- `MainWindow` keeps the dialog instance, but connects dialog actions to the `AppController` API and connects
-  `AppController` signals to update the dialog UI.
-- Keep `TrackingManager` usage internal to `AppController`. Only signals are forwarded outward.
+=======================================================================
+Scenario 1: User changes current frame through UI controls
+  Trigger examples:
+    - User edits `ui->framePosition` spinbox (valueChanged)
+    - User edits `ui->framePosition_2` spinbox (valueChanged)
+    - User drags `ui->frameSlider` (valueChanged -> `frameSliderMoved`)
+    - User clicks a CacheStatusWidget frame -> `seekFrame(frame)`
 
-Placement
----------
-File path suggestion:
-- Header: `yawt/src/core/appcontroller.h`
-- Impl:   `yawt/src/core/appcontroller.cpp`
+High-level connection(s) in `MainWindow::setupConnections()`:
+  - `connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);`
+  - `connect(ui->framePosition_2, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);`
+  - `connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);`
+  - `connect(cacheStatusWidget, &CacheStatusWidget::frameClicked, this, [this](int frame) { seekFrame(frame); });`
 
-Initial public interface (sketch)
----------------------------------
-Responsibilities to expose:
-- Model accessors:
-  - `BlobTableModel* blobTableModel() const;`
-  - `AnnotationTableModel* annotationTableModel() const;`
-  - `TrackingDataStorage* trackingDataStorage() const;` (maybe)
-- Model-modifying commands:
-  - `Q_INVOKABLE void addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame);`
-  - `Q_INVOKABLE void addRoi(const QRectF& roi, int frame);`
-  - `Q_INVOKABLE void deleteBlobById(int id);`
-  - `Q_INVOKABLE void removeAllBlobs();`
-  - `Q_INVOKABLE void setRoiSizeMultiplier(double factor);`
-- Tracking control:
-  - `Q_INVOKABLE void requestStartTracking(const QString& videoPath, int keyFrame, const Thresholding::ThresholdSettings& settings, const std::vector<Tracking::InitialWormInfo>& initialWorms, int totalFrames);`
-  - `Q_INVOKABLE void cancelTracking();`
-- Signals:
-  - `tracksUpdated(const Tracking::AllWormTracks& tracks)` - emitted when final tracks are available and stored.
-  - `trackingProgress(int overallPercent, const QString& msg)`
-  - `trackingStarted()`
-  - `trackingCancelled()`
-  - `trackingFailed(const QString& reason)`
-  - (Optionally) `dataStorageChanged()` for UI to refresh if needed.
+Call trace (detailed):
 
-Internal wiring
----------------
-- Connect `TrackingManager` signals to AppController private slots:
-  - `overallTrackingProgress -> trackingProgress(...)`
-  - `trackingStatusUpdate -> trackingProgress(...)` or separate status signal
-  - `allTracksUpdated -> internal handler that writes tracks to TrackingDataStorage and emits tracksUpdated`
-  - `trackingFinishedSuccessfully`, `trackingFailed`, `trackingCancelled` -> forwarded signals
-- When `allTracksUpdated` arrives: AppController should store tracks into `TrackingDataStorage` (call `setTrackForItem`) and then emit `tracksUpdated` with the final storage union (or the tracks passed through).
-- AppController should also be the single place to call `TrackingDataStorage::getItemsWithTracks()` if UI needs that information for dialogs.
+1. UI spinbox change: `QSpinBox::valueChanged(int)` emitted
+   -> Connected to
+   2. `MainWindow::seekFrame(int frame)`
 
-Ownership / parenting
----------------------
-- AppController is a QObject parented by MainWindow (or by qApp). Use QObject parent-child to manage lifetimes.
-- Internal members should use `this` as parent where applicable so Qt will manage deletion.
-- TrackingManager typically expects a `TrackingDataStorage*` pointer. AppController will instantiate TrackingDataStorage and pass pointer to TrackingManager constructor.
+MainWindow::seekFrame:
+  - Calls: `ui->videoLoader->seekToFrame(frame, false);`
+    - note: `suppressEmit = false` here -> VideoLoader is expected to emit `frameChanged` when frame is displayed.
+  - Then: `if (!ui->frameSlider->isSliderDown()) ui->frameSlider->setValue(frame);`
+  - Returns to event loop.
 
-Dialog interactions (TrackingProgressDialog)
--------------------------------------------
-- MainWindow continues to create and own `TrackingProgressDialog`.
-- Connect `TrackingProgressDialog::beginTrackingRequested` to `MainWindow` slot that calls `AppController::requestStartTracking(...)` (or connect the dialog signal directly to `AppController`).
-- Connect `AppController` signals (progress/finished/failed) to the dialog UI slots to update the progress UI.
-- Keep the existing `TrackingManager` -> `TrackingProgressDialog` connections but routed via AppController so MainWindow does not need to include `trackingmanager.h`.
+VideoLoader::seekToFrame(int frameNumber, bool suppressEmit)
+  - Bounds-check and qBound frameNumber against [0, totalFrames-1].
+  - If `m_frameLoaderManager` exists:
+      - `m_frameLoaderManager->resetPrioritiesForCurrentFrame(frameNumber, s_preloadRadius);`
+      - `preloadAdjacentFrames(frameNumber, s_preloadRadius);`
+  - Calls `displayFrame(frameNumber, suppressEmit);`
 
-MiniLoader / visible-ID polling
--------------------------------
-- Consider creating a separate `MiniLoaderCoordinator` later to encapsulate:
-  - `m_miniLoaderPollTimer`
-  - connecting many `MiniLoader` instances
-  - deduplicating repetitive selection->miniLoader lambdas
-- For now, leave miniloader logic in MainWindow and incrementally move it.
+VideoLoader::displayFrame(int frameNumber, bool suppressEmit)
+  - Quick checks: video open, frame range -> return early if invalid.
+  - Optionally: again call `m_frameLoaderManager->resetPrioritiesForCurrentFrame(...)` (safety).
+  - Tries to retrieve `CachedFrame* cached = m_frameCache->object(frameNumber);`
+  - Branch here:
 
-Migration plan (incremental)
-----------------------------
-1) Add new `AppController` header/impl with basic ctor/dtor. Implement:
-   - create `TrackingDataStorage`, `TrackingManager`, `BlobTableModel`, `AnnotationTableModel`.
-   - connect `TrackingManager` signals to AppController slots that just re-emit or log.
-   - expose model getters.
-   - implement simple `addBlobFromVideo` that delegates to the blob model.
-2) Modify `MainWindow::MainWindow()`:
-   - Instantiate `AppController` early.
-   - Replace creation of `m_trackingDataStorage`, `m_blobTableModel`, `m_annotationTableModel`, and `m_trackingManager` with using `app->...` getters.
-   - Keep `TrackingProgressDialog` creation in MainWindow but change connections: connect dialog signals to AppController's slots rather than directly to TrackingManager.
-   - Keep signals from AppController connected to MainWindow (e.g., tracksUpdated -> acceptTracksFromController).
-3) Move contents of `MainWindow::onStartTrackingActionTriggered()` and `handleBeginTrackingFromDialog()` into AppController API. Initially the MainWindow will call `app->requestStartTracking(...)`.
-4) Move `acceptTracksFromManager` logic into AppController private handler of `allTracksUpdated` -> storing tracks in storage and emitting `tracksUpdated` signal. Update MainWindow's slot to be a thin UI updater that calls `ui->videoLoader->setTracksToDisplay(...)` with storage data (or data forwarded).
-5) Run tests and manual checks at each step. If anything breaks, revert that step and diagnose.
+    Path A: Frame is in cache (synchronous, fast)
+      - `if (cached && cached->original)` true:
+        - `currentCvFrame = cached->original;`
+        - If `cached->thresholded` present -> `m_thresholdedFrame_mono = *cached->thresholded;` else `m_thresholdedFrame_mono = cv::Mat()`
+        - `frameFromCache = true;`
+        - Set `currentFrameIdx = frameNumber`
+        - Decide which QImage to produce:
+            - If `m_activeViewModes` requests threshold and `m_thresholdedFrame_mono` available -> convert thresholded to `currentQImageFrame`
+            - Else convert `*currentCvFrame` to `currentQImageFrame`
+        - If `!suppressEmit`:
+            - Emit `frameChanged(currentFrameIdx, currentQImageFrame);`
+              * Emitted from UI thread (VideoLoader), with `frameNumber`.
+        - `update()` (repaint)
+      - End Path A.
 
-Testing checklist
------------------
-- UI still binds to `blobTableModel` and `annotationTableModel` from AppController and view operations (add/remove/select) work as before.
-- Video load / play / seek actions are unaffected.
-- `onStartTrackingActionTriggered()` opens dialog and dialog can request tracking; progress updates appear.
-- When tracking finishes, tracks are stored in storage and VideoLoader shows tracks.
-- Memory ownership: no leaks due to wrong parent relationships.
-- Build succeeds on both CMake and qmake flows.
+    Path B: Frame is NOT in cache (async/disk or background)
+      - Check current file position - attempt `videoCapture.set(CAP_PROP_POS_FRAMES, frameNumber)`
+        - If `set()` fails:
+            - Set `m_pendingSeekFrame = frameNumber`
+            - If `m_frameLoaderManager`:
+                - Build request: `FrameLoadRequest(frameNumber, priority=100, getCurrentThresholdSettings())`
+                - `m_frameLoaderManager->requestFrames(reqs);`  // background will deliver via frameLoaded signal
+            - Return (do NOT emit `frameChanged` now)
+        - Else `set()` succeeded:
+            - Attempt `videoCapture.read(*currentCvFrame)`:
+              - If read success:
+                  - Insert new `CachedFrame` into `m_frameCache` with original (threshold empty)
+                  - Request background reprocessing for thresholded (`m_frameLoaderManager->requestFrames([...])`)
+                  - Set `currentFrameIdx = frameNumber`
+                  - Convert to `currentQImageFrame` (original)
+                  - If `!suppressEmit`:
+                      - Emit `frameChanged(currentFrameIdx, currentQImageFrame);`
+                  - `update()`
+              - If read fails:
+                  - Clear `currentCvFrame` and `m_thresholdedFrame_mono`
+                  - If `m_isPlaying` then `pause()` (playback halts)
+                  - Return
+      - End Path B.
 
-Potential pitfalls
-------------------
-- Signal/slot signatures mismatches: ensure meta-types are registered where needed (TrackingManager already registers some types).
-- Lifetime ordering: if MainWindow is destroyed before AppController cleanup, ensure TrackingManager threads are stopped properly.
-- Redundant indirection: avoid future circular dependencies (AppController -> TrackingManager -> Storage -> Models -> UI). Models should be independent; AppController wires them.
-- Including GUI headers in core: AppController must avoid including heavy GUI headers (e.g. `mainwindow.h`), but can include `QRectF`, `QString`, and forward-declare models. AppController is in `src/core` so keep includes minimal.
+VideoLoader asynchronous path (if frame was requested to background loader):
+  - Background loader (FrameLoaderManager) will later emit:
+      - `FrameLoaderManager::frameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded)`
+        -> Connected to `VideoLoader::onFrameLoaded(int, cv::Mat, cv::Mat)`
 
-Notes on signals to implement in AppController (detailed)
---------------------------------------------------------
-- signals:
-  - `void tracksUpdated(const Tracking::AllWormTracks& tracks);`
-  - `void trackingProgress(int percent);` (or `int, QString` for message)
-  - `void trackingStatusMessage(const QString& message);`
-  - `void trackingStarted();`
-  - `void trackingFinished();`
-  - `void trackingFailed(const QString& reason);`
-  - `void trackingCancelled();`
-- private slots:
-  - `void onTrackingManagerOverallProgress(int);`
-  - `void onTrackingManagerStatusUpdate(const QString&);`
-  - `void onTrackingManagerAllTracksUpdated(const Tracking::AllWormTracks&);`
-  - `void onTrackingFailed(const QString&);`
-  - `void onTrackingFinishedSuccessfully(const QString& outputPath);`
-  - `void onTrackingCancelled();`
+VideoLoader::onFrameLoaded(int frameNumber, original, thresholded)
+  - Insert/merge into `m_frameCache` (creates CachedFrame with original + optional thresholded).
+  - Emit `frameCached(frameNumber);` (notify widgets like CacheStatusWidget / MiniLoaders).
+  - Emit `frameEvicted(evictedFrames...)` for any evictions.
+  - If `m_pendingSeekFrame == frameNumber`:
+      - Clear `m_pendingSeekFrame = -1`
+      - Choose which buffer to use (if threshold requested & available use thresholded)
+      - Set `currentCvFrame` and `m_thresholdedFrame_mono`
+      - `currentFrameIdx = frameNumber`
+      - Convert to `currentQImageFrame` appropriately
+      - Emit `frameChanged(currentFrameIdx, currentQImageFrame);`   <-- IMPORTANT: this will reach MainWindow (and others)
+      - `update()` (repaint)
 
-TODOs for initial implementation (small steps)
-----------------------------------------------
-- [ ] Create `yawt/src/core/appcontroller.h` with the public API and signals listed above.
-- [ ] Create `yawt/src/core/appcontroller.cpp` that:
-      - Instantiates storage, manager, models.
-      - Connects manager signals to AppController slots and re-emits.
-      - Implements `addBlobFromVideo`, `addRoi`, `removeAllBlobs`, `deleteBlobById`.
-      - Implements `requestStartTracking` (calls TrackingManager::startFullTrackingProcess).
-- [ ] Update `MainWindow::MainWindow()`:
-      - Replace `new TrackingDataStorage(...)`, `new BlobTableModel(...)`, `new AnnotationTableModel(...)`, `new TrackingManager(...)` creations with `m_appController = new AppController(this);` and set models from `m_appController`.
-      - Wire UI signals (like `videoLoader->blobClickedForAddition`) to small lambdas that call `m_appController->addBlobFromVideo(...)`.
-      - Connect `m_appController->tracksUpdated(...)` to a new `MainWindow::acceptTracksFromController(...)` thin slot which performs UI actions (set VideoLoader tracks, refresh annotation table).
-- [ ] Run a build and fix any missing includes and compile errors.
-- [ ] Run runtime smoke tests: open a video, add blobs, start tracking.
+MainWindow connections listening to `VideoLoader::frameChanged`:
+  - `connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay, Qt::UniqueConnection);`
+  - `connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop, Qt::UniqueConnection);`
+  - Also `connect(ui->videoLoader, &VideoLoader::frameChanged, cacheStatusWidget, &CacheStatusWidget::onFrameCached)` was wired via a lambda earlier (cacheStatusWidget uses a lambda listening to `frameChanged` to set current).
+  - Many other components react to `frameCached` and `frameChanged` (MiniLoaders, CacheStatusWidget, overlay widgets).
 
-Open design questions (defer to user)
-------------------------------------
-- Do you want `AppController` to be the owner of `TrackingProgressDialog` (so UI only connects to controller signals), or have MainWindow keep the dialog and just use controller signals? -- User said MainWindow should keep owning it. We'll follow that.
-- Should `AppController` expose storage pointer directly or only via controlled accessors? Expose pointer via `trackingDataStorage()` is convenient for existing code, but consider accessor methods for read-only operations to maintain encapsulation.
+MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame)
+  - If `!ui->frameSlider->isSliderDown()` then `ui->frameSlider->setValue(currentFrameNumber);`
+  - `ui->framePosition->setValue(currentFrameNumber);`
+  - `ui->framePosition_2->setValue(currentFrameNumber);`
+  - (Note: updateMiniLoaderCrop is also invoked via separate connection to update per-frame crops)
 
-Notes about meta-types
-----------------------
-- `TrackingManager::registerMetaTypes()` exists; ensure that if AppController forwards types via signals (e.g., `Tracking::AllWormTracks`), those meta-types are registered before connections cross threads. `TrackingManager` registers them on construction but AppController should either call the same registration or rely on TrackingManager to register them.
+Other direct callers that lead to seek:
+  - `MainWindow::frameSliderMoved(int value)`:
+      - Calls: `ui->videoLoader->seekToFrame(value, false);`
+      - If `!ui->framePosition->hasFocus()` set `ui->framePosition->setValue(value);`
+  - `MainWindow::goToFirstFrame()` / `goToLastFrame()`:
+      - Call `ui->videoLoader->seekToFrame(0/last, false)` and then update widgets.
+  - `CacheStatusWidget::frameClicked` -> `MainWindow::seekFrame(frame)` -> follows above.
 
-End of scratchpad - keep this file as a running journal for the refactor steps and to dump notes/ideas during development.
+Summary of side-effects / listeners when `frameChanged` is emitted:
+  - `MainWindow::updateFrameDisplay` (updates spinboxes & slider)
+  - `MainWindow::updateMiniLoaderCrop` (calls into mini loaders to set expected frames)
+  - `CacheStatusWidget::setCurrentFrame` (via the lambda joining to frameChanged)
+  - `MiniLoader::onFrameCached` gets `frameCached` not `frameChanged`, but `onFrameLoaded` emits `frameCached` earlier
+  - Any other slots connected to `VideoLoader::frameChanged` in UI will be invoked.
+
+=======================================================================
+Scenario 2: Pressing Play/Pause -> playback advancing frames
+
+High-level connection(s) in `MainWindow::setupConnections()`:
+  - `connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });`
+  - Secondary button mirror wired identically.
+  - `MainWindow::setPlayButtonsState(bool playing, bool blockSignals)`:
+      - `ui->playPauseButton->setChecked(playing);` (mirrors)
+      - sets the icon
+      - IMPORTANT: `if (playing) ui->videoLoader->play(); else ui->videoLoader->pause();`
+
+Call trace (detailed):
+
+1. User toggles `playPauseButton` (or `playPauseButton_2`)
+   -> `QToolButton::toggled(bool checked)` emitted
+   -> lambda in `MainWindow::setupConnections()` invoked:
+      - Calls `MainWindow::setPlayButtonsState(checked)`
+
+MainWindow::setPlayButtonsState(bool playing, bool blockSignals=false)
+  - Optionally `blockSignals` to true to avoid reentrancy when mirroring (but default false here).
+  - Update checked state of both buttons, update icon.
+  - If `playing`:
+      - Calls `ui->videoLoader->play();`
+    Else:
+      - Calls `ui->videoLoader->pause();`
+
+VideoLoader::play()
+  - Guard: `if (!isVideoLoaded() || m_isPlaying) return;`
+  - If `currentFrameIdx >= totalFramesCount-1 && totalFramesCount > 0`:
+      - `seekToFrame(0, true);`   // resets to start, suppressEmit=true so the seek won't immediately emit `frameChanged`
+  - If `currentFrameIdx == -1 && totalFramesCount > 0`:
+      - `seekToFrame(0, true);`
+  - Set `m_isPlaying = true;`
+  - `updateTimerInterval();` -> sets `playbackTimer` interval based on FPS and playback speed.
+  - `playbackTimer->start();`
+  - Emit `playbackStateChanged(true, m_playbackSpeedMultiplier);`
+
+Important: `playbackTimer` is connected in constructor to:
+  - `connect(playbackTimer, &QTimer::timeout, this, &VideoLoader::processNextFrame);`
+
+VideoLoader::processNextFrame()
+  - Guard: `if (!m_isPlaying || !isVideoLoaded()) return;`
+  - If `currentFrameIdx < totalFramesCount - 1`:
+      - `int nextFrame = currentFrameIdx + 1;`
+      - Branch:
+        Path A: `m_frameCache && m_frameCache->contains(nextFrame)` true
+           - `displayFrame(nextFrame);`  // default suppressEmit = false, so `frameChanged` will be emitted in displayFrame
+        Path B: frame not cached
+           - `m_pendingSeekFrame = nextFrame;`
+           - If `m_frameLoaderManager`: call `m_frameLoaderManager->resetPrioritiesForCurrentFrame(nextFrame, s_preloadRadius);`
+             and `preloadAdjacentFrames(nextFrame, s_preloadRadius);`
+           - Do NOT perform synchronous disk read here; rely on background loader to call `onFrameLoaded`
+  - Else (we are at last frame):
+      - call `pause();` which sets `m_isPlaying = false; playbackTimer->stop(); emit playbackStateChanged(false, ...)`
+
+If Path A (cached) -> VideoLoader::displayFrame(nextFrame) flow follows (see Scenario 1 Path A), eventually emits `frameChanged(nextFrame, currentQImageFrame)` which goes to MainWindow::updateFrameDisplay and others. After the paint finish, next timer tick -> processNextFrame again -> next frame.
+
+If Path B (not cached) -> `m_pendingSeekFrame` set and background requests made; when background loads the frame it emits `frameLoaded` and VideoLoader::onFrameLoaded is called, and because `m_pendingSeekFrame == frameNumber` it does:
+  - set `currentFrameIdx = frameNumber;`
+  - emit `frameChanged(currentFrameIdx, currentQImageFrame);`
+  - update()
+  - NOTE: Since `processNextFrame` didn't call `displayFrame` synchronously, the play timer continues running; on the next timer tick `processNextFrame()` will see `currentFrameIdx` was updated by `onFrameLoaded` so will progress to nextFrame+1 etc. If `onFrameLoaded` was too slow, `processNextFrame` might set another `m_pendingSeekFrame` again for the next frame.
+
+Edge cases observed in code:
+  - `VideoLoader::play()` resets to frame 0 when at end, with `seekToFrame(0, true)` -> suppressEmit true meaning first display will NOT emit `frameChanged` immediately. However, background cache may supply the frame and then `onFrameLoaded` will emit `frameChanged`.
+  - `seekToFrame(..., true)` used from `play()` prevents immediate double emission during play start; later on the timer the progression will emit frames as usual.
+  - If a synchronous `videoCapture.read()` fails while playing, `displayFrame` will call `pause()` to stop playback. Playback can be paused automatically on frame read errors.
+
+Listeners receiving `frameChanged` during playback:
+  - Same as in Scenario 1: `MainWindow::updateFrameDisplay`, `MainWindow::updateMiniLoaderCrop`, CacheStatusWidget, MiniLoaders, etc.
+
+=======================================================================
+Other noteworthy paths & interactions (cross-cutting):
+
+- frameSlider -> user dragging slider:
+  - `frameSliderMoved(int value)` called on `valueChanged`
+  - `frameSliderMoved` calls `ui->videoLoader->seekToFrame(value, false);` and then updates `framePosition` spinbox if it does not have focus.
+  - dragging slider also sets `ui->frameSlider->isSliderDown()` during drag; `updateFrameDisplay` won't update the slider value while slider is down (avoids feedback loops).
+
+- Focus protection:
+  - Many places update spinboxes only when they do not have focus to avoid changing what the user is currently editing:
+    - Example: after seeking, MainWindow sets `ui->framePosition->setValue(currentFrameNumber);` but only FrameSlider is prevented from being overwritten if slider is down.
+    - Seek callers also check `if (!ui->framePosition->hasFocus())` prior to writing to the spinbox.
+
+- Mirrored widgets:
+  - There are duplicate controls (`playPauseButton_2`, `framePosition_2`, `comboPlaybackSpeed_2`) that are mirrored. `setPlayButtonsState` handles mirroring of play buttons. Spinbox connections mirror both to `MainWindow::seekFrame`.
+
+- `suppressEmit` behavior:
+  - When `suppressEmit == true` passed to `displayFrame`, `displayFrame` will not call `emit frameChanged(...)`. However, if the frame must be loaded asynchronously (pending), `onFrameLoaded` will still emit `frameChanged` when the frame becomes available.
+  - `play()` uses `seekToFrame(..., true)` to avoid an immediate `frameChanged` emission before starting the timer; the timer-driven `processNextFrame` will drive subsequent `displayFrame` emissions.
+
+- Background/Cache interplay:
+  - `m_frameCache` is checked frequently to decide synchronous vs asynchronous path.
+  - Calls to `m_frameLoaderManager->requestFrames()` pass a copy of current threshold settings to ensure background precomputations match UI state.
+  - `frameCached` is emitted when a cached insert completes; MiniLoaders and CacheStatusWidget listen to `frameCached`.
+  - `onFrameLoaded` emits `frameEvicted` for any frames that got evicted due to QCache capacity.
+
+- When user seeks to a frame that is out-of-range:
+  - `seekToFrame` does `frameNumber = qBound(0, frameNumber, totalFramesCount > 0 ? totalFramesCount - 1 : 0);` so requests clamp to available range.
+
+- If VideoLoader is not loaded (`!isVideoLoaded()`), `seekToFrame` and `play()` early-return; UI logic typically disables playback controls appropriately at load/unload.
+
+=======================================================================
+Concise sequence examples (two linear traces):
+
+A) User ⇢ Spinbox valueChanged(123) ⇢ MainWindow::seekFrame(123)
+   ⇢ VideoLoader::seekToFrame(123,false)
+   ⇢ VideoLoader::preloadAdjacentFrames / resetPriorities
+   ⇢ VideoLoader::displayFrame(123,false)
+     - if cached -> set currentFrameIdx, currentQImageFrame, emit frameChanged(123,QImage)
+     - else -> either (sync read -> same emit) OR (set m_pendingSeekFrame + requestFrames -> return)
+       - if pending -> later FrameLoaderManager::frameLoaded -> VideoLoader::onFrameLoaded -> emit frameChanged(123,QImage)
+   ⇢ MainWindow::updateFrameDisplay(123,QImage) -> spinboxes + slider updated
+   ⇢ MainWindow::updateMiniLoaderCrop(123,QImage) -> mini loaders updated
+   ⇢ CacheStatusWidget::onFrameCached (if cached) -> UI cache marker updated
+
+B) User ⇢ Press `playPauseButton` (toggle true) ⇢ MainWindow::setPlayButtonsState(true)
+   ⇢ ui->videoLoader->play()
+   ⇢ VideoLoader::play() -> set m_isPlaying=true; playbackTimer->start()
+   ⇢ playbackTimer timeout => VideoLoader::processNextFrame()
+   ⇢ processNextFrame computes nextFrame = currentFrameIdx +1
+     - if cache has nextFrame -> displayFrame(nextFrame) -> emit frameChanged(nextFrame) -> MainWindow update...
+     - else -> m_pendingSeekFrame = nextFrame; request background load; return
+   ⇢ Background onFrameLoaded(nextFrame, ...) -> VideoLoader::onFrameLoaded()
+   ⇢ onFrameLoaded sees m_pendingSeekFrame==nextFrame -> sets currentFrameIdx and emits frameChanged(nextFrame)
+   ⇢ MainWindow::updateFrameDisplay and other receivers invoked
+   ⇢ Timer fires again -> processNextFrame continues to next frame
+
+=======================================================================
+If you want, next steps I can:
+ - Dump an ordered, plain-list of the exact function bodies (snippet-level) in the order they are invoked (I can copy function signatures + first line or essential lines).
+ - Annotate this trace with exact line numbers from the files (I've referenced functions from: `yawt/src/gui/mainwindow.cpp` and `yawt/src/gui/widgets/videoloader.cpp`).
+ - Produce a simplified sequence diagram (textual) focusing on only MainWindow <-> VideoLoader <-> FrameLoaderManager interactions.
+
+End of scratchpad trace.

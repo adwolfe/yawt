@@ -898,6 +898,7 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
     }
 
     if (!suppressEmit) {
+        qDebug() << "VideoLoader::displayFrame - about to emit frameChanged for frame" << currentFrameIdx << "thread:" << QThread::currentThread();
         emit frameChanged(currentFrameIdx, currentQImageFrame);
     }
     update();
@@ -1762,6 +1763,7 @@ void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat original, cv::Mat thres
 
         // Emit signal(s) for newly cached frame(s)
         if (afterSet.contains(frameNumber)) {
+            qDebug() << "VideoLoader::onFrameLoaded - emitting frameCached for frame" << frameNumber << "thread:" << QThread::currentThread();
             emit frameCached(frameNumber);
         }
 
@@ -1798,6 +1800,7 @@ void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat original, cv::Mat thres
                 convertCvMatToQImage(*currentCvFrame, currentQImageFrame);
             }
 
+            qDebug() << "VideoLoader::onFrameLoaded - about to emit frameChanged for frame" << currentFrameIdx << "thread:" << QThread::currentThread();
             emit frameChanged(currentFrameIdx, currentQImageFrame);
             update();
         }

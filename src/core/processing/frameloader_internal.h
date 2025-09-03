@@ -98,6 +98,11 @@ signals:
     void frameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded);
     void frameLoadError(int frameNumber, QString error);
 
+private slots:
+    // Private slot used to receive worker-loaded frames, perform pending-frame cleanup,
+    // and then forward the load to external listeners via the public signal.
+    void onWorkerFrameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded);
+
 private:
     int m_numWorkers;
     QString m_videoPath;

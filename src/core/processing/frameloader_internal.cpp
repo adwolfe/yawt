@@ -25,12 +25,14 @@ void FrameLoaderWorker::loadFrame(const FrameLoadRequest& request) {
     }
 
     if (!m_videoCapture.isOpened()) {
+        qDebug() << "FrameLoaderWorker::loadFrame - Failed to open video for frame" << frameNumber << "thread:" << QThread::currentThread();
         emit frameLoadError(frameNumber, "Failed to open video file");
         return;
     }
 
     try {
         if (!m_videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
+            qDebug() << "FrameLoaderWorker::loadFrame - Failed to seek to frame" << frameNumber << "thread:" << QThread::currentThread();
             emit frameLoadError(frameNumber, "Failed to seek to frame");
             return;
         }
@@ -44,11 +46,14 @@ void FrameLoaderWorker::loadFrame(const FrameLoadRequest& request) {
                 qWarning() << "FrameLoaderWorker: thresholding exception for frame" << frameNumber << ":" << ex.what();
                 thresholded = cv::Mat();
             }
+            qDebug() << "FrameLoaderWorker::loadFrame - emitting frameLoaded for frame" << frameNumber << "thread:" << QThread::currentThread();
             emit frameLoaded(frameNumber, frame, thresholded);
         } else {
+            qDebug() << "FrameLoaderWorker::loadFrame - failed to read frame" << frameNumber << "thread:" << QThread::currentThread();
             emit frameLoadError(frameNumber, QString("Failed to read frame %1").arg(frameNumber));
         }
     } catch (const cv::Exception& ex) {
+        qDebug() << "FrameLoaderWorker::loadFrame - OpenCV exception for frame" << frameNumber << ":" << ex.what() << "thread:" << QThread::currentThread();
         emit frameLoadError(frameNumber, QString("OpenCV exception: %1").arg(ex.what()));
     }
 }
@@ -69,7 +74,10 @@ void FrameLoaderWorker::processRequests() {
             continue;
         }
 
-        m_pendingFrames->remove(request.frameNumber);
+        // NOTE: Do NOT remove the pending entry here. The manager should
+        // remain responsible for clearing pending frames after a worker
+        // finishes and the frame is forwarded. Removing it here permits
+        // duplicate requests to be queued by other threads (race).
         locker.unlock();
         loadFrame(request);
     }
@@ -220,11 +228,12 @@ void FrameLoaderManager::startAllLoaders() {
         worker->setVideoPath(m_videoPath);
 
         connect(thread, &QThread::started, worker, &FrameLoaderWorker::processRequests);
-        // Explicitly bind the new signature (original + thresholded cv::Mat) to avoid ambiguity
+        // Connect the worker's loaded-frame signal to our private slot so the manager
+        // can perform pending-frame cleanup before forwarding the frameLoaded signal.
         connect(worker,
                 static_cast<void (FrameLoaderWorker::*)(int, cv::Mat, cv::Mat)>(&FrameLoaderWorker::frameLoaded),
                 this,
-                static_cast<void (FrameLoaderManager::*)(int, cv::Mat, cv::Mat)>(&FrameLoaderManager::frameLoaded));
+                &FrameLoaderManager::onWorkerFrameLoaded);
         connect(worker, &FrameLoaderWorker::frameLoadError, this, &FrameLoaderManager::frameLoadError);
         connect(thread, &QThread::finished, worker, &QObject::deleteLater);
 
@@ -232,6 +241,23 @@ void FrameLoaderManager::startAllLoaders() {
         m_threads.append(thread);
         thread->start();
     }
+}
+
+// Receive worker-completed frames, remove the frame from the pending map,
+// then forward the frameLoaded signal to external listeners.
+void FrameLoaderManager::onWorkerFrameLoaded(int frameNumber, cv::Mat original, cv::Mat thresholded)
+{
+    {
+        QMutexLocker locker(m_queueMutex);
+        // Only remove if it still exists; clearRequests() may have already removed it.
+        if (m_pendingFrames->contains(frameNumber)) {
+            m_pendingFrames->remove(frameNumber);
+        }
+    } // unlock mutex before emitting
+
+    // Forward to public consumers (VideoLoader etc.)
+    qDebug() << "FrameLoaderManager::onWorkerFrameLoaded - forwarding frameLoaded for frame" << frameNumber << "thread:" << QThread::currentThread();
+    emit frameLoaded(frameNumber, original, thresholded);
 }
 
 void FrameLoaderManager::stopAllLoaders() {

@@ -82,6 +82,24 @@ public:
     Q_INVOKABLE int countItemsWithTracks() const;
     // - Convenience: whether there are any worm items available to track
     Q_INVOKABLE bool hasWormItems() const;
+
+    // Returns a preferred position for a worm at or before the requested frame.
+    // The controller will first attempt to return the tracked position at `frame`, and if
+    // none exists will return the last known position before `frame` (if any).
+    // Returns true if a position was found and populated into outPos/outRoi.
+    Q_INVOKABLE bool getPreferredWormPosition(int wormId, int frame, QPointF& outPos, QRectF& outRoi) const;
+
+    // Convenience struct describing a merge/split event for UI consumption
+    struct MergeSplitEvent {
+        int frame = -1;
+        QString eventType; // "Merge", "Split", or "Merge/Split"
+        QString details;   // Human-readable details (other IDs, added/removed lists)
+    };
+
+    // Compute merge/split events for a specific worm up to maxFrame (exclusive).
+    // Returns an ordered list of events (ascending frame order).
+    Q_INVOKABLE QList<MergeSplitEvent> getMergeSplitEventsForWorm(int wormId, int maxFrame) const;
+
     // UI helper: create and show the tracking progress dialog parented to 'parent' (optional).
     // The controller will create the dialog, connect to its signals and forward dialog requests to the manager.
     //
