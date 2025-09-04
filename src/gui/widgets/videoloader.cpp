@@ -699,8 +699,14 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
                 if (m_frameLoader) {
                     m_frameLoader->requestSingleFrame(frameNumber, 100); // High priority
                 }
+                qDebug() << "Seek FAILED. Requesting frame" << frameNumber << "via FrameLoader";
                 return;
             }
+            // ADD THIS LINE
+            qDebug() << "Seek SUCCEEDED. Now reading frame" << frameNumber << "from disk.";
+
+        } else {
+            qDebug() << "Not playing -- " << frameNumber << ". Reading directly.";
         }
 
         if (videoCapture.read(currentCvFrame)) {

@@ -1,10 +1,16 @@
 #include "mainwindow.h"
 #include <QStyleFactory>
 #include <QApplication>
+#include <QMetaType>
+#include <opencv2/core.hpp>
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
+    // Register cv::Mat for queued signal/slot delivery across threads.
+    // Using the string name ensures the meta-type is registered for queued use.
+    qRegisterMetaType<cv::Mat>("cv::Mat");
 
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
