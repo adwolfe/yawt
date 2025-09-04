@@ -10,6 +10,7 @@
 #include "itemtypedelegate.h"
 // #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
 #include "trackingprogressdialog.h"
+#include "../core/appcontroller.h"
 #include "trackingmanager.h"
 #include "trackingdatastorage.h"
 #include "version.h"
@@ -32,8 +33,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_blobTableModel(nullptr)
     , m_colorDelegate(nullptr)
     , m_itemTypeDelegate(nullptr)
-    , m_trackingProgressDialog(nullptr)
-    , m_trackingManager(nullptr)
+    , m_appController(nullptr)
     , m_interactionModeButtonGroup(new QButtonGroup(this))
     , m_trackingDataStorage(nullptr)
     , m_hasCompletedTracking(false)
@@ -41,29 +41,28 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Initialize central data storage
-    m_trackingDataStorage = new TrackingDataStorage(this);
+    // Initialize AppController which owns storage, manager and models.
+    m_appController = new AppController(this);
 
+    // Obtain models and storage from the controller (controller manages lifetimes).
+    m_blobTableModel = m_appController->blobTableModel();
+    ui->wormTableView->setModel(m_blobTableModel);
 
+    m_annotationTableModel = m_appController->annotationTableModel();
+    ui->annoTableView->setModel(m_annotationTableModel);
+
+    m_trackingDataStorage = m_appController->trackingDataStorage();
 
     // Set up MiniLoader instances
     ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
-    ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
+    ui->miniLoader->setShowOverlays(false);
 
     if (ui->miniLoaderOverlay) {
         ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
-        ui->miniLoaderOverlay->setShowOverlays(true);  // Overlays enabled on overlay instance
+        ui->miniLoaderOverlay->setShowOverlays(true);
     }
 
-
-    // Model and Delegates
-    m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
-    ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
-
-    // Annotation Table Model
-    m_annotationTableModel = new AnnotationTableModel(m_trackingDataStorage, this);
-    ui->annoTableView->setModel(m_annotationTableModel);
-    qDebug() << "MainWindow: AnnotationTableModel created and connected to annoTableView";
+    qDebug() << "MainWindow: AppController created and models bound";
 
     // Merge/Split events model and view
     m_mergeSplitModel = new QStandardItemModel(this);
@@ -154,8 +153,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     resizeTableColumns();
 
-    // Tracking Manager - pass data storage
-    m_trackingManager = new TrackingManager(m_trackingDataStorage, this);
+    // TrackingManager is now owned by AppController; MainWindow must not create it.
 
     // Pass data storage to VideoLoader
     ui->videoLoader->setTrackingDataStorage(m_trackingDataStorage);
@@ -621,7 +619,7 @@ void MainWindow::setupConnections() {
 
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
-    connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
+    if (m_appController) connect(m_appController, &AppController::tracksUpdated, this, &MainWindow::acceptTracksFromManager);
 
     // Annotation table selection
     connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
@@ -1337,73 +1335,34 @@ void MainWindow::onStartTrackingActionTriggered() {
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
-    if (!m_trackingProgressDialog) {
-        m_trackingProgressDialog = new TrackingProgressDialog(this);
-        connect(m_trackingProgressDialog, &TrackingProgressDialog::beginTrackingRequested, this, &MainWindow::handleBeginTrackingFromDialog);
-        connect(m_trackingProgressDialog, &TrackingProgressDialog::cancelTrackingRequested, this, &MainWindow::handleCancelTrackingFromDialog);
-        connect(m_trackingManager, &TrackingManager::trackingStatusUpdate, m_trackingProgressDialog, &TrackingProgressDialog::updateStatusMessage);
-        connect(m_trackingManager, &TrackingManager::overallTrackingProgress, m_trackingProgressDialog, &TrackingProgressDialog::updateOverallProgress);
-        connect(m_trackingManager, &TrackingManager::trackingFinishedSuccessfully, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
-        connect(m_trackingManager, &TrackingManager::trackingFailed, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingFailed);
-        connect(m_trackingManager, &TrackingManager::trackingCancelled, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
+    // Delegate dialog creation and orchestration to AppController.
+    if (m_appController) {
+        bool onlyTrackMissing = true; // Default behavior; dialog can override when created by controller.
+        m_appController->showTrackingDialog(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames, this);
+    } else {
+        QMessageBox::critical(this, "Error", "Internal error: AppController missing.");
     }
-    //m_trackingProgressDialog->resetDialog();
-    int wormsWithTracks = 0;
-    if (m_trackingDataStorage) {
-        QSet<int> itemsWithTracks = m_trackingDataStorage->getItemsWithTracks();
-        for (const auto& info : initialWorms) {
-            if (itemsWithTracks.contains(info.id)) ++wormsWithTracks;
-        }
-    }
-    m_trackingProgressDialog->setTrackingParameters(videoPath, keyFrame, settings, initialWorms.size(), totalFrames, wormsWithTracks);
-    m_trackingProgressDialog->exec();
 }
 
 void MainWindow::handleBeginTrackingFromDialog() {
-    if (!m_trackingManager || !ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
-        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("Internal error: Components missing.");
+    if (!m_appController || !ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
+        QMessageBox::critical(this, "Error", "Internal error: Components missing.");
         return;
     }
+
     QString videoPath = ui->videoLoader->getCurrentVideoPath();
     int keyFrame = ui->videoLoader->getCurrentFrameNumber();
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
-    std::vector<Tracking::InitialWormInfo> initialWorms;
-    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
-    for(const TableItems::ClickedItem& item : items) {
-        if(item.type == TableItems::ItemType::Worm) {
-            Tracking::InitialWormInfo info; info.id = item.id; info.initialRoi = item.initialBoundingBox; info.color = item.color;
-            initialWorms.push_back(info);
-        }
-    }
-    if (initialWorms.empty()) {
-        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("No worms to track."); return;
-    }
-
-    // If the dialog requests only missing worms, filter out those that already have tracks.
-    if (m_trackingProgressDialog && m_trackingProgressDialog->onlyTrackMissingChecked() && m_trackingDataStorage) {
-        QSet<int> itemsWithTracks = m_trackingDataStorage->getItemsWithTracks();
-        std::vector<Tracking::InitialWormInfo> filtered;
-        filtered.reserve(initialWorms.size());
-        for (const auto& iw : initialWorms) {
-            if (!itemsWithTracks.contains(iw.id)) {
-                filtered.push_back(iw);
-            }
-        }
-        if (filtered.empty()) {
-            if (m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("All selected worms already have tracks.");
-            return;
-        }
-        initialWorms.swap(filtered);
-    }
-
-    QString dataDirectory = ui->videoLoader->getDataDirectory();
-    m_trackingManager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
+    // Delegate building initial worms and starting tracking to the AppController.
+    // Let the controller handle filtering (only-missing) and orchestration.
+    bool onlyTrackMissing = true;
+    m_appController->beginTrackingFromModel(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames);
 }
 
 void MainWindow::handleCancelTrackingFromDialog() {
-    if (m_trackingManager) m_trackingManager->cancelTracking();
+    if (m_appController) m_appController->cancelTracking();
 }
 
 void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {

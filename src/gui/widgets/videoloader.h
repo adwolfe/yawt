@@ -79,58 +79,9 @@ private:
     mutable QAtomicInt m_requests;
 };
 
-// Frame loading request structure
-struct FrameLoadRequest {
-    int frameNumber;
-    int priority; // Higher number = higher priority
-    QDateTime requestTime;
-
-    FrameLoadRequest(int fn, int prio = 1)
-        : frameNumber(fn), priority(prio), requestTime(QDateTime::currentDateTime()) {}
-
-    bool operator<(const FrameLoadRequest& other) const {
-        if (priority != other.priority) return priority < other.priority;
-        return requestTime > other.requestTime; // Newer requests first for same priority
-    }
-
-    bool operator>(const FrameLoadRequest& other) const {
-        if (priority != other.priority) return priority > other.priority;
-        return requestTime < other.requestTime; // Older requests last for same priority
-    }
-};
-
-// Background frame loader worker
-class FrameLoader : public QObject {
-    Q_OBJECT
-
-public:
-    explicit FrameLoader(QObject* parent = nullptr);
-    ~FrameLoader();
-
-    void setVideoPath(const QString& path);
-    void requestFrames(const QList<int>& frameNumbers, int priority = 1);
-    void requestSingleFrame(int frameNumber, int priority = 1);
-    void clearRequests();
-    void stop();
-
-signals:
-    void frameLoaded(int frameNumber, cv::Mat frame);
-    void frameLoadError(int frameNumber, QString error);
-
-public slots:
-    void processRequests();
-
-private:
-    void loadFrame(int frameNumber);
-
-    QString m_videoPath;
-    cv::VideoCapture m_videoCapture;
-    QQueue<FrameLoadRequest> m_requestQueue;
-    mutable QMutex m_queueMutex;
-    QWaitCondition m_waitCondition;
-    bool m_stopRequested;
-    bool m_isProcessing;
-};
+// Frame loader declarations moved to a separate header: src/gui/widgets/frameloader.h
+// Forward-declare the worker class here to avoid exposing internal types.
+class FrameLoader;
 
 
 

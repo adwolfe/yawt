@@ -48,8 +48,9 @@ set(SOURCES
     # GUI widgets and delegates
     src/gui/widgets/mergeviewer.cpp
     src/gui/widgets/miniloader.cpp
-    src/gui/widgets/cachestatuswidget.cpp
+   # src/gui/widgets/cachestatuswidget.cpp
     src/gui/widgets/videofiletreeview.cpp
+    src/gui/widgets/frameloader.cpp
     src/gui/widgets/videoloader.cpp
 
     src/gui/delegates/colordelegate.cpp
@@ -62,7 +63,7 @@ set(SOURCES
 
     # Core processing
     src/core/processing/videoprocessor.cpp
-    src/core/processing/frameloader_internal.cpp
+ #   src/core/processing/frameloader_internal.cpp
 
     # Data
     src/data/trackingdatastorage.cpp
@@ -88,8 +89,9 @@ set(HEADERS
     # GUI widgets / delegates
     src/gui/widgets/mergeviewer.h
     src/gui/widgets/miniloader.h
-    src/gui/widgets/cachestatuswidget.h
+  #  src/gui/widgets/cachestatuswidget.h
     src/gui/widgets/videofiletreeview.h
+    src/gui/widgets/frameloader.h
     src/gui/widgets/videoloader.h
 
     src/gui/delegates/colordelegate.h
@@ -102,7 +104,7 @@ set(HEADERS
 
     # Core processing
     src/core/processing/videoprocessor.h
-    src/core/processing/frameloader_internal.h
+#    src/core/processing/frameloader_internal.h
 
     # Data
     src/data/trackingdatastorage.h

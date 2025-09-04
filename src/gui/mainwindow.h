@@ -3,7 +3,7 @@
 
 #include <QMainWindow>
 #include <QItemSelection>
-#include <QButtonGroup> // For interaction modes
+#include <QButtonGroup>
 #include <QResizeEvent>
 #include <QStandardItemModel>
 #include <QList>
@@ -16,28 +16,40 @@ class BlobTableModel;
 class AnnotationTableModel;
 class ColorDelegate;
 class ItemTypeDelegate;
-class TrackingProgressDialog;
-class TrackingManager;
 class TrackingDataStorage;
-class AppController; // Application controller (non-GUI) introduced to own core models and manager
-// Retracking forward declarations removed
+class AppController; // Application controller (owns core non-UI components)
 
 // Include VideoLoader header for enums and QFlags type
 #include "widgets/videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
-#include "../data/trackingcommon.h" // For AllWormTracks and Tracking::DetectedBlob
+#include "../data/trackingcommon.h" // For Tracking::AllWormTracks and Tracking::DetectedBlob
 #include "../data/trackingdatastorage.h" // Central data storage
 
 QT_BEGIN_NAMESPACE
 QT_END_NAMESPACE
 
+/**
+ * MainWindow
+ *
+ * The primary UI class. After recent refactors, MainWindow no longer creates or owns the
+ * TrackingManager or the TrackingProgressDialog. Those responsibilities are delegated to
+ * AppController. MainWindow obtains models and the central storage from AppController and
+ * remains responsible for view-layer logic (widget wiring, playback controls, selection handling).
+ *
+ * Notes:
+ *  - MainWindow keeps a pointer to AppController (typically created in MainWindow ctor).
+ *  - MainWindow may keep non-owning pointers to models/storage obtained from the controller for
+ *    backward-compatible wiring with existing UI code paths.
+ *  - The TrackingProgressDialog is created and owned by AppController (if shown via
+ *    AppController::showTrackingDialog). MainWindow should call into the controller to show the dialog.
+ */
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
-    
+
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -56,8 +68,7 @@ public slots:
     void goToFirstFrame();
     void goToLastFrame();
     void onAnnotationTableClicked(const QModelIndex& index);
-    
-public slots:
+
     // Debug control slots
     void toggleTrackingDebug();
 
@@ -89,16 +100,15 @@ public slots:
     void handleRemoveBlobsClicked();
     void handleDeleteSelectedBlobClicked();
 
-    
-    // Retracking functionality
-    // Retracking functionality removed
-
-
-    // Tracking Process
-    void onStartTrackingActionTriggered();
+    // Tracking Process (UI entry points)
+    // MainWindow triggers tracking flows via AppController. These slots exist so the
+    // existing UI wiring remains compatible with the refactor.
+    void onStartTrackingActionTriggered();           // User clicked tracking button -> ask AppController to show dialog / start tracking.
+    void handleBeginTrackingFromDialog();            // Kept as a slot for legacy direct-dialog flows (may be invoked by controller-owned dialog via a connection).
+    void handleCancelTrackingFromDialog();           // Kept for compatibility.
     void acceptTracksFromManager(const Tracking::AllWormTracks& tracks);
     void performPostTrackingMemoryCleanup();
-    
+
     // Playback speed control
     void setupPlaybackSpeedComboBox();
     void onPlaybackSpeedChanged(int index);
@@ -118,9 +128,6 @@ public slots:
     // Poll timer tick: periodically poll MiniLoader(s) for visible IDs (fallback if signal missed)
     void onMiniLoaderPollTimeout();
 
-
-
-
 private:
     void setupConnections();
     void initializeUIStates();
@@ -134,31 +141,36 @@ private:
     bool arePlayButtonsChecked() const;
 
     Ui::MainWindow *ui;
+
+    // Models & delegates (non-owning or parented to MainWindow as appropriate)
     BlobTableModel *m_blobTableModel;
     AnnotationTableModel *m_annotationTableModel;
     ColorDelegate *m_colorDelegate;
     ItemTypeDelegate *m_itemTypeDelegate;
-    TrackingManager *m_trackingManager;
-    TrackingDataStorage *m_trackingDataStorage; // Central data storage
+
+    // AppController owns TrackingManager, TrackingDataStorage, and models.
+    // MainWindow keeps a pointer to the controller to request high-level operations.
     AppController *m_appController; // Controller owning storage, manager and models
 
+    // Central data storage pointer (may be obtained from AppController for convenience).
+    // MainWindow does not own this; lifetime is managed by the controller (or parent).
+    TrackingDataStorage *m_trackingDataStorage;
+
     QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
-    
-    // Tracking state
+
+    // Tracking/view state
     bool m_hasCompletedTracking; // Whether initial tracking has been completed
-    
+
     // ROI size factor spinbox
     double roiFactorSpinBoxD;
-    
-    // Model for merge/split events table
+
+    // Merge/Split events model
     QStandardItemModel* m_mergeSplitModel;
+
     // Polling fallback: timer to query mini loaders periodically and update visible IDs if changed
     QTimer* m_miniLoaderPollTimer;
     // Last polled set to detect changes and avoid redundant UI updates
     QSet<int> m_lastPolledVisibleIds;
-
-    // Note: references to MergeViewer and the mergeHistoryText widget have been removed from this header.
-    // Any merge-visualization or textual history UI should be reintroduced by the caller when needed.
-
 };
+
 #endif // MAINWINDOW_H
