@@ -277,7 +277,7 @@
        <enum>QTabWidget::TabShape::Rounded</enum>
       </property>
       <property name="currentIndex">
-       <number>1</number>
+       <number>2</number>
       </property>
       <widget class="QWidget" name="trackingTab">
        <attribute name="title">
@@ -303,7 +303,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/pan.svg</normaloff>:/resources/pan.svg</iconset>
               </property>
               <property name="checkable">
@@ -329,7 +329,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/roi.svg</normaloff>:/resources/roi.svg</iconset>
               </property>
               <property name="checkable">
@@ -349,7 +349,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
               </property>
               <property name="checkable">
@@ -366,7 +366,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
               </property>
               <property name="checkable">
@@ -389,7 +389,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
               </property>
               <property name="checkable">
@@ -419,7 +419,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/thresh_alt.svg</normaloff>:/resources/thresh_alt.svg</iconset>
               </property>
               <property name="checkable">
@@ -433,7 +433,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/poke_alt2.svg</normaloff>:/resources/poke_alt2.svg</iconset>
               </property>
               <property name="checkable">
@@ -447,7 +447,7 @@
                <string>...</string>
               </property>
               <property name="icon">
-               <iconset resource="../../resources.qrc">
+               <iconset resource="resources.qrc">
                 <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
               </property>
               <property name="checkable">
@@ -1051,6 +1051,31 @@ QToolButton#lastFrameButton {
         </item>
        </layout>
       </widget>
+      <widget class="QWidget" name="backupTab">
+       <attribute name="title">
+        <string>Cleanup</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="4">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_10" stretch="0,1">
+          <item>
+           <layout class="QVBoxLayout" name="verticalLayout_3" stretch="">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_4">
+            <item>
+             <widget class="QTableView" name="annoTableView"/>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
       <widget class="QWidget" name="cleanupTab">
        <attribute name="title">
         <string>Cleanup</string>
@@ -1189,6 +1214,70 @@ QToolButton#firstFrameButton_2 {
            </widget>
           </item>
           <item>
+           <widget class="QToolButton" name="playPauseButton_2">
+            <property name="styleSheet">
+             <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+QToolButton#playPauseButton_2 {
+    /* Make it round */
+    border-radius: 18px; /* Half of the button's size (e.g., 50px / 2) */
+
+    /* Define size - necessary for border-radius to work correctly */
+    min-width: 36px;
+    max-width: 36px;
+    min-height:36px;
+    max-height: 36px;
+
+    /* Set borders and background */
+    border: 2px solid #555; /* Example border */
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #f6f7fa, stop: 1 #dadbde); /* Example gradient background */
+
+    /* Define icon size */
+    icon-size: 24px 24px; /* Adjust as needed */
+}
+
+/* ----- Optional: Hover and Pressed Effects ----- */
+
+QToolButton#playPauseButton_2:hover {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #ffffff, stop: 1 #f0f0f0); /* Lighter on hover */
+    border-color: #777;
+}
+
+QToolButton#playPauseButton_2:pressed {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #dadbde, stop: 1 #f6f7fa); /* Inverted gradient on press */
+    border-color: #444;
+}
+
+/* Style for when the button is checked AND pressed */
+QToolButton#playPauseButton_2:checked:pressed {
+     background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #cccccc, stop: 1 #e0e0e0); /* Different pressed look when checked */
+}
+
+/* Style for when the button is checked AND hovered */
+QToolButton#playPauseButton_2:checked:hover {
+     background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #e8e8e8, stop: 1 #d8d8d8); /* Different hover look when checked */
+     border-color: #666;
+}</string>
+            </property>
+            <property name="text">
+             <string>...</string>
+            </property>
+            <property name="icon">
+             <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
+            </property>
+            <property name="shortcut">
+             <string>Space</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QToolButton" name="lastFrameButton_2">
             <property name="styleSheet">
              <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
@@ -1321,7 +1410,7 @@ QToolButton#lastFrameButton_2 {
   </customwidget>
  </customwidgets>
  <resources>
-  <include location="../../resources.qrc"/>
+  <include location="resources.qrc"/>
  </resources>
  <connections/>
 </ui>

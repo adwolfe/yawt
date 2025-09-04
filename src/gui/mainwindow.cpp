@@ -1,23 +1,22 @@
-// Disconnect cleanup-tab MiniLoaders (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2)
-// from Tracking-tab UI by removing connect() calls and preventing updates
-// from frame/selection/model signals; keep primary `miniLoader` connected.
-
 #include "mainwindow.h"
 #include <QTimer>
 #include <QShortcut>
-#include "../utils/debugutils.h"
+#include "debugutils.h"
 #include "ui_mainwindow.h"
-#include "widgets/miniloader.h"
-#include "../models/annotationtablemodel.h"
-#include "../models/blobtablemodel.h"
-#include "delegates/colordelegate.h"
-#include "delegates/itemtypedelegate.h"
+#include "miniloader.h"
+#include "annotationtablemodel.h"
+#include "blobtablemodel.h"
+#include "colordelegate.h"
+#include "itemtypedelegate.h"
+// #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
 #include "trackingprogressdialog.h"
-#include "../core/appcontroller.h"
-#include "../data/trackingdatastorage.h"
+#include "trackingmanager.h"
+#include "trackingdatastorage.h"
 #include "version.h"
-
-#include "widgets/cachestatuswidget.h"
+// No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
+// #include "videoloader.h"
+// #include "trackingcommon.h"
+// MergeViewer removed from MainWindow implementation
 
 #include <QStandardPaths>
 #include <QFileDialog>
@@ -33,6 +32,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_blobTableModel(nullptr)
     , m_colorDelegate(nullptr)
     , m_itemTypeDelegate(nullptr)
+    , m_trackingProgressDialog(nullptr)
     , m_trackingManager(nullptr)
     , m_interactionModeButtonGroup(new QButtonGroup(this))
     , m_trackingDataStorage(nullptr)
@@ -41,52 +41,29 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Create application controller which owns storage, models, and TrackingManager
-    m_appController = new AppController(this);
+    // Initialize central data storage
+    m_trackingDataStorage = new TrackingDataStorage(this);
 
-    // Retrieve storage from controller and keep a local pointer for legacy code paths in MainWindow
-    m_trackingDataStorage = m_appController->trackingDataStorage();
 
-    // Set up MiniLoader instances with the storage obtained from AppController
-    // We keep the widgets around, but we will explicitly avoid wiring the cleanup-tab mini loaders
-    // (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2) to tracking-tab signals.
-    if (ui->miniLoader) {
-        ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
-        ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
-    }
+
+    // Set up MiniLoader instances
+    ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
+    ui->miniLoader->setShowOverlays(false);  // No overlays on main miniLoader
 
     if (ui->miniLoaderOverlay) {
-        // Keep storage and overlay mode configured, but we will NOT connect it to tracking tab signals.
         ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
         ui->miniLoaderOverlay->setShowOverlays(true);  // Overlays enabled on overlay instance
     }
 
-    // Set up all other MiniLoader instances with TrackingDataStorage (they live on the Cleanup tab)
-    // They will not be connected to the tracking UI's signals.
-    if (ui->mlon2) {
-        ui->mlon2->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlon2->setShowOverlays(true);
-    }
-    if (ui->mlon1) {
-        ui->mlon1->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlon1->setShowOverlays(true);
-    }
-    if (ui->mlop1) {
-        ui->mlop1->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlop1->setShowOverlays(true);
-    }
-    if (ui->mlop2) {
-        ui->mlop2->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlop2->setShowOverlays(true);
-    }
 
-    // Model and Delegates - obtain models from AppController
-    m_blobTableModel = m_appController->blobTableModel();
-    ui->wormTableView->setModel(m_blobTableModel);
+    // Model and Delegates
+    m_blobTableModel = new BlobTableModel(m_trackingDataStorage, this);
+    ui->wormTableView->setModel(m_blobTableModel); // Assuming ui->wormTableView is your QTableView
 
-    // Annotation Table Model from controller (no dedicated annotation view in this UI)
-    m_annotationTableModel = m_appController->annotationTableModel();
-    qDebug() << "MainWindow: AnnotationTableModel obtained from AppController (no view in this UI)";
+    // Annotation Table Model
+    m_annotationTableModel = new AnnotationTableModel(m_trackingDataStorage, this);
+    ui->annoTableView->setModel(m_annotationTableModel);
+    qDebug() << "MainWindow: AnnotationTableModel created and connected to annoTableView";
 
     // Merge/Split events model and view
     m_mergeSplitModel = new QStandardItemModel(this);
@@ -102,6 +79,18 @@ MainWindow::MainWindow(QWidget *parent)
     // Jump to frame when a merge/split row is clicked
     connect(ui->mergeSplitTableView, &QTableView::clicked, this, [this](const QModelIndex &index){
         if (!index.isValid()) return;
+        // Determine currently selected worm in the worm table (if any) so overlay shows correct worm
+        int selectedWormId = -1;
+        if (ui->wormTableView->selectionModel() && !ui->wormTableView->selectionModel()->selectedIndexes().isEmpty()) {
+            int selRow = ui->wormTableView->selectionModel()->selectedIndexes().first().row();
+            if (selRow >= 0 && selRow < m_blobTableModel->rowCount()) {
+                const TableItems::ClickedItem& it = m_blobTableModel->getItem(selRow);
+                selectedWormId = it.id;
+            }
+        }
+
+
+
         // Frame number is in column 0
         QModelIndex frameIdx = m_mergeSplitModel->index(index.row(), 0);
         QVariant v = m_mergeSplitModel->data(frameIdx, Qt::DisplayRole);
@@ -134,10 +123,39 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->horizontalHeader()->setSectionsClickable(true);
     ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
 
+    // Configure annotation table view
+    ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    ui->annoTableView->horizontalHeader()->setStretchLastSection(false);
+    ui->annoTableView->horizontalHeader()->setVisible(true);
+    ui->annoTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ui->annoTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+
+    // Set column resize modes for annotation table
+    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
+    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
+    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
+
+    // Add hover effects and cursor styling to indicate clickability
+    ui->annoTableView->setMouseTracking(true);
+    ui->annoTableView->viewport()->setCursor(Qt::PointingHandCursor);
+    ui->annoTableView->setStyleSheet(
+        "QTableView::item:hover { "
+        "    background-color: #e3f2fd; "
+        "    border: 1px solid #2196f3; "
+        "} "
+        "QTableView::item:selected { "
+        "    background-color: #bbdefb; "
+        "    color: #000; "
+        "}"
+    );
+
+    qDebug() << "MainWindow: Annotation table view configured successfully";
+
     resizeTableColumns();
 
-    // TrackingManager is now owned by AppController; MainWindow keeps the pointer field null to avoid accidental direct usage.
-    m_trackingManager = nullptr;
+    // Tracking Manager - pass data storage
+    m_trackingManager = new TrackingManager(m_trackingDataStorage, this);
 
     // Pass data storage to VideoLoader
     ui->videoLoader->setTrackingDataStorage(m_trackingDataStorage);
@@ -154,67 +172,10 @@ MainWindow::MainWindow(QWidget *parent)
     // View mode buttons will be synced by syncViewModeOptionButtons via the signal
     // Set initial active view modes in VideoLoader if desired, e.g., show Blobs by default
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
+    // ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::None, true); // Or start with nothing
 
     qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
     ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !", 10000);
-
-    // --- Cache status widget: visualize frames currently present in the VideoLoader cache ---
-    // Create widget and add to status bar as a permanent (right-most) widget.
-    CacheStatusWidget* cacheStatusWidget = new CacheStatusWidget(this);
-    statusBar()->addPermanentWidget(cacheStatusWidget, 0);
-
-    // When VideoLoader emits that a frame was cached, mark it in the widget.
-    connect(ui->videoLoader, &VideoLoader::frameCached, cacheStatusWidget, &CacheStatusWidget::onFrameCached);
-    // Also listen for explicit eviction notifications so the widget can remove frames immediately.
-    connect(ui->videoLoader, &VideoLoader::frameEvicted, cacheStatusWidget, &CacheStatusWidget::onFrameEvicted);
-
-    // When a new video is loaded, update the widget with total frame count.
-    connect(ui->videoLoader, &VideoLoader::videoLoaded, this, [cacheStatusWidget](const QString&, int totalFrames, double, QSize) {
-        cacheStatusWidget->setTotalFrames(totalFrames);
-    });
-
-    // Highlight the current frame as VideoLoader updates.
-    connect(ui->videoLoader, &VideoLoader::frameChanged, this, [cacheStatusWidget](int frameNumber, const QImage&) {
-        cacheStatusWidget->setCurrentFrame(frameNumber);
-    });
-
-    // Clicks on the cache strip will seek the main video to that frame.
-    connect(cacheStatusWidget, &CacheStatusWidget::frameClicked, this, [this](int frame) {
-        seekFrame(frame);
-    });
-
-    // Periodic poll to detect evictions / reconcile cache differences.
-    QTimer* cachePollTimer = new QTimer(this);
-    cachePollTimer->setInterval(500); // 500 ms
-    connect(cachePollTimer, &QTimer::timeout, this, [this, cacheStatusWidget]() {
-        if (!ui || !ui->videoLoader) return;
-        if (!ui->videoLoader->isVideoLoaded()) {
-            cacheStatusWidget->clear();
-            return;
-        }
-        int total = ui->videoLoader->getTotalFrames();
-        if (total <= 0) {
-            cacheStatusWidget->clear();
-            return;
-        }
-        int center = ui->videoLoader->getCurrentFrameNumber();
-        if (center < 0) center = 0;
-        int preload = ui->videoLoader->getPreloadRadius();
-        // scan radius: cover the preload radius plus a margin, with a reasonable minimum window
-        int scanRadius = qMax(preload + 50, 200);
-        int start = qMax(0, center - scanRadius);
-        int end = qMin(total - 1, center + scanRadius);
-
-        QSet<int> present;
-        // Query VideoLoader for frames available in cache (getQImageForFrame returns null if not cached)
-        for (int f = start; f <= end; ++f) {
-            QImage qi = ui->videoLoader->getQImageForFrame(f);
-            if (!qi.isNull()) present.insert(f);
-        }
-
-        cacheStatusWidget->setCachedFrames(present);
-    });
-    cachePollTimer->start();
 }
 
 MainWindow::~MainWindow()
@@ -223,29 +184,33 @@ MainWindow::~MainWindow()
 }
 
 void MainWindow::setPlayButtonsState(bool playing, bool blockSignals) {
-    // Helper: set playback state and keep button consistent.
+    // Helper: set playback state and keep both mirrored buttons consistent.
     if (!ui) return;
     if (blockSignals) {
         ui->playPauseButton->blockSignals(true);
+        ui->playPauseButton_2->blockSignals(true);
     }
 
     ui->playPauseButton->setChecked(playing);
+    ui->playPauseButton_2->setChecked(playing);
 
     QIcon icon = playing ? QIcon::fromTheme("media-playback-pause", QIcon(":/icons/pause.png"))
                         : QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png"));
     ui->playPauseButton->setIcon(icon);
+    ui->playPauseButton_2->setIcon(icon);
 
     if (playing) ui->videoLoader->play();
     else ui->videoLoader->pause();
 
     if (blockSignals) {
         ui->playPauseButton->blockSignals(false);
+        ui->playPauseButton_2->blockSignals(false);
     }
 }
 
 bool MainWindow::arePlayButtonsChecked() const {
     if (!ui) return false;
-    return ui->playPauseButton->isChecked();
+    return ui->playPauseButton->isChecked() || ui->playPauseButton_2->isChecked();
 }
 
 void MainWindow::setupInteractionModeButtonGroup() {
@@ -279,7 +244,6 @@ void MainWindow::showEvent(QShowEvent* event) {
 }
 
 void MainWindow::setupConnections() {
-    qDebug() << "MainWindow::setupConnections - invoked (should appear only once)";
     // Connect ROI factor spinbox to BlobTableModel
     connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
@@ -289,21 +253,16 @@ void MainWindow::setupConnections() {
 
     // VideoLoader basic signals
     connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
-    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay, Qt::UniqueConnection);
-    // Keep updateMiniLoaderCrop hooked to frameChanged, but that function is updated to only update the primary miniLoader.
-    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop, Qt::UniqueConnection);
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop);
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
-
-    // Connect VideoLoader frameCached signal only to the primary miniLoader (tracking-tab)
-    // Cleanup-tab mini loaders intentionally NOT connected here.
-    if (ui->miniLoader) connect(ui->videoLoader, &VideoLoader::frameCached, ui->miniLoader, &MiniLoader::onFrameCached, Qt::UniqueConnection);
-
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
 
-    // Playback controls (single button) - use helper to keep it in sync
+    // Playback controls (mirrored buttons) - use helper to keep them in sync
     connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });
+    connect(ui->playPauseButton_2, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });
     connect(ui->firstFrameButton, &QToolButton::clicked, this, &MainWindow::goToFirstFrame);
     connect(ui->firstFrameButton_2, &QToolButton::clicked, this, &MainWindow::goToFirstFrame);
     connect(ui->lastFrameButton, &QToolButton::clicked, this, &MainWindow::goToLastFrame);
@@ -321,9 +280,12 @@ void MainWindow::setupConnections() {
     connect(ui->trackModeButton, &QToolButton::clicked, this, &MainWindow::editTracksModeButtonClicked);
 
     // View Mode Option Buttons (Checkable QToolButtons or QCheckBoxes) -> VideoLoader
+    // Assuming ui->showThreshButton is checkable
     connect(ui->viewThreshButton, &QToolButton::toggled, this, &MainWindow::onViewThresholdToggled);
+    // Add these connections once you have the buttons in your UI:
     connect(ui->viewBlobsButton, &QToolButton::toggled, this, &MainWindow::onViewBlobsToggled);
     connect(ui->viewTracksButton, &QToolButton::toggled, this, &MainWindow::onViewTracksToggled);
+
 
     // Thresholding UI -> VideoLoader & MainWindow
     connect(ui->globalRadio, &QRadioButton::clicked, this, &MainWindow::updateThresholdAlgorithmSettings);
@@ -348,17 +310,37 @@ void MainWindow::setupConnections() {
                 // When an item's visibility changes, update the VideoLoader with current items
                 ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
             });
+    // Wire the overlay mini loader to the same model if present
+    if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) {
+        // When the blob list changes, instruct overlay to repaint
+        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
+        // Item visibility changes should also trigger a repaint
+        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
 
-    // NOTE: We purposely DO NOT connect the cleanup-tab mini loaders (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2)
-    // to model changes or selection changes here. Those widgets are isolated on the Cleanup tab for separate debugging.
-
+        // Allow the overlay to respond to selection changes
+        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+                ui->miniLoaderOverlay, [this](const QItemSelection &selected, const QItemSelection&) {
+                    // Build the list of selected ClickedItem(s) and call overlay's handler
+                    QList<TableItems::ClickedItem> selItems;
+                    QModelIndexList indexes = selected.indexes();
+                    if (!indexes.isEmpty()) {
+                        int row = indexes.first().row();
+                        if (row >= 0 && row < m_blobTableModel->rowCount()) selItems.append(m_blobTableModel->getItem(row));
+                    }
+                    ui->miniLoaderOverlay->onWormSelectionChanged(selItems);
+                });
+    }
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
+
+    // Retracking UI removed - no connections
 
     // Auto-resize table columns when model data changes
     connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
     connect(m_blobTableModel, &BlobTableModel::rowsRemoved, this, &MainWindow::resizeTableColumns);
+
+    // Retracking combo removed
 
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -376,8 +358,20 @@ void MainWindow::setupConnections() {
         const TableItems::ClickedItem& sel = m_blobTableModel->getItem(row);
         // Populate merge/split table for this worm
         m_mergeSplitModel->removeRows(0, m_mergeSplitModel->rowCount());
+        // We'll iterate through stored merge history and split resolution maps in TrackingManager via storage/APIs
+        // For now, collect merge starts from storage's merge history and track point qualities for splits
+        // Iterate frames in ascending order and add the first merged frame before a split
+        QList<int> frames = m_trackingDataStorage->getMergeGroupsForFrame(0).isEmpty() ? QList<int>() : QList<int>();
+        // Simple (but potentially slow) approach: scan all frames present in merge history
+        for (auto it = m_trackingDataStorage->getMergeGroupsForFrame(0).begin(); it != m_trackingDataStorage->getMergeGroupsForFrame(0).end(); ++it) {
+            Q_UNUSED(it);
+        }
+        // Instead, we will query the entire merge history map directly via an accessor - but since none exists, read internal map via getAllTracks as a proxy
+        // Practical approach: scan frames from 0..currentFrame and check if this worm appears in merge groups
         // Determine frame range from video loader
         int maxFrame = ui->videoLoader->getTotalFrames();
+        // New approach: compare merge-group membership for the selected worm between consecutive frames.
+        // Whenever the group's membership changes we emit an event row (Merge / Split / Merge/Split).
         QList<int> prevGroup; // empty means not merged on previous frame
         for (int f = 0; f < maxFrame; ++f) {
             QList<QList<int>> groups = m_trackingDataStorage->getMergeGroupsForFrame(f);
@@ -386,6 +380,7 @@ void MainWindow::setupConnections() {
                 if (g.contains(sel.id)) { currGroup = g; break; }
             }
 
+            // Compare prevGroup and currGroup as sets
             QSet<int> prevSet;
             for (int id : prevGroup) prevSet.insert(id);
             QSet<int> currSet;
@@ -395,10 +390,15 @@ void MainWindow::setupConnections() {
                 continue; // no change
             }
 
+            // Membership changed - decide event type(s)
+            bool prevEmpty = prevSet.isEmpty();
+            bool currEmpty = currSet.isEmpty();
+
             QString eventType;
             QString details;
 
-            if (prevSet.isEmpty() && !currSet.isEmpty()) {
+            if (prevEmpty && !currEmpty) {
+                // Newly merged
                 eventType = "Merge";
                 QSet<int> others = currSet;
                 others.remove(sel.id);
@@ -408,7 +408,8 @@ void MainWindow::setupConnections() {
                     for (int id : others) ids << QString::number(id);
                     details = QString("Merged with worm(s) %1").arg(ids.join(", "));
                 }
-            } else if (!prevSet.isEmpty() && currSet.isEmpty()) {
+            } else if (!prevEmpty && currEmpty) {
+                // Split from previous merged group
                 eventType = "Split";
                 QSet<int> others = prevSet;
                 others.remove(sel.id);
@@ -419,6 +420,7 @@ void MainWindow::setupConnections() {
                     details = QString("Split from worm(s) %1").arg(ids.join(", "));
                 }
             } else {
+                // Both non-empty and different: detect additions/removals
                 QSet<int> added = currSet - prevSet;
                 QSet<int> removed = prevSet - currSet;
                 if (!added.isEmpty() && removed.isEmpty()) {
@@ -466,13 +468,109 @@ void MainWindow::setupConnections() {
         ui->deleteButton->setEnabled(!selected.isEmpty());
     });
 
+    // Table View Selection -> MiniLoader Overlays
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
+        Q_UNUSED(deselected)
+
+        if (selected.isEmpty()) {
+            // No selection - clear the mini loaders
+            if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) ui->miniLoaderOverlay->clearSelection();
+        } else {
+            // Get the first selected row and extract the worm ID
+            QModelIndexList selectedIndexes = selected.indexes();
+            if (!selectedIndexes.isEmpty()) {
+                int selectedRow = selectedIndexes.first().row();
+                if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
+                    const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
+                    if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) ui->miniLoaderOverlay->setSelectedWorm(selectedItem.id);
+
+                    // Auto-center video on worm position if zoomed in
+                    double currentZoom = ui->videoLoader->getZoomFactor();
+                    qDebug() << "MainWindow: Blob selection - zoom factor:" << currentZoom << "worm ID:" << selectedItem.id;
+                    if (currentZoom > 1.5) {
+                        qDebug() << "MainWindow: Zoom factor > 1.5, attempting auto-center for worm" << selectedItem.id;
+                        int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+                        QPointF wormPosition;
+                        QRectF wormRoi;
+                        bool centered = false;
+                        QString statusMessage;
+
+
+
+                        // Try to get worm position for current frame
+                        qDebug() << "MainWindow: Trying to get worm data for frame" << currentFrame << "worm ID" << selectedItem.id;
+                        if (m_trackingDataStorage->getWormDataForFrame(selectedItem.id, currentFrame, wormPosition, wormRoi)) {
+                            qDebug() << "MainWindow: Found worm data - position:" << wormPosition << "ROI:" << wormRoi;
+                            if (!wormPosition.isNull() && wormPosition.x() >= 0 && wormPosition.y() >= 0) {
+                                qDebug() << "MainWindow: Calling centerOnVideoPoint with position" << wormPosition;
+                                ui->videoLoader->centerOnVideoPoint(wormPosition);
+                                statusMessage = QString("Centered on Worm %1 at frame %2 (zoom: %3x)")
+                                               .arg(selectedItem.id).arg(currentFrame).arg(currentZoom, 0, 'f', 1);
+                                centered = true;
+                                qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "at tracked position" << wormPosition;
+                            } else {
+                                qDebug() << "MainWindow: Worm position invalid:" << wormPosition;
+                            }
+                        }
+
+                        if (!centered) {
+                            // Try to get the last known position before this frame (for lost tracking)
+                            qDebug() << "MainWindow: Trying to get last known position before frame" << currentFrame << "for worm" << selectedItem.id;
+                            if (m_trackingDataStorage->getLastKnownPositionBefore(selectedItem.id, currentFrame, wormPosition, wormRoi)) {
+                                qDebug() << "MainWindow: Found last known position:" << wormPosition << "ROI:" << wormRoi;
+                                if (!wormPosition.isNull() && wormPosition.x() >= 0 && wormPosition.y() >= 0) {
+                                    qDebug() << "MainWindow: Calling centerOnVideoPoint with last known position" << wormPosition;
+                                    ui->videoLoader->centerOnVideoPoint(wormPosition);
+                                    statusMessage = QString("Centered on Worm %1 last known position (zoom: %2x)")
+                                                   .arg(selectedItem.id).arg(currentZoom, 0, 'f', 1);
+                                    centered = true;
+                                    qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "at last known position" << wormPosition;
+                                } else {
+                                    qDebug() << "MainWindow: Last known position invalid:" << wormPosition;
+                                }
+                            }
+                        }
+
+                        if (!centered) {
+                            // If no tracking data, use initial position from blob as final fallback
+                            QPointF initialPos = selectedItem.initialCentroid;
+                            qDebug() << "MainWindow: No last known position found, using initial position:" << initialPos;
+                            if (!initialPos.isNull() && initialPos.x() >= 0 && initialPos.y() >= 0) {
+                                qDebug() << "MainWindow: Calling centerOnVideoPoint with initial position" << initialPos;
+                                ui->videoLoader->centerOnVideoPoint(initialPos);
+                                statusMessage = QString("Centered on Worm %1 initial position (zoom: %2x)")
+                                               .arg(selectedItem.id).arg(currentZoom, 0, 'f', 1);
+                                centered = true;
+                                qDebug() << "MainWindow: Centered video on worm" << selectedItem.id << "initial position" << initialPos;
+                            } else {
+                                qDebug() << "MainWindow: Initial position also invalid:" << initialPos;
+                            }
+                        }
+
+                        if (centered) {
+                            statusBar()->showMessage(statusMessage, 3000);
+                        } else {
+                            qDebug() << "MainWindow: Auto-center failed - no valid position found";
+                        }
+                    } else {
+                        qDebug() << "MainWindow: Zoom factor too low for auto-center:" << currentZoom;
+                    }
+                }
+            }
+        }
+    });
+
+
+
+
+
     // Table View Selection -> MiniLoader (update crop when selection changes)
-    // Keep this connected so the primary miniLoader (display on Tracking tab) is updated.
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         Q_UNUSED(selected)
         Q_UNUSED(deselected)
-        // When selection changes, update the primary miniLoader crop with current frame
+        // When selection changes, update the miniLoader crop with current frame
         if (ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
             int currentFrame = ui->videoLoader->getCurrentFrameNumber();
             QImage currentImage = ui->videoLoader->getCurrentQImageFrame();
@@ -497,11 +595,14 @@ void MainWindow::setupConnections() {
     connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
             [this](int logicalIndex) {
         if (logicalIndex == BlobTableModel::Column::Show) {
+            // Get current header state
             QVariant checkState = m_blobTableModel->headerData(
                 BlobTableModel::Column::Show, Qt::Horizontal, Qt::CheckStateRole);
 
+            // Toggle state
             if (checkState.isValid()) {
                 Qt::CheckState newState;
+                // If all or partial, make all unchecked. If none, make all checked.
                 if (checkState.toInt() == Qt::Unchecked) {
                     newState = Qt::Checked;
                 } else {
@@ -520,10 +621,10 @@ void MainWindow::setupConnections() {
 
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
-    // Listen for tracksUpdated from AppController (controller stores tracks into storage and emits this)
-    connect(m_appController, &AppController::tracksUpdated, this, &MainWindow::acceptTracksFromManager);
+    connect(m_trackingManager, &TrackingManager::allTracksUpdated, this, &MainWindow::acceptTracksFromManager);
 
-    // Annotation table selection - removed (no view). If UI regains an annotation view, reconnect here.
+    // Annotation table selection
+    connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
     // Connect header data changes to trigger UI update
     connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
@@ -540,12 +641,30 @@ void MainWindow::setupConnections() {
         initialItemIDs.insert(item.id);
     }
     ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
+    if (ui->miniLoaderOverlay) ui->miniLoaderOverlay->update();
 
-    // Only update primary miniLoader display; do NOT update cleanup-tab mini loaders here.
-    if (ui->miniLoader) ui->miniLoader->update();
+    // Connect MiniLoader visible worms signal to MainWindow so we can filter merge history live.
+    // Also connect the overlay instance if present so we receive visible updates from either widget.
+    // Always check ui->miniLoader presence since some UI permutations may not include it.
+    if (ui->miniLoader) {
+        // Primary miniLoader is display-only (zoom view). Per the new flow it should NOT be
+        // connected to visibility signals or used as the source of truth for visibility.
+        qDebug() << "MainWindow: primary miniLoader present but will NOT be connected to visibility signals (display-only).";
+    }
+    // If an overlay widget exists, connect its visibleWormsUpdated signal as well so we don't miss updates.
+    if (ui->miniLoaderOverlay) {
+        QMetaObject::Connection c2 = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdated,
+                this, &MainWindow::onMiniLoaderVisibleWormsUpdated);
+        qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> slot, overlay ptr=" << ui->miniLoaderOverlay
+                 << " connection valid:" << bool(c2);
+
+        // Mirror-to-MergeViewer functionality removed.
+        // Previously we forwarded MiniLoader overlay per-frame visibility maps to a MergeViewer widget.
+        // The MergeViewer has been removed from the UI and related forwarding logic is intentionally omitted.
+    }
 
     // Start a short polling timer as a fallback in case signals are missed or paint() hasn't yet emitted.
-    // This keeps an internal list of visible IDs in sync with the primary miniLoader only.
+    // This keeps the mergeHistoryText in sync with miniLoader(s) reliably.
     m_miniLoaderPollTimer = new QTimer(this);
     connect(m_miniLoaderPollTimer, &QTimer::timeout, this, &MainWindow::onMiniLoaderPollTimeout);
     m_miniLoaderPollTimer->setInterval(100); // 100 ms poll interval
@@ -570,11 +689,15 @@ void MainWindow::initializeUIStates() {
     ui->frameSlider->setMinimum(0);
     ui->frameSlider->setSingleStep(10);
     ui->frameSlider->setPageStep(100);
-    // Initialize play button to the "play" state and icon without emitting signals
+    // Initialize both play buttons to the "play" state and icon without emitting signals
     setPlayButtonsState(false, /*blockSignals=*/false);
 
     // Initialize delete button to disabled state since there are no items selected initially
     ui->deleteButton->setEnabled(false);
+
+    // Initialize Clear Fix button to disabled state until tracking is completed
+
+    // Retrack controls removed from UI
 
     ui->adaptiveTypeCombo->setCurrentIndex(0);
     setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
@@ -678,7 +801,7 @@ void MainWindow::editBlobsModeButtonClicked() {
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     }
 
-    // Provide mode-specific feedback
+        // Provide mode-specific feedback
     QString modeMessage;
     if (m_hasCompletedTracking) {
         modeMessage = "Blob Edit Mode: Click on blobs to add Fix markers";
@@ -700,15 +823,25 @@ void MainWindow::onViewThresholdToggled(bool checked) {
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, checked);
 }
 void MainWindow::onViewBlobsToggled(bool checked) {
+    // Assuming you have a ui->viewBlobsButton that is checkable
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, checked);
 }
 void MainWindow::onViewTracksToggled(bool checked) {
+    // Assuming you have a ui->viewTracksButton that is checkable
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, checked);
 }
+// Optional:
+// void MainWindow::onViewNoneClicked() {
+//     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, false);
+//     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, false);
+//     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, false);
+// }
 
 
 // --- Slots to sync UI buttons with VideoLoader's state ---
 void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode) {
+    // This will be handled by QButtonGroup if buttons are added to it correctly
+    // Or, if not using QButtonGroup for these specific buttons for some reason:
     ui->panModeButton->setChecked(newMode == VideoLoader::InteractionMode::PanZoom);
     ui->roiModeButton->setChecked(newMode == VideoLoader::InteractionMode::DrawROI);
     ui->cropModeButton->setChecked(newMode == VideoLoader::InteractionMode::Crop);
@@ -718,7 +851,9 @@ void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode
 }
 
 void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes) {
+    // Update the checked state of your independent view mode buttons
     ui->viewThreshButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Threshold));
+    // Assuming you have ui->viewBlobsButton and ui->viewTracksButton:
     ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
     ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
     qDebug() << "MainWindow: View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
@@ -791,23 +926,34 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
 
+    // Determine item type based on tracking state
+    // Legacy behavior previously turned newly added items into 'Fix' blobs after tracking completed.
+    // That behavior is disabled: always add items as regular Worm blobs.
     TableItems::ItemType itemType = TableItems::ItemType::Worm;
 
+    // Now adding through the data storage via the model
     bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, itemType);
 
     if (added) {
+        // Enable the delete button since we now have an item
         ui->deleteButton->setEnabled(true);
 
+        // Select the newly added row
         int lastRow = m_blobTableModel->rowCount() - 1;
         QModelIndex newIndex = m_blobTableModel->index(lastRow, 0);
         ui->wormTableView->setCurrentIndex(newIndex);
         ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
 
+        // Resize columns to fit the new content
         resizeTableColumns();
 
+        // Provide user feedback based on blob type
         QString feedbackMessage;
+        // Always report as a Worm blob since auto-Fix behavior is disabled
         feedbackMessage = QString("Added Worm blob at frame %1").arg(currentFrame);
         statusBar()->showMessage(feedbackMessage, 3000);
+
+    // No retrack combo functionality in this build
     }
 }
 
@@ -815,9 +961,11 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
 
+    // Convert ROI rect to centroid and bounding box in video coords
     QPointF centroid = QPointF(roi.x() + roi.width() / 2.0, roi.y() + roi.height() / 2.0);
     QRectF boundingBox = roi;
 
+    // Add as ROI type to the model
     bool added = m_blobTableModel->addItem(centroid, boundingBox, currentFrame, TableItems::ItemType::ROI);
 
     if (added) {
@@ -833,19 +981,28 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
 
 void MainWindow::handleRemoveBlobsClicked() {
     m_blobTableModel->removeRows(0, m_blobTableModel->getAllItems().length());
-    ui->deleteButton->setEnabled(false);
+    ui->deleteButton->setEnabled(false); // Disable delete button after clearing all items
+    // VideoLoader will get updates from storage, but keep these for backward compatibility
     ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
     ui->videoLoader->setVisibleTrackIDs(QSet<int>());
+    // Ensure table columns are properly sized after clearing
     resizeTableColumns();
 }
 
+
 void MainWindow::handleDeleteSelectedBlobClicked() {
+    // Get the currently selected row
     QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
 
+    // If there's a selection (should be at least one index per row)
     if (!selectedIndexes.isEmpty()) {
+        // Get the row of the first selected index (we only allow single row selection)
         int selectedRow = selectedIndexes.first().row();
+
+        // Remove the selected row
         m_blobTableModel->removeRows(selectedRow, 1);
 
+        // Select the next row if available, or the previous row if this was the last one
         if (m_blobTableModel->rowCount() > 0) {
             int newRow = (selectedRow < m_blobTableModel->rowCount()) ? selectedRow : m_blobTableModel->rowCount() - 1;
             QModelIndex newIndex = m_blobTableModel->index(newRow, 0);
@@ -853,7 +1010,12 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
             ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         }
 
+        // The delete button will be automatically enabled/disabled by the selection changed handler
+
+        // Make sure the table layout is updated
         resizeTableColumns();
+
+    // Retrack combo removed
     }
 }
 
@@ -872,6 +1034,7 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->frameSlider->setValue(0);
     ui->framePosition->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
     ui->framePosition->setValue(0);
+    // Mirror maximum and initial value for the secondary frame position widget
     ui->framePosition_2->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
     ui->framePosition_2->setValue(0);
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
@@ -884,61 +1047,171 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
         ui->frameSlider->setValue(currentFrameNumber);
     }
     ui->framePosition->setValue(currentFrameNumber);
+    // Keep the duplicated frame position in sync
     ui->framePosition_2->setValue(currentFrameNumber);
+
+    // Merge history text widget and MergeViewer UI were removed.
+    // Any merge-history or merge-visualization updates are intentionally omitted here.
 }
 
-// Update only the primary miniLoader (on the Tracking tab). Cleanup-tab mini loaders are intentionally NOT updated here.
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
-    if (!ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
+    if (!ui->miniLoader || currentFrame.isNull()) {
         return;
     }
 
-    static int m_lastMiniLoaderUpdateFrame = -1;
-    if (m_lastMiniLoaderUpdateFrame == currentFrameNumber) {
-        qDebug() << "MainWindow::updateMiniLoaderCrop - skipping redundant update for frame" << currentFrameNumber;
-        return;
-    }
-    m_lastMiniLoaderUpdateFrame = currentFrameNumber;
-
+    // Get the crop size from BlobTableModel
     QSizeF cropSize = m_blobTableModel->getCurrentFixedRoiSize();
     if (cropSize.isEmpty()) {
         cropSize = QSizeF(100, 100); // fallback size
     }
 
-    // Determine selected worm (if any) so we can center primary miniLoader on it
-    int selectedWormId = -1;
+    // Determine center point for cropping (use only the central frame to pick center)
+    QPointF centerPoint;
+    bool foundCenterPoint = false;
+
+    // First priority: if a worm is selected, use its centroid (for the current/central frame)
     QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
     if (!selectedIndexes.isEmpty()) {
         int selectedRow = selectedIndexes.first().row();
         if (selectedRow >= 0 && selectedRow < m_blobTableModel->rowCount()) {
             const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(selectedRow);
-            selectedWormId = selectedItem.id;
+            int wormId = selectedItem.id;
+
+            QPointF wormPosition;
+            QRectF wormRoi;
+            if (m_trackingDataStorage->getWormDataForFrame(wormId, currentFrameNumber, wormPosition, wormRoi)) {
+                centerPoint = wormPosition;
+                foundCenterPoint = true;
+            } else if (m_trackingDataStorage->getLastKnownPositionBefore(wormId, currentFrameNumber, wormPosition, wormRoi)) {
+                centerPoint = wormPosition;
+                foundCenterPoint = true;
+            }
         }
     }
 
-    QPointF centerPoint;
-    bool foundCenterPoint = false;
-
-    if (selectedWormId != -1) {
-        QPointF wormPosition;
-        QRectF wormRoi;
-        if (m_trackingDataStorage->getWormDataForFrame(selectedWormId, currentFrameNumber, wormPosition, wormRoi)) {
-            centerPoint = wormPosition;
-            foundCenterPoint = true;
-        } else if (m_trackingDataStorage->getLastKnownPositionBefore(selectedWormId, currentFrameNumber, wormPosition, wormRoi)) {
-            centerPoint = wormPosition;
+    // Second priority: use MiniLoader's last known center point
+    if (!foundCenterPoint) {
+       const QPointF lastCenter = ui->miniLoader->getLastCenterPoint();
+        if (!lastCenter.isNull() && lastCenter.x() >= 0 && lastCenter.y() >= 0) {
+            centerPoint = lastCenter;
             foundCenterPoint = true;
         }
     }
 
+    // Third priority: use center of the provided (central) image
     if (!foundCenterPoint) {
         centerPoint = QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0);
     }
 
-    if (ui->miniLoader) {
-        qDebug() << "MainWindow::updateMiniLoaderCrop - setting expected frame" << currentFrameNumber << "for primary miniLoader" << ui->miniLoader;
-        ui->miniLoader->setExpectedFrame(currentFrameNumber, cropSize, centerPoint, ui->videoLoader);
+    // Calculate the crop rectangle (same for all frames we will send)
+    double cropWidth = cropSize.width();
+    double cropHeight = cropSize.height();
+    double left = centerPoint.x() - cropWidth / 2.0;
+    double top = centerPoint.y() - cropHeight / 2.0;
+
+    // Clamp to image bounds (use currentFrame dimensions as reference)
+    left = qBound(0.0, left, currentFrame.width() - cropWidth);
+    top = qBound(0.0, top, currentFrame.height() - cropHeight);
+
+    const QPointF cropOffset(left, top);
+    QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
+                   static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
+
+    // Intersect with image bounds
+    QRect imageBounds(0, 0, currentFrame.width(), currentFrame.height());
+    cropRect = cropRect.intersected(imageBounds);
+    const QSizeF newSize(cropRect.width(), cropRect.height());
+
+    if (cropRect.isEmpty()) {
+        return;
     }
+
+    // Send one cropped frame to each of the five mini loaders instead of batching +/-2 frames to a single overlay.
+    // Mapping:
+    //   mlon2 -> currentFrameNumber - 2
+    //   mlon1 -> currentFrameNumber - 1
+    //   miniLoaderOverlay -> currentFrameNumber
+    //   mlop1 -> currentFrameNumber + 1
+    //   mlop2 -> currentFrameNumber + 2
+    {
+        int offsets[5] = { -2, -1, 0, 1, 2 };
+        int totalFrames = 0;
+        if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
+
+        // Helper lambda to get a cropped frame (real or black placeholder) for a specific absolute frame.
+        auto buildCroppedForFrame = [&](int frameNum) -> std::tuple<QImage, QPointF, QSizeF> {
+            QRect localCrop = cropRect;
+            QImage img;
+            if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
+                img = ui->videoLoader->getQImageForFrame(frameNum);
+            }
+            if (!img.isNull()) {
+                QRect imgBounds(0, 0, img.width(), img.height());
+                localCrop = localCrop.intersected(imgBounds);
+            }
+            if (localCrop.isEmpty()) localCrop = cropRect;
+            QImage cf;
+            if (!img.isNull()) cf = img.copy(localCrop);
+            else {
+                cf = QImage(localCrop.size(), QImage::Format_RGB32);
+                cf.fill(Qt::black);
+            }
+            QPointF offset(localCrop.left() + 0.0, localCrop.top() + 0.0);
+            QSizeF size(localCrop.width(), localCrop.height());
+            return std::make_tuple(cf, offset, size);
+        };
+
+        // Map offsets to UI widget pointers (if present)
+        MiniLoader* widgetTargets[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+        widgetTargets[0] = (ui->mlon2) ? ui->mlon2 : nullptr;
+        widgetTargets[1] = (ui->mlon1) ? ui->mlon1 : nullptr;
+        widgetTargets[2] = (ui->miniLoaderOverlay) ? ui->miniLoaderOverlay : nullptr;
+        widgetTargets[3] = (ui->mlop1) ? ui->mlop1 : nullptr;
+        widgetTargets[4] = (ui->mlop2) ? ui->mlop2 : nullptr;
+
+        // Send one frame to each target
+        for (int i = 0; i < 5; ++i) {
+            int targetFrame = currentFrameNumber + offsets[i];
+            if (targetFrame < 0) continue;
+            if (totalFrames > 0 && targetFrame >= totalFrames) continue;
+
+            MiniLoader* target = widgetTargets[i];
+            if (!target) continue;
+
+            QImage cf;
+            QPointF off;
+            QSizeF sz;
+            std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
+
+            // Use the MiniLoader single-frame API
+            target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
+            qDebug() << "MainWindow::updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
+                     << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("miniLoaderOverlay"):(i==3?QString("mlop1"):QString("mlop2")))))
+                     << "size:" << cf.size();
+        }
+
+        // Primary miniLoader (zoom-only) should receive the central frame for display consistency
+        if (ui->miniLoader) {
+            QImage cf_center;
+            QPointF off_center;
+            QSizeF sz_center;
+            std::tie(cf_center, off_center, sz_center) = buildCroppedForFrame(currentFrameNumber);
+            ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, cf_center, off_center, sz_center, centerPoint);
+            qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
+        }
+
+        // If we sent to an overlay, let it emit visibility signals as before. If no overlay, clear visible set.
+        if (ui->miniLoaderOverlay) {
+            // Allow overlay to compute visibility for its single frame and emit signals as needed.
+            onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
+        } else {
+            onMiniLoaderVisibleWormsUpdated(QList<int>()); // clear visible set so merge history shows all (or callers adapt)
+        }
+    }
+
+    // The batching path has been replaced above. No additional fallback logic required here.
+    // All five mini loader widgets (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2) were handled.
+    // No-op placeholder to preserve function structure.
 }
 
 void MainWindow::frameSliderMoved(int value) {
@@ -946,19 +1219,25 @@ void MainWindow::frameSliderMoved(int value) {
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(value);
     }
+    // Also update the mirrored spinbox if it's not being edited
 }
 
 // Slot: receive visible worm IDs from MiniLoader. Update cached set and rebuild merge history text.
 // Emitted frequently (on repaint), so keep this lightweight.
 void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
+    // Log received visible IDs. Merge history text widget and MergeViewer were removed from the UI,
+    // so we no longer update them here. Keep the last-polled set updated so polling fallback remains usable.
     qDebug() << "MainWindow::onMiniLoaderVisibleWormsUpdated received visibleIds:" << visibleIds;
 
     m_lastPolledVisibleIds.clear();
     for (int id : visibleIds) m_lastPolledVisibleIds.insert(id);
+    // Note: any higher-level consumers that previously relied on MainWindow to forward these IDs
+    // should now connect directly to MiniLoader or the appropriate model/storage.
 }
 
-// Poll timer fallback handler: periodically query the primary MiniLoader instance for visible IDs and update
-// MainWindow state if the polled set changes.
+// Poll timer fallback handler: periodically query any MiniLoader instances for visible IDs and update
+// MainWindow state if the polled set changes. This complements the signal-based updates and prevents
+// missed updates due to paint/emit ordering differences.
 void MainWindow::onMiniLoaderPollTimeout() {
     QSet<int> polledSet;
     // Query primary miniLoader instance if present
@@ -966,7 +1245,13 @@ void MainWindow::onMiniLoaderPollTimeout() {
         const QList<int> vis = ui->miniLoader->getVisibleWormIds();
         for (int id : vis) polledSet.insert(id);
     }
+    // Query overlay miniLoader instance if present
+    if (ui->miniLoaderOverlay) {
+        const QList<int> vis = ui->miniLoaderOverlay->getVisibleWormIds();
+        for (int id : vis) polledSet.insert(id);
+    }
 
+    // If polled set differs from the last polled set, invoke the visible-IDs handler to update UI.
     if (polledSet != m_lastPolledVisibleIds) {
         m_lastPolledVisibleIds = polledSet;
         QList<int> list;
@@ -976,6 +1261,12 @@ void MainWindow::onMiniLoaderPollTimeout() {
         onMiniLoaderVisibleWormsUpdated(list);
     }
 }
+
+// Helper: build the textual merge history block for a given frame using a provided visible set.
+// If visibleSet is empty, treat it as \"no filtering\" (show all merges).
+/* buildMergeHistoryText removed from MainWindow.
+   Merge history textual output is no longer maintained by MainWindow.
+   Reintroduce a separate component or helper if this functionality is required again. */
 
 void MainWindow::seekFrame(int frame) {
     ui->videoLoader->seekToFrame(frame, false);
@@ -1012,7 +1303,7 @@ void MainWindow::goToLastFrame() {
     }
     if (arePlayButtonsChecked())
     {
-        // Use helper to pause and sync play button
+        // Use helper to pause and sync both play buttons
         setPlayButtonsState(false);
     }
 }
@@ -1027,81 +1318,164 @@ void MainWindow::onStartTrackingActionTriggered() {
         QMessageBox::critical(this, "Error", "Video path is empty."); return;
     }
 
-    int wormCount = 0;
-    int wormsWithTracks = 0;
-    if (m_appController) {
-        wormCount = m_appController->countWormItems();
-        wormsWithTracks = m_appController->countItemsWithTracks();
-    } else if (m_blobTableModel) {
-        const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
-        for (const auto& it : items) if (it.type == TableItems::ItemType::Worm) ++wormCount;
-        if (m_trackingDataStorage) wormsWithTracks = m_trackingDataStorage->getItemsWithTracks().size();
+    std::vector<Tracking::InitialWormInfo> initialWorms;
+    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
+    for(const TableItems::ClickedItem& item : items) {
+        if(item.type == TableItems::ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
+            Tracking::InitialWormInfo info;
+            info.id = item.id;
+            info.initialRoi = item.initialBoundingBox;
+            info.color = item.color;
+            initialWorms.push_back(info);
+        }
     }
-
-    if (wormCount == 0) {
-        QMessageBox::information(this, "Tracking", "No items marked as 'Worm' in the table to track.");
-        return;
+    if (initialWorms.empty()) {
+        QMessageBox::information(this, "Tracking", "No items marked as 'Worm' in the table to track."); return;
     }
 
     int keyFrame = ui->videoLoader->getCurrentFrameNumber();
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
-    if (m_appController) {
-        m_appController->showTrackingDialog(videoPath, keyFrame, settings, /*onlyTrackMissing=*/true, totalFrames, this);
-    } else {
-        QMessageBox::critical(this, "Error", "Internal error: Controller missing.");
+    if (!m_trackingProgressDialog) {
+        m_trackingProgressDialog = new TrackingProgressDialog(this);
+        connect(m_trackingProgressDialog, &TrackingProgressDialog::beginTrackingRequested, this, &MainWindow::handleBeginTrackingFromDialog);
+        connect(m_trackingProgressDialog, &TrackingProgressDialog::cancelTrackingRequested, this, &MainWindow::handleCancelTrackingFromDialog);
+        connect(m_trackingManager, &TrackingManager::trackingStatusUpdate, m_trackingProgressDialog, &TrackingProgressDialog::updateStatusMessage);
+        connect(m_trackingManager, &TrackingManager::overallTrackingProgress, m_trackingProgressDialog, &TrackingProgressDialog::updateOverallProgress);
+        connect(m_trackingManager, &TrackingManager::trackingFinishedSuccessfully, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
+        connect(m_trackingManager, &TrackingManager::trackingFailed, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingFailed);
+        connect(m_trackingManager, &TrackingManager::trackingCancelled, m_trackingProgressDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
     }
+    //m_trackingProgressDialog->resetDialog();
+    int wormsWithTracks = 0;
+    if (m_trackingDataStorage) {
+        QSet<int> itemsWithTracks = m_trackingDataStorage->getItemsWithTracks();
+        for (const auto& info : initialWorms) {
+            if (itemsWithTracks.contains(info.id)) ++wormsWithTracks;
+        }
+    }
+    m_trackingProgressDialog->setTrackingParameters(videoPath, keyFrame, settings, initialWorms.size(), totalFrames, wormsWithTracks);
+    m_trackingProgressDialog->exec();
+}
+
+void MainWindow::handleBeginTrackingFromDialog() {
+    if (!m_trackingManager || !ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
+        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("Internal error: Components missing.");
+        return;
+    }
+    QString videoPath = ui->videoLoader->getCurrentVideoPath();
+    int keyFrame = ui->videoLoader->getCurrentFrameNumber();
+    Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
+    int totalFrames = ui->videoLoader->getTotalFrames();
+
+    std::vector<Tracking::InitialWormInfo> initialWorms;
+    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
+    for(const TableItems::ClickedItem& item : items) {
+        if(item.type == TableItems::ItemType::Worm) {
+            Tracking::InitialWormInfo info; info.id = item.id; info.initialRoi = item.initialBoundingBox; info.color = item.color;
+            initialWorms.push_back(info);
+        }
+    }
+    if (initialWorms.empty()) {
+        if(m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("No worms to track."); return;
+    }
+
+    // If the dialog requests only missing worms, filter out those that already have tracks.
+    if (m_trackingProgressDialog && m_trackingProgressDialog->onlyTrackMissingChecked() && m_trackingDataStorage) {
+        QSet<int> itemsWithTracks = m_trackingDataStorage->getItemsWithTracks();
+        std::vector<Tracking::InitialWormInfo> filtered;
+        filtered.reserve(initialWorms.size());
+        for (const auto& iw : initialWorms) {
+            if (!itemsWithTracks.contains(iw.id)) {
+                filtered.push_back(iw);
+            }
+        }
+        if (filtered.empty()) {
+            if (m_trackingProgressDialog) m_trackingProgressDialog->onTrackingFailed("All selected worms already have tracks.");
+            return;
+        }
+        initialWorms.swap(filtered);
+    }
+
+    QString dataDirectory = ui->videoLoader->getDataDirectory();
+    m_trackingManager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
+}
+
+void MainWindow::handleCancelTrackingFromDialog() {
+    if (m_trackingManager) m_trackingManager->cancelTracking();
 }
 
 void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {
-    qDebug() << "MainWindow: Received" << tracks.size() << "tracks (assumed stored by AppController).";
+    qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
 
-    if (m_trackingDataStorage) {
-        qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
+    // Store tracks in the central data storage
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        qDebug() << "MainWindow: Storing track for worm" << it->first << "with" << it->second.size() << "points";
+        m_trackingDataStorage->setTrackForItem(it->first, it->second);
     }
 
+    // Debug: Verify tracks were stored
+    qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
+
+    // Refresh annotation table to show lost tracking events
     if (m_annotationTableModel) {
         m_annotationTableModel->refreshAnnotations();
-        qDebug() << "MainWindow: Refreshed annotation model with" << m_annotationTableModel->rowCount() << "annotations";
+        qDebug() << "MainWindow: Refreshed annotation table with" << m_annotationTableModel->rowCount() << "annotations";
     }
 
+    // VideoLoader still needs direct track data for backward compatibility
+    // It will also get data from storage now
+    //    ui->videoLoader->setTracksToDisplay(tracks);
+    // Use the union of all tracks in central storage so we don't overwrite previously saved tracks
     if (m_trackingDataStorage) {
         const auto& allTracks = m_trackingDataStorage->getAllTracks();
         qDebug() << "MainWindow: Supplying VideoLoader with" << allTracks.size() << "total tracks from storage";
         ui->videoLoader->setTracksToDisplay(allTracks);
     } else {
+        // Fallback if storage not available
         ui->videoLoader->setTracksToDisplay(tracks);
     }
 
-    if (!tracks.empty()) {
+    if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
         ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
         ui->wormTableView->selectAll();
+        // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
 
+    // Keep track data in storage for MiniLoader overlays and other components
+    // Memory cleanup will be handled elsewhere if needed
+
+    // Mark that we have completed tracking
     m_hasCompletedTracking = true;
 
     statusBar()->showMessage("Tracking completed", 4000);
 
+    // Perform memory cleanup after tracking is complete
     performPostTrackingMemoryCleanup();
 }
 
 void MainWindow::setupPlaybackSpeedComboBox() {
+    // Clear any existing items on both comboboxes
     ui->comboPlaybackSpeed->clear();
     ui->comboPlaybackSpeed_2->clear();
 
+    // Helper lambda to populate a combobox with identical entries
     auto populate = [](QComboBox* cb) {
         cb->addItem("0.25x", 0.25);
         cb->addItem("0.5x", 0.5);
         cb->addItem("0.75x", 0.75);
         cb->addItem("1.0x", 1.0);
+        //cb->addItem("1.25x", 1.25);
         cb->addItem("1.5x", 1.5);
         cb->addItem("2.0x", 2.0);
         cb->addItem("2.5x", 2.5);
+        //cb->addItem("3.0x", 3.0);
         cb->addItem("5.0x", 5.0);
         cb->addItem("10.0x", 10.0);
         cb->addItem("20.0x", 20.0);
+        // Default index (1.0x)
         cb->setCurrentIndex(3);
     };
 
@@ -1112,6 +1486,7 @@ void MainWindow::setupPlaybackSpeedComboBox() {
 }
 
 void MainWindow::onPlaybackSpeedChanged(int index) {
+    // Determine which combobox sent the signal so we use the correct itemData
     QComboBox* senderCombo = qobject_cast<QComboBox*>(sender());
     if (!senderCombo) senderCombo = ui->comboPlaybackSpeed;
 
@@ -1119,20 +1494,25 @@ void MainWindow::onPlaybackSpeedChanged(int index) {
         return;
     }
 
+    // Get the speed multiplier from the sending combobox's item data
     double speedMultiplier = senderCombo->itemData(index).toDouble();
 
     qDebug() << "MainWindow: Setting playback speed to" << speedMultiplier << "x";
 
+    // Set the speed in VideoLoader
     ui->videoLoader->setPlaybackSpeed(speedMultiplier);
 
+    // Keep both comboboxes visually in sync
     updatePlaybackSpeedComboBox(speedMultiplier);
 }
 
 void MainWindow::updatePlaybackSpeedComboBox(double speedMultiplier) {
+    // Update both comboboxes to reflect the given speed multiplier
     auto updateOne = [&](QComboBox* cb) {
         for (int i = 0; i < cb->count(); ++i) {
             double itemSpeed = cb->itemData(i).toDouble();
             if (qFuzzyCompare(itemSpeed, speedMultiplier)) {
+                // Block signals to avoid recursive calls
                 cb->blockSignals(true);
                 cb->setCurrentIndex(i);
                 cb->blockSignals(false);
@@ -1156,15 +1536,31 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
         return;
     }
 
+    // DEBUG: Check zoom factor at start of annotation click
+    double initialZoom = ui->videoLoader->getZoomFactor();
+    qDebug() << "MainWindow: Annotation click START - zoom factor:" << initialZoom;
+
+    // Pause playback if it's currently playing (either play button)
     if (arePlayButtonsChecked()) {
+        // Use helper to pause and sync both play buttons
         setPlayButtonsState(false);
+        qDebug() << "MainWindow: Paused playback for annotation navigation";
     }
 
+    // Seek to the start frame of the annotation
     int targetFrame = annotation->startFrame;
     int targetWormId = annotation->wormId;
+    qDebug() << "MainWindow: About to seek to frame" << targetFrame;
+    qDebug() << "MainWindow: Seeking to annotation frame" << targetFrame << "for worm" << targetWormId;
 
     seekFrame(targetFrame);
 
+    // DEBUG: Check zoom factor after seeking
+    double zoomAfterSeek = ui->videoLoader->getZoomFactor();
+    qDebug() << "MainWindow: After seekFrame - zoom factor:" << zoomAfterSeek;
+    qDebug() << "MainWindow: About to find blob table row for worm" << targetWormId;
+
+    // Update the frame position display
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(targetFrame);
     }
@@ -1172,14 +1568,118 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
         ui->framePosition_2->setValue(targetFrame);
     }
 
+    // Select the corresponding worm in the blob table
     int blobTableRow = -1;
+
+    // DEBUG: Check zoom factor before blob selection
+    double zoomBeforeBlobSelection = ui->videoLoader->getZoomFactor();
+    qDebug() << "MainWindow: Before blob selection - zoom factor:" << zoomBeforeBlobSelection;
+
+    // Find the row with matching worm ID
     for (int i = 0; i < m_blobTableModel->rowCount(); ++i) {
-        const TableItems::ClickedItem& item = m_blobTableModel->getItem(i);
+        const TableItems::ClickedItem& item = m_trackingDataStorage->getItemByIndex(i);
         if (item.id == targetWormId) {
             blobTableRow = i;
             break;
         }
     }
 
+    // Select the row in the blob table if found
     if (blobTableRow >= 0) {
-        QModelIndex blobIndex = m_blobTableModel->index(blobTableRow,
+        QModelIndex blobIndex = m_blobTableModel->index(blobTableRow, 0);
+        ui->wormTableView->setCurrentIndex(blobIndex);
+        ui->wormTableView->selectionModel()->select(blobIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        ui->wormTableView->scrollTo(blobIndex, QAbstractItemView::EnsureVisible);
+        qDebug() << "MainWindow: Selected worm" << targetWormId << "in blob table (row" << blobTableRow << ")";
+    } else {
+        // Clear selection if worm not found in blob table
+        ui->wormTableView->clearSelection();
+        qDebug() << "MainWindow: Worm" << targetWormId << "not found in blob table, cleared selection";
+    }
+
+    // Show status message
+    QString statusMessage;
+    if (annotation->startFrame == annotation->endFrame) {
+        statusMessage = QString("Navigated to frame %1 - Worm %2 tracking lost")
+                       .arg(targetFrame).arg(annotation->wormId);
+    } else {
+        statusMessage = QString("Navigated to frame %1 - Worm %2 tracking lost (frames %1-%3)")
+                       .arg(targetFrame).arg(annotation->wormId).arg(annotation->endFrame);
+    }
+    statusBar()->showMessage(statusMessage, 4000);
+}
+
+// --- Table View and VideoLoader Sync ---
+void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected) {
+    Q_UNUSED(selected);
+    Q_UNUSED(deselected);
+
+    // Create a set with all item IDs from the central data storage
+    // Only the checkbox state (visible flag) will control actual display
+    QSet<int> allItemIDs;
+
+    if (m_trackingDataStorage) {
+        // Get all IDs directly from the storage
+        allItemIDs = m_trackingDataStorage->getAllItemIds();
+    } else if (m_blobTableModel) {
+        // Fallback to model if storage not available
+        const QList<TableItems::ClickedItem>& allItems = m_blobTableModel->getAllItems();
+        for (const auto& item : allItems) {
+            allItemIDs.insert(item.id);
+        }
+    }
+
+    qDebug() << "MainWindow: Setting all item IDs as visible in VideoLoader:" << allItemIDs;
+    ui->videoLoader->setVisibleTrackIDs(allItemIDs);
+}
+
+void MainWindow::performPostTrackingMemoryCleanup() {
+    qDebug() << "MainWindow: Performing post-tracking memory cleanup...";
+
+    // Get memory usage before cleanup
+    double cacheHitRate = ui->videoLoader->getCacheHitRate();
+    int cacheSize = ui->videoLoader->getCacheSize();
+
+    qDebug() << "MainWindow: VideoLoader cache status before cleanup - Size:" << cacheSize
+             << "frames, Hit rate:" << QString::number(cacheHitRate, 'f', 1) << "%";
+
+    // Reduce VideoLoader frame cache size significantly after tracking
+    // During tracking, we don't need as many cached frames since we're not seeking rapidly
+    int originalCacheSize = 50; // Default cache size
+    int reducedCacheSize = 10;  // Smaller cache for post-tracking
+
+    if (cacheSize > reducedCacheSize) {
+        ui->videoLoader->setCacheSize(reducedCacheSize);
+        qDebug() << "MainWindow: Reduced VideoLoader cache from" << cacheSize << "to" << reducedCacheSize << "frames";
+    }
+
+    // Clear any temporary UI state that might hold large data
+    // Model will automatically refresh when needed
+
+    // Report final cache status
+    int finalCacheSize = ui->videoLoader->getCacheSize();
+    double finalHitRate = ui->videoLoader->getCacheHitRate();
+
+    qDebug() << "MainWindow: Memory cleanup complete - Final cache size:" << finalCacheSize
+             << "frames, Hit rate:" << QString::number(finalHitRate, 'f', 1) << "%";
+
+    // Estimate memory freed (rough calculation)
+    int framesFreed = cacheSize - finalCacheSize;
+    if (framesFreed > 0) {
+        // Assume ~1MB per frame for rough estimate (depends on resolution)
+        double estimatedMBFreed = framesFreed * 1.0;
+        qDebug() << "MainWindow: Estimated" << QString::number(estimatedMBFreed, 'f', 1)
+                 << "MB freed from VideoLoader cache reduction";
+    }
+}
+
+// --- Debug Control ---
+void MainWindow::toggleTrackingDebug() {
+    bool currentState = DebugUtils::isTrackingDebugEnabled();
+    DebugUtils::setTrackingDebugEnabled(!currentState);
+    QString status = DebugUtils::isTrackingDebugEnabled() ? "enabled" : "disabled";
+    qDebug() << "MainWindow: Tracking debug messages" << status;
+    statusBar()->showMessage(QString("Tracking debug messages %1").arg(status), 2000);
+}
+
+// Retracking UI and logic removed

@@ -14,7 +14,6 @@
 
 // Forward declarations
 class TrackingDataStorage;
-class VideoLoader;
 
 /**
  * Simple MiniLoader widget that displays a pre-cropped frame.
@@ -67,15 +66,6 @@ public:
                                 QPointF centerPoint);
 
     /**
-     * @brief Set the expected frame number and crop parameters for self-cropping
-     * @param frameNumber The frame number this MiniLoader should display
-     * @param cropSize Size of crop in video coordinates  
-     * @param centerPoint Center point for cropping in video coordinates
-     * @param videoLoader Pointer to VideoLoader for accessing frames
-     */
-    void setExpectedFrame(int frameNumber, QSizeF cropSize, QPointF centerPoint, VideoLoader* videoLoader);
-
-    /**
      * @brief Convert coordinates between mini widget and video coordinates
      */
     QPointF miniToVideo(const QPointF& miniPoint) const;
@@ -96,12 +86,6 @@ public:
     // Key = absolute frame number, Value = set of visible worm IDs for that frame.
     QMap<int, QSet<int>> getVisibleWormsByFrame() const;
     void setVisibleWormsByFrame(const QMap<int, QSet<int>>& map);
-
-    /**
-     * @brief Clears the currently displayed content so the MiniLoader shows a blank/placeholder state.
-     * This sets the internal cropped frame to a null QImage and triggers a repaint.
-     */
-    void clearContent();
 
 public slots:
     /**
@@ -130,12 +114,6 @@ public slots:
      * @brief Clears the selected worm.
      */
     void clearSelection();
-
-    /**
-     * @brief Handle frame cached signal from VideoLoader - check if it's our expected frame
-     * @param frameNumber The frame number that was just cached
-     */
-    void onFrameCached(int frameNumber);
 
     /**
      * @brief Update with multiple pre-cropped frames.
@@ -222,12 +200,6 @@ private:
     QPointF m_centerPoint;          // Center point in video coordinates
     QPointF m_cropOffset;           // Top-left of crop in video coordinates
     QSizeF m_cropSize;              // Size of crop in video coordinates
-
-    // Self-cropping functionality
-    int m_expectedFrameNumber;      // Frame number this MiniLoader expects to display
-    QSizeF m_expectedCropSize;      // Expected crop size for self-cropping
-    QPointF m_expectedCenterPoint;  // Expected center point for self-cropping
-    VideoLoader* m_videoLoader;     // Pointer to VideoLoader for accessing frames
 
     // Overlay functionality
     TrackingDataStorage* m_trackingDataStorage;  // Reference to tracking data storage

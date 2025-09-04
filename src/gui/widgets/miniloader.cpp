@@ -2,15 +2,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QDebug>
-#include "../../data/trackingdatastorage.h"
-#include "videoloader.h"
-
-namespace {
-static inline bool wantDebug(const MiniLoader* ml) {
-    // Only allow debug messages to appear when this widget has the specific object name
-    return ml && ml->objectName() == QLatin1String("miniLoader");
-}
-} // anonymous
+#include "trackingdatastorage.h"
 
 MiniLoader::MiniLoader(QWidget* parent)
     : QWidget(parent)
@@ -18,10 +10,6 @@ MiniLoader::MiniLoader(QWidget* parent)
     , m_centerPoint(0, 0)
     , m_cropOffset(0, 0)
     , m_cropSize(100, 100)
-    , m_expectedFrameNumber(-1)
-    , m_expectedCropSize(100, 100)
-    , m_expectedCenterPoint(0, 0)
-    , m_videoLoader(nullptr)
     , m_trackingDataStorage(nullptr)
     , m_showOverlays(true)
     , m_selectedWormId(-1)
@@ -89,25 +77,6 @@ void MiniLoader::setShowOverlays(bool show)
     update();
 }
 
-void MiniLoader::clearContent()
-{
-    // Reset the displayed image to a null QImage so paintEvent shows the "No crop available" state.
-    m_croppedFrame = QImage(); // null image
-    m_currentFrameNumber = -1;
-
-    // Reset crop metadata to sensible defaults
-    m_cropOffset = QPointF(0, 0);
-    m_cropSize = QSizeF(0, 0);
-    m_centerPoint = QPointF(0, 0);
-
-    // Clear any per-frame visibility info
-    m_visibleWormsByFrame.clear();
-    m_visibleWormIds.clear();
-
-    // Trigger a repaint to reflect the cleared content immediately
-    update();
-}
-
 void MiniLoader::onWormSelectionChanged(const QList<TableItems::ClickedItem>& selectedItems)
 {
     if (selectedItems.isEmpty()) {
@@ -128,9 +97,7 @@ void MiniLoader::setSelectedWorm(int wormId)
 
     m_selectedWormId = wormId;
 
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader: Selected worm changed to" << wormId;
-    }
+    qDebug() << "MiniLoader: Selected worm changed to" << wormId;
 
     if (m_selectedWormId < 0) {
         clearSelection();
@@ -169,102 +136,6 @@ void MiniLoader::updateWithCroppedFrame(int frameNumber, const QImage& croppedFr
     m_cropOffset = cropOffset;
     m_cropSize = cropSize;
     m_centerPoint = centerPoint;
-
-    update();
-}
-
-void MiniLoader::setExpectedFrame(int frameNumber, QSizeF cropSize, QPointF centerPoint, VideoLoader* videoLoader)
-{
-    m_expectedFrameNumber = frameNumber;
-    m_expectedCropSize = cropSize;
-    m_expectedCenterPoint = centerPoint;
-    m_videoLoader = videoLoader;
-
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader::setExpectedFrame - expecting frame" << frameNumber << "widget" << this;
-    }
-
-    // Try to get the frame immediately if it's already cached
-    onFrameCached(frameNumber);
-}
-
-#include <QDebug>
-
-void MiniLoader::onFrameCached(int frameNumber)
-{
-    QObject* snd = sender();
-    QThread* thr = QThread::currentThread();
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader" << this << "received frameCached for frame" << frameNumber
-                 << "expecting frame" << m_expectedFrameNumber
-                 << "sender()" << snd
-                 << "sender->objectName()" << (snd ? snd->objectName() : QString("<null>"))
-                 << "thread" << thr;
-    }
-
-    // Check if this is the frame we're waiting for
-    if (frameNumber != m_expectedFrameNumber || !m_videoLoader) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader" << this << "frameCached ignored (frame mismatch or no videoLoader)";
-        }
-        return;
-    }
-
-    // Fast-path: if we're already showing this frame, ignore duplicates to avoid repeated work
-    if (frameNumber == m_currentFrameNumber) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader" << this << "already showing frame" << frameNumber << "- ignoring duplicate";
-        }
-        return;
-    }
-
-    // Try to get the cached frame from VideoLoader
-    QImage fullFrame = m_videoLoader->getQImageForFrame(frameNumber);
-    if (fullFrame.isNull()) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader" << this << "cached frame is null for frame" << frameNumber;
-        }
-        return; // Frame not available yet
-    }
-
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader" << this << "got cached frame of size"
-                 << fullFrame.size() << "for frame" << frameNumber;
-    }
-
-    // Calculate crop rectangle
-    double cropWidth = m_expectedCropSize.width();
-    double cropHeight = m_expectedCropSize.height();
-    double left = m_expectedCenterPoint.x() - cropWidth / 2.0;
-    double top = m_expectedCenterPoint.y() - cropHeight / 2.0;
-
-    // Clamp to image bounds
-    left = qBound(0.0, left, fullFrame.width() - cropWidth);
-    top = qBound(0.0, top, fullFrame.height() - cropHeight);
-
-    QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
-                   static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
-
-    // Intersect with image bounds
-    QRect imageBounds(0, 0, fullFrame.width(), fullFrame.height());
-    cropRect = cropRect.intersected(imageBounds);
-
-    if (cropRect.isEmpty()) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader" << this << "cropRect is empty, skipping update";
-        }
-        return;
-    }
-
-    // Crop the image
-    QImage croppedFrame = fullFrame.copy(cropRect);
-
-    // Update with the cropped frame
-    m_currentFrameNumber = frameNumber;
-    m_croppedFrame = croppedFrame;
-    m_cropOffset = QPointF(cropRect.left(), cropRect.top());
-    m_cropSize = QSizeF(cropRect.width(), cropRect.height());
-    m_centerPoint = m_expectedCenterPoint;
 
     update();
 }
@@ -502,9 +373,7 @@ static QPolygonF cropPolygonToWidget(const QPolygonF& cropPoly, const QRect& tar
 
 void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
 {
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
-    }
+    qDebug() << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
 
     // If updateWithCroppedFrames precomputed a per-frame visibility map, use it for this draw so
     // painting is consistent with the emitted per-frame signal. Do not emit visibility signals from paint().
@@ -518,9 +387,7 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
     }
 
     if (m_currentFrameNumber < 0) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader::drawOverlays early return - bad frame";
-        }
+        qDebug() << "MiniLoader::drawOverlays early return - bad frame";
         return;
     }
 
@@ -529,29 +396,21 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
     QMap<int, Tracking::DetectedBlob> blobMap;
     if (m_trackingDataStorage) {
         blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(m_currentFrameNumber);
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
-        }
+        qDebug() << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
     } else {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader::drawOverlays: no storage available; skipping blob overlay drawing";
-        }
+        qDebug() << "MiniLoader::drawOverlays: no storage available; skipping blob overlay drawing";
         return;
     }
 
     if (blobMap.isEmpty()) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader::drawOverlays no blobs for frame" << m_currentFrameNumber;
-        }
+        qDebug() << "MiniLoader::drawOverlays no blobs for frame" << m_currentFrameNumber;
         return;
     }
 
     // Crop rect in video coordinates
     QRectF cropRectVid = getCurrentCropRectVideo();
     if (cropRectVid.isEmpty()) {
-        if (wantDebug(this)) {
-            qDebug() << "MiniLoader::drawOverlays crop rect empty";
-        }
+        qDebug() << "MiniLoader::drawOverlays crop rect empty";
         return;
     }
 
@@ -670,9 +529,7 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
     }
 
     // Debug: list visible worm IDs found this draw
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader::drawOverlays visible worm IDs:" << m_visibleWormIds;
-    }
+    qDebug() << "MiniLoader::drawOverlays visible worm IDs:" << m_visibleWormIds;
     // Do not emit visibleWormsUpdated from paint anymore. Per-frame visibility is emitted from updateWithCroppedFrames
     // via visibleWormsUpdatedPerFrame so listeners get the full multi-frame map in one signal.
 }
@@ -802,54 +659,48 @@ void MiniLoader::updateWithCroppedFrames(int startFrameNumber,
         }
     } // end frames loop
 
-    // Emit the single-frame visible IDs (center frame) so listeners depending on the current crop get notified.
-    // m_visibleWormIds was populated above for the center frame.
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader::updateWithCroppedFrames emitting center-frame visible ids:" << m_visibleWormIds;
-    }
-    emit visibleWormsUpdated(m_visibleWormIds);
+// Emit the single-frame visible IDs (center frame) so listeners depending on the current crop get notified.
+// m_visibleWormIds was populated above for the center frame.
+qDebug() << "MiniLoader::updateWithCroppedFrames emitting center-frame visible ids:" << m_visibleWormIds;
+emit visibleWormsUpdated(m_visibleWormIds);
 
-    // Compute the union of all visible worm IDs across the supplied frames so we can build a consistent
-    // id->color map to accompany the per-frame visibility signal.
-    QSet<int> unionSet;
-    for (auto it = m_visibleWormsByFrame.constBegin(); it != m_visibleWormsByFrame.constEnd(); ++it) {
-        unionSet.unite(it.value());
-    }
-    QList<int> unionList = unionSet.values();
+// Compute the union of all visible worm IDs across the supplied frames so we can build a consistent
+// id->color map to accompany the per-frame visibility signal.
+QSet<int> unionSet;
+for (auto it = m_visibleWormsByFrame.constBegin(); it != m_visibleWormsByFrame.constEnd(); ++it) {
+    unionSet.unite(it.value());
+}
+QList<int> unionList = unionSet.values();
 
-    // Build a map from worm ID -> QColor using the TrackingDataStorage (so colors match the overlay).
-    QMap<int, QColor> idColors;
-    for (int id : unionSet) {
-        // Prefer the authority-provided cached color map (m_idColors). If not available, fall back
-        // to storage lookup; if neither yields a color, use a default gray fallback.
-        if (m_idColors.contains(id)) {
-            idColors.insert(id, m_idColors.value(id));
+// Build a map from worm ID -> QColor using the TrackingDataStorage (so colors match the overlay).
+QMap<int, QColor> idColors;
+for (int id : unionSet) {
+    // Prefer the authority-provided cached color map (m_idColors). If not available, fall back
+    // to storage lookup; if neither yields a color, use a default gray fallback.
+    if (m_idColors.contains(id)) {
+        idColors.insert(id, m_idColors.value(id));
+    } else {
+        const TableItems::ClickedItem* item = nullptr;
+        if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(id);
+        if (item) {
+            idColors.insert(id, item->color);
         } else {
-            const TableItems::ClickedItem* item = nullptr;
-            if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(id);
-            if (item) {
-                idColors.insert(id, item->color);
-            } else {
-                // Fallback color matches MergeViewer's default gray
-                idColors.insert(id, QColor(160, 160, 160));
-            }
+            // Fallback color matches MergeViewer's default gray
+            idColors.insert(id, QColor(160, 160, 160));
         }
     }
+}
 
-    // Emit the per-frame visibility map including the center frame and the id->color map so consumers
-    // (e.g. MergeViewer) can align segments correctly and use consistent colors matching the overlay.
-    int centerFrame = centerFrameNumber;
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader::updateWithCroppedFrames emitting per-frame map center:" << centerFrame << " ids:" << unionList;
-    }
-    emit visibleWormsUpdatedPerFrame(centerFrame, m_visibleWormsByFrame, idColors);
+// Emit the per-frame visibility map including the center frame and the id->color map so consumers
+// (e.g. MergeViewer) can align segments correctly and use consistent colors matching the overlay.
+int centerFrame = centerFrameNumber;
+qDebug() << "MiniLoader::updateWithCroppedFrames emitting per-frame map center:" << centerFrame << " ids:" << unionList;
+emit visibleWormsUpdatedPerFrame(centerFrame, m_visibleWormsByFrame, idColors);
 
-    // Also emit the union list along with the center frame for backward-compatible consumers that need it.
-    if (wantDebug(this)) {
-        qDebug() << "MiniLoader::updateWithCroppedFrames emitting union ids:" << unionList;
-    }
-    emit visibleWormsUnionUpdated(centerFrame, unionList);
+// Also emit the union list along with the center frame for backward-compatible consumers that need it.
+qDebug() << "MiniLoader::updateWithCroppedFrames emitting union ids:" << unionList;
+emit visibleWormsUnionUpdated(centerFrame, unionList);
 
-    // Trigger a repaint (central frame was updated above)
-    update();
+// Trigger a repaint (central frame was updated above)
+update();
 }
