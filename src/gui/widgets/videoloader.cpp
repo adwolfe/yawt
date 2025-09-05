@@ -55,7 +55,8 @@ bool FrameCache::getFrame(int frameNumber, cv::Mat& outFrame) {
 
     auto it = m_frames.find(frameNumber);
     if (it != m_frames.end() && it->isValid) {
-        outFrame = it->rawFrame.clone();
+        // Return a shallow copy to avoid an expensive deep clone on the main thread.
+        outFrame = it->rawFrame;
         updateAccessTime(frameNumber);
         m_hits.fetchAndAddOrdered(1);
         return true;
@@ -715,6 +716,28 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
                 if (m_frameCache) {
                     m_frameCache->insertFrame(frameNumber, currentCvFrame);
                 }
+
+                // Preload the immediate next two frames using the background loader.
+                // Do not enqueue frames already present in the cache.
+                if (m_frameLoader) {
+                    int f1 = frameNumber + 1;
+                    int f2 = frameNumber + 2;
+
+                    if (f1 >= 0 && (totalFramesCount <= 0 || f1 < totalFramesCount)) {
+                        if (!m_frameCache || !m_frameCache->hasFrame(f1)) {
+                            // Use a high priority for the very next frame
+                            m_frameLoader->requestSingleFrame(f1, 100);
+                        }
+                    }
+
+                    if (f2 >= 0 && (totalFramesCount <= 0 || f2 < totalFramesCount)) {
+                        if (!m_frameCache || !m_frameCache->hasFrame(f2)) {
+                            // Slightly lower priority for the second-ahead frame
+                            m_frameLoader->requestSingleFrame(f2, 100);
+                        }
+                    }
+                }
+
             } else {
                 currentCvFrame = cv::Mat(); m_thresholdedFrame_mono = cv::Mat();
                 return;
@@ -733,10 +756,10 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
         // Trigger preloading of adjacent frames (but not during rapid seeking)
         static QDateTime lastPreloadTime;
         QDateTime now = QDateTime::currentDateTime();
-        if (lastPreloadTime.msecsTo(now) > 100) { // Throttle preloading
-            preloadAdjacentFrames(frameNumber, m_isPlaying ? 10 : 5);
-            lastPreloadTime = now;
-        }
+        //if (lastPreloadTime.msecsTo(now) > 100) { // Throttle preloading
+        //    preloadAdjacentFrames(frameNumber, m_isPlaying ? 10 : 5);
+        //    lastPreloadTime = now;
+        //}
     }
 
     if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
@@ -1524,10 +1547,17 @@ void VideoLoader::startFrameLoader() {
     m_frameLoaderThread = new QThread(this);
     m_frameLoader->moveToThread(m_frameLoaderThread);
 
-    // Connect signals
+    // Provide the loader with our shared frame cache (if available) so the loader
+    // can populate the cache from the worker thread without involving the UI thread.
+    if (m_frameCache) {
+        m_frameLoader->setFrameCache(m_frameCache);
+    }
+
+    // Connect signals - force queued delivery for cross-thread signals to ensure
+    // slots run in the receiver (GUI) thread and arguments are copied through Qt's meta system.
     connect(m_frameLoaderThread, &QThread::started, m_frameLoader, &FrameLoader::processRequests);
-    connect(m_frameLoader, &FrameLoader::frameLoaded, this, &VideoLoader::onFrameLoaded);
-    connect(m_frameLoader, &FrameLoader::frameLoadError, this, &VideoLoader::onFrameLoadError);
+    connect(m_frameLoader, &FrameLoader::frameLoaded, this, &VideoLoader::onFrameLoaded, Qt::QueuedConnection);
+    connect(m_frameLoader, &FrameLoader::frameLoadError, this, &VideoLoader::onFrameLoadError, Qt::QueuedConnection);
     connect(m_frameLoaderThread, &QThread::finished, m_frameLoader, &QObject::deleteLater);
 
     m_frameLoaderThread->start();
@@ -1626,27 +1656,25 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
 }
 
 void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat frame) {
-    if (m_frameCache) {
-        m_frameCache->insertFrame(frameNumber, frame);
+    // Frame has already been inserted into the cache by the worker thread (if a cache was provided).
+    // Avoid redundant cache insertion and expensive cloning on the main thread.
+    // If this was a pending seek, update the display using a shallow assignment.
+    if (m_pendingSeekFrame == frameNumber) {
+        m_pendingSeekFrame = -1;
 
-        // If this is the pending seek frame, display it immediately
-        if (m_pendingSeekFrame == frameNumber) {
-            m_pendingSeekFrame = -1;
+        // Shallow-assign the frame (cheap). The cache owns the pixel buffer.
+        currentCvFrame = frame;
+        currentFrameIdx = frameNumber;
+        applyThresholding();
 
-            // Update the display with the newly loaded frame
-            currentCvFrame = frame.clone();
-            currentFrameIdx = frameNumber;
-            applyThresholding();
-
-            if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
-                convertCvMatToQImage(m_thresholdedFrame_mono, currentQImageFrame);
-            } else if (!currentCvFrame.empty()) {
-                convertCvMatToQImage(currentCvFrame, currentQImageFrame);
-            }
-
-            emit frameChanged(currentFrameIdx, currentQImageFrame);
-            update();
+        if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
+            convertCvMatToQImage(m_thresholdedFrame_mono, currentQImageFrame);
+        } else if (!currentCvFrame.empty()) {
+            convertCvMatToQImage(currentCvFrame, currentQImageFrame);
         }
+
+        emit frameChanged(currentFrameIdx, currentQImageFrame);
+        update();
     }
 }
 

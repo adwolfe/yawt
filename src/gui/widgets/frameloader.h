@@ -21,6 +21,10 @@
  * It declares a simple prioritized request struct and a QObject-based worker
  * that can be moved to a QThread to process frame load requests using OpenCV.
  */
+ 
+// Forward-declare FrameCache so the loader can accept a cache pointer without
+// requiring inclusion of the full cache header here.
+class FrameCache;
 
 /// Frame loading request structure used by the background loader.
 struct FrameLoadRequest {
@@ -60,6 +64,11 @@ public:
     void requestFrames(const QList<int>& frameNumbers, int priority = 1);
     void requestSingleFrame(int frameNumber, int priority = 1);
     void clearRequests();
+
+    // Provide the loader with a pointer to the shared FrameCache so it can
+    // insert loaded frames directly into the cache from the worker thread.
+    void setFrameCache(FrameCache* cache);
+
     void stop();
 
 signals:
@@ -78,6 +87,7 @@ private:
 
     QString m_videoPath;
     cv::VideoCapture m_videoCapture;
+    FrameCache* m_frameCache;
     QQueue<FrameLoadRequest> m_requestQueue;
     mutable QMutex m_queueMutex;
     QWaitCondition m_waitCondition;

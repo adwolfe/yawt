@@ -1,4 +1,5 @@
 #include "frameloader.h"
+#include "videoloader.h"
 
 #include <QDebug>
 #include <QMutexLocker>
@@ -10,7 +11,7 @@
 // ============================================================================
 
 FrameLoader::FrameLoader(QObject* parent)
-    : QObject(parent), m_stopRequested(false), m_isProcessing(false) {
+    : QObject(parent), m_stopRequested(false), m_isProcessing(false), m_frameCache(nullptr) {
 }
 
 FrameLoader::~FrameLoader() {
@@ -37,19 +38,63 @@ void FrameLoader::setVideoPath(const QString& path) {
     }
 }
 
+void FrameLoader::setFrameCache(FrameCache* cache) {
+    // Store a pointer to the shared FrameCache so the loader thread can
+    // insert loaded frames directly into the cache without involving the UI thread.
+    QMutexLocker locker(&m_queueMutex);
+    m_frameCache = cache;
+    qDebug() << "FrameLoader: frame cache set:" << (m_frameCache != nullptr);
+}
+
 void FrameLoader::requestFrames(const QList<int>& frameNumbers, int priority) {
     QMutexLocker locker(&m_queueMutex);
 
+    bool anyAdded = false;
     for (int frameNumber : frameNumbers) {
+        // Skip invalid frame numbers
+        if (frameNumber < 0) continue;
+
+        // Skip if frame is already in cache
+        if (m_frameCache && m_frameCache->hasFrame(frameNumber)) {
+            continue;
+        }
+
+        // Skip if already queued
+        bool alreadyQueued = false;
+        for (const FrameLoadRequest& req : m_requestQueue) {
+            if (req.frameNumber == frameNumber) { alreadyQueued = true; break; }
+        }
+        if (alreadyQueued) continue;
+
         m_requestQueue.enqueue(FrameLoadRequest(frameNumber, priority));
+        anyAdded = true;
     }
 
     locker.unlock();
-    m_waitCondition.wakeOne();
+    if (anyAdded) {
+        m_waitCondition.wakeOne();
+    }
 }
 
 void FrameLoader::requestSingleFrame(int frameNumber, int priority) {
     QMutexLocker locker(&m_queueMutex);
+
+    if (frameNumber < 0) {
+        return;
+    }
+
+    // If frame already cached, don't enqueue
+    if (m_frameCache && m_frameCache->hasFrame(frameNumber)) {
+        return;
+    }
+
+    // Avoid duplicate requests
+    for (const FrameLoadRequest& req : m_requestQueue) {
+        if (req.frameNumber == frameNumber) {
+            return;
+        }
+    }
+
     m_requestQueue.enqueue(FrameLoadRequest(frameNumber, priority));
     locker.unlock();
     m_waitCondition.wakeOne();
@@ -123,6 +168,12 @@ void FrameLoader::loadFrame(int frameNumber) {
 
         cv::Mat frame;
         if (m_videoCapture.read(frame) && !frame.empty()) {
+            // If a shared frame cache has been provided, insert the newly loaded
+            // frame from this worker thread. FrameCache::insertFrame is thread-safe.
+            if (m_frameCache) {
+                m_frameCache->insertFrame(frameNumber, frame);
+            }
+
             emit frameLoaded(frameNumber, frame);
         } else {
             emit frameLoadError(frameNumber, "Failed to read frame");

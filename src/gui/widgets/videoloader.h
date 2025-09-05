@@ -47,7 +47,7 @@ struct CachedFrame {
 
     CachedFrame() : frameNumber(-1), isValid(false) {}
     CachedFrame(int fn, const cv::Mat& raw)
-        : frameNumber(fn), rawFrame(raw.clone()), isValid(true), lastAccessed(QDateTime::currentDateTime()) {}
+        : frameNumber(fn), rawFrame(raw), isValid(true), lastAccessed(QDateTime::currentDateTime()) {}
 };
 
 // Thread-safe LRU frame cache
