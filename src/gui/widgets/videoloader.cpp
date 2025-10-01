@@ -169,7 +169,7 @@ VideoLoader::VideoLoader(QWidget* parent)
     updateCursorShape();
 
     // Initialize frame caching system
-    m_frameCache = new FrameCache(50); // Default cache size of 50 frames
+    m_frameCache = new FrameCache(500); // Default cache size of 50 frames
     startFrameLoader();
 }
 
