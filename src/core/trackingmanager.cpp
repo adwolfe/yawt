@@ -42,9 +42,15 @@
  * Memory management (processed frames and cleanup):
  *  - assembleProcessedFrames() accumulates chunked results; monitor footprint via getProcessedVideoMemoryUsage() during long videos.
  *  - clearProcessedVideoMemory() frees accumulated processed frames early after save/cancel/fail and emits a status update to inform the UI.
- */
+  */
 #include "trackingmanager.h"
+#include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
+
+#ifdef TRACKING_DEBUG
+#undef TRACKING_DEBUG
+#endif
+#define TRACKING_DEBUG() YAWT_DEBUG(lcCoreTrackingManager)
 
 #include <QDebug>
 #include <QDir>
@@ -453,12 +459,12 @@ void TrackingManager::registerMetaTypes()
     qRegisterMetaType<QList<Tracking::DetectedBlob>>("QList<Tracking::DetectedBlob>");
     qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob");
     qRegisterMetaType<Tracking::TrackerState>("Tracking::TrackerState");
-    TRACKING_DEBUG() << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
 }
 
 // Destructor
 TrackingManager::~TrackingManager() {
-    TRACKING_DEBUG() << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") DESTRUCTOR - START cleaning up...";
 
     // Ensure tracking is cancelled and resources are released
     if (m_isTrackingRunning) {
@@ -469,7 +475,7 @@ TrackingManager::~TrackingManager() {
 
     // Force a final cleanup to ensure all resources are released
     cleanupThreadsAndObjects();
-    TRACKING_DEBUG() << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
 }
 
 // Main entry point for tracking
@@ -477,7 +483,7 @@ void TrackingManager::startFullTrackingProcess(
     const QString& videoPath, const QString& dataDirectory, int keyFrameNum,
     const std::vector<Tracking::InitialWormInfo>& initialWorms,
     const Thresholding::ThresholdSettings& settings, int totalFramesInVideoHint) {
-    TRACKING_DEBUG() << "TrackingManager (" << this << "): startFullTrackingProcess called.";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << "): startFullTrackingProcess called.";
     if (m_isTrackingRunning) {
         qWarning() << "TrackingManager: Attempted to start tracking while already running.";
         emit trackingFailed("Another tracking process is already running.");
@@ -628,7 +634,7 @@ void TrackingManager::startFullTrackingProcess(
     for (const auto& r : backwardFrameRanges) launch_chunk_processor(r.first, r.second, false);
 
     // Timer-based pause resolution has been eliminated in favor of direct resolution
-    TRACKING_DEBUG() << "TM: Using direct split resolution instead of timer-based approach";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TM: Using direct split resolution instead of timer-based approach";
 }
 
 void TrackingManager::cancelTracking() {
@@ -654,7 +660,7 @@ void TrackingManager::cancelTracking() {
 }
 
 void TrackingManager::cleanupThreadsAndObjects() {
-    TRACKING_DEBUG() << "TrackingManager: Starting aggressive memory cleanup...";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager: Starting aggressive memory cleanup...";
 
     // Calculate memory usage before cleanup for reporting
     size_t memoryBefore = getProcessedVideoMemoryUsage();
@@ -734,9 +740,9 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
     // Calculate and report memory freed
     double memoryMB = (memoryBefore + tracksMemoryBefore) / (1024.0 * 1024.0);
-    TRACKING_DEBUG() << "TrackingManager: Aggressive cleanup complete - freed approximately"
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager: Aggressive cleanup complete - freed approximately"
              << QString::number(memoryMB, 'f', 1) << "MB of tracking data";
-    TRACKING_DEBUG() << "TrackingManager: All data structures cleared and memory aggressively freed";
+    YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager: All data structures cleared and memory aggressively freed";
 }
 
 // --- Video Processing Callbacks ---

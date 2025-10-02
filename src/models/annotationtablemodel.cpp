@@ -1,6 +1,7 @@
 #include "annotationtablemodel.h"
 #include "../data/trackingdatastorage.h"
 #include <QDebug>
+#include "../utils/loggingcategories.h"
 #include <algorithm>
 
 AnnotationTableModel::AnnotationTableModel(TrackingDataStorage* storage, QObject* parent)
@@ -90,7 +91,7 @@ void AnnotationTableModel::populateLostAnnotations() {
     // Sort annotations by worm ID, then by start frame
     std::sort(m_annotations.begin(), m_annotations.end());
     
-    qDebug() << "AnnotationTableModel: Populated" << m_annotations.size() << "lost tracking annotations";
+    YAWT_DEBUG(lcModelsAnnotationTable) << "AnnotationTableModel: Populated" << m_annotations.size() << "lost tracking annotations";
 }
 
 // QAbstractTableModel interface implementation

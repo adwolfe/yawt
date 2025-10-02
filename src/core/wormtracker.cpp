@@ -2,11 +2,18 @@
 #include "wormtracker.h" // Lowercase include
 #include "../utils/debugutils.h"
 #include "../data/trackingcommon.h"
+#include "../utils/loggingcategories.h"
 #include <QDebug>
 #include <QtMath>       // For qSqrt, qPow, qAbs
 #include <algorithm>    // For std::sort, std::min_element etc. if needed
 #include <limits>       // For std::numeric_limits
 #include <QLineF>
+
+// Route legacy TRACKING_DEBUG() to new category-based logger for this module
+#ifdef TRACKING_DEBUG
+#undef TRACKING_DEBUG
+#endif
+#define TRACKING_DEBUG() YAWT_DEBUG(lcCoreWormTracker)
 
 
 // Constants for boundary expansion logic

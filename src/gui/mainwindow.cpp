@@ -17,6 +17,7 @@
  *  - Prefer AppController::showTrackingDialog(...) to construct/wire progress dialogs.
  */
 #include "mainwindow.h"
+#include "../utils/loggingcategories.h"
 #include <QTimer>
 #include <QShortcut>
 #include "debugutils.h"
@@ -80,7 +81,7 @@ MainWindow::MainWindow(QWidget *parent)
         ui->miniLoaderOverlay->setShowOverlays(true);
     }
 
-    qDebug() << "MainWindow: AppController created and models bound";
+    YAWT_INFO(lcGuiMainWindow) << "AppController created and models bound";
 
     // Merge/Split events model and view
     m_mergeSplitModel = new QStandardItemModel(this);
@@ -167,7 +168,7 @@ MainWindow::MainWindow(QWidget *parent)
         "}"
     );
 
-    qDebug() << "MainWindow: Annotation table view configured successfully";
+    YAWT_DEBUG(lcGuiMainWindow) << "Annotation table view configured successfully";
 
     resizeTableColumns();
 
@@ -190,7 +191,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     // ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::None, true); // Or start with nothing
 
-    qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
+    YAWT_DEBUG(lcGuiMainWindow) << "Setting to global" << ui->globalThreshAutoCheck->checkState();
     ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !", 10000);
 }
 
@@ -746,7 +747,7 @@ void MainWindow::initializeUIStates() {
     ui->globalRadio->setChecked(true);
     ui->globalThreshSlider->setValue(100);
     ui->globalThreshAutoCheck->setChecked(false);
-    qDebug() << "Setting to global" << ui->globalThreshAutoCheck->checkState();
+    YAWT_DEBUG(lcGuiMainWindow) << "Setting to global" << ui->globalThreshAutoCheck->checkState();
     updateThresholdAlgorithmSettings();
 
     // Initialize ROI factor spinbox
@@ -875,7 +876,7 @@ void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode
     ui->cropModeButton->setChecked(newMode == VideoLoader::InteractionMode::Crop);
     ui->selectionModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditBlobs);
     ui->trackModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditTracks);
-    qDebug() << "MainWindow: Interaction mode UI synced to" << static_cast<int>(newMode);
+    YAWT_DEBUG(lcGuiMainWindow) << "Interaction mode UI synced to" << static_cast<int>(newMode);
 }
 
 void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes) {
@@ -884,7 +885,7 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
     // Assuming you have ui->viewBlobsButton and ui->viewTracksButton:
     ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
     ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
-    qDebug() << "MainWindow: View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
+    YAWT_DEBUG(lcGuiMainWindow) << "View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
 }
 
 
@@ -1213,7 +1214,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
 
             // Use the MiniLoader single-frame API
             target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
-            qDebug() << "MainWindow::updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
+            YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
                      << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("miniLoaderOverlay"):(i==3?QString("mlop1"):QString("mlop2")))))
                      << "size:" << cf.size();
         }
@@ -1225,7 +1226,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
             QSizeF sz_center;
             std::tie(cf_center, off_center, sz_center) = buildCroppedForFrame(currentFrameNumber);
             ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, cf_center, off_center, sz_center, centerPoint);
-            qDebug() << "MainWindow::updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
+            YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
         }
 
         // If we sent to an overlay, let it emit visibility signals as before. If no overlay, clear visible set.
@@ -1255,7 +1256,7 @@ void MainWindow::frameSliderMoved(int value) {
 void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
     // Log received visible IDs. Merge history text widget and MergeViewer were removed from the UI,
     // so we no longer update them here. Keep the last-polled set updated so polling fallback remains usable.
-    qDebug() << "MainWindow::onMiniLoaderVisibleWormsUpdated received visibleIds:" << visibleIds;
+    YAWT_DEBUG(lcGuiMainWindow) << "onMiniLoaderVisibleWormsUpdated received visibleIds:" << visibleIds;
 
     m_lastPolledVisibleIds.clear();
     for (int id : visibleIds) m_lastPolledVisibleIds.insert(id);
@@ -1285,7 +1286,7 @@ void MainWindow::onMiniLoaderPollTimeout() {
         QList<int> list;
         list.reserve(polledSet.size());
         for (int id : polledSet) list.append(id);
-        qDebug() << "MainWindow::onMiniLoaderPollTimeout polled visible IDs:" << list;
+        YAWT_DEBUG(lcGuiMainWindow) << "onMiniLoaderPollTimeout polled visible IDs:" << list;
         onMiniLoaderVisibleWormsUpdated(list);
     }
 }
@@ -1403,21 +1404,21 @@ void MainWindow::handleCancelTrackingFromDialog() {
 }
 
 void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) {
-    qDebug() << "MainWindow: Received" << tracks.size() << "tracks.";
+    YAWT_INFO(lcGuiMainWindow) << "Received" << tracks.size() << "tracks.";
 
     // Store tracks in the central data storage
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        qDebug() << "MainWindow: Storing track for worm" << it->first << "with" << it->second.size() << "points";
+        YAWT_DEBUG(lcGuiMainWindow) << "Storing track for worm" << it->first << "with" << it->second.size() << "points";
         m_trackingDataStorage->setTrackForItem(it->first, it->second);
     }
 
     // Debug: Verify tracks were stored
-    qDebug() << "MainWindow: TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
+    YAWT_DEBUG(lcGuiMainWindow) << "TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
 
     // Refresh annotation table to show lost tracking events
     if (m_annotationTableModel) {
         m_annotationTableModel->refreshAnnotations();
-        qDebug() << "MainWindow: Refreshed annotation table with" << m_annotationTableModel->rowCount() << "annotations";
+        YAWT_DEBUG(lcGuiMainWindow) << "Refreshed annotation table with" << m_annotationTableModel->rowCount() << "annotations";
     }
 
     // VideoLoader still needs direct track data for backward compatibility
@@ -1630,13 +1631,13 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
 }
 
 void MainWindow::performPostTrackingMemoryCleanup() {
-    qDebug() << "MainWindow: Performing post-tracking memory cleanup...";
+    YAWT_INFO(lcGuiMainWindow) << "Performing post-tracking memory cleanup...";
 
     // Get memory usage before cleanup
     double cacheHitRate = ui->videoLoader->getCacheHitRate();
     int cacheSize = ui->videoLoader->getCacheSize();
 
-    qDebug() << "MainWindow: VideoLoader cache status before cleanup - Size:" << cacheSize
+    YAWT_INFO(lcGuiMainWindow) << "VideoLoader cache status before cleanup - Size:" << cacheSize
              << "frames, Hit rate:" << QString::number(cacheHitRate, 'f', 1) << "%";
 
     // Reduce VideoLoader frame cache size significantly after tracking
@@ -1646,7 +1647,7 @@ void MainWindow::performPostTrackingMemoryCleanup() {
 
     if (cacheSize > reducedCacheSize) {
         ui->videoLoader->setCacheSize(reducedCacheSize);
-        qDebug() << "MainWindow: Reduced VideoLoader cache from" << cacheSize << "to" << reducedCacheSize << "frames";
+        YAWT_INFO(lcGuiMainWindow) << "Reduced VideoLoader cache from" << cacheSize << "to" << reducedCacheSize << "frames";
     }
 
     // Clear any temporary UI state that might hold large data
@@ -1671,11 +1672,9 @@ void MainWindow::performPostTrackingMemoryCleanup() {
 
 // --- Debug Control ---
 void MainWindow::toggleTrackingDebug() {
-    bool currentState = DebugUtils::isTrackingDebugEnabled();
-    DebugUtils::setTrackingDebugEnabled(!currentState);
-    QString status = DebugUtils::isTrackingDebugEnabled() ? "enabled" : "disabled";
-    qDebug() << "MainWindow: Tracking debug messages" << status;
-    statusBar()->showMessage(QString("Tracking debug messages %1").arg(status), 2000);
+    QString msg = "Logging verbosity is controlled via --verbosity=1..3 or --firehose at launch.";
+    qDebug().noquote() << "MainWindow:" << msg;
+    statusBar()->showMessage(msg, 4000);
 }
 
 // Retracking UI and logic removed

@@ -2,6 +2,7 @@
 #include "trackingcommon.h" // Lowercase include
 #include <QtMath>       // For qSqrt, qPow
 #include <QDebug>       // For qWarning/qDebug
+#include "../utils/loggingcategories.h"
 
 
 namespace Tracking {
@@ -16,7 +17,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
     result.isValid = false;
 
     if (binaryImage.empty() || binaryImage.type() != CV_8UC1) {
-        qWarning() << "findClickedBlob: Invalid input image (empty or not CV_8UC1).";
+        YAWT_WARN(lcDataCommon) << "findClickedBlob: Invalid input image (empty or not CV_8UC1).";
         return result;
     }
 
@@ -116,7 +117,7 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
     QList<DetectedBlob> plausibleBlobs;
 
     if (binaryImage.empty() || binaryImage.type() != CV_8UC1 || roiToSearch.isEmpty() || roiToSearch.width() <=0 || roiToSearch.height() <=0) {
-        qWarning() << "findAllPlausibleBlobsInRoi: Invalid input image or ROI.";
+        YAWT_WARN(lcDataCommon) << "findAllPlausibleBlobsInRoi: Invalid input image or ROI.";
         return plausibleBlobs;
     }
 

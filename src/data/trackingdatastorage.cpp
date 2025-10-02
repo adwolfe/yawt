@@ -19,6 +19,7 @@
 #include "trackingdatastorage.h"
 #include <stdexcept>
 #include <QtMath>
+#include "../utils/loggingcategories.h"
 
 // Define a default small ROI size for when no worms are present or dimensions are zero
 const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0);
@@ -92,7 +93,7 @@ int TrackingDataStorage::addItem(const QPointF& centroid, const QRectF& bounding
     emit allDataChanged();
     emit itemsChanged(m_items);
     
-    qDebug() << "TrackingDataStorage: Added item ID" << newItem.id << "Original BBox:" << boundingBox;
+    YAWT_DEBUG(lcDataStorage) << "Added item ID" << newItem.id << "Original BBox:" << boundingBox;
     return newItem.id;
 }
 
@@ -226,7 +227,7 @@ void TrackingDataStorage::setRoiSizeMultiplier(double multiplier) {
 void TrackingDataStorage::setTrackForItem(int itemId, const std::vector<Tracking::WormTrackPoint>& trackPoints) {
     // Check if item exists
     if (getIndexFromId(itemId) < 0) {
-        qWarning() << "TrackingDataStorage: Tried to set track for non-existent item ID" << itemId;
+        YAWT_WARN(lcDataStorage) << "Tried to set track for non-existent item ID" << itemId;
         return;
     }
     
@@ -300,7 +301,7 @@ void TrackingDataStorage::clearAndCompactTrackData() {
     QMap<int, int>().swap(m_idToIndexMap);
     updateIdToIndexMap(); // Rebuild the map
     
-    qDebug() << "TrackingDataStorage: Cleared and compacted" << trackCount << "track datasets, memory deallocated";
+    YAWT_INFO(lcDataStorage) << "Cleared and compacted" << trackCount << "track datasets, memory deallocated";
     emit allDataChanged();
 }
 
@@ -553,7 +554,7 @@ void TrackingDataStorage::updateIdToIndexMap() {
     for (int i = 0; i < m_items.count(); ++i) {
         m_idToIndexMap[m_items[i].id] = i;
     }
-    qDebug() << "TrackingDataStorage: ID-to-index map updated with" << m_idToIndexMap.size() << "entries";
+    YAWT_DEBUG(lcDataStorage) << "ID-to-index map updated with" << m_idToIndexMap.size() << "entries";
 }
 
 void TrackingDataStorage::recalculateGlobalMetricsAndROIs() {
@@ -640,7 +641,7 @@ void TrackingDataStorage::recalculateGlobalMetricsAndROIs() {
 
     // Emit signals
     if (metricsChanged) {
-        qDebug() << "TrackingDataStorage: Global metrics updated."
+        YAWT_INFO(lcDataStorage) << "Global metrics updated."
                 << "Area (min/max):" << m_minObservedArea << "/" << m_maxObservedArea
                 << "Aspect (min/max):" << m_minObservedAspectRatio << "/" << m_maxObservedAspectRatio
                 << "Fixed ROI Size:" << m_currentFixedRoiSize;
@@ -672,5 +673,5 @@ void TrackingDataStorage::buildFrameIndex() {
         m_frameIndex[wormId] = frameMap;
     }
 
-    qDebug() << "TrackingDataStorage: Built frame index for" << m_tracks.size() << "worms";
+    YAWT_DEBUG(lcDataStorage) << "Built frame index for" << m_tracks.size() << "worms";
 }

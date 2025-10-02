@@ -35,6 +35,7 @@
 #include "../gui/trackingprogressdialog.h"
 #include <QWidget>
 
+#include "../utils/loggingcategories.h"
 #include <QDebug>
 
 AppController::AppController(QObject* parent)
@@ -68,7 +69,7 @@ AppController::~AppController()
 {
     // QObject parent-child will delete owned children (m_manager, m_blobModel, m_annotationModel, m_storage if created with 'this' parent).
     // If m_storage was provided by caller, we do not delete it here (it may not be parented to us).
-    qDebug() << "AppController: destroyed";
+    YAWT_DEBUG(lcCoreAppController) << "AppController destroyed";
 }
 
 void AppController::initWithNewStorage()
@@ -133,7 +134,7 @@ TrackingDataStorage* AppController::trackingDataStorage() const
 void AppController::addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame)
 {
     if (!m_blobModel) {
-        qWarning() << "AppController::addBlobFromVideo: blob model not available";
+        YAWT_WARN(lcCoreAppController) << "addBlobFromVideo: blob model not available";
         return;
     }
 
@@ -150,7 +151,7 @@ void AppController::addBlobFromVideo(const Tracking::DetectedBlob& blob, int fra
 void AppController::addRoi(const QRectF& roi, int frame)
 {
     if (!m_blobModel) {
-        qWarning() << "AppController::addRoi: blob model not available";
+        YAWT_WARN(lcCoreAppController) << "addRoi: blob model not available";
         return;
     }
 
@@ -164,7 +165,7 @@ void AppController::addRoi(const QRectF& roi, int frame)
 void AppController::removeAllBlobs()
 {
     if (!m_blobModel) {
-        qWarning() << "AppController::removeAllBlobs: blob model not available";
+        YAWT_WARN(lcCoreAppController) << "removeAllBlobs: blob model not available";
         return;
     }
 
@@ -178,7 +179,7 @@ void AppController::removeAllBlobs()
 void AppController::deleteBlobById(int id)
 {
     if (!m_blobModel) {
-        qWarning() << "AppController::deleteBlobById: blob model not available";
+        YAWT_WARN(lcCoreAppController) << "deleteBlobById: blob model not available";
         return;
     }
 
@@ -187,7 +188,7 @@ void AppController::deleteBlobById(int id)
     for (int i = 0; i < items.size(); ++i) {
         if (items[i].id == id) {
             if (!m_blobModel->removeRows(i, 1)) {
-                qWarning() << "AppController::deleteBlobById: failed to remove row" << i;
+                YAWT_WARN(lcCoreAppController) << "deleteBlobById: failed to remove row" << i;
             }
             return;
         }
@@ -198,7 +199,7 @@ void AppController::deleteBlobById(int id)
 void AppController::setRoiSizeMultiplier(double factor)
 {
     if (!m_blobModel) {
-        qWarning() << "AppController::setRoiSizeMultiplier: blob model not available";
+        YAWT_WARN(lcCoreAppController) << "setRoiSizeMultiplier: blob model not available";
         return;
     }
     m_blobModel->updateRoiSizeMultiplier(factor);
@@ -211,7 +212,7 @@ void AppController::requestStartTracking(const QString& videoPath,
                                         int totalFrames)
 {
     if (!m_manager) {
-        qWarning() << "AppController::requestStartTracking: TrackingManager not available";
+        YAWT_WARN(lcCoreAppController) << "requestStartTracking: TrackingManager not available";
         emit trackingFailed("Internal error: TrackingManager missing");
         return;
     }
@@ -227,7 +228,7 @@ void AppController::requestStartTracking(const QString& videoPath,
 void AppController::cancelTracking()
 {
     if (!m_manager) {
-        qWarning() << "AppController::cancelTracking: TrackingManager not available";
+        YAWT_WARN(lcCoreAppController) << "cancelTracking: TrackingManager not available";
         return;
     }
     m_manager->cancelTracking();
@@ -250,14 +251,14 @@ void AppController::onTrackingManagerStatusUpdate(const QString& status)
 void AppController::onTrackingManagerAllTracksUpdated(const Tracking::AllWormTracks& tracks)
 {
     if (!m_storage) {
-        qWarning() << "AppController::onTrackingManagerAllTracksUpdated: storage missing";
+        YAWT_WARN(lcCoreAppController) << "onTrackingManagerAllTracksUpdated: storage missing";
     } else {
         // Store tracks into central storage (merge/overwrite per item)
         for (auto it = tracks.begin(); it != tracks.end(); ++it) {
             int wormId = it->first;
             const std::vector<Tracking::WormTrackPoint>& track = it->second;
             m_storage->setTrackForItem(wormId, track);
-            qDebug() << "AppController: stored track for worm" << wormId << "with" << (int)track.size() << "points";
+            YAWT_DEBUG(lcCoreAppController) << "stored track for worm" << wormId << "with" << (int)track.size() << "points";
         }
     }
 
@@ -324,12 +325,12 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
                                           int totalFrames)
 {
     if (!m_manager) {
-        qWarning() << "AppController::beginTrackingFromModel: TrackingManager not available";
+        YAWT_WARN(lcCoreAppController) << "beginTrackingFromModel: TrackingManager not available";
         emit trackingFailed("Internal error: TrackingManager missing");
         return;
     }
     if (!m_blobModel) {
-        qWarning() << "AppController::beginTrackingFromModel: BlobTableModel not available";
+        YAWT_WARN(lcCoreAppController) << "beginTrackingFromModel: BlobTableModel not available";
         emit trackingFailed("Internal error: Blob model missing");
         return;
     }
@@ -422,13 +423,13 @@ void AppController::onDialogBeginRequested()
 {
     // Use stored dialog parameters (set via showTrackingDialog) to start tracking.
     if (!m_manager) {
-        qWarning() << "AppController::onDialogBeginRequested: TrackingManager not available";
+        YAWT_WARN(lcCoreAppController) << "onDialogBeginRequested: TrackingManager not available";
         emit trackingFailed("Internal error: TrackingManager missing");
         if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: TrackingManager missing");
         return;
     }
     if (!m_blobModel) {
-        qWarning() << "AppController::onDialogBeginRequested: BlobTableModel not available";
+        YAWT_WARN(lcCoreAppController) << "onDialogBeginRequested: BlobTableModel not available";
         emit trackingFailed("Internal error: Blob model missing");
         if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: Blob model missing");
         return;
@@ -437,7 +438,7 @@ void AppController::onDialogBeginRequested()
     // Build initial worm list from model, respecting the dialog's only-missing preference.
     std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(m_dialogOnlyTrackMissing);
     if (initialWorms.empty()) {
-        qDebug() << "AppController::onDialogBeginRequested: no worm items to track (after filtering).";
+        YAWT_INFO(lcCoreAppController) << "onDialogBeginRequested: no worm items to track (after filtering).";
         emit trackingFailed("No worm items available to track.");
         if (m_trackingDialog) m_trackingDialog->onTrackingFailed("No worms to track.");
         return;

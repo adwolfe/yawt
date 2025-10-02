@@ -5,15 +5,16 @@
 #include <algorithm> // For std::reverse
 #include "../../data/trackingcommon.h"
 #include "../../utils/thresholdingutils.h"
+#include "../../utils/loggingcategories.h"
 
 VideoProcessor::VideoProcessor(QObject *parent)
     : QObject(parent)
 {
-    qDebug() << "VideoProcessor (" << this << ") created.";
+    YAWT_DEBUG(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") created.";
 }
 
 VideoProcessor::~VideoProcessor() {
-    qDebug() << "VideoProcessor (" << this << ") destroyed.";
+    YAWT_DEBUG(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") destroyed.";
 }
 
 // NEW IMPLEMENTATION
@@ -26,9 +27,9 @@ void VideoProcessor::processFrameRange(
     bool isForwardChunk)
 {
     bool processingActive = true; // Local flag for this processing task
-    qDebug() << "VideoProcessor (" << this << "): Starting processing for chunk" << chunkId
-             << "Frames:" << startFrameAbsolute << "to" << endFrameAbsolute -1
-             << (isForwardChunk ? "(ForwardSegment)" : "(BackwardSegment)");
+    YAWT_INFO(lcCoreVideoProcessor) << "VideoProcessor (" << this << "): Starting processing for chunk" << chunkId
+                                    << "Frames:" << startFrameAbsolute << "to" << endFrameAbsolute - 1
+                                    << (isForwardChunk ? "(ForwardSegment)" : "(BackwardSegment)");
 
     cv::VideoCapture cap;
     try {
@@ -45,7 +46,7 @@ void VideoProcessor::processFrameRange(
     // CAP_PROP_POS_FRAMES is 0-based index of the frame to be decoded/captured next.
     if (startFrameAbsolute > 0) { // No need to set if starting from frame 0
         if (!cap.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(startFrameAbsolute))) {
-            qWarning() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Failed to set video capture to frame" << startFrameAbsolute;
+            YAWT_WARN(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Failed to set video capture to frame" << startFrameAbsolute;
             // Depending on the video backend, seeking might not be perfectly accurate or supported.
             // We can try to read frames until we reach the desired startFrame as a fallback,
             // but this is less efficient. For now, we'll proceed and rely on set().
@@ -58,7 +59,7 @@ void VideoProcessor::processFrameRange(
     int totalFramesInThisChunk = endFrameAbsolute - startFrameAbsolute;
 
     if (totalFramesInThisChunk <= 0) {
-        qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": No frames to process in this range.";
+        YAWT_DEBUG(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") Chunk" << chunkId << ": No frames to process in this range.";
         cap.release();
         emit rangeProcessingComplete(chunkId, processedFramesInChunk, isForwardChunk);
         return;
@@ -71,15 +72,15 @@ void VideoProcessor::processFrameRange(
 
         if (QThread::currentThread()->isInterruptionRequested()) {
             processingActive = false;
-            qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Processing was interrupted.";
+            YAWT_INFO(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Processing was interrupted.";
             // Don't emit error here, let TrackingManager handle cancellation flow
             cap.release();
             return; // Exit cleanly
         }
 
         if (!cap.read(currentFrame) || currentFrame.empty()) {
-            qWarning() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Failed to read frame or empty frame at video index" << currentVideoFrameIndex
-                       << "(chunk frame" << i << "). Expected end:" << endFrameAbsolute -1;
+            YAWT_WARN(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Failed to read frame or empty frame at video index" << currentVideoFrameIndex
+                                            << "(chunk frame" << i << "). Expected end:" << endFrameAbsolute - 1;
             // If this happens before all expected frames in the chunk are read, it might be an issue.
             // This could mean the video ended prematurely or there was a read error.
             break; // Stop processing this chunk
@@ -96,11 +97,11 @@ void VideoProcessor::processFrameRange(
     cap.release();
 
     if (!processingActive) { // Processing was stopped or interrupted
-        qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Exiting due to interruption/stop request.";
+        YAWT_INFO(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Exiting due to interruption/stop request.";
         return;
     }
 
-    qDebug() << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Processing complete. Processed" << processedFramesInChunk.size() << "frames.";
+    YAWT_INFO(lcCoreVideoProcessor) << "VideoProcessor (" << this << ") Chunk" << chunkId << ": Processing complete. Processed" << processedFramesInChunk.size() << "frames.";
     emit rangeProcessingComplete(chunkId, processedFramesInChunk, isForwardChunk);
 }
 

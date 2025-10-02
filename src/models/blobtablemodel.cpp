@@ -7,6 +7,7 @@
 // Adjusted includes for refactored layout
 #include "../data/trackingdatastorage.h"
 #include "../data/trackingcommon.h"
+#include "../utils/loggingcategories.h"
 
 BlobTableModel::BlobTableModel(TrackingDataStorage* storage, QObject *parent)
     : QAbstractTableModel(parent),
@@ -116,7 +117,7 @@ QVariant BlobTableModel::data(const QModelIndex &index, int role) const {
             }
         }
     } catch (const std::out_of_range& e) {
-        qWarning() << "BlobTableModel: Error accessing item at index" << index.row() << ":" << e.what();
+        YAWT_WARN(lcModelsBlobTable) << "Error accessing item at index" << index.row() << ":" << e.what();
     }
     
     return QVariant();
@@ -169,7 +170,7 @@ bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, in
             }
         }
     } catch (const std::out_of_range& e) {
-        qWarning() << "BlobTableModel: Error accessing item at index" << index.row() << ":" << e.what();
+        YAWT_WARN(lcModelsBlobTable) << "Error accessing item at index" << index.row() << ":" << e.what();
     }
     
     return false;
@@ -213,7 +214,7 @@ bool BlobTableModel::removeRows(int position, int rows, const QModelIndex &paren
             const TableItems::ClickedItem &item = m_storage->getItemByIndex(position + i);
             itemsToRemove.append(item.id);
         } catch (const std::out_of_range& e) {
-            qWarning() << "BlobTableModel: Error accessing item at index" << (position + i) << ":" << e.what();
+            YAWT_WARN(lcModelsBlobTable) << "Error accessing item at index" << (position + i) << ":" << e.what();
             success = false;
         }
     }

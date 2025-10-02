@@ -1,6 +1,7 @@
 #include "thresholdingutils.h"
 #include <QDebug>
 #include <algorithm>
+#include "loggingcategories.h"
 
 namespace ThresholdingUtils {
 
@@ -28,7 +29,7 @@ void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
         try {
             cv::GaussianBlur(grayFrame, grayFrame, cv::Size(kernelSize, kernelSize), settings.blurSigmaX);
         } catch (const cv::Exception& ex) {
-            qWarning() << "GaussianBlur Exception:" << ex.what();
+            YAWT_WARN(lcUtilsThresholding) << "GaussianBlur Exception:" << ex.what();
         }
     }
 
@@ -62,7 +63,7 @@ void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
             break;
         }
     } catch (const cv::Exception& ex) {
-        qWarning() << "Thresholding Exception:" << ex.what();
+        YAWT_WARN(lcUtilsThresholding) << "Thresholding Exception:" << ex.what();
         outputFrame = cv::Mat();
     }
 }
