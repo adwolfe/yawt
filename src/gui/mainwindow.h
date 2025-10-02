@@ -30,17 +30,38 @@ QT_END_NAMESPACE
 /**
  * MainWindow
  *
- * The primary UI class. After recent refactors, MainWindow no longer creates or owns the
- * TrackingManager or the TrackingProgressDialog. Those responsibilities are delegated to
- * AppController. MainWindow obtains models and the central storage from AppController and
- * remains responsible for view-layer logic (widget wiring, playback controls, selection handling).
+ * Primary UI shell for YAWT. MainWindow owns widgets and view-layer behavior (menus, playback,
+ * selection, mode toggles) and binds its views to models provided by AppController. It routes
+ * high-level user actions to AppController, which orchestrates non-UI logic (storage, tracking).
+ *
+ * Responsibilities:
+ *  - Manage and wire UI widgets (VideoLoader, MiniLoader, table views, delegates).
+ *  - Bind to controller-provided models (BlobTableModel, AnnotationTableModel).
+ *  - Handle user interactions: file selection, playback, ROI creation, threshold controls.
+ *  - Keep UI in sync with VideoLoader interaction/view modes and visible tracks.
+ *
+ * Non-responsibilities:
+ *  - Does not own TrackingManager, TrackingDataStorage, or worker threads.
+ *  - Does not implement tracking algorithms or non-UI orchestration.
+ *
+ * Threading and lifetime:
+ *  - Lives on the GUI thread.
+ *  - Holds a pointer to AppController (typically parented to MainWindow); QObject parent/child
+ *    semantics apply for deterministic lifetimes of controller-owned components.
+ *
+ * Key interactions:
+ *  - AppController: requests to start/cancel tracking; obtains models/storage; receives progress
+ *    and final tracks via signals.
+ *  - VideoLoader/MiniLoader: frame navigation, ROI gestures, visible-worm updates.
+ *  - Models: BlobTableModel and AnnotationTableModel are set on their respective views.
+ *
+ * Signals/slots overview:
+ *  - Slots cover file/directory selection, playback/navigation, ROI creation, threshold updates,
+ *    and tracking entry points (onStartTrackingActionTriggered(), acceptTracksFromManager()).
  *
  * Notes:
- *  - MainWindow keeps a pointer to AppController (typically created in MainWindow ctor).
- *  - MainWindow may keep non-owning pointers to models/storage obtained from the controller for
- *    backward-compatible wiring with existing UI code paths.
- *  - The TrackingProgressDialog is created and owned by AppController (if shown via
- *    AppController::showTrackingDialog). MainWindow should call into the controller to show the dialog.
+ *  - TrackingProgressDialog can be owned/wired by AppController. Prefer invoking
+ *    AppController::showTrackingDialog(...) rather than constructing dialogs here.
  */
 class MainWindow : public QMainWindow
 {
@@ -54,6 +75,14 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
 
+/**
+ * Slots: UI event handlers and high-level entry points.
+ * - File/Directory: chooseWorkingDirectory()
+ * - Video: initiateFrameDisplay(), updateFrameDisplay(), updateMiniLoaderCrop(), seekFrame(), frameSliderMoved()
+ * - Thresholding: setGlobalThresholdType(), setAdaptiveThresholdType(), setGlobalThresholdValue(), setAdaptiveBlockSize(), setAdaptiveCValue(), setBlurEnabled(), setBlurKernel(), setBackgroundAssumption()
+ * - Tracking: onStartTrackingActionTriggered(), handleBeginTrackingFromDialog(), handleCancelTrackingFromDialog(), acceptTracksFromManager(), performPostTrackingMemoryCleanup()
+ * - UI sync: syncInteractionModeButtons(), syncViewModeOptionButtons(), updateVisibleTracksInVideoLoader(), onMiniLoaderVisibleWormsUpdated(), onMiniLoaderPollTimeout()
+ */
 public slots:
     // File/Directory Operations
     void chooseWorkingDirectory();
@@ -116,7 +145,11 @@ public slots:
 
     // Table View and VideoLoader Sync
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);
-    // ROI handling: when the user draws an ROI in VideoLoader, add it to the BlobTableModel as an ROI item
+    /** 
+     * Handle a newly drawn ROI from the VideoLoader.
+     * Adds the ROI as a worm candidate in the BlobTableModel for the current keyframe.
+     * @param roi Rectangle in video coordinates drawn by the user.
+     */
     void handleRoiDefined(const QRectF& roi);
 
     // Slots to react to VideoLoader mode changes (for UI sync)
@@ -134,42 +167,62 @@ private:
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
 
-    // Helper to keep the pair of play/pause buttons in sync.
-    // Implemented in the .cpp file. Use this everywhere instead of duplicating logic.
+    /**
+     * Keep the mirrored play/pause buttons in sync with the current playback state.
+     * Use this helper instead of duplicating UI toggle logic.
+     * @param playing When true, reflect that playback is active; otherwise paused/stopped.
+     * @param blockSignals When true, temporarily block signals on the widgets to avoid feedback loops.
+     */
     void setPlayButtonsState(bool playing, bool blockSignals = true);
-    // Convenience: query whether either of the mirrored play buttons is checked.
+    /**
+     * Convenience query indicating whether any of the mirrored play buttons is currently checked.
+     * @return true if either play button is checked; false otherwise.
+     */
     bool arePlayButtonsChecked() const;
 
+    /** Qt Designer-generated UI form. Owned by MainWindow via QObject parent hierarchy. */
     Ui::MainWindow *ui;
 
-    // Models & delegates (non-owning or parented to MainWindow as appropriate)
+    // Models & delegates
+    /** Non-owning pointer to the blob model (owned by AppController). Bound to worm table view. */
     BlobTableModel *m_blobTableModel;
+    /** Non-owning pointer to the annotation model (owned by AppController). Bound to annotation view. */
     AnnotationTableModel *m_annotationTableModel;
+    /** Color cell delegate created/parented to MainWindow; owned by MainWindow unless reparented. */
     ColorDelegate *m_colorDelegate;
+    /** Item type delegate created/parented to MainWindow; owned by MainWindow unless reparented. */
     ItemTypeDelegate *m_itemTypeDelegate;
 
-    // AppController owns TrackingManager, TrackingDataStorage, and models.
-    // MainWindow keeps a pointer to the controller to request high-level operations.
+    // Controller and storage
+    /**
+     * Application controller that owns core non-UI components:
+     * - TrackingManager, TrackingDataStorage, and the core models.
+     * Typically constructed in MainWindow and parented to MainWindow, so lifetime is tied to UI.
+     */
     AppController *m_appController; // Controller owning storage, manager and models
-
-    // Central data storage pointer (may be obtained from AppController for convenience).
-    // MainWindow does not own this; lifetime is managed by the controller (or parent).
+    /**
+     * Non-owning pointer to the central data storage.
+     * Owned by AppController; retrieved for convenience to avoid repeated lookups.
+     */
     TrackingDataStorage *m_trackingDataStorage;
 
-    QButtonGroup *m_interactionModeButtonGroup; // For Pan, ROI, Crop, EditBlobs, EditTracks
+    /** Button group for interaction modes (Pan, ROI, Crop, EditBlobs, EditTracks). Owned by MainWindow. */
+    QButtonGroup *m_interactionModeButtonGroup;
 
     // Tracking/view state
-    bool m_hasCompletedTracking; // Whether initial tracking has been completed
+    /** Whether initial tracking has been completed in the current session. Pure UI state. */
+    bool m_hasCompletedTracking;
 
-    // ROI size factor spinbox
+    /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;
 
-    // Merge/Split events model
+    /** Model for merge/split events shown in the UI. Owned by MainWindow unless reparented to a view. */
     QStandardItemModel* m_mergeSplitModel;
 
-    // Polling fallback: timer to query mini loaders periodically and update visible IDs if changed
+    // MiniLoader polling and cache
+    /** Timer used as a fallback to poll MiniLoader(s) for visible IDs. Owned by MainWindow. */
     QTimer* m_miniLoaderPollTimer;
-    // Last polled set to detect changes and avoid redundant UI updates
+    /** Cache of last polled visible worm IDs to suppress redundant UI updates. */
     QSet<int> m_lastPolledVisibleIds;
 };
 

@@ -1,3 +1,21 @@
+/**
+ * @file mainwindow.cpp
+ * @brief MainWindow UI shell: widget wiring, UI logic, delegates, and binding to AppController.
+ *
+ * Responsibilities:
+ *  - Manage and wire UI widgets (VideoLoader, MiniLoader, table views, delegates).
+ *  - Bind controller-provided models (BlobTableModel, AnnotationTableModel) to views.
+ *  - Handle user interactions: file selection, playback, ROI creation, threshold controls.
+ *  - Keep UI in sync with VideoLoader interaction/view modes and visible tracks.
+ *
+ * Non-responsibilities:
+ *  - Non-UI orchestration and tracking algorithms (owned by AppController/TrackingManager).
+ *  - Thread management and long-running workers.
+ *
+ * Notes:
+ *  - Lives on the GUI thread; holds a pointer to AppController.
+ *  - Prefer AppController::showTrackingDialog(...) to construct/wire progress dialogs.
+ */
 #include "mainwindow.h"
 #include <QTimer>
 #include <QShortcut>
@@ -176,6 +194,12 @@ MainWindow::MainWindow(QWidget *parent)
     ui->statusbar->showMessage(QString("Welcome to YAWT version ")+QString(PROJECT_VERSION)+" !", 10000);
 }
 
+/**
+ * @brief Destructor. Ensures UI-owned resources are cleaned up and QObject ownership is respected.
+ *
+ * This destructor should not manage non-UI resources (e.g., TrackingManager threads),
+ * which are owned and orchestrated by AppController.
+ */
 MainWindow::~MainWindow()
 {
     delete ui;
@@ -224,6 +248,12 @@ void MainWindow::setupInteractionModeButtonGroup() {
 
 
 // Override resize event to handle table column resizing
+/**
+ * @brief Handle window resize to keep views/layouts in sync.
+ * @param event Resize event carrying new size; used to adjust table columns and viewports.
+ *
+ * This function should remain lightweight and avoid heavy computations.
+ */
 void MainWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     // Call resizeTableColumns directly instead of using a signal
@@ -1307,6 +1337,13 @@ void MainWindow::goToLastFrame() {
 }
 
 // --- Tracking Process ---
+/**
+ * @brief UI entry point for starting tracking.
+ *
+ * Gathers current video context (path, keyframe, threshold settings, total frames) from the UI
+ * and delegates orchestration to AppController by showing the controller-owned dialog or
+ * starting tracking directly as configured.
+ */
 void MainWindow::onStartTrackingActionTriggered() {
     if (!ui->videoLoader || !ui->videoLoader->isVideoLoaded()) {
         QMessageBox::warning(this, "Tracking Setup", "No video loaded."); return;
