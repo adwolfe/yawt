@@ -1,4 +1,48 @@
 // trackingmanager.cpp
+/**
+ * @file trackingmanager.cpp
+ * @brief Coordinates multi-worm tracking, video processing, and cross-thread orchestration.
+ *
+ * Responsibilities:
+ *  - Orchestrate end-to-end tracking: initial video processing, per-worm trackers (forward/backward),
+ *    merge/split handling, progress aggregation, and finalization (CSV/JSON/video saving).
+ *  - Own worker threads for video processing, per-worm tracking, and optional background video saving.
+ *  - Persist run metadata: threshold settings, input blobs, and per-frame merge history.
+ *
+ * Threading model:
+ *  - GUI thread: constructs TrackingManager and receives high-level signals.
+ *  - Video processing: one or more QThreads running VideoProcessor workers (chunked processing).
+ *  - Worm tracking: one QThread per WormTracker (forward/backward per conceptual worm).
+ *  - Video saving: optional background worker thread (VideoSaverWorker).
+ *  - All cross-thread communication uses Qt queued signals/slots; custom types must be registered via registerMetaTypes().
+ *
+ * Lifecycle:
+ *  - startFullTrackingProcess(...) initializes run state and launches workers.
+ *  - cancelTracking() requests cancellation; workers should cooperatively stop.
+ *  - cleanupThreadsAndObjects() joins/cleans worker threads and clears transient state.
+ *  - When all trackers finish (or cancel/fail), TrackingManager emits trackingFinishedSuccessfully(...),
+ *    trackingCancelled(), or trackingFailed(QString).
+ *
+ * Signals summary:
+ *  - overallTrackingProgress(int): aggregate percent across video processing and trackers.
+ *  - trackingStatusUpdate(QString): human-readable status (chunk x/y, saving n%).
+ *  - allTracksUpdated(AllWormTracks): incremental consolidated tracks for UI/storage.
+ *  - trackingFinishedSuccessfully(QString): successful completion; may include output path.
+ *  - trackingFailed(QString): irrecoverable error with reason.
+ *  - trackingCancelled(): user/system cancellation completed.
+ *
+ * Progress aggregation (where/how):
+ *  - updateOverallProgress() aggregates progress from video processing and all WormTrackers into a single 0–100 value.
+ *  - Emits overallTrackingProgress(percent) frequently; trackingStatusUpdate(message) provides granular context (e.g., "Processing chunk x/y", "Saving video n%").
+ *
+ * Cancellation paths (what happens when cancelled):
+ *  - cancelTracking() sets cancellation flags and requests all workers to stop cooperatively; terminal state emits trackingCancelled().
+ *  - cleanupThreadsAndObjects() joins/cleans QThreads and resets transient state; it is safe and idempotent to call after cancel/fail or before a new run.
+ *
+ * Memory management (processed frames and cleanup):
+ *  - assembleProcessedFrames() accumulates chunked results; monitor footprint via getProcessedVideoMemoryUsage() during long videos.
+ *  - clearProcessedVideoMemory() frees accumulated processed frames early after save/cancel/fail and emits a status update to inform the UI.
+ */
 #include "trackingmanager.h"
 #include "../utils/debugutils.h"
 
