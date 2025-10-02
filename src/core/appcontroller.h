@@ -1,3 +1,17 @@
+/**
+ * @file appcontroller.h
+ * @brief Non-UI application controller that owns storage, models, and TrackingManager; exposes high-level APIs and forwards signals for UI consumption.
+ *
+ * Responsibilities:
+ *  - Create and own TrackingDataStorage, TrackingManager, BlobTableModel, and AnnotationTableModel.
+ *  - Expose models to the GUI so views can bind to them.
+ *  - Provide high-level operations to manipulate models and to start/cancel tracking (e.g., beginTrackingFromModel, requestStartTracking, showTrackingDialog, cancelTracking).
+ *  - Translate TrackingManager signals into controller-level signals suitable for UI.
+ *
+ * Threading/Lifetime:
+ *  - QObject living on the GUI thread; parents storage/models/manager by default for deterministic lifetime.
+ *  - Connects to TrackingManager via Qt signals/slots (queued where cross-thread). Ensure meta-types are registered (handled in TrackingManager).
+ */
 #ifndef APPCONTROLLER_H
 #define APPCONTROLLER_H
 
@@ -35,6 +49,14 @@ class QWidget;
  *  - AppController is a QObject and should be parented by MainWindow (or another long-lived QObject).
  *  - AppController connects to TrackingManager and forwards progress/finished/failed events via signals.
  */
+/**
+ * @class AppController
+ * @brief Non-UI controller that owns storage, models, and TrackingManager; exposes high-level APIs and forwards progress/status signals to the UI.
+ *
+ * Creates and owns TrackingDataStorage, TrackingManager, BlobTableModel, and AnnotationTableModel.
+ * Provides high-level operations (beginTrackingFromModel, requestStartTracking, showTrackingDialog, cancelTracking)
+ * and forwards TrackingManager signals as controller-level signals for UI consumption.
+ */
 class AppController : public QObject
 {
     Q_OBJECT
@@ -59,6 +81,14 @@ public:
 
     // Tracking control API (high-level)
     // Note: Thresholding::ThresholdSettings and Tracking::InitialWormInfo are defined in trackingcommon.h
+    /**
+     * @brief Start a full tracking run using explicitly provided initial worms.
+     * @param videoPath Absolute path to the source video.
+     * @param keyFrame Frame index where all worms are visible.
+     * @param settings Thresholding parameters captured from the UI.
+     * @param initialWorms Vector of initial worm descriptors (ID, ROI, color).
+     * @param totalFrames Total number of frames in the video (hint for progress and bounds).
+     */
     Q_INVOKABLE void requestStartTracking(const QString& videoPath,
                                           int keyFrame,
                                           const Thresholding::ThresholdSettings& settings,
@@ -89,6 +119,17 @@ public:
     // the dialog with accurate context (video file name, keyframe, threshold settings, whether only-missing
     // should be tracked, and total frames). If the caller supplies these, the controller will store them
     // and use them when starting tracking from the dialog flow.
+    /**
+     * @brief Create, wire, and execute the controller-owned tracking dialog.
+     * @param videoPath Absolute path to the source video.
+     * @param keyFrame Frame index used as the keyframe.
+     * @param settings Thresholding parameters snapshot for this session.
+     * @param onlyTrackMissing When true, initial worms are built by skipping items already tracked in storage.
+     * @param totalFrames Total number of frames in the video (for progress UI and bounds).
+     * @param parent Optional parent widget for the dialog.
+     *
+     * The dialog emits begin/cancel requests; this controller responds by starting or cancelling tracking via TrackingManager.
+     */
     Q_INVOKABLE void showTrackingDialog(const QString& videoPath,
                                         int keyFrame,
                                         const Thresholding::ThresholdSettings& settings,
@@ -97,17 +138,33 @@ public:
                                         QWidget* parent = nullptr);
 
 signals:
-    // Emitted when tracks are available/updated (after they are stored in storage)
+    /**
+     * @brief Emitted after tracks are persisted in TrackingDataStorage.
+     * UI can refresh overlays, tables, and mini-loaders from the single source of truth.
+     */
     void tracksUpdated(const Tracking::AllWormTracks& tracks);
 
-    // Progress and status signals for UI/dialogs
+    /**
+     * @name Tracking lifecycle and progress
+     * @{
+     */
+    /** Emitted when a tracking run is initiated by the controller. */
     void trackingStarted();
+    /**
+     * @brief Overall percent progress and optional status message for UI/dialogs.
+     * @param overallPercent 0–100 aggregate progress across video processing and trackers.
+     * @param statusMessage Optional human-readable status (e.g., chunk info, saving progress).
+     */
     void trackingProgress(int overallPercent, const QString& statusMessage);
+    /** Emitted when tracking finishes successfully (after finalization). */
     void trackingFinished();
+    /** Emitted when tracking fails irrecoverably. Reason is human-readable. */
     void trackingFailed(const QString& reason);
+    /** Emitted when a user- or system-requested cancellation completes. */
     void trackingCancelled();
+    /** @} */
 
-    // Generic status message (optional)
+    /** Generic status message stream for detailed updates (can be verbose). */
     void trackingStatusMessage(const QString& message);
 
 private slots:
@@ -124,30 +181,42 @@ private slots:
     void onDialogCancelRequested();
 
 private:
-    // Helper to initialize owned components
+    /**
+     * @brief Initialize controller-owned storage, manager, and models.
+     * Parents all created objects to this controller for deterministic lifetime.
+     */
     void initWithNewStorage();
+    /**
+     * @brief Connect TrackingManager signals to controller handlers and forwarding signals.
+     * Safe to call multiple times; guarded against a null manager.
+     */
     void connectTrackingManagerSignals();
 
-    // Internal helper to build the vector<InitialWormInfo> from the blob model,
-    // optionally filtering out items that already have tracks in storage.
+    /**
+     * @brief Build initial worm list from the blob model.
+     * @param onlyTrackMissing When true, skip items that already have tracks in storage.
+     * @return Vector of InitialWormInfo constructed from current BlobTableModel contents.
+     *
+     * Thread affinity: GUI thread (reads model/storage).
+     */
     std::vector<Tracking::InitialWormInfo> buildInitialWormsFromModel(bool onlyTrackMissing) const;
 
-    // Owned components (lifetime managed by QObject parent/child)
-    TrackingDataStorage* m_storage = nullptr;
-    TrackingManager* m_manager = nullptr;
-    BlobTableModel* m_blobModel = nullptr;
-    AnnotationTableModel* m_annotationModel = nullptr;
+    // Owned components (QObject-parented to this controller unless storage is injected)
+    // - If constructed by AppController, these are children of this and auto-destroyed.
+    // - If an external TrackingDataStorage is injected via ctor, m_storage is non-owned.
+    TrackingDataStorage* m_storage = nullptr;         // owned unless injected
+    TrackingManager* m_manager = nullptr;             // owned
+    BlobTableModel* m_blobModel = nullptr;            // owned
+    AnnotationTableModel* m_annotationModel = nullptr;// owned
 
-    // Parameters used to initialize the controller-owned tracking dialog (if created via showTrackingDialog).
-    // These let the controller present accurate context in the dialog without requiring MainWindow to
-    // construct the InitialWormInfo vector itself.
+    // Dialog parameters cached for controller-owned dialog orchestration (UI thread only)
     QString m_dialogVideoPath;
     int m_dialogKeyFrame = -1;
     Thresholding::ThresholdSettings m_dialogSettings;
     bool m_dialogOnlyTrackMissing = true;
     int m_dialogTotalFrames = 0;
 
-    // Optional: controller-owned tracking progress dialog (created on demand)
+    // Controller-owned tracking progress dialog (created on demand, parented to provided 'parent' widget)
     TrackingProgressDialog* m_trackingDialog = nullptr;
 };
 

@@ -1,3 +1,31 @@
+/**
+ * @file appcontroller.cpp
+ * @brief Implements AppController: non-UI orchestration for models, storage, and tracking.
+ *
+ * Responsibilities (implementation notes):
+ *  - Construct and own TrackingDataStorage, TrackingManager, and UI-facing models.
+ *  - Wire TrackingManager signals to controller slots and forward UI-friendly signals.
+ *  - Provide high-level APIs used by the GUI to start/cancel tracking and modify models.
+ *  - Optionally own and orchestrate the TrackingProgressDialog lifecycle.
+ *
+ * Typical flows:
+ *  1) Direct start:
+ *     - beginTrackingFromModel(...) builds InitialWormInfo from BlobTableModel
+ *       (optionally filtering items already tracked) and invokes TrackingManager.
+ *  2) Dialog-driven:
+ *     - showTrackingDialog(...) creates a controller-owned dialog, connects its
+ *       signals, and onDialogBeginRequested() triggers TrackingManager with the
+ *       cached parameters.
+ *
+ * Threading:
+ *  - AppController lives on the GUI thread.
+ *  - TrackingManager may run workers on background threads; all cross-thread
+ *    communication uses Qt signals/slots. Meta-types are registered in TrackingManager.
+ *
+ * Lifetime:
+ *  - When AppController creates components, it parents them to itself for
+ *    deterministic cleanup. If external storage is injected, ownership remains external.
+ */
 #include "appcontroller.h"
 
 #include "trackingmanager.h"
