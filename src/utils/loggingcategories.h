@@ -10,8 +10,8 @@
 //   2) In all other .cpp files, simply:
 //          #include "utils/loggingcategories.h"
 //   3) At app startup, call Yawt::Logging::installDefaultMessagePattern();
-//      and Yawt::Logging::applyVerbosity(<1..3>);
-//      Verbosity aliases: 1 = basic, 2 = intermediate, 3 = firehose (all).
+//      and Yawt::Logging::applyVerbosity(<1..4>);
+//      Verbosity levels: 1 = basic, 2 = normal, 3 = YAWT-only firehose, 4 = full firehose (Qt internals too).
 //
 // Notes:
 // - This header enables fine-grained filtering (by category & level) and a unified
@@ -85,7 +85,8 @@ namespace Logging {
 enum class Verbosity : int {
     Basic       = 1, // status updates, high-level flow; debug mostly off
     Normal      = 2, // include action-level debug (state transitions, split/merge decisions)
-    Firehose    = 3  // include per-frame debug and all messages from all categories
+    Firehose    = 3, // YAWT-only firehose: all yawt.* info+debug; Qt internals suppressed
+    FirehoseAll = 4  // Full firehose: enable info+debug for all categories, including Qt internals
 };
 
 // Install a readable global message pattern that includes time, level, category, file, and line.
@@ -125,22 +126,35 @@ inline QString filterRulesForVerbosity(Verbosity v)
 
     switch (v) {
     case Verbosity::Basic:
-        // Enable only high-level info on core components; keep debug off.
+        // Enable only high-level info on YAWT components; suppress Qt internals; keep debug off.
         rules +=
         "yawt.core.*.info=true\n"
-        "yawt.data.*.info=true\n";
+        "yawt.data.*.info=true\n"
+        "yawt.gui.*.info=true\n"
+        "qt.*.info=false\n"
+        "qt.*.debug=false\n";
         break;
     case Verbosity::Normal:
-        // Enable info for most and debug for core components (but keep GUI debug off).
+        // Enable YAWT info broadly and debug for non-GUI components; suppress Qt internals.
         rules +=
-        "*.info=true\n"
+        "yawt.*.info=true\n"
         "yawt.core.*.debug=true\n"
         "yawt.data.*.debug=true\n"
         "yawt.models.*.debug=true\n"
-        "yawt.utils.*.debug=true\n";
+        "yawt.utils.*.debug=true\n"
+        "qt.*.info=false\n"
+        "qt.*.debug=false\n";
         break;
     case Verbosity::Firehose:
-        // Everything on: info + debug everywhere (per-frame messages will flow).
+        // YAWT-only firehose: enable all yawt.* info + debug; keep Qt internals suppressed.
+        rules +=
+        "yawt.*.info=true\n"
+        "yawt.*.debug=true\n"
+        "qt.*.info=false\n"
+        "qt.*.debug=false\n";
+        break;
+    case Verbosity::FirehoseAll:
+        // Full firehose: enable info + debug for all categories, including Qt internals.
         rules +=
         "*.info=true\n"
         "*.debug=true\n";
@@ -153,13 +167,13 @@ inline QString filterRulesForVerbosity(Verbosity v)
 inline void applyVerbosity(int level)
 {
     if (level < 1) level = 1;
-    if (level > 3) level = 3;
+    if (level > 4) level = 4;
     const Verbosity v = static_cast<Verbosity>(level);
     QLoggingCategory::setFilterRules(filterRulesForVerbosity(v));
 }
 
-// Friendly alias for --firehose -> verbosity=3
-inline void applyFirehose() { applyVerbosity(3); }
+// Friendly alias for --firehose -> verbosity=4 (full firehose incl. Qt internals)
+inline void applyFirehose() { applyVerbosity(4); }
 
 // Parse a "--verbosity=N" or "--firehose" pair from a pre-parsed string list and apply.
 // This is optional sugar if you don't use QCommandLineParser in main yet.

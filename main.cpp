@@ -17,8 +17,8 @@ int main(int argc, char *argv[])
     QCommandLineParser parser;
     parser.setApplicationDescription("YAWT - Yet Another Worm Tracker");
     parser.addHelpOption();
-    QCommandLineOption verbosityOpt(QStringList() << "v" << "verbosity", "Verbosity level (1-3). 1=basic, 2=normal, 3=firehose.", "level");
-    QCommandLineOption firehoseOpt("firehose", "Alias for --verbosity=3 (very verbose)");
+    QCommandLineOption verbosityOpt(QStringList() << "v" << "verbosity", "Verbosity level (1-4). 1=basic, 2=normal, 3=firehose (YAWT only), 4=firehose (all, incl. Qt).", "level");
+    QCommandLineOption firehoseOpt("firehose", "Alias for --verbosity=4 (full firehose incl. Qt internals)");
     parser.addOption(verbosityOpt);
     parser.addOption(firehoseOpt);
     parser.process(a);
