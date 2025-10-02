@@ -5,6 +5,7 @@
 #include <QFontMetrics>
 #include <QLinearGradient>
 #include <QDebug>
+#include "../../utils/loggingcategories.h"
 #include <algorithm>
 
 MergeViewer::MergeViewer(QWidget* parent)
@@ -282,7 +283,7 @@ void MergeViewer::paintEvent(QPaintEvent* ev)
             for (int i = 0; i < segments; ++i) {
                 visParts << (visibleVec[i] ? QStringLiteral("1") : QStringLiteral("0"));
             }
-            qDebug() << "MergeViewer: ID" << id << "frames" << frameNums << "visiblePerSegment" << visParts.join("");
+            YAWT_DEBUG(lcGuiMiniLoader) << "MergeViewer: ID" << id << "frames" << frameNums << "visiblePerSegment" << visParts.join("");
 
             // Draw per-segment rectangles based on the computed visibility vector.
             for (int i = 0; i < segments; ++i) {

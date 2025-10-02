@@ -2,6 +2,7 @@
 #include "frameloader.h"
 
 #include <QDebug>
+#include "../../utils/loggingcategories.h"
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPainterPath>
@@ -22,12 +23,12 @@
 
 FrameCache::FrameCache(int maxCacheSize)
     : m_maxSize(maxCacheSize), m_hits(0), m_requests(0) {
-    qDebug() << "FrameCache created with max size:" << m_maxSize;
+    YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache created with max size:" << m_maxSize;
 }
 
 FrameCache::~FrameCache() {
     clear();
-    qDebug() << "FrameCache destroyed. Final hit rate:" << hitRate() << "%";
+    YAWT_INFO(lcGuiVideoLoader) << "FrameCache destroyed. Final hit rate:" << hitRate() << "%";
 }
 
 void FrameCache::insertFrame(int frameNumber, const cv::Mat& frame) {
@@ -46,7 +47,7 @@ void FrameCache::insertFrame(int frameNumber, const cv::Mat& frame) {
         evictLRU();
     }
 
-    qDebug() << "FrameCache: Cached frame" << frameNumber << "- Cache size:" << m_frames.size();
+    YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache: Cached frame" << frameNumber << "- Cache size:" << m_frames.size();
 }
 
 bool FrameCache::getFrame(int frameNumber, cv::Mat& outFrame) {
@@ -74,7 +75,7 @@ bool FrameCache::hasFrame(int frameNumber) const {
 void FrameCache::clear() {
     QMutexLocker locker(&m_mutex);
     m_frames.clear();
-    qDebug() << "FrameCache: Cleared all frames";
+    YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache: Cleared all frames";
 }
 
 void FrameCache::setMaxSize(int maxSize) {
@@ -112,7 +113,7 @@ void FrameCache::evictLRU() {
         }
     }
 
-    qDebug() << "FrameCache: Evicting frame" << oldest->frameNumber;
+    YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache: Evicting frame" << oldest->frameNumber;
     m_frames.erase(oldest);
 }
 
@@ -213,7 +214,7 @@ int VideoLoader::getCurrentFrameNumber() const { return currentFrameIdx; }
 QImage VideoLoader::getCurrentQImageFrame() const { return currentQImageFrame;}
 QSize VideoLoader::getVideoFrameSize() const { return originalFrameSize; }
 double VideoLoader::getZoomFactor() const {
-    qDebug() << "VideoLoader::getZoomFactor() called - returning:" << m_zoomFactor;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::getZoomFactor() called - returning:" << m_zoomFactor;
     return m_zoomFactor;
 }
 QRectF VideoLoader::getCurrentRoi() const { return m_activeRoiRect; }
@@ -267,14 +268,14 @@ bool VideoLoader::loadVideo(const QString& filePath) {
                                          "Loading a new video will remove all blobs, tracks, and annotations. Do you want to continue?",
                                          QMessageBox::Yes | QMessageBox::No);
         if (resp != QMessageBox::Yes) {
-            qDebug() << "VideoLoader::loadVideo - user cancelled loading due to existing annotations.";
+            YAWT_INFO(lcGuiVideoLoader) << "VideoLoader::loadVideo - user cancelled loading due to existing annotations.";
             return false;
         }
         // User confirmed: clear the central storage (this emits signals so models/views update)
         m_storage->removeAllItems();
     }
 
-    qDebug() << "VideoLoader::loadVideo() - resetting zoom factor from" << m_zoomFactor << "to 1.0";
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::loadVideo() - resetting zoom factor from" << m_zoomFactor << "to 1.0";
     m_zoomFactor = 1.0;
     m_panOffset = QPointF(0.0, 0.0);
     m_activeRoiRect = QRectF();
@@ -315,7 +316,7 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     }
     framesPerSecond = videoCapture.get(cv::CAP_PROP_FPS);
     if (framesPerSecond <= 0) {
-        qWarning() << "Video FPS reported as 0 or less, defaulting to 25.0";
+        YAWT_WARN(lcGuiVideoLoader) << "Video FPS reported as 0 or less, defaulting to 25.0";
         framesPerSecond = 25.0;
     }
     totalFramesCount = static_cast<int>(videoCapture.get(cv::CAP_PROP_FRAME_COUNT));
@@ -337,7 +338,7 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     emit interactionModeChanged(m_currentInteractionMode);
     emit activeViewModesChanged(m_activeViewModes);
     updateCursorShape();
-    qDebug() << "Video loaded:" << filePath << "- Cache hit rate:" << getCacheHitRate() << "%";
+    YAWT_INFO(lcGuiVideoLoader) << "Video loaded:" << filePath << "- Cache hit rate:" << getCacheHitRate() << "%";
     return true;
 }
 
@@ -348,7 +349,7 @@ bool VideoLoader::openVideoFile(const QString& filePath) {
     try {
         return videoCapture.open(filePath.toStdString());
     } catch (const cv::Exception& ex) {
-        qWarning() << "OpenCV exception while opening video:" << ex.what();
+        YAWT_WARN(lcGuiVideoLoader) << "OpenCV exception while opening video:" << ex.what();
         return false;
     }
 }
@@ -385,13 +386,13 @@ void VideoLoader::setZoomFactor(double factor) {
 }
 
 void VideoLoader::setZoomFactorAtPoint(double factor, const QPointF& widgetPoint) {
-    qDebug() << "VideoLoader::setZoomFactorAtPoint() called with factor:" << factor << "current zoom:" << m_zoomFactor;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::setZoomFactorAtPoint() called with factor:" << factor << "current zoom:" << m_zoomFactor;
     if (!isVideoLoaded()) return;
     double newZoomFactor = qBound(0.05, factor, 50.0);
     if (qFuzzyCompare(m_zoomFactor, newZoomFactor)) return;
     QPointF videoPointBeforeZoom = mapPointToVideo(widgetPoint);
     m_zoomFactor = newZoomFactor;
-    qDebug() << "VideoLoader::setZoomFactorAtPoint() - zoom changed to:" << m_zoomFactor;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::setZoomFactorAtPoint() - zoom changed to:" << m_zoomFactor;
 
     if (videoPointBeforeZoom.x() < 0 || videoPointBeforeZoom.y() < 0) {
         QSizeF widgetSize = size();
@@ -408,55 +409,55 @@ void VideoLoader::setZoomFactorAtPoint(double factor, const QPointF& widgetPoint
 }
 
 void VideoLoader::centerOnVideoPoint(const QPointF& videoPoint) {
-    qDebug() << "VideoLoader::centerOnVideoPoint called with point:" << videoPoint;
-    qDebug() << "VideoLoader: isVideoLoaded():" << isVideoLoaded() << "zoomFactor:" << m_zoomFactor;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::centerOnVideoPoint called with point:" << videoPoint;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: isVideoLoaded():" << isVideoLoaded() << "zoomFactor:" << m_zoomFactor;
 
     if (!isVideoLoaded() || m_zoomFactor <= 0) {
-        qDebug() << "VideoLoader::centerOnVideoPoint - early return: video not loaded or invalid zoom";
+        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::centerOnVideoPoint - early return: video not loaded or invalid zoom";
         return;
     }
 
     // Bounds checking for video point
     if (videoPoint.isNull() || videoPoint.x() < 0 || videoPoint.y() < 0) {
-        qDebug() << "VideoLoader::centerOnVideoPoint - early return: invalid video point";
+        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::centerOnVideoPoint - early return: invalid video point";
         return;
     }
 
     // Ensure point is within video frame bounds
-    qDebug() << "VideoLoader: originalFrameSize:" << originalFrameSize << "videoPoint:" << videoPoint;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: originalFrameSize:" << originalFrameSize << "videoPoint:" << videoPoint;
     if (videoPoint.x() >= originalFrameSize.width() || videoPoint.y() >= originalFrameSize.height()) {
-        qDebug() << "VideoLoader::centerOnVideoPoint - early return: point outside frame bounds";
+        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::centerOnVideoPoint - early return: point outside frame bounds";
         return;
     }
 
     // Get the center of the widget
     QSizeF widgetSize = size();
     QPointF widgetCenter(widgetSize.width() / 2.0, widgetSize.height() / 2.0);
-    qDebug() << "VideoLoader: widgetSize:" << widgetSize << "widgetCenter:" << widgetCenter;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: widgetSize:" << widgetSize << "widgetCenter:" << widgetCenter;
 
     // Calculate where the video point currently maps to in widget coordinates
     QPointF currentWidgetPoint = mapPointFromVideo(videoPoint);
-    qDebug() << "VideoLoader: currentWidgetPoint:" << currentWidgetPoint;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: currentWidgetPoint:" << currentWidgetPoint;
 
     // If the mapping failed (returns -1, -1 for errors), don't adjust
     if (currentWidgetPoint == QPointF(-1, -1)) {
-        qDebug() << "VideoLoader::centerOnVideoPoint - early return: mapping to widget coordinates failed";
+        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::centerOnVideoPoint - early return: mapping to widget coordinates failed";
         return;
     }
 
     // Calculate the offset needed to move the video point to the center
     QPointF offsetNeeded = widgetCenter - currentWidgetPoint;
-    qDebug() << "VideoLoader: offsetNeeded:" << offsetNeeded << "current m_panOffset:" << m_panOffset;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: offsetNeeded:" << offsetNeeded << "current m_panOffset:" << m_panOffset;
 
     // Apply the offset to the pan
     m_panOffset += offsetNeeded;
-    qDebug() << "VideoLoader: new m_panOffset:" << m_panOffset;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: new m_panOffset:" << m_panOffset;
 
     // Clamp to valid bounds and update
     clampPanOffset();
-    qDebug() << "VideoLoader: m_panOffset after clamp:" << m_panOffset;
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: m_panOffset after clamp:" << m_panOffset;
     update();
-    qDebug() << "VideoLoader::centerOnVideoPoint - completed successfully";
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader::centerOnVideoPoint - completed successfully";
 }
 
 // --- Mode Setting Slots ---
@@ -467,7 +468,7 @@ void VideoLoader::setInteractionMode(InteractionMode mode) {
     m_isDefiningRoi = false;
     updateCursorShape();
     emit interactionModeChanged(m_currentInteractionMode);
-    qDebug() << "Interaction mode set to:" << static_cast<int>(m_currentInteractionMode);
+    YAWT_INFO(lcGuiVideoLoader) << "Interaction mode set to:" << static_cast<int>(m_currentInteractionMode);
     update();
 }
 
@@ -480,7 +481,7 @@ void VideoLoader::setViewModeOption(VideoLoader::ViewModeOption option, bool act
         return;
     }
 
-    qDebug() << "Active view modes changed. New flags:" << QString::number(static_cast<int>(m_activeViewModes), 16);
+    YAWT_DEBUG(lcGuiVideoLoader) << "Active view modes changed. New flags:" << QString::number(static_cast<int>(m_activeViewModes), 16);
 
     if (isVideoLoaded() && currentFrameIdx >= 0) {
         bool thresholdStateChanged = (oldModes.testFlag(ViewModeOption::Threshold) != m_activeViewModes.testFlag(ViewModeOption::Threshold));
@@ -635,7 +636,7 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
         update();
     }
-    qDebug() << "VideoLoader: Items to display updated. Count:" << m_itemsToDisplay.size();
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Items to display updated. Count:" << m_itemsToDisplay.size();
 }
 
 void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
@@ -644,7 +645,7 @@ void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs (as blobs now use track data)
         update();
     }
-    qDebug() << "VideoLoader: Tracks set for display. Count:" << m_allTracksToDisplay.size();
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Tracks set for display. Count:" << m_allTracksToDisplay.size();
 }
 
 void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
@@ -653,7 +654,7 @@ void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs
         update();
     }
-    qDebug() << "VideoLoader: Visible track IDs updated. Count:" << m_visibleTrackIDs.size();
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Visible track IDs updated. Count:" << m_visibleTrackIDs.size();
 }
 
 void VideoLoader::clearDisplayedTracks() {
@@ -663,7 +664,7 @@ void VideoLoader::clearDisplayedTracks() {
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs
         update();
     }
-    qDebug() << "VideoLoader: All displayed tracks (data) cleared.";
+    YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: All displayed tracks (data) cleared.";
 }
 
 /* Per-item color update slot removed.
@@ -700,14 +701,14 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
                 if (m_frameLoader) {
                     m_frameLoader->requestSingleFrame(frameNumber, 100); // High priority
                 }
-                qDebug() << "Seek FAILED. Requesting frame" << frameNumber << "via FrameLoader";
+                YAWT_INFO(lcGuiVideoLoader) << "Seek FAILED. Requesting frame" << frameNumber << "via FrameLoader";
                 return;
             }
             // ADD THIS LINE
-            qDebug() << "Seek SUCCEEDED. Now reading frame" << frameNumber << "from disk.";
+            YAWT_DEBUG(lcGuiVideoLoader) << "Seek SUCCEEDED. Now reading frame" << frameNumber << "from disk.";
 
         } else {
-            qDebug() << "Not playing -- " << frameNumber << ". Reading directly.";
+            YAWT_DEBUG(lcGuiVideoLoader) << "Not playing -- " << frameNumber << ". Reading directly.";
         }
 
         if (videoCapture.read(currentCvFrame)) {
@@ -791,7 +792,7 @@ void VideoLoader::convertCvMatToQImage(const cv::Mat& mat, QImage& qimg) {
             else if (mat.channels() == 1 && mat.type() != CV_8UC1) { mat.convertTo(temp, CV_8UC1, 255.0); qimg = QImage(temp.data, temp.cols, temp.rows, static_cast<int>(temp.step), QImage::Format_Grayscale8); }
             else { qimg = QImage(); }
         } catch (const cv::Exception& ex) {
-            qWarning() << "OpenCV conversion exception:" << ex.what(); qimg = QImage();
+            YAWT_WARN(lcGuiVideoLoader) << "OpenCV conversion exception:" << ex.what(); qimg = QImage();
         }
     }
 }
@@ -1026,17 +1027,17 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 if (clickVideoPoint.x() >= 0) {
                     Tracking::DetectedBlob blobData = Tracking::findClickedBlob(m_thresholdedFrame_mono, clickVideoPoint);
                     if (blobData.isValid) {
-                        qDebug() << "VideoLoader: Blob clicked for addition. Centroid:" << blobData.centroid;
+                        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Blob clicked for addition. Centroid:" << blobData.centroid;
                         emit blobClickedForAddition(blobData);
                         handled = true;
                     } else {
-                        qDebug() << "VideoLoader: No valid blob found at click point:" << clickVideoPoint;
+                        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: No valid blob found at click point:" << clickVideoPoint;
                     }
                 }
             } else if (!m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
-                qDebug() << "VideoLoader: EditBlobs mode active, but Threshold view is not. Blob selection might be inaccurate or disabled.";
+                YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: EditBlobs mode active, but Threshold view is not. Blob selection might be inaccurate or disabled.";
             } else {
-                qDebug() << "VideoLoader: Cannot select blob, thresholded image is not available (and it should be if Threshold view is on).";
+                YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: Cannot select blob, thresholded image is not available (and it should be if Threshold view is on).";
             }
 
             if (!handled) {
@@ -1094,7 +1095,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 }
             }
             if (bestTrackId != -1) {
-                qDebug() << "Track point clicked: Worm ID" << bestTrackId << "Frame" << bestFrameNum;
+                YAWT_INFO(lcGuiVideoLoader) << "Track point clicked: Worm ID" << bestTrackId << "Frame" << bestFrameNum;
                 emit trackPointClicked(bestTrackId, bestFrameNum, bestVideoPoint);
                 event->accept();
             } else {
@@ -1208,7 +1209,7 @@ void VideoLoader::wheelEvent(QWheelEvent* event) {
     } else if (hasAngleDelta) {
         // STANDARD MOUSE WHEEL or other devices primarily using angleDelta.
         // This also catches touchpads that might only provide angleDelta.
-        qDebug() << "Mouse Wheel/Other (using angleDelta):" << event->angleDelta().y();
+        YAWT_DEBUG(lcGuiVideoLoader) << "Mouse Wheel/Other (using angleDelta):" << event->angleDelta().y();
         int angleY = event->angleDelta().y();
 
         // angleDelta() is typically in 1/8ths of a degree.
@@ -1221,7 +1222,7 @@ void VideoLoader::wheelEvent(QWheelEvent* event) {
 
         // Special consideration if it's a touchpad using angleDelta:
         if (isTouchpad) {
-            qDebug() << "Touchpad is using angleDelta. Steps:" << steps << "with zs:" << zs_for_this_event;
+            YAWT_DEBUG(lcGuiVideoLoader) << "Touchpad is using angleDelta. Steps:" << steps << "with zs:" << zs_for_this_event;
             // If this still feels too fast/slow for a touchpad using angleDelta,
             // you might need to adjust 'steps' or 'zs_for_this_event' specifically here.
             // For example, if touchpad angleDelta is also small and frequent:
@@ -1232,7 +1233,7 @@ void VideoLoader::wheelEvent(QWheelEvent* event) {
     } else if (hasPixelDelta) {
         // For non-touchpad devices that might provide pixelDelta (e.g., some high-resolution mice)
         // but were not caught by the (isTouchpad && hasPixelDelta) condition.
-        qDebug() << "High-resolution Mouse/Other (using pixelDelta):" << event->pixelDelta().y();
+        YAWT_DEBUG(lcGuiVideoLoader) << "High-resolution Mouse/Other (using pixelDelta):" << event->pixelDelta().y();
         int pixelY = event->pixelDelta().y();
 
         // These pixel values might be larger than the touchpad's +/-1.
@@ -1461,7 +1462,7 @@ void VideoLoader::applyThresholding() {
                              cv::Size(m_blurKernelSize, m_blurKernelSize),
                              m_blurSigmaX);
         } catch (const cv::Exception& ex) {
-            qWarning() << "GaussianBlur Exception:" << ex.what();
+            YAWT_WARN(lcGuiVideoLoader) << "GaussianBlur Exception:" << ex.what();
         }
     }
     int type =
@@ -1498,7 +1499,7 @@ void VideoLoader::applyThresholding() {
             break;
         }
     } catch (const cv::Exception& ex) {
-        qWarning() << "Thresholding Exception:" << ex.what();
+        YAWT_WARN(lcGuiVideoLoader) << "Thresholding Exception:" << ex.what();
         m_thresholdedFrame_mono = cv::Mat();
     }
 }
@@ -1561,7 +1562,7 @@ void VideoLoader::startFrameLoader() {
     connect(m_frameLoaderThread, &QThread::finished, m_frameLoader, &QObject::deleteLater);
 
     m_frameLoaderThread->start();
-    qDebug() << "VideoLoader: Frame loader thread started";
+    YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: Frame loader thread started";
 }
 
 void VideoLoader::stopFrameLoader() {
@@ -1572,7 +1573,7 @@ void VideoLoader::stopFrameLoader() {
     if (m_frameLoaderThread && m_frameLoaderThread->isRunning()) {
         m_frameLoaderThread->quit();
         if (!m_frameLoaderThread->wait(3000)) {
-            qWarning() << "VideoLoader: Frame loader thread failed to stop gracefully, terminating";
+            YAWT_WARN(lcGuiVideoLoader) << "VideoLoader: Frame loader thread failed to stop gracefully, terminating";
             m_frameLoaderThread->terminate();
             m_frameLoaderThread->wait(1000);
         }
@@ -1580,7 +1581,7 @@ void VideoLoader::stopFrameLoader() {
 
     m_frameLoader = nullptr;
     m_frameLoaderThread = nullptr;
-    qDebug() << "VideoLoader: Frame loader thread stopped";
+    YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: Frame loader thread stopped";
 }
 
 bool VideoLoader::getCachedFrame(int frameNumber, cv::Mat& outFrame) {
@@ -1651,7 +1652,7 @@ void VideoLoader::preloadAdjacentFrames(int centerFrame, int radius) {
         // Higher priority for closer frames
         int priority = 10 - qMin(radius, 9); // Priority 1-10
         m_frameLoader->requestFrames(framesToLoad, priority);
-        qDebug() << "VideoLoader: Requested preload of" << framesToLoad.size() << "frames around" << centerFrame;
+        YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Requested preload of" << framesToLoad.size() << "frames around" << centerFrame;
     }
 }
 
@@ -1679,7 +1680,7 @@ void VideoLoader::onFrameLoaded(int frameNumber, cv::Mat frame) {
 }
 
 void VideoLoader::onFrameLoadError(int frameNumber, QString error) {
-    qWarning() << "VideoLoader: Failed to load frame" << frameNumber << ":" << error;
+    YAWT_WARN(lcGuiVideoLoader) << "VideoLoader: Failed to load frame" << frameNumber << ":" << error;
 
     // If this was the pending seek frame, clear it
     if (m_pendingSeekFrame == frameNumber) {

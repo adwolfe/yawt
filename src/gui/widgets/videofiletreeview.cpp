@@ -3,6 +3,7 @@
 #include <QHeaderView>
 #include <QTimer>
 #include <QDebug>
+#include "../../utils/loggingcategories.h"
 #include <QFileSystemModel> // <<< Make sure this is included
 
 VideoFileTreeView::VideoFileTreeView(QWidget *parent) : QTreeView(parent) {
@@ -53,8 +54,8 @@ void VideoFileTreeView::setRootDirectory(const QString &path) {
     QString effectivePath = path;
     QDir dir(path);
     if (path.isEmpty() || !dir.exists()) {
-        qWarning() << "VideoFileTreeView: Root path '" << path
-                   << "' is invalid or does not exist. Defaulting to home directory.";
+        YAWT_WARN(lcGuiVideoLoader) << "VideoFileTreeView: Root path '" << path
+                                    << "' is invalid or does not exist. Defaulting to home directory.";
         effectivePath = QDir::homePath();
     }
 
@@ -65,7 +66,7 @@ void VideoFileTreeView::setRootDirectory(const QString &path) {
     if (proxyModel) { // Ensure proxyModel is initialized
         setRootIndex(proxyModel->mapFromSource(sourceRootIndex));
     } else {
-        qWarning() << "VideoFileTreeView: Proxy model not initialized. Cannot set root index.";
+        YAWT_WARN(lcGuiVideoLoader) << "VideoFileTreeView: Proxy model not initialized. Cannot set root index.";
         // Fallback or error handling if proxy model somehow isn't set
         // This shouldn't happen if constructor logic is correct.
         setRootIndex(QModelIndex()); // Set an invalid index
@@ -101,7 +102,7 @@ void VideoFileTreeView::onItemDoubleClicked(const QModelIndex &proxyIndex) {
 
     QString filePath = fileSystemModel->filePath(sourceIndex);
     if (!filePath.isEmpty()) {
-        qDebug() << "File double-clicked (via proxy):" << filePath;
+        YAWT_INFO(lcGuiVideoLoader) << "File double-clicked (via proxy):" << filePath;
         emit videoFileDoubleClicked(filePath);
     }
 }

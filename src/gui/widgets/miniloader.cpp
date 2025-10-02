@@ -2,6 +2,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QDebug>
+#include "../../utils/loggingcategories.h"
 #include "trackingdatastorage.h"
 
 MiniLoader::MiniLoader(QWidget* parent)
@@ -97,7 +98,7 @@ void MiniLoader::setSelectedWorm(int wormId)
 
     m_selectedWormId = wormId;
 
-    qDebug() << "MiniLoader: Selected worm changed to" << wormId;
+    YAWT_INFO(lcGuiMiniLoader) << "MiniLoader: Selected worm changed to" << wormId;
 
     if (m_selectedWormId < 0) {
         clearSelection();
@@ -373,7 +374,7 @@ static QPolygonF cropPolygonToWidget(const QPolygonF& cropPoly, const QRect& tar
 
 void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
 {
-    qDebug() << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
+    YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays called - selectedWorm:" << m_selectedWormId << "frame:" << m_currentFrameNumber << "hasStorage:" << (m_trackingDataStorage != nullptr);
 
     // If updateWithCroppedFrames precomputed a per-frame visibility map, use it for this draw so
     // painting is consistent with the emitted per-frame signal. Do not emit visibility signals from paint().
@@ -387,7 +388,7 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
     }
 
     if (m_currentFrameNumber < 0) {
-        qDebug() << "MiniLoader::drawOverlays early return - bad frame";
+        YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays early return - bad frame";
         return;
     }
 
@@ -396,21 +397,21 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
     QMap<int, Tracking::DetectedBlob> blobMap;
     if (m_trackingDataStorage) {
         blobMap = m_trackingDataStorage->getDetectedBlobsForFrame(m_currentFrameNumber);
-        qDebug() << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
+        YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays blob map contains keys:" << blobMap.keys();
     } else {
-        qDebug() << "MiniLoader::drawOverlays: no storage available; skipping blob overlay drawing";
+        YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays: no storage available; skipping blob overlay drawing";
         return;
     }
 
     if (blobMap.isEmpty()) {
-        qDebug() << "MiniLoader::drawOverlays no blobs for frame" << m_currentFrameNumber;
+        YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays no blobs for frame" << m_currentFrameNumber;
         return;
     }
 
     // Crop rect in video coordinates
     QRectF cropRectVid = getCurrentCropRectVideo();
     if (cropRectVid.isEmpty()) {
-        qDebug() << "MiniLoader::drawOverlays crop rect empty";
+        YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays crop rect empty";
         return;
     }
 
@@ -529,7 +530,7 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
     }
 
     // Debug: list visible worm IDs found this draw
-    qDebug() << "MiniLoader::drawOverlays visible worm IDs:" << m_visibleWormIds;
+    YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::drawOverlays visible worm IDs:" << m_visibleWormIds;
     // Do not emit visibleWormsUpdated from paint anymore. Per-frame visibility is emitted from updateWithCroppedFrames
     // via visibleWormsUpdatedPerFrame so listeners get the full multi-frame map in one signal.
 }
@@ -661,7 +662,7 @@ void MiniLoader::updateWithCroppedFrames(int startFrameNumber,
 
 // Emit the single-frame visible IDs (center frame) so listeners depending on the current crop get notified.
 // m_visibleWormIds was populated above for the center frame.
-qDebug() << "MiniLoader::updateWithCroppedFrames emitting center-frame visible ids:" << m_visibleWormIds;
+YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::updateWithCroppedFrames emitting center-frame visible ids:" << m_visibleWormIds;
 emit visibleWormsUpdated(m_visibleWormIds);
 
 // Compute the union of all visible worm IDs across the supplied frames so we can build a consistent
@@ -694,11 +695,11 @@ for (int id : unionSet) {
 // Emit the per-frame visibility map including the center frame and the id->color map so consumers
 // (e.g. MergeViewer) can align segments correctly and use consistent colors matching the overlay.
 int centerFrame = centerFrameNumber;
-qDebug() << "MiniLoader::updateWithCroppedFrames emitting per-frame map center:" << centerFrame << " ids:" << unionList;
+YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::updateWithCroppedFrames emitting per-frame map center:" << centerFrame << " ids:" << unionList;
 emit visibleWormsUpdatedPerFrame(centerFrame, m_visibleWormsByFrame, idColors);
 
 // Also emit the union list along with the center frame for backward-compatible consumers that need it.
-qDebug() << "MiniLoader::updateWithCroppedFrames emitting union ids:" << unionList;
+YAWT_DEBUG(lcGuiMiniLoader) << "MiniLoader::updateWithCroppedFrames emitting union ids:" << unionList;
 emit visibleWormsUnionUpdated(centerFrame, unionList);
 
 // Trigger a repaint (central frame was updated above)

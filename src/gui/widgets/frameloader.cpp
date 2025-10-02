@@ -2,6 +2,7 @@
 #include "videoloader.h"
 
 #include <QDebug>
+#include "../../utils/loggingcategories.h"
 #include <QMutexLocker>
 #include <QThread>
 #include <algorithm>
@@ -31,10 +32,10 @@ void FrameLoader::setVideoPath(const QString& path) {
     m_videoPath = path;
     if (!path.isEmpty()) {
         if (!m_videoCapture.open(path.toStdString())) {
-            qWarning() << "FrameLoader: Failed to open video:" << path;
+            YAWT_WARN(lcGuiVideoLoader) << "FrameLoader: Failed to open video:" << path;
             return;
         }
-        qDebug() << "FrameLoader: Video opened successfully:" << path;
+        YAWT_INFO(lcGuiVideoLoader) << "FrameLoader: Video opened successfully:" << path;
     }
 }
 
@@ -43,7 +44,7 @@ void FrameLoader::setFrameCache(FrameCache* cache) {
     // insert loaded frames directly into the cache without involving the UI thread.
     QMutexLocker locker(&m_queueMutex);
     m_frameCache = cache;
-    qDebug() << "FrameLoader: frame cache set:" << (m_frameCache != nullptr);
+    YAWT_DEBUG(lcGuiVideoLoader) << "FrameLoader: frame cache set:" << (m_frameCache != nullptr);
 }
 
 void FrameLoader::requestFrames(const QList<int>& frameNumbers, int priority) {
@@ -103,7 +104,7 @@ void FrameLoader::requestSingleFrame(int frameNumber, int priority) {
 void FrameLoader::clearRequests() {
     QMutexLocker locker(&m_queueMutex);
     m_requestQueue.clear();
-    qDebug() << "FrameLoader: Cleared all pending requests";
+    YAWT_DEBUG(lcGuiVideoLoader) << "FrameLoader: Cleared all pending requests";
 }
 
 void FrameLoader::stop() {
@@ -114,7 +115,7 @@ void FrameLoader::stop() {
 }
 
 void FrameLoader::processRequests() {
-    qDebug() << "FrameLoader: Started processing requests";
+    YAWT_INFO(lcGuiVideoLoader) << "FrameLoader: Started processing requests";
     m_isProcessing = true;
 
     while (!m_stopRequested) {
@@ -151,7 +152,7 @@ void FrameLoader::processRequests() {
     }
 
     m_isProcessing = false;
-    qDebug() << "FrameLoader: Stopped processing requests";
+    YAWT_INFO(lcGuiVideoLoader) << "FrameLoader: Stopped processing requests";
 }
 
 void FrameLoader::loadFrame(int frameNumber) {
