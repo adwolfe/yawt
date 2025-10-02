@@ -15,12 +15,50 @@
 #include "trackingcommon.h"
 
 /**
- * @brief Central storage class for all tracking data
- * 
- * TrackingDataStorage serves as the single source of truth for both blob and track data.
- * It manages the storage, retrieval, and modification of all tracking-related data.
- * UI components like BlobTableModel and VideoLoader will use this class instead of
- * storing data themselves.
+ * Central storage for all tracking data (single source of truth).
+ *
+ * What this is:
+ * - Authoritative store for items (blobs/ROIs), tracks, detected blobs per frame, and per-frame merge groups.
+ * - Backing data for UI models (BlobTableModel, AnnotationTableModel) and visual components (VideoLoader/MiniLoader).
+ * - The place where final tracks and merge histories are persisted during/after tracking runs.
+ *
+ * Responsibilities:
+ * - Add/remove/update items (IDs, types, colors, visibility, ROI sizing).
+ * - Store and retrieve tracks per item; maintain fast per-frame lookup indexes.
+ * - Maintain global metrics (area/aspect ratio ranges) and derived fixed ROI size with a user multiplier.
+ * - Record per-frame merge groups and detected blobs for overlays and analysis.
+ * - Emit coherent signals for UI/model consumers on changes (items, tracks, global metrics).
+ *
+ * Ownership:
+ * - Typically constructed and owned by AppController (QObject parented to the controller).
+ * - Callers should not delete this directly when parented; QObject ownership applies.
+ *
+ * Key APIs:
+ * - addItem/removeItem/removeAllItems: manage item lifecycle and emit itemAdded/itemRemoved/itemsChanged.
+ * - setTrackForItem/clearTrackForItem/clearAllTracks: manage per-item tracks and rebuild frame index.
+ * - getWormDataForFrame/getLastKnownPositionBefore: query per-frame position/ROI derived from tracks.
+ * - setMergeGroupsForFrame/getMergeGroupsForFrame: persist/retrieve per-frame conceptual merge groups.
+ * - setDetectedBlobForFrame/getDetectedBlobsForFrame: record per-frame detected blobs per worm.
+ *
+ * Invariants:
+ * - Item IDs are unique and stable for the lifetime of the item.
+ * - m_idToIndexMap must be updated whenever m_items changes (add/remove); use updateIdToIndexMap().
+ * - m_frameIndex (wormId -> frame -> trackPoint*) must be rebuilt when tracks are set/cleared; use buildFrameIndex().
+ * - m_tracks contains only valid item IDs present in m_items.
+ * - ROI sizing: m_currentFixedRoiSize derives from global metrics, scaled by m_roiSizeMultiplier (> 0.0).
+ * - Merge history structure: m_mergeHistory[frame] is a list of groups; each group is a list of conceptual worm IDs.
+ * - Detected blobs by frame: m_detectedBlobsByFrame[frame][wormId] contains the last reported DetectedBlob for that worm at that frame.
+ *
+ * Concurrency expectations:
+ * - This class is not internally synchronized; it is intended to be used on the GUI thread.
+ * - Writers/readers should not call into this class concurrently from multiple threads.
+ * - TrackingManager updates should be funneled to the GUI thread before mutating storage (e.g., via queued signals).
+ *
+ * Signal semantics:
+ * - itemsChanged(...) emits the full item list for consumers that need to rebuild view state (order follows m_items).
+ * - trackAdded/trackRemoved fire on per-item track mutations; allDataChanged is reserved for broad refreshes.
+ * - globalMetricsUpdated is emitted whenever global metric ranges or fixed ROI size change.
+ * - itemVisibilityChanged communicates visibility toggles for selective UI redraws.
  */
 class TrackingDataStorage : public QObject {
     Q_OBJECT

@@ -1,3 +1,21 @@
+/**
+ * @file trackingdatastorage.cpp
+ * @brief Implementation of TrackingDataStorage: centralized, single source-of-truth for items, tracks, per-frame blobs, and merge history.
+ *
+ * Responsibilities:
+ * - Manage item lifecycle (IDs, types, colors, visibility, ROI sizing).
+ * - Store/retrieve per-item tracks and maintain fast per-frame indexes.
+ * - Maintain global metrics and derived fixed ROI size with a user multiplier.
+ * - Record per-frame merge groups and per-frame detected blobs for overlays/analysis.
+ *
+ * Concurrency:
+ * - Intended for GUI-thread access. Do not mutate/read from multiple threads concurrently.
+ * - Updaters should funnel writes to the GUI thread (e.g., via queued signals).
+ *
+ * Signals:
+ * - itemsChanged(...) for full item list updates, trackAdded/trackRemoved for per-item track mutations,
+ *   allDataChanged for broad refresh, globalMetricsUpdated for metric/ROI changes.
+ */
 #include "trackingdatastorage.h"
 #include <stdexcept>
 #include <QtMath>
@@ -5,6 +23,10 @@
 // Define a default small ROI size for when no worms are present or dimensions are zero
 const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0);
 
+/**
+ * @brief Construct storage with initialized color palette and defaults.
+ * Initializes ID counters, metrics, ROI multiplier, and supporting indexes/maps.
+ */
 TrackingDataStorage::TrackingDataStorage(QObject *parent)
     : QObject(parent),
       m_nextId(1),
@@ -197,6 +219,10 @@ void TrackingDataStorage::setRoiSizeMultiplier(double multiplier) {
 
 // --- Track Management Methods ---
 
+/**
+ * @brief Replace or set the full track for an item and rebuild frame index.
+ * Emits trackRemoved/trackAdded appropriately and signals allDataChanged/itemsChanged for UI/model refresh.
+ */
 void TrackingDataStorage::setTrackForItem(int itemId, const std::vector<Tracking::WormTrackPoint>& trackPoints) {
     // Check if item exists
     if (getIndexFromId(itemId) < 0) {
@@ -255,6 +281,10 @@ void TrackingDataStorage::clearAllTracks() {
     emit allDataChanged();
 }
 
+/**
+ * @brief Aggressively clear tracks and compact memory.
+ * Use when large runs should release memory immediately after save/cancel/fail.
+ */
 void TrackingDataStorage::clearAndCompactTrackData() {
     // Get count before clearing for reporting
     int trackCount = m_tracks.size();
@@ -276,6 +306,10 @@ void TrackingDataStorage::clearAndCompactTrackData() {
 
 // --- Merge History Methods ---
 
+/**
+ * @brief Persist per-frame conceptual merge groups (for overlays and post-run analysis).
+ * Each group is a list of conceptual worm IDs present in the same physical blob at that frame.
+ */
 void TrackingDataStorage::setMergeGroupsForFrame(int frameNumber, const QList<QList<int>>& groups) {
     if (frameNumber < 0) return; // silently ignore invalid frame numbers
     m_mergeHistory.insert(frameNumber, groups);
@@ -287,6 +321,10 @@ QList<QList<int>> TrackingDataStorage::getMergeGroupsForFrame(int frameNumber) c
 
 // --- Detected blob persistence API ---
 
+/**
+ * @brief Record a DetectedBlob for a worm at a given frame (latest wins).
+ * Enables per-frame overlay reconstruction and debugging of merge/split decisions.
+ */
 void TrackingDataStorage::setDetectedBlobForFrame(int frameNumber, int wormId, const Tracking::DetectedBlob& blob) {
     if (frameNumber < 0) return;
     m_detectedBlobsByFrame[frameNumber].insert(wormId, blob);
