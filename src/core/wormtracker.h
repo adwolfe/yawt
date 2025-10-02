@@ -1,3 +1,65 @@
+/**
+ * @file wormtracker.h
+ * @brief Per-worm tracker processing frames forward/backward from a keyframe.
+ *
+ * Responsibilities:
+ *  - Maintain per-worm tracking state and a fixed-size search ROI.
+ *  - For each frame, choose an anchor (primary) blob, report the full blob, and emit updates.
+ *  - Detect and react to merges/splits/lost-tracking scenarios; pause on split for external resolution.
+ *  - Emit lifecycle and progress signals suitable for cross-thread consumption.
+ *
+ * State machine notes:
+ *  - TrackingNormally: tracking a single worm-sized blob.
+ *  - TrackingAsMerged: blob likely represents multiple worms (merged entity).
+ *  - PausedForSplit: split detected; tracker pauses and emits candidates, awaiting assignment.
+ *  - Lost: target not found; attempt recovery using last-known position/ROI heuristics.
+ *  - Transitions are driven by helpers such as updateTrackingState(), detectSplitByAreaReduction(),
+ *    detectMergeByAreaIncrease(), and boundary/area plausibility checks.
+ *
+ * Signals (semantics):
+ *  - positionUpdated(wormId, originalFrameNumber, primaryBlob, fullBlob, searchRoiUsed, state, splitCandidates):
+ *      Per-frame update. primaryBlob is the anchor used to extend the track; fullBlob may be larger (merged) for state logic.
+ *      splitCandidates is populated only when entering PausedForSplit.
+ *  - splitDetectedAndPaused(wormId, originalFrameNumber, detectedBlobs):
+ *      Emitted when a merged entity appears to split. The tracker pauses. TrackingManager should resolve by calling
+ *      resumeTrackingWithAssignedTarget(...).
+ *  - stateChanged(wormId, newState, associatedEntityId):
+ *      State transitions for UI/manager consumption; associatedEntityId may reference a merge representative if applicable.
+ *  - progress(wormId, percentDone), finished(), errorOccurred(wormId, msg):
+ *      Lifecycle/progress reporting from the worker thread.
+ *
+ * Threading:
+ *  - Instances are intended to run on their own QThread. All signals should be delivered via queued connections
+ *    to TrackingManager/UI. The underlying frames pointer is non-owning and must remain valid for the tracker lifetime.
+ *
+ * Public API (semantics):
+ *  - WormTracker(int wormId, QRectF initialRoi, TrackingDirection direction, int videoKeyFrameNum, QObject* parent):
+ *      Construct a tracker for a conceptual worm. initialRoi is the fixed-size search ROI (centered on the worm at keyframe);
+ *      direction selects forward/backward traversal; videoKeyFrameNum is the absolute keyframe index in the original video.
+ *  - setFrames(const std::vector<cv::Mat>* frames):
+ *      Non-owning pointer to pre-processed frames (forward or reverse order depending on direction). Must remain valid during tracking.
+ *  - startTracking():
+ *      Begin processing on the worker thread; emits progress/positionUpdated/stateChanged and eventually finished()/errorOccurred().
+ *  - continueTracking():
+ *      Internal loop progression; typically invoked by the tracker's own thread control.
+ *  - stopTracking():
+ *      Request a cooperative stop; a finished() signal will follow once the loop exits.
+ *  - resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob& targetBlob):
+ *      Resume after PausedForSplit by assigning the selected post-split target (chosen by TrackingManager).
+ *
+ * Private helpers (high-level intent):
+ *  - processFrame/processFrameAsSingle/processFrameAsMerged:
+ *      Core per-frame decision logic; selects primary/full blobs, evaluates boundaries, and updates state.
+ *  - handleLostTracking/handleSingleBlobCase/handleMultipleBlobsCase:
+ *      Branch handlers for common scenarios; may transition to Lost/PausedForSplit/TrackingAsMerged.
+ *  - detectSplitByAreaReduction/detectMergeByAreaIncrease:
+ *      Heuristics guiding transitions between single vs merged states.
+ *  - findPersistingAnchor/findPersistingComponent/selectBestBlobCandidate:
+ *      Blob selection utilities emphasizing temporal consistency across frames.
+ *  - initializeFrameProcessing/adjustRoiPos/findPlausibleBlobsInRoi:
+ *      ROI management and candidate enumeration within the fixed-size search window.
+ */
+
 // wormtracker.h
 #ifndef WORMTRACKER_H
 #define WORMTRACKER_H

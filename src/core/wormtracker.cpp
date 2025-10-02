@@ -49,8 +49,11 @@ void WormTracker::setFrames(const std::vector<cv::Mat>* frames) {
     m_framesToProcess = frames;
 }
 
-void WormTracker::startTracking()
-{
+/**
+ * @brief Begin per-worm tracking on the worker thread.
+ * Initializes state and schedules loop progression via continueTracking().
+ */
+void WormTracker::startTracking() {
     TRACKING_DEBUG().noquote() << getDebugLabel("startTracking") << "startTracking - STARTING TRACKING";
     if (!m_framesToProcess || m_framesToProcess->empty()) {
         qWarning().noquote() << getDebugLabel("startTracking") << "No frames";
@@ -71,8 +74,11 @@ void WormTracker::startTracking()
     QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
 }
 
-void WormTracker::continueTracking()
-{
+/**
+ * @brief Internal loop progression invoked on the worker thread.
+ * Advances frame-by-frame, emitting progress and positionUpdated/stateChanged as appropriate.
+ */
+void WormTracker::continueTracking() {
     TRACKING_DEBUG().noquote() << getDebugLabel("continueTracking") << "continueTracking - CALLED for frame:" << m_currFrameNum;
     
     if (QThread::currentThread()->isInterruptionRequested())
@@ -132,6 +138,10 @@ void WormTracker::continueTracking()
     }
 }
 
+/**
+ * @brief Request a cooperative stop of the tracking loop.
+ * Sets the internal flag so the worker loop exits and a finished() signal follows.
+ */
 void WormTracker::stopTracking() {
     m_trackingActive = false;
     QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
