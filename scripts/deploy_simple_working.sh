@@ -70,7 +70,7 @@ print_step "Step 1: Copying Qt Frameworks"
 
 # Copy Qt frameworks
 QT_LIB_PATH="$HOMEBREW_PREFIX/opt/qt/lib"
-for framework in QtCore QtGui QtWidgets QtSvg; do
+for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     if [ -d "$QT_LIB_PATH/$framework.framework" ]; then
         echo "  Copying $framework.framework"
         cp -R "$QT_LIB_PATH/$framework.framework" "$FRAMEWORKS_DIR/"
@@ -88,7 +88,11 @@ done
 print_step "Step 2: Copying Qt Plugins"
 
 # Copy essential Qt plugins
-QT_PLUGINS_PATH="$HOMEBREW_PREFIX/share/qt/plugins"
+if [ -d "$HOMEBREW_PREFIX/lib/qt6/plugins" ]; then
+    QT_PLUGINS_PATH="$HOMEBREW_PREFIX/lib/qt6/plugins"
+else
+    QT_PLUGINS_PATH="$HOMEBREW_PREFIX/share/qt/plugins"
+fi
 if [ -f "$QT_PLUGINS_PATH/platforms/libqcocoa.dylib" ]; then
     cp "$QT_PLUGINS_PATH/platforms/libqcocoa.dylib" "$PLUGINS_DIR/platforms/"
     echo "  Copied Cocoa platform plugin"
@@ -103,8 +107,8 @@ done
 
 print_step "Step 3: Copying OpenCV Libraries"
 
-# Get all OpenCV libraries the app depends on
-OPENCV_LIBS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | grep '/opt/homebrew.*opencv' | awk '{print $1}')
+# Get all OpenCV libraries the app depends on (respect the detected Homebrew prefix)
+OPENCV_LIBS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | grep "$HOMEBREW_PREFIX.*opencv" | awk '{print $1}')
 
 for lib_path in $OPENCV_LIBS; do
     if [ -f "$lib_path" ]; then
@@ -115,11 +119,44 @@ for lib_path in $OPENCV_LIBS; do
     fi
 done
 
+# Also copy ALL OpenCV modules from the keg (defensive in case some are pulled transitively)
+if [ -d "$HOMEBREW_PREFIX/opt/opencv/lib" ]; then
+    OPENCV_LIB_DIR="$HOMEBREW_PREFIX/opt/opencv/lib"
+elif [ -d "$HOMEBREW_PREFIX/opt/opencv@4/lib" ]; then
+    OPENCV_LIB_DIR="$HOMEBREW_PREFIX/opt/opencv@4/lib"
+else
+    OPENCV_LIB_DIR=""
+fi
+if [ -d "$OPENCV_LIB_DIR" ]; then
+    echo "  Scanning $OPENCV_LIB_DIR for OpenCV modules..."
+    for lib in "$OPENCV_LIB_DIR"/libopencv_*.dylib; do
+        [ -f "$lib" ] || continue
+        lib_name=$(basename "$lib")
+        if [ ! -f "$FRAMEWORKS_DIR/$lib_name" ]; then
+            echo "    Copying $lib_name"
+            cp "$lib" "$FRAMEWORKS_DIR/"
+            chmod u+w "$FRAMEWORKS_DIR/$lib_name"
+        fi
+    done
+else
+    # Fallback to prefix/lib if keg path isn't available
+    echo "  Keg path not found; scanning $HOMEBREW_PREFIX/lib for OpenCV modules..."
+    for lib in "$HOMEBREW_PREFIX/lib"/libopencv_*.dylib; do
+        [ -f "$lib" ] || continue
+        lib_name=$(basename "$lib")
+        if [ ! -f "$FRAMEWORKS_DIR/$lib_name" ]; then
+            echo "    Copying $lib_name"
+            cp "$lib" "$FRAMEWORKS_DIR/"
+            chmod u+w "$FRAMEWORKS_DIR/$lib_name"
+        fi
+    done
+fi
+
 # Copy OpenCV's dependencies (like TBB, OpenBLAS)
 echo "  Finding OpenCV dependencies..."
 for opencv_lib in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
     if [ -f "$opencv_lib" ]; then
-        DEPS=$(otool -L "$opencv_lib" | grep '/opt/homebrew' | grep -v opencv | awk '{print $1}' | head -20)
+        DEPS=$(otool -L "$opencv_lib" | grep "$HOMEBREW_PREFIX" | grep -v opencv | awk '{print $1}')
         for dep in $DEPS; do
             if [ -f "$dep" ]; then
                 dep_name=$(basename "$dep")
@@ -132,6 +169,69 @@ for opencv_lib in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
         done
     fi
 done
+
+# Additional dependency closure: copy any remaining Homebrew-linked dylibs referenced by
+# binaries already in the bundle (Frameworks and PlugIns). This pulls in items like
+# libdouble-conversion, fmt, tbb, openblas, etc., if they are needed.
+CHANGED=true
+PASS=0
+while $CHANGED && [ $PASS -lt 5 ]; do
+    CHANGED=false
+    PASS=$((PASS+1))
+    for f in "$APP_NAME.app/Contents/MacOS/$APP_NAME" "$FRAMEWORKS_DIR"/*.dylib "$FRAMEWORKS_DIR"/Qt*.framework/Versions/A/* "$PLUGINS_DIR"/*/*.dylib; do
+        [ -f "$f" ] || continue
+        DEPS=$(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep "^$HOMEBREW_PREFIX/" || true)
+        for dep in $DEPS; do
+            dep_name=$(basename "$dep")
+            # If dependency is a Qt framework binary, copy the entire framework dir
+            if [[ "$dep" == *"/Qt"*"framework/Versions/"*"/*" ]]; then
+                fw_dir=$(echo "$dep" | sed -E 's#(Qt[^/]*\.framework)/.*#\1#')
+                fw_name=$(basename "$fw_dir")
+                if [ ! -d "$FRAMEWORKS_DIR/$fw_name" ] && [ -d "$QT_LIB_PATH/$fw_name" ]; then
+                    echo "  Closure copy (Qt framework): $fw_name"
+                    cp -R "$QT_LIB_PATH/$fw_name" "$FRAMEWORKS_DIR/"
+                    chmod -R u+w "$FRAMEWORKS_DIR/$fw_name"
+                    rm -rf "$FRAMEWORKS_DIR/$fw_name/Versions/A/Headers" "$FRAMEWORKS_DIR/$fw_name/Headers" 2>/dev/null || true
+                    CHANGED=true
+                fi
+            else
+                # Regular Homebrew dylib
+                if [ ! -f "$FRAMEWORKS_DIR/$dep_name" ] && [ -f "$dep" ]; then
+                    echo "  Closure copy: $dep_name (from $f)"
+                    cp "$dep" "$FRAMEWORKS_DIR/"
+                    chmod u+w "$FRAMEWORKS_DIR/$dep_name"
+                    CHANGED=true
+                fi
+            fi
+        done
+    done
+done
+
+# Proactively include libdouble-conversion if present (used by Qt)
+for dc in "$HOMEBREW_PREFIX"/lib/libdouble-conversion*.dylib; do
+    [ -f "$dc" ] || continue
+    dc_name=$(basename "$dc")
+    if [ ! -f "$FRAMEWORKS_DIR/$dc_name" ]; then
+        echo "  Copying $dc_name"
+        cp "$dc" "$FRAMEWORKS_DIR/"
+        chmod u+w "$FRAMEWORKS_DIR/$dc_name"
+    fi
+done
+
+# If QtDBus is referenced by app or any plugin, ensure the framework is bundled
+if otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | grep -q "$QT_LIB_PATH/QtDBus.framework"; then
+    NEED_QTDBUS=1
+elif find "$PLUGINS_DIR" -name "*.dylib" -maxdepth 2 -print0 2>/dev/null | xargs -0 otool -L 2>/dev/null | grep -q "$QT_LIB_PATH/QtDBus.framework"; then
+    NEED_QTDBUS=1
+else
+    NEED_QTDBUS=0
+fi
+if [ "$NEED_QTDBUS" -eq 1 ] && [ -d "$QT_LIB_PATH/QtDBus.framework" ] && [ ! -d "$FRAMEWORKS_DIR/QtDBus.framework" ]; then
+    echo "  Copying QtDBus.framework"
+    cp -R "$QT_LIB_PATH/QtDBus.framework" "$FRAMEWORKS_DIR/"
+    chmod -R u+w "$FRAMEWORKS_DIR/QtDBus.framework"
+    rm -rf "$FRAMEWORKS_DIR/QtDBus.framework/Versions/A/Headers" "$FRAMEWORKS_DIR/QtDBus.framework/Headers" 2>/dev/null || true
+fi
 
 print_step "Step 4: Creating qt.conf"
 
@@ -158,7 +258,7 @@ fix_lib_path() {
 # Fix main executable paths
 echo "  Fixing main executable..."
 # Fix Qt framework paths
-for framework in QtCore QtGui QtWidgets QtSvg; do
+for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
     new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
     fix_lib_path "$old_path" "$new_path" "$APP_NAME.app/Contents/MacOS/$APP_NAME"
@@ -173,7 +273,7 @@ done
 
 echo "  Fixing library IDs and dependencies..."
 # Fix Qt framework IDs
-for framework in QtCore QtGui QtWidgets QtSvg; do
+for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     if [ -f "$FRAMEWORKS_DIR/$framework.framework/Versions/A/$framework" ]; then
         install_name_tool -id "@executable_path/../Frameworks/$framework.framework/Versions/A/$framework" \
             "$FRAMEWORKS_DIR/$framework.framework/Versions/A/$framework" 2>/dev/null || true
@@ -189,7 +289,7 @@ for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
         install_name_tool -id "@executable_path/../Frameworks/$lib_name" "$lib_file" 2>/dev/null || true
 
         # Fix dependencies on other homebrew libraries
-        DEPS=$(otool -L "$lib_file" 2>/dev/null | grep '/opt/homebrew' | awk '{print $1}' || true)
+        DEPS=$(otool -L "$lib_file" 2>/dev/null | grep "$HOMEBREW_PREFIX" | awk '{print $1}' || true)
         for dep_path in $DEPS; do
             dep_name=$(basename "$dep_path")
             if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
@@ -198,7 +298,7 @@ for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
         done
 
         # Fix Qt framework dependencies
-        for framework in QtCore QtGui QtWidgets QtSvg; do
+        for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
             old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
             new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
             fix_lib_path "$old_path" "$new_path" "$lib_file"
@@ -207,9 +307,9 @@ for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
 done
 
 # Fix Qt framework inter-dependencies
-for framework1 in QtCore QtGui QtWidgets QtSvg; do
+for framework1 in QtCore QtGui QtWidgets QtSvg QtDBus; do
     if [ -f "$FRAMEWORKS_DIR/$framework1.framework/Versions/A/$framework1" ]; then
-        for framework2 in QtCore QtGui QtWidgets QtSvg; do
+        for framework2 in QtCore QtGui QtWidgets QtSvg QtDBus; do
             if [ "$framework1" != "$framework2" ]; then
                 old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework2.framework/Versions/A/$framework2"
                 new_path="@executable_path/../Frameworks/$framework2.framework/Versions/A/$framework2"
@@ -256,7 +356,14 @@ else
 fi
 
 # Check for remaining external dependencies
-EXTERNAL_DEPS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | grep '/opt/homebrew' | grep -v '@executable_path' || true)
+EXTERNAL_DEPS=$(
+    {
+        otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME";
+        for f in "$FRAMEWORKS_DIR"/*.dylib; do otool -L "$f"; done
+        for f in "$FRAMEWORKS_DIR"/Qt*.framework/Versions/A/*; do [ -f "$f" ] && otool -L "$f"; done
+        for p in "$PLUGINS_DIR"/*/*.dylib; do otool -L "$p"; done
+    } 2>/dev/null | grep "$HOMEBREW_PREFIX" | grep -v '@executable_path' || true
+)
 if [ -z "$EXTERNAL_DEPS" ]; then
     print_success "All dependencies are bundled"
 else
