@@ -7,7 +7,17 @@ set -e
 
 APP_NAME="yawt"
 BUILD_DIR="build"
-HOMEBREW_PREFIX="/opt/homebrew"
+# Detect Homebrew prefix (Apple Silicon default /opt/homebrew, Intel default /usr/local)
+if command -v brew >/dev/null 2>&1; then
+    HOMEBREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
+else
+    ARCH="$(uname -m)"
+    if [ "$ARCH" = "x86_64" ]; then
+        HOMEBREW_PREFIX="/usr/local"
+    else
+        HOMEBREW_PREFIX="/opt/homebrew"
+    fi
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -34,14 +44,20 @@ print_error() {
 
 print_step "Simple YAWT Deployment"
 
-# Verify prerequisites
-if [ ! -d "$BUILD_DIR/$APP_NAME.app" ]; then
-    print_error "App not found at $BUILD_DIR/$APP_NAME.app"
-    echo "Please build first: cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make"
+# Locate app bundle (support running from repo root or from build/)
+if [ -d "$BUILD_DIR/$APP_NAME.app" ]; then
+    # Running from repository root; descend into build directory
+    cd "$BUILD_DIR"
+elif [ -d "$APP_NAME.app" ]; then
+    # Already in build directory; keep working directory as-is
+    BUILD_DIR="."
+else
+    print_error "App not found."
+    echo "Expected at: '$BUILD_DIR/$APP_NAME.app' (repo root) or './$APP_NAME.app' (inside build)"
+    echo "Please build first, for example:"
+    echo "  mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make"
     exit 1
 fi
-
-cd "$BUILD_DIR"
 
 # Create bundle directories
 FRAMEWORKS_DIR="$APP_NAME.app/Contents/Frameworks"

@@ -30,7 +30,8 @@ include_directories(
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
 
 # Include OpenCV
-find_package(OpenCV REQUIRED PATHS /opt/homebrew)
+# Prefer standard OpenCV discovery; allow overriding via -DOpenCV_DIR
+find_package(OpenCV REQUIRED)
 
 # List of sources (updated to reflect new organization under src/)
 set(SOURCES
@@ -172,7 +173,7 @@ install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 # Custom deployment target for macOS app bundle
 if(APPLE)
     add_custom_target(deploy
-        COMMAND ${CMAKE_SOURCE_DIR}/deploy_mac.sh
+        COMMAND ${CMAKE_SOURCE_DIR}/scripts/deploy_simple_working.sh
         DEPENDS ${PROJECT_NAME}
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Deploying macOS app bundle with all dependencies"
