@@ -207,14 +207,18 @@ while $CHANGED && [ $PASS -lt 5 ]; do
     done
 done
 
-# Proactively include libdouble-conversion if present (used by Qt)
-for dc in "$HOMEBREW_PREFIX"/lib/libdouble-conversion*.dylib; do
-    [ -f "$dc" ] || continue
-    dc_name=$(basename "$dc")
-    if [ ! -f "$FRAMEWORKS_DIR/$dc_name" ]; then
-        echo "  Copying $dc_name"
-        cp "$dc" "$FRAMEWORKS_DIR/"
-        chmod u+w "$FRAMEWORKS_DIR/$dc_name"
+# Proactively include libdouble-conversion and md4c if present (used by Qt)
+for libglob in \
+    "$HOMEBREW_PREFIX"/lib/libdouble-conversion*.dylib \
+    "$HOMEBREW_PREFIX"/opt/double-conversion/lib/libdouble-conversion*.dylib \
+    "$HOMEBREW_PREFIX"/lib/libmd4c*.dylib \
+    "$HOMEBREW_PREFIX"/opt/md4c/lib/libmd4c*.dylib; do
+    [ -f "$libglob" ] || continue
+    b=$(basename "$libglob")
+    if [ ! -f "$FRAMEWORKS_DIR/$b" ]; then
+        echo "  Copying $b"
+        cp "$libglob" "$FRAMEWORKS_DIR/"
+        chmod u+w "$FRAMEWORKS_DIR/$b"
     fi
 done
 
@@ -257,6 +261,8 @@ fix_lib_path() {
 
 # Fix main executable paths
 echo "  Fixing main executable..."
+# Ensure app has rpath to bundled Frameworks (safe to add even if present)
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 # Fix Qt framework paths
 for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
@@ -303,6 +309,17 @@ for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
             new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
             fix_lib_path "$old_path" "$new_path" "$lib_file"
         done
+
+        # Rewrite OpenCV @rpath dependencies to bundled path
+        if otool -L "$lib_file" 2>/dev/null | grep -q "@rpath/libopencv_"; then
+            for cv in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
+                [ -f "$cv" ] || continue
+                cv_name=$(basename "$cv")
+                if otool -L "$lib_file" 2>/dev/null | grep -q "@rpath/$cv_name"; then
+                    install_name_tool -change "@rpath/$cv_name" "@executable_path/../Frameworks/$cv_name" "$lib_file" 2>/dev/null || true
+                fi
+            done
+        fi
     fi
 done
 
@@ -319,15 +336,77 @@ for framework1 in QtCore QtGui QtWidgets QtSvg QtDBus; do
     fi
 done
 
+# Fix Qt frameworks' non-Qt dependencies and OpenCV @rpath usage
+for qbin in "$FRAMEWORKS_DIR"/Qt*.framework/Versions/A/*; do
+    [ -f "$qbin" ] || continue
+    # Rewrite Homebrew deps (e.g., md4c, double-conversion, etc.) to bundled copies
+    DEPS=$(otool -L "$qbin" 2>/dev/null | awk '{print $1}' | grep "^$HOMEBREW_PREFIX/" || true)
+    for dep_path in $DEPS; do
+        dep_name=$(basename "$dep_path")
+        if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+            install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$dep_name" "$qbin" 2>/dev/null || true
+        fi
+    done
+    # Rewrite OpenCV @rpath references to bundled copies
+    for cv in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
+        [ -f "$cv" ] || continue
+        cv_name=$(basename "$cv")
+        if otool -L "$qbin" 2>/dev/null | grep -q "@rpath/$cv_name"; then
+            install_name_tool -change "@rpath/$cv_name" "@executable_path/../Frameworks/$cv_name" "$qbin" 2>/dev/null || true
+        fi
+    done
+done
+
 # Fix Qt plugins
 for plugin in "$PLUGINS_DIR"/*/*.dylib; do
     if [ -f "$plugin" ]; then
-        for framework in QtCore QtGui QtWidgets QtSvg; do
+        # Ensure Qt framework paths point inside bundle
+        for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
             old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
             new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
             fix_lib_path "$old_path" "$new_path" "$plugin"
         done
+        # Rewrite Homebrew deps (e.g., md4c, double-conversion, tbb, etc.) to bundled copies
+        DEPS=$(otool -L "$plugin" 2>/dev/null | awk '{print $1}' | grep "^$HOMEBREW_PREFIX/" || true)
+        for dep_path in $DEPS; do
+            dep_name=$(basename "$dep_path")
+            if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+                install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$dep_name" "$plugin" 2>/dev/null || true
+            fi
+        done
+        # Rewrite OpenCV @rpath references to bundled copies
+        for cv in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
+            [ -f "$cv" ] || continue
+            cv_name=$(basename "$cv")
+            if otool -L "$plugin" 2>/dev/null | grep -q "@rpath/$cv_name"; then
+                install_name_tool -change "@rpath/$cv_name" "@executable_path/../Frameworks/$cv_name" "$plugin" 2>/dev/null || true
+            fi
+        done
     fi
+done
+
+# Generic pass: rewrite absolute OpenCV keg paths to bundled copies
+print_step "Step 5b: Rewriting OpenCV keg paths"
+for target in "$APP_NAME.app/Contents/MacOS/$APP_NAME" \
+              "$FRAMEWORKS_DIR"/*.dylib \
+              "$FRAMEWORKS_DIR"/Qt*.framework/Versions/A/* \
+              "$PLUGINS_DIR"/*/*.dylib; do
+    [ -f "$target" ] || continue
+    DEPS=$(otool -L "$target" 2>/dev/null | awk '{print $1}' || true)
+    for dep in $DEPS; do
+        case "$dep" in
+            "$HOMEBREW_PREFIX"/opt/opencv/lib/libopencv_*.dylib|\
+            "$HOMEBREW_PREFIX"/opt/opencv@4/lib/libopencv_*.dylib|\
+            "$HOMEBREW_PREFIX"/Cellar/opencv/*/lib/libopencv_*.dylib|\
+            "$HOMEBREW_PREFIX"/lib/libopencv_*.dylib)
+                base=$(basename "$dep")
+                if [ -f "$FRAMEWORKS_DIR/$base" ]; then
+                    echo "  Rewriting $dep -> @executable_path/../Frameworks/$base in $target"
+                    install_name_tool -change "$dep" "@executable_path/../Frameworks/$base" "$target" 2>/dev/null || true
+                fi
+                ;;
+        esac
+    done
 done
 
 print_step "Step 6: Code Signing"
