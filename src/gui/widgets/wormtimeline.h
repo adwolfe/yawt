@@ -28,6 +28,7 @@ signals:
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     struct EventNode {
@@ -38,6 +39,8 @@ private:
 
     void rebuildEventNodes();
     double frameToX(int frame, const QRect& contentRect) const;
+    double frameToXWithZoom(int frame, const QRect& contentRect) const;
+    void updatePanForZoom(const QRect& contentRect, double zoomFactor, double cursorX);
     QList<int> sortedWormIds() const;
 
     int m_totalFrames = 0;
@@ -47,6 +50,9 @@ private:
 
     QList<EventNode> m_eventNodes;
     int m_selectedNodeIndex = -1;
+
+    double m_zoom = 1.0;
+    double m_panX = 0.0;
 
     int m_lineThickness = 6;
     int m_minRowSpacing = 12;

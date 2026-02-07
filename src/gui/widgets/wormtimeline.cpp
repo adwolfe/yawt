@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QFontMetrics>
 #include <QPainterPath>
+#include <QWheelEvent>
 #include <QString>
 
 #include <algorithm>
@@ -74,6 +75,50 @@ double WormTimeline::frameToX(int frame, const QRect& contentRect) const
     if (t < 0.0) t = 0.0;
     if (t > 1.0) t = 1.0;
     return contentRect.left() + t * contentRect.width();
+}
+
+double WormTimeline::frameToXWithZoom(int frame, const QRect& contentRect) const
+{
+    if (m_totalFrames <= 1) return contentRect.left();
+    double t = static_cast<double>(frame) / static_cast<double>(m_totalFrames - 1);
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    double virtualWidth = contentRect.width() * m_zoom;
+    double x = contentRect.left() + t * virtualWidth - m_panX;
+    return x;
+}
+
+void WormTimeline::updatePanForZoom(const QRect& contentRect, double zoomFactor, double cursorX)
+{
+    if (m_totalFrames <= 1) {
+        m_zoom = 1.0;
+        m_panX = 0.0;
+        return;
+    }
+
+    double prevZoom = m_zoom;
+    double prevVirtualWidth = contentRect.width() * prevZoom;
+    double newZoom = std::clamp(zoomFactor, 1.0, 6.0);
+    double newVirtualWidth = contentRect.width() * newZoom;
+
+    double t = 0.0;
+    if (prevVirtualWidth > 0.0) {
+        double localX = cursorX - contentRect.left() + m_panX;
+        t = localX / prevVirtualWidth;
+    }
+    t = std::clamp(t, 0.0, 1.0);
+
+    m_zoom = newZoom;
+    if (newVirtualWidth <= contentRect.width()) {
+        m_panX = 0.0;
+        return;
+    }
+
+    double desiredPan = (cursorX - contentRect.left()) - t * newVirtualWidth;
+    double maxPan = newVirtualWidth - contentRect.width();
+    if (desiredPan < -maxPan) desiredPan = -maxPan;
+    if (desiredPan > 0.0) desiredPan = 0.0;
+    m_panX = -desiredPan;
 }
 
 void WormTimeline::rebuildEventNodes()
@@ -162,7 +207,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
 
     // Keyframe dotted line
     if (m_totalFrames > 0) {
-        double keyX = frameToX(m_keyframeFrame, contentRect);
+        double keyX = frameToXWithZoom(m_keyframeFrame, contentRect);
         QPen keyPen(QColor(30, 30, 30));
         keyPen.setStyle(Qt::DashLine);
         keyPen.setWidthF(2.0);
@@ -180,7 +225,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
 
     for (int i = 0; i < m_eventNodes.size(); ++i) {
         const EventNode& node = m_eventNodes[i];
-        double x = frameToX(node.frame, contentRect);
+        double x = frameToXWithZoom(node.frame, contentRect);
         double sumY = 0.0;
         int count = 0;
         for (int id : node.wormIds) {
@@ -285,4 +330,25 @@ void WormTimeline::mousePressEvent(QMouseEvent* event)
     }
 
     QWidget::mousePressEvent(event);
+}
+
+void WormTimeline::wheelEvent(QWheelEvent* event)
+{
+    const QRect contentRect(
+        m_leftPadding,
+        m_topPadding,
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        std::max(1, height() - m_topPadding - m_bottomPadding)
+    );
+
+    const double delta = event->angleDelta().y();
+    if (delta == 0.0) {
+        event->accept();
+        return;
+    }
+
+    const double factor = (delta > 0.0) ? 1.1 : (1.0 / 1.1);
+    updatePanForZoom(contentRect, m_zoom * factor, event->position().x());
+    update();
+    event->accept();
 }
