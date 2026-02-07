@@ -137,6 +137,8 @@ public:
     QImage getOrLoadQImageForFrame(int frameNumber);
     // Populate the cache with a small sequential window around a center frame.
     void cacheWindowAroundFrame(int centerFrame, int radius);
+    // Read and cache the next sequential frame if the capture is already positioned.
+    bool prefetchNextSequentialFrame();
     // Convenience helper: return a map of frameNumber -> QImage for the provided list of frames.
     // Frames that cannot be retrieved will map to a null QImage. Useful for callers that need
     // multiple cropped frames to send to MiniLoader in one batch.
@@ -362,6 +364,7 @@ private:
     QThread* m_frameLoaderThread;              // Thread for background loading
     int m_lastPreloadCenter;                   // Last center frame for preloading
     mutable QAtomicInt m_pendingSeekFrame;     // Frame number for pending seek operation
+    int m_cacheStreamNextFrame;                // Next sequential frame for paused prefetch
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(VideoLoader::ViewModeOptions)

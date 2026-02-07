@@ -159,7 +159,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_frameLoader(nullptr),
     m_frameLoaderThread(nullptr),
     m_lastPreloadCenter(-1),
-    m_pendingSeekFrame(-1) {
+    m_pendingSeekFrame(-1),
+    m_cacheStreamNextFrame(-1) {
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -1700,9 +1701,39 @@ void VideoLoader::cacheWindowAroundFrame(int centerFrame, int radius) {
         }
     }
 
-    if (restoreFrame >= 0 && (totalFramesCount <= 0 || restoreFrame < totalFramesCount)) {
-        videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(restoreFrame));
+    m_cacheStreamNextFrame = endFrame + 1;
+    if (m_isPlaying) {
+        if (restoreFrame >= 0 && (totalFramesCount <= 0 || restoreFrame < totalFramesCount)) {
+            videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(restoreFrame));
+        }
     }
+}
+
+bool VideoLoader::prefetchNextSequentialFrame() {
+    if (!videoCapture.isOpened() || originalFrameSize.isEmpty()) {
+        return false;
+    }
+    if (m_cacheStreamNextFrame < 0) {
+        return false;
+    }
+    if (totalFramesCount > 0 && m_cacheStreamNextFrame >= totalFramesCount) {
+        return false;
+    }
+
+    int currentPos = static_cast<int>(videoCapture.get(cv::CAP_PROP_POS_FRAMES));
+    if (currentPos != m_cacheStreamNextFrame) {
+        return false;
+    }
+
+    cv::Mat frame;
+    if (!videoCapture.read(frame) || frame.empty()) {
+        return false;
+    }
+    if (m_frameCache) {
+        m_frameCache->insertFrame(m_cacheStreamNextFrame, frame);
+    }
+    ++m_cacheStreamNextFrame;
+    return true;
 }
 
 QMap<int, QImage> VideoLoader::getQImagesForFrames(const QList<int>& frameNumbers) const {

@@ -215,6 +215,7 @@ private:
     /** Whether initial tracking has been completed in the current session. Pure UI state. */
     bool m_hasCompletedTracking;
     bool m_isVideoPlaying = false;
+    int m_lastMiniLoaderFrame = -1;
 
     /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;

@@ -1091,7 +1091,20 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     }
 
     if (!m_isVideoPlaying && ui->videoLoader) {
-        ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+        if (m_lastMiniLoaderFrame < 0) {
+            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+        } else if (currentFrameNumber > m_lastMiniLoaderFrame) {
+            if (currentFrameNumber - m_lastMiniLoaderFrame == 1) {
+                if (!ui->videoLoader->prefetchNextSequentialFrame()) {
+                    ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+                }
+            } else {
+                ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+            }
+        } else if (currentFrameNumber < m_lastMiniLoaderFrame) {
+            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+        }
+        m_lastMiniLoaderFrame = currentFrameNumber;
     }
 
     // Get the crop size from BlobTableModel
@@ -1266,6 +1279,9 @@ void MainWindow::onPlaybackStateChanged(bool isPlaying, double currentSpeed) {
     Q_UNUSED(currentSpeed);
     m_isVideoPlaying = isPlaying;
     setSideMiniLoadersPaused(isPlaying);
+    if (isPlaying) {
+        m_lastMiniLoaderFrame = -1;
+    }
 
     if (!isPlaying && ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
         int currentFrame = ui->videoLoader->getCurrentFrameNumber();
