@@ -300,47 +300,71 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         p.setPen(linePen);
         int y = yForId.value(id);
 
-        QVector<int> evIdx = wormEvents.value(id);
-        std::sort(evIdx.begin(), evIdx.end(), [&](int a, int b) {
-            return eventPos[a].x < eventPos[b].x;
-        });
-
-        QVector<const MergeSpan*> spansForWorm;
-        spansForWorm.reserve(m_mergeSpans.size());
-        for (const MergeSpan& span : m_mergeSpans) {
-            if (span.wormIds.contains(id)) spansForWorm.append(&span);
-        }
-        std::sort(spansForWorm.begin(), spansForWorm.end(), [&](const MergeSpan* a, const MergeSpan* b) {
-            return a->startFrame < b->startFrame;
-        });
-
         QPainterPath path;
         path.moveTo(virtualLeft, y);
 
-        for (int spanIndex = 0; spanIndex < spansForWorm.size(); ++spanIndex) {
-            const MergeSpan* span = spansForWorm[spanIndex];
-            double startX = frameToXWithZoom(span->startFrame, contentRect);
-            double endX = frameToXWithZoom(span->endFrame, contentRect);
-            if (endX < virtualLeft || startX > virtualRight) continue;
+        struct SpanAffect {
+            double startX;
+            double endX;
+            double targetY;
+        };
+        QVector<SpanAffect> affects;
+        affects.reserve(m_mergeSpans.size());
 
-            double prevEndX = virtualLeft;
-            if (spanIndex > 0) {
-                prevEndX = frameToXWithZoom(spansForWorm[spanIndex - 1]->endFrame, contentRect);
-            }
-            double nextStartX = virtualRight;
-            if (spanIndex + 1 < spansForWorm.size()) {
-                nextStartX = frameToXWithZoom(spansForWorm[spanIndex + 1]->startFrame, contentRect);
-            }
+        for (const MergeSpan& span : m_mergeSpans) {
+            double startX = frameToXWithZoom(span.startFrame, contentRect);
+            double endX = frameToXWithZoom(span.endFrame, contentRect);
+            if (endX < virtualLeft || startX > virtualRight) continue;
 
             double sumY = 0.0;
             int count = 0;
-            for (int wid : span->wormIds) {
+            double minY = y;
+            double maxY = y;
+            bool first = true;
+            for (int wid : span.wormIds) {
                 if (yForId.contains(wid)) {
-                    sumY += yForId.value(wid);
+                    double wy = yForId.value(wid);
+                    sumY += wy;
                     ++count;
+                    if (first) {
+                        minY = wy;
+                        maxY = wy;
+                        first = false;
+                    } else {
+                        minY = std::min(minY, wy);
+                        maxY = std::max(maxY, wy);
+                    }
                 }
             }
             double mergeY = (count > 0) ? (sumY / static_cast<double>(count)) : y;
+
+            bool inGroup = span.wormIds.contains(id);
+            if (inGroup) {
+                affects.append({startX, endX, mergeY});
+            } else {
+                if (y >= minY && y <= maxY && count > 1) {
+                    double targetY = (std::abs(y - minY) <= std::abs(y - maxY)) ? minY : maxY;
+                    if (targetY != y) {
+                        affects.append({startX, endX, targetY});
+                    }
+                }
+            }
+        }
+
+        std::sort(affects.begin(), affects.end(), [&](const SpanAffect& a, const SpanAffect& b) {
+            return a.startX < b.startX;
+        });
+
+        for (int spanIndex = 0; spanIndex < affects.size(); ++spanIndex) {
+            const SpanAffect& span = affects[spanIndex];
+            double startX = span.startX;
+            double endX = span.endX;
+            double targetY = span.targetY;
+
+            double prevEndX = virtualLeft;
+            if (spanIndex > 0) prevEndX = affects[spanIndex - 1].endX;
+            double nextStartX = virtualRight;
+            if (spanIndex + 1 < affects.size()) nextStartX = affects[spanIndex + 1].startX;
 
             double spanWidth = std::max(8.0, endX - startX);
             double ramp = std::min(40.0, 0.2 * spanWidth);
@@ -351,13 +375,12 @@ void WormTimeline::paintEvent(QPaintEvent* event)
 
             double rampStart = startX - ramp;
             double rampEnd = endX + ramp;
-
             if (rampStart < prevEndX) rampStart = prevEndX;
             if (rampEnd > nextStartX) rampEnd = nextStartX;
 
             path.lineTo(rampStart, y);
-            path.lineTo(startX, mergeY);
-            path.lineTo(endX, mergeY);
+            path.lineTo(startX, targetY);
+            path.lineTo(endX, targetY);
             path.lineTo(rampEnd, y);
         }
 
