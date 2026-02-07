@@ -1231,18 +1231,29 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
                 (ui->mlop2) ? ui->mlop2 : nullptr
             };
 
+            auto buildBlankForCrop = [&]() -> std::tuple<QImage, QPointF, QSizeF> {
+                QRect localCrop = cropRect;
+                if (localCrop.isEmpty()) localCrop = cropRect;
+                QImage cf(localCrop.size(), QImage::Format_RGB32);
+                cf.fill(Qt::black);
+                QPointF offset(localCrop.left() + 0.0, localCrop.top() + 0.0);
+                QSizeF size(localCrop.width(), localCrop.height());
+                return std::make_tuple(cf, offset, size);
+            };
+
             for (int i = 0; i < 4; ++i) {
                 int targetFrame = currentFrameNumber + offsets[i];
-                if (targetFrame < 0) continue;
-                if (totalFrames > 0 && targetFrame >= totalFrames) continue;
-
                 MiniLoader* target = widgetTargets[i];
                 if (!target) continue;
 
                 QImage cf;
                 QPointF off;
                 QSizeF sz;
-                std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
+                if (targetFrame < 0 || (totalFrames > 0 && targetFrame >= totalFrames)) {
+                    std::tie(cf, off, sz) = buildBlankForCrop();
+                } else {
+                    std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
+                }
 
                 target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
                 YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
