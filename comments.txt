@@ -1,0 +1,14 @@
+src/gui/mainwindow.cpp:71 // ui->annoTableView->setModel(m_annotationTableModel);
+src/gui/mainwindow.cpp:145 // ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+src/gui/mainwindow.cpp:146 // ui->annoTableView->horizontalHeader()->setStretchLastSection(false);
+src/gui/mainwindow.cpp:147 // ui->annoTableView->horizontalHeader()->setVisible(true);
+src/gui/mainwindow.cpp:148 // ui->annoTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+src/gui/mainwindow.cpp:149 // ui->annoTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+src/gui/mainwindow.cpp:150 // ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+src/gui/mainwindow.cpp:153 // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
+src/gui/mainwindow.cpp:154 // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
+src/gui/mainwindow.cpp:155 // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
+src/gui/mainwindow.cpp:158 // ui->annoTableView->setMouseTracking(true);
+src/gui/mainwindow.cpp:159 // ui->annoTableView->viewport()->setCursor(Qt::PointingHandCursor);
+src/gui/mainwindow.cpp:160 // ui->annoTableView->setStyleSheet(...);
+src/gui/mainwindow.cpp:656 // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);

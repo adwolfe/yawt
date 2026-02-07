@@ -68,7 +68,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->setModel(m_blobTableModel);
 
     m_annotationTableModel = m_appController->annotationTableModel();
-    ui->annoTableView->setModel(m_annotationTableModel);
+    // ui->annoTableView->setModel(m_annotationTableModel);
 
     m_trackingDataStorage = m_appController->trackingDataStorage();
 
@@ -142,33 +142,33 @@ MainWindow::MainWindow(QWidget *parent)
     ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
 
     // Configure annotation table view
-    ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-    ui->annoTableView->horizontalHeader()->setStretchLastSection(false);
-    ui->annoTableView->horizontalHeader()->setVisible(true);
-    ui->annoTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    ui->annoTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
-    ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    // ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    // ui->annoTableView->horizontalHeader()->setStretchLastSection(false);
+    // ui->annoTableView->horizontalHeader()->setVisible(true);
+    // ui->annoTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    // ui->annoTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
 
     // Set column resize modes for annotation table
-    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
-    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
-    ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
+    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
+    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
+    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
 
     // Add hover effects and cursor styling to indicate clickability
-    ui->annoTableView->setMouseTracking(true);
-    ui->annoTableView->viewport()->setCursor(Qt::PointingHandCursor);
-    ui->annoTableView->setStyleSheet(
-        "QTableView::item:hover { "
-        "    background-color: #e3f2fd; "
-        "    border: 1px solid #2196f3; "
-        "} "
-        "QTableView::item:selected { "
-        "    background-color: #bbdefb; "
-        "    color: #000; "
-        "}"
-    );
+    // ui->annoTableView->setMouseTracking(true);
+    // ui->annoTableView->viewport()->setCursor(Qt::PointingHandCursor);
+    // ui->annoTableView->setStyleSheet(
+    //     "QTableView::item:hover { "
+    //     "    background-color: #e3f2fd; "
+    //     "    border: 1px solid #2196f3; "
+    //     "} "
+    //     "QTableView::item:selected { "
+    //     "    background-color: #bbdefb; "
+    //     "    color: #000; "
+    //     "}"
+    // );
 
-    YAWT_DEBUG(lcGuiMainWindow) << "Annotation table view configured successfully";
+    // YAWT_DEBUG(lcGuiMainWindow) << "Annotation table view configured successfully";
 
     resizeTableColumns();
 
@@ -653,7 +653,7 @@ void MainWindow::setupConnections() {
     if (m_appController) connect(m_appController, &AppController::tracksUpdated, this, &MainWindow::acceptTracksFromManager);
 
     // Annotation table selection
-    connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
+    // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
     // Connect header data changes to trigger UI update
     connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
