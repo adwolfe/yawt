@@ -34,6 +34,9 @@
 #include "trackingdatastorage.h"
 #include "version.h"
 #include "wormtimeline.h"
+#include "../utils/thresholdingutils.h"
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
 // #include "videoloader.h"
 // #include "trackingcommon.h"
@@ -84,6 +87,22 @@ MainWindow::MainWindow(QWidget *parent)
         ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
         ui->miniLoaderOverlay->setShowOverlays(true);
     }
+    if (ui->mlon2) {
+        ui->mlon2->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlon2->setShowOverlays(true);
+    }
+    if (ui->mlon1) {
+        ui->mlon1->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlon1->setShowOverlays(true);
+    }
+    if (ui->mlop1) {
+        ui->mlop1->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlop1->setShowOverlays(true);
+    }
+    if (ui->mlop2) {
+        ui->mlop2->setTrackingDataStorage(m_trackingDataStorage);
+        ui->mlop2->setShowOverlays(true);
+    }
 
     YAWT_INFO(lcGuiMainWindow) << "AppController created and models bound";
 
@@ -100,7 +119,21 @@ MainWindow::MainWindow(QWidget *parent)
 
     if (ui->wormTimeline) {
         connect(ui->wormTimeline, &WormTimeline::eventClicked,
-                this, [this](int frame, const QList<int>&) { seekFrame(frame); });
+                this, [this](int frame, const QList<int>& wormIds) {
+                    seekFrame(frame);
+                    if (!wormIds.isEmpty() && m_blobTableModel) {
+                        int chosenId = *std::min_element(wormIds.begin(), wormIds.end());
+                        for (int row = 0; row < m_blobTableModel->rowCount(); ++row) {
+                            const TableItems::ClickedItem& it = m_blobTableModel->getItem(row);
+                            if (it.id == chosenId) {
+                                ui->wormTableView->selectRow(row);
+                                break;
+                            }
+                        }
+                    }
+                });
+        connect(ui->wormTimeline, &WormTimeline::frameScrubbed,
+                this, [this](int frame) { seekFrame(frame); });
     }
 
     // Jump to frame when a merge/split row is clicked
@@ -918,6 +951,22 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
     ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
     ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
     YAWT_DEBUG(lcGuiMainWindow) << "View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
+
+    const bool showOverlays = newModes.testFlag(VideoLoader::ViewModeOption::Blobs);
+    if (ui->miniLoader) ui->miniLoader->setShowOverlays(showOverlays);
+    if (ui->miniLoaderOverlay) ui->miniLoaderOverlay->setShowOverlays(showOverlays);
+    if (ui->mlon2) ui->mlon2->setShowOverlays(showOverlays);
+    if (ui->mlon1) ui->mlon1->setShowOverlays(showOverlays);
+    if (ui->mlop1) ui->mlop1->setShowOverlays(showOverlays);
+    if (ui->mlop2) ui->mlop2->setShowOverlays(showOverlays);
+
+    if (ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
+        int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+        QImage currentImage = ui->videoLoader->getCurrentQImageFrame();
+        if (!currentImage.isNull()) {
+            updateMiniLoaderCrop(currentFrame, currentImage);
+        }
+    }
 }
 
 
@@ -1112,8 +1161,9 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
     // Keep the duplicated frame position in sync
     ui->framePosition_2->setValue(currentFrameNumber);
 
-    // Merge history text widget and MergeViewer UI were removed.
-    // Any merge-history or merge-visualization updates are intentionally omitted here.
+    if (ui->wormTimeline) {
+        ui->wormTimeline->setCurrentFrame(currentFrameNumber);
+    }
 }
 
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
@@ -1215,16 +1265,37 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     {
         int totalFrames = 0;
         if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
+        const bool thresholdView = ui->videoLoader
+            && ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Threshold);
+        Thresholding::ThresholdSettings threshSettings;
+        if (thresholdView && ui->videoLoader) {
+            threshSettings = ui->videoLoader->getCurrentThresholdSettings();
+        }
 
         // Helper lambda to get a cropped frame (real or black placeholder) for a specific absolute frame.
         auto buildCroppedForFrame = [&](int frameNum) -> std::tuple<QImage, QPointF, QSizeF> {
             QRect localCrop = cropRect;
             QImage img;
-            if (frameNum == currentFrameNumber) {
-                img = currentFrame;
-            } else if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
+            if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
                 img = ui->videoLoader->getQImageForFrame(frameNum);
             }
+            if (img.isNull() && frameNum == currentFrameNumber) {
+                img = currentFrame;
+            }
+
+            if (thresholdView && !img.isNull()) {
+                QImage bgr = img.convertToFormat(QImage::Format_BGR888);
+                cv::Mat inputMat(bgr.height(), bgr.width(), CV_8UC3,
+                                 const_cast<uchar*>(bgr.bits()), bgr.bytesPerLine());
+                cv::Mat threshMat;
+                ThresholdingUtils::applyThresholding(inputMat, threshMat, threshSettings);
+                if (!threshMat.empty()) {
+                    QImage gray(threshMat.data, threshMat.cols, threshMat.rows,
+                                threshMat.step, QImage::Format_Grayscale8);
+                    img = gray.copy();
+                }
+            }
+
             if (!img.isNull()) {
                 QRect imgBounds(0, 0, img.width(), img.height());
                 localCrop = localCrop.intersected(imgBounds);

@@ -7,6 +7,7 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 #include <QString>
+#include <cmath>
 
 #include <algorithm>
 
@@ -32,6 +33,14 @@ void WormTimeline::setKeyframeFrame(int frame)
     if (frame < 0) frame = 0;
     if (m_keyframeFrame == frame) return;
     m_keyframeFrame = frame;
+    update();
+}
+
+void WormTimeline::setCurrentFrame(int frame)
+{
+    if (frame < 0) frame = 0;
+    if (m_currentFrame == frame) return;
+    m_currentFrame = frame;
     update();
 }
 
@@ -88,6 +97,27 @@ double WormTimeline::frameToXWithZoom(int frame, const QRect& contentRect) const
     return x;
 }
 
+int WormTimeline::xToFrameWithZoom(double x, const QRect& contentRect) const
+{
+    if (m_totalFrames <= 1) return 0;
+    double virtualWidth = contentRect.width() * m_zoom;
+    if (virtualWidth <= 0.0) return 0;
+    double t = (x - contentRect.left() + m_panX) / virtualWidth;
+    t = std::clamp(t, 0.0, 1.0);
+    int frame = static_cast<int>(std::round(t * static_cast<double>(m_totalFrames - 1)));
+    return frame;
+}
+
+static int niceFrameStep(int frameSpan)
+{
+    if (frameSpan <= 0) return 1;
+    const int targets[] = {10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000};
+    for (int t : targets) {
+        if (frameSpan / t <= 8) return t;
+    }
+    return targets[9];
+}
+
 void WormTimeline::updatePanForZoom(const QRect& contentRect, double zoomFactor, double cursorX)
 {
     if (m_totalFrames <= 1) {
@@ -96,15 +126,13 @@ void WormTimeline::updatePanForZoom(const QRect& contentRect, double zoomFactor,
         return;
     }
 
-    double prevZoom = m_zoom;
-    double prevVirtualWidth = contentRect.width() * prevZoom;
+    double prevVirtualWidth = contentRect.width() * m_zoom;
     double newZoom = std::clamp(zoomFactor, 1.0, 6.0);
     double newVirtualWidth = contentRect.width() * newZoom;
 
     double t = 0.0;
     if (prevVirtualWidth > 0.0) {
-        double localX = cursorX - contentRect.left() + m_panX;
-        t = localX / prevVirtualWidth;
+        t = (cursorX - contentRect.left() + m_panX) / prevVirtualWidth;
     }
     t = std::clamp(t, 0.0, 1.0);
 
@@ -114,19 +142,19 @@ void WormTimeline::updatePanForZoom(const QRect& contentRect, double zoomFactor,
         return;
     }
 
-    double desiredPan = (cursorX - contentRect.left()) - t * newVirtualWidth;
+    double desiredPan = t * newVirtualWidth - (cursorX - contentRect.left());
     double maxPan = newVirtualWidth - contentRect.width();
-    if (desiredPan < -maxPan) desiredPan = -maxPan;
-    if (desiredPan > 0.0) desiredPan = 0.0;
-    m_panX = -desiredPan;
+    m_panX = std::clamp(desiredPan, 0.0, maxPan);
 }
 
 void WormTimeline::rebuildEventNodes()
 {
     m_eventNodes.clear();
+    m_mergeSpans.clear();
     if (m_totalFrames <= 0 || m_mergeGroupsByFrame.isEmpty()) return;
 
     QMap<QString, QList<int>> prevGroups;
+    QMap<QString, int> activeSpans;
     for (int frame = 0; frame < m_totalFrames; ++frame) {
         QMap<QString, QList<int>> currGroups;
         const QList<QList<int>> groups = m_mergeGroupsByFrame.value(frame);
@@ -149,6 +177,9 @@ void WormTimeline::rebuildEventNodes()
                 node.wormIds = it.value();
                 m_eventNodes.append(node);
             }
+            if (!activeSpans.contains(it.key())) {
+                activeSpans.insert(it.key(), frame);
+            }
         }
         for (auto it = prevGroups.constBegin(); it != prevGroups.constEnd(); ++it) {
             if (!currGroups.contains(it.key())) {
@@ -156,10 +187,27 @@ void WormTimeline::rebuildEventNodes()
                 node.frame = frame;
                 node.wormIds = it.value();
                 m_eventNodes.append(node);
+
+                if (activeSpans.contains(it.key())) {
+                    MergeSpan span;
+                    span.startFrame = activeSpans.value(it.key());
+                    span.endFrame = frame;
+                    span.wormIds = it.value();
+                    m_mergeSpans.append(span);
+                    activeSpans.remove(it.key());
+                }
             }
         }
 
         prevGroups = currGroups;
+    }
+
+    for (auto it = activeSpans.constBegin(); it != activeSpans.constEnd(); ++it) {
+        MergeSpan span;
+        span.startFrame = it.value();
+        span.endFrame = m_totalFrames - 1;
+        span.wormIds = prevGroups.value(it.key());
+        m_mergeSpans.append(span);
     }
 }
 
@@ -176,6 +224,9 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
         std::max(1, height() - m_topPadding - m_bottomPadding)
     );
+    const double virtualLeft = contentRect.left() - m_panX;
+    const double virtualWidth = contentRect.width() * m_zoom;
+    const double virtualRight = virtualLeft + virtualWidth;
 
     QList<int> ids = sortedWormIds();
     if (ids.isEmpty()) {
@@ -205,14 +256,14 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         yForId.insert(ids[i], y);
     }
 
-    // Keyframe dotted line
+    // Current-frame dashed line
     if (m_totalFrames > 0) {
-        double keyX = frameToXWithZoom(m_keyframeFrame, contentRect);
-        QPen keyPen(QColor(30, 30, 30));
-        keyPen.setStyle(Qt::DashLine);
-        keyPen.setWidthF(2.0);
-        p.setPen(keyPen);
-        p.drawLine(QPointF(keyX, contentRect.top()), QPointF(keyX, contentRect.bottom()));
+        double curX = frameToXWithZoom(m_currentFrame, contentRect);
+        QPen curPen(QColor(20, 20, 20));
+        curPen.setStyle(Qt::DashLine);
+        curPen.setWidthF(2.0);
+        p.setPen(curPen);
+        p.drawLine(QPointF(curX, contentRect.top()), QPointF(curX, contentRect.bottom()));
     }
 
     // Precompute event positions and index per worm
@@ -241,6 +292,8 @@ void WormTimeline::paintEvent(QPaintEvent* event)
     }
 
     // Draw worm timelines with local detours into merge/split nodes
+    p.save();
+    p.setClipRect(contentRect);
     for (int id : ids) {
         QColor c = m_wormColors.value(id, QColor(120, 120, 120));
         QPen linePen(c, m_lineThickness, Qt::SolidLine, Qt::RoundCap);
@@ -252,28 +305,66 @@ void WormTimeline::paintEvent(QPaintEvent* event)
             return eventPos[a].x < eventPos[b].x;
         });
 
+        QVector<const MergeSpan*> spansForWorm;
+        spansForWorm.reserve(m_mergeSpans.size());
+        for (const MergeSpan& span : m_mergeSpans) {
+            if (span.wormIds.contains(id)) spansForWorm.append(&span);
+        }
+        std::sort(spansForWorm.begin(), spansForWorm.end(), [&](const MergeSpan* a, const MergeSpan* b) {
+            return a->startFrame < b->startFrame;
+        });
+
         QPainterPath path;
-        path.moveTo(contentRect.left(), y);
+        path.moveTo(virtualLeft, y);
 
-        for (int j = 0; j < evIdx.size(); ++j) {
-            int idx = evIdx[j];
-            double x = eventPos[idx].x;
-            double yNode = eventPos[idx].y;
+        for (int spanIndex = 0; spanIndex < spansForWorm.size(); ++spanIndex) {
+            const MergeSpan* span = spansForWorm[spanIndex];
+            double startX = frameToXWithZoom(span->startFrame, contentRect);
+            double endX = frameToXWithZoom(span->endFrame, contentRect);
+            if (endX < virtualLeft || startX > virtualRight) continue;
 
-            double prevX = (j > 0) ? eventPos[evIdx[j - 1]].x : contentRect.left();
-            double nextX = (j + 1 < evIdx.size()) ? eventPos[evIdx[j + 1]].x : contentRect.right();
-            double leftGap = std::max(6.0, x - prevX);
-            double rightGap = std::max(6.0, nextX - x);
-            double dx = std::min(40.0, 0.2 * std::min(leftGap, rightGap));
+            double prevEndX = virtualLeft;
+            if (spanIndex > 0) {
+                prevEndX = frameToXWithZoom(spansForWorm[spanIndex - 1]->endFrame, contentRect);
+            }
+            double nextStartX = virtualRight;
+            if (spanIndex + 1 < spansForWorm.size()) {
+                nextStartX = frameToXWithZoom(spansForWorm[spanIndex + 1]->startFrame, contentRect);
+            }
 
-            path.lineTo(x - dx, y);
-            path.lineTo(x, yNode);
-            path.lineTo(x + dx, y);
+            double sumY = 0.0;
+            int count = 0;
+            for (int wid : span->wormIds) {
+                if (yForId.contains(wid)) {
+                    sumY += yForId.value(wid);
+                    ++count;
+                }
+            }
+            double mergeY = (count > 0) ? (sumY / static_cast<double>(count)) : y;
+
+            double spanWidth = std::max(8.0, endX - startX);
+            double ramp = std::min(40.0, 0.2 * spanWidth);
+            double leftGap = std::max(0.0, startX - prevEndX);
+            double rightGap = std::max(0.0, nextStartX - endX);
+            ramp = std::min(ramp, 0.45 * leftGap);
+            ramp = std::min(ramp, 0.45 * rightGap);
+
+            double rampStart = startX - ramp;
+            double rampEnd = endX + ramp;
+
+            if (rampStart < prevEndX) rampStart = prevEndX;
+            if (rampEnd > nextStartX) rampEnd = nextStartX;
+
+            path.lineTo(rampStart, y);
+            path.lineTo(startX, mergeY);
+            path.lineTo(endX, mergeY);
+            path.lineTo(rampEnd, y);
         }
 
-        path.lineTo(contentRect.right(), y);
+        path.lineTo(virtualRight, y);
         p.drawPath(path);
     }
+    p.restore();
 
     // Draw event nodes on top of lines
     m_selectedNodeIndex = std::min(m_selectedNodeIndex, static_cast<int>(m_eventNodes.size()) - 1);
@@ -298,7 +389,43 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         p.drawEllipse(circleRect);
     }
 
-    // Labels on the right
+    // Scale bar (frame ticks) below the worm lines
+    {
+        int barY = contentRect.bottom() - 6;
+        QPen axisPen(palette().mid().color());
+        axisPen.setWidthF(1.0);
+        p.setPen(axisPen);
+        p.drawLine(QPointF(contentRect.left(), barY), QPointF(contentRect.right(), barY));
+
+        double leftFrameF = (m_totalFrames > 1 && virtualWidth > 0.0)
+            ? (m_panX / virtualWidth) * static_cast<double>(m_totalFrames - 1)
+            : 0.0;
+        double rightFrameF = (m_totalFrames > 1 && virtualWidth > 0.0)
+            ? ((m_panX + contentRect.width()) / virtualWidth) * static_cast<double>(m_totalFrames - 1)
+            : 0.0;
+
+        int leftFrame = std::max(0, static_cast<int>(std::floor(leftFrameF)));
+        int rightFrame = std::min(m_totalFrames - 1, static_cast<int>(std::ceil(rightFrameF)));
+        int span = std::max(1, rightFrame - leftFrame);
+        int step = niceFrameStep(span);
+        int firstTick = (leftFrame / step) * step;
+
+        QFont tickFont = font();
+        tickFont.setPointSizeF(std::max(8.0, tickFont.pointSizeF() - 1));
+        p.setFont(tickFont);
+        QFontMetrics fm(tickFont);
+
+        for (int f = firstTick; f <= rightFrame; f += step) {
+            double x = frameToXWithZoom(f, contentRect);
+            if (x < contentRect.left() - 1 || x > contentRect.right() + 1) continue;
+            p.drawLine(QPointF(x, barY - 4), QPointF(x, barY + 4));
+            QString label = QString::number(f);
+            int tw = fm.horizontalAdvance(label);
+            p.drawText(QPointF(x - tw / 2.0, barY + 14), label);
+        }
+    }
+
+    // Labels on the right (scroll with timeline)
     p.setPen(palette().text().color());
     QFont labelFont = font();
     labelFont.setBold(true);
@@ -308,7 +435,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         p.setPen(c);
         int y = yForId.value(id);
         QString label = QString("Worm %1").arg(id);
-        p.drawText(QPointF(contentRect.right() + 12, y + 4), label);
+        p.drawText(QPointF(virtualRight + 12, y + 4), label);
     }
 }
 
@@ -316,6 +443,19 @@ void WormTimeline::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() != Qt::LeftButton) {
         QWidget::mousePressEvent(event);
+        return;
+    }
+
+    const QRect contentRect(
+        m_leftPadding,
+        m_topPadding,
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        std::max(1, height() - m_topPadding - m_bottomPadding)
+    );
+    const double curX = frameToXWithZoom(m_currentFrame, contentRect);
+    if (std::abs(event->position().x() - curX) <= 6.0) {
+        m_isDraggingFrame = true;
+        event->accept();
         return;
     }
 
@@ -328,8 +468,62 @@ void WormTimeline::mousePressEvent(QMouseEvent* event)
             return;
         }
     }
+    m_isPanning = true;
+    m_lastPanX = event->position().x();
+    event->accept();
+}
 
-    QWidget::mousePressEvent(event);
+void WormTimeline::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_isDraggingFrame) {
+        const QRect contentRect(
+            m_leftPadding,
+            m_topPadding,
+            std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+            std::max(1, height() - m_topPadding - m_bottomPadding)
+        );
+        int frame = xToFrameWithZoom(event->position().x(), contentRect);
+        m_currentFrame = frame;
+        update();
+        emit frameScrubbed(frame);
+        event->accept();
+        return;
+    }
+    if (!m_isPanning) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    const QRect contentRect(
+        m_leftPadding,
+        m_topPadding,
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        std::max(1, height() - m_topPadding - m_bottomPadding)
+    );
+
+    const double dx = event->position().x() - m_lastPanX;
+    m_lastPanX = event->position().x();
+
+    double virtualWidth = contentRect.width() * m_zoom;
+    if (virtualWidth <= contentRect.width()) {
+        m_panX = 0.0;
+        update();
+        event->accept();
+        return;
+    }
+
+    m_panX = std::clamp(m_panX - dx, 0.0, virtualWidth - contentRect.width());
+    update();
+    event->accept();
+}
+
+void WormTimeline::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_isPanning = false;
+        m_isDraggingFrame = false;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 void WormTimeline::wheelEvent(QWheelEvent* event)

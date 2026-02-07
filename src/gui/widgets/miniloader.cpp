@@ -510,7 +510,12 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
             f.setBold(true);
             painter.setFont(f);
             painter.setPen(Qt::yellow);
-            painter.drawText(QRectF(centroidWidget.x() - 12, centroidWidget.y() - 12, 24, 24), Qt::AlignCenter, label);
+            // Scatter labels slightly (deterministic) so merged worms don't stack perfectly.
+            int h = wormId * 37 + m_currentFrameNumber * 17;
+            int dx = (h % 9) - 8;                 // [-4, 4]
+            int dy = ((h / 9) % 9) - 8;          // [-4, 4]
+            painter.drawText(QRectF(centroidWidget.x() - 12 + dx, centroidWidget.y() - 12 + dy, 24, 24),
+                             Qt::AlignCenter, label);
         }
     }
 
