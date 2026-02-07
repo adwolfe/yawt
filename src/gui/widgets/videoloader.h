@@ -132,6 +132,11 @@ public:
     // and, if implemented in the .cpp, may synchronously convert a cached cv::Mat to QImage.
     // If the frame is not available this should return a null QImage.
     QImage getQImageForFrame(int frameNumber) const;
+    // Return a QImage for an arbitrary frame number, loading from disk synchronously if missing
+    // and inserting into the cache. Intended for paused/stepped usage.
+    QImage getOrLoadQImageForFrame(int frameNumber);
+    // Populate the cache with a small sequential window around a center frame.
+    void cacheWindowAroundFrame(int centerFrame, int radius);
     // Convenience helper: return a map of frameNumber -> QImage for the provided list of frames.
     // Frames that cannot be retrieved will map to a null QImage. Useful for callers that need
     // multiple cropped frames to send to MiniLoader in one batch.

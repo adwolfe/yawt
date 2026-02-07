@@ -160,12 +160,14 @@ public slots:
 
     // Poll timer tick: periodically poll MiniLoader(s) for visible IDs (fallback if signal missed)
     void onMiniLoaderPollTimeout();
+    void onPlaybackStateChanged(bool isPlaying, double currentSpeed);
 
 private:
     void setupConnections();
     void initializeUIStates();
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
+    void setSideMiniLoadersPaused(bool paused);
 
     /**
      * Keep the mirrored play/pause buttons in sync with the current playback state.
@@ -212,6 +214,7 @@ private:
     // Tracking/view state
     /** Whether initial tracking has been completed in the current session. Pure UI state. */
     bool m_hasCompletedTracking;
+    bool m_isVideoPlaying = false;
 
     /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;

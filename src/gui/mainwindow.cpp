@@ -45,6 +45,7 @@
 #include <QDebug>
 #include <QButtonGroup> // For m_interactionModeButtonGroup
 #include <QSet>
+#include <QGraphicsOpacityEffect>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -288,6 +289,7 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
+    connect(ui->videoLoader, &VideoLoader::playbackStateChanged, this, &MainWindow::onPlaybackStateChanged);
 
     // Playback controls (mirrored buttons) - use helper to keep them in sync
     connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });
@@ -1088,6 +1090,10 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         return;
     }
 
+    if (!m_isVideoPlaying && ui->videoLoader) {
+        ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+    }
+
     // Get the crop size from BlobTableModel
     QSizeF cropSize = m_blobTableModel->getCurrentFixedRoiSize();
     if (cropSize.isEmpty()) {
@@ -1163,7 +1169,6 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     //   mlop1 -> currentFrameNumber + 1
     //   mlop2 -> currentFrameNumber + 2
     {
-        int offsets[5] = { -2, -1, 0, 1, 2 };
         int totalFrames = 0;
         if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
 
@@ -1171,7 +1176,9 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         auto buildCroppedForFrame = [&](int frameNum) -> std::tuple<QImage, QPointF, QSizeF> {
             QRect localCrop = cropRect;
             QImage img;
-            if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
+            if (frameNum == currentFrameNumber) {
+                img = currentFrame;
+            } else if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
                 img = ui->videoLoader->getQImageForFrame(frameNum);
             }
             if (!img.isNull()) {
@@ -1190,33 +1197,45 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
             return std::make_tuple(cf, offset, size);
         };
 
-        // Map offsets to UI widget pointers (if present)
-        MiniLoader* widgetTargets[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-        widgetTargets[0] = (ui->mlon2) ? ui->mlon2 : nullptr;
-        widgetTargets[1] = (ui->mlon1) ? ui->mlon1 : nullptr;
-        widgetTargets[2] = (ui->miniLoaderOverlay) ? ui->miniLoaderOverlay : nullptr;
-        widgetTargets[3] = (ui->mlop1) ? ui->mlop1 : nullptr;
-        widgetTargets[4] = (ui->mlop2) ? ui->mlop2 : nullptr;
-
-        // Send one frame to each target
-        for (int i = 0; i < 5; ++i) {
-            int targetFrame = currentFrameNumber + offsets[i];
-            if (targetFrame < 0) continue;
-            if (totalFrames > 0 && targetFrame >= totalFrames) continue;
-
-            MiniLoader* target = widgetTargets[i];
-            if (!target) continue;
-
+        // Always update the overlay (center frame)
+        if (ui->miniLoaderOverlay) {
             QImage cf;
             QPointF off;
             QSizeF sz;
-            std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
-
-            // Use the MiniLoader single-frame API
-            target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
-            YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
-                     << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("miniLoaderOverlay"):(i==3?QString("mlop1"):QString("mlop2")))))
+            std::tie(cf, off, sz) = buildCroppedForFrame(currentFrameNumber);
+            ui->miniLoaderOverlay->updateWithCroppedFrame(currentFrameNumber, cf, off, sz, centerPoint);
+            YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << currentFrameNumber << "to widget miniLoaderOverlay"
                      << "size:" << cf.size();
+        }
+
+        // Only update +/- frames when playback is not running.
+        if (!m_isVideoPlaying) {
+            int offsets[4] = { -2, -1, 1, 2 };
+            MiniLoader* widgetTargets[4] = {
+                (ui->mlon2) ? ui->mlon2 : nullptr,
+                (ui->mlon1) ? ui->mlon1 : nullptr,
+                (ui->mlop1) ? ui->mlop1 : nullptr,
+                (ui->mlop2) ? ui->mlop2 : nullptr
+            };
+
+            for (int i = 0; i < 4; ++i) {
+                int targetFrame = currentFrameNumber + offsets[i];
+                if (targetFrame < 0) continue;
+                if (totalFrames > 0 && targetFrame >= totalFrames) continue;
+
+                MiniLoader* target = widgetTargets[i];
+                if (!target) continue;
+
+                QImage cf;
+                QPointF off;
+                QSizeF sz;
+                std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
+
+                target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
+                YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
+                         << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("mlop1"):QString("mlop2"))))
+                         << "size:" << cf.size();
+            }
         }
 
         // Primary miniLoader (zoom-only) should receive the central frame for display consistency
@@ -1241,6 +1260,45 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     // The batching path has been replaced above. No additional fallback logic required here.
     // All five mini loader widgets (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2) were handled.
     // No-op placeholder to preserve function structure.
+}
+
+void MainWindow::onPlaybackStateChanged(bool isPlaying, double currentSpeed) {
+    Q_UNUSED(currentSpeed);
+    m_isVideoPlaying = isPlaying;
+    setSideMiniLoadersPaused(isPlaying);
+
+    if (!isPlaying && ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
+        int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+        QImage currentImage = ui->videoLoader->getCurrentQImageFrame();
+        if (!currentImage.isNull()) {
+            updateMiniLoaderCrop(currentFrame, currentImage);
+        }
+    }
+}
+
+void MainWindow::setSideMiniLoadersPaused(bool paused) {
+    MiniLoader* targets[4] = {
+        ui->mlon2 ? ui->mlon2 : nullptr,
+        ui->mlon1 ? ui->mlon1 : nullptr,
+        ui->mlop1 ? ui->mlop1 : nullptr,
+        ui->mlop2 ? ui->mlop2 : nullptr
+    };
+
+    for (MiniLoader* target : targets) {
+        if (!target) continue;
+        target->setEnabled(!paused);
+
+        if (paused) {
+            QGraphicsOpacityEffect* effect = qobject_cast<QGraphicsOpacityEffect*>(target->graphicsEffect());
+            if (!effect) {
+                effect = new QGraphicsOpacityEffect(target);
+                target->setGraphicsEffect(effect);
+            }
+            effect->setOpacity(0.35);
+        } else if (target->graphicsEffect()) {
+            target->setGraphicsEffect(nullptr);
+        }
+    }
 }
 
 void MainWindow::frameSliderMoved(int value) {

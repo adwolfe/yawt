@@ -330,6 +330,7 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     }
 
     seekToFrame(0);
+    cacheWindowAroundFrame(0, 4); // warm cache for initial display (frames 0-4)
     emit videoLoaded(filePath, totalFramesCount, framesPerSecond, originalFrameSize);
     emit zoomFactorChanged(m_zoomFactor);
     emit roiDefined(m_activeRoiRect);
@@ -718,22 +719,19 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
                     m_frameCache->insertFrame(frameNumber, currentCvFrame);
                 }
 
-                // Preload the immediate next two frames using the background loader.
-                // Do not enqueue frames already present in the cache.
-                if (m_frameLoader) {
+                // Avoid background preloading when paused; cache windows are managed explicitly elsewhere.
+                if (m_isPlaying && m_frameLoader) {
                     int f1 = frameNumber + 1;
                     int f2 = frameNumber + 2;
 
                     if (f1 >= 0 && (totalFramesCount <= 0 || f1 < totalFramesCount)) {
                         if (!m_frameCache || !m_frameCache->hasFrame(f1)) {
-                            // Use a high priority for the very next frame
                             m_frameLoader->requestSingleFrame(f1, 100);
                         }
                     }
 
                     if (f2 >= 0 && (totalFramesCount <= 0 || f2 < totalFramesCount)) {
                         if (!m_frameCache || !m_frameCache->hasFrame(f2)) {
-                            // Slightly lower priority for the second-ahead frame
                             m_frameLoader->requestSingleFrame(f2, 100);
                         }
                     }
@@ -1608,6 +1606,103 @@ QImage VideoLoader::getQImageForFrame(int frameNumber) const {
 
     // Not present in cache -> return null QImage
     return QImage();
+}
+
+QImage VideoLoader::getOrLoadQImageForFrame(int frameNumber) {
+    // Return a QImage for an arbitrary frame number, loading from disk if needed.
+    if (frameNumber < 0 || (totalFramesCount > 0 && frameNumber >= totalFramesCount)) {
+        return QImage();
+    }
+
+    cv::Mat mat;
+    if (m_frameCache && m_frameCache->getFrame(frameNumber, mat)) {
+        QImage qimg;
+        convertCvMatToQImage(mat, qimg);
+        return qimg;
+    }
+
+    if (!videoCapture.isOpened() || originalFrameSize.isEmpty()) {
+        return QImage();
+    }
+
+    int restoreFrame = currentFrameIdx;
+    int currentPos = static_cast<int>(videoCapture.get(cv::CAP_PROP_POS_FRAMES));
+    bool seekOk = true;
+    if (currentPos != frameNumber) {
+        seekOk = videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber));
+    }
+    if (!seekOk) {
+        return QImage();
+    }
+
+    cv::Mat loaded;
+    if (!videoCapture.read(loaded) || loaded.empty()) {
+        // Attempt to restore position even on failure
+        videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(restoreFrame));
+        return QImage();
+    }
+
+    if (m_frameCache) {
+        m_frameCache->insertFrame(frameNumber, loaded);
+    }
+
+    // Restore capture position to the current frame (best effort)
+    videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(restoreFrame));
+
+    QImage qimg;
+    convertCvMatToQImage(loaded, qimg);
+    return qimg;
+}
+
+void VideoLoader::cacheWindowAroundFrame(int centerFrame, int radius) {
+    if (!videoCapture.isOpened() || originalFrameSize.isEmpty()) {
+        return;
+    }
+    if (centerFrame < 0 || (totalFramesCount > 0 && centerFrame >= totalFramesCount)) {
+        return;
+    }
+    if (radius < 0) {
+        return;
+    }
+
+    int startFrame = qMax(0, centerFrame - radius);
+    int endFrame = (totalFramesCount > 0) ? qMin(totalFramesCount - 1, centerFrame + radius)
+                                          : (centerFrame + radius);
+
+    if (m_frameCache) {
+        bool allPresent = true;
+        for (int f = startFrame; f <= endFrame; ++f) {
+            if (!m_frameCache->hasFrame(f)) {
+                allPresent = false;
+                break;
+            }
+        }
+        if (allPresent) {
+            return;
+        }
+    }
+
+    int restoreFrame = currentFrameIdx;
+    int currentPos = static_cast<int>(videoCapture.get(cv::CAP_PROP_POS_FRAMES));
+    if (currentPos != startFrame) {
+        if (!videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(startFrame))) {
+            return;
+        }
+    }
+
+    for (int f = startFrame; f <= endFrame; ++f) {
+        cv::Mat frame;
+        if (!videoCapture.read(frame) || frame.empty()) {
+            break;
+        }
+        if (m_frameCache) {
+            m_frameCache->insertFrame(f, frame);
+        }
+    }
+
+    if (restoreFrame >= 0 && (totalFramesCount <= 0 || restoreFrame < totalFramesCount)) {
+        videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(restoreFrame));
+    }
 }
 
 QMap<int, QImage> VideoLoader::getQImagesForFrames(const QList<int>& frameNumbers) const {
