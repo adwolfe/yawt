@@ -318,6 +318,12 @@ public:
      */
     QList<QList<int>> getMergeGroupsForFrame(int frameNumber) const;
 
+    /**
+     * @brief Retrieve the full merge history map.
+     * @return Map of frame -> list of groups (each group is a list of worm IDs)
+     */
+    QMap<int, QList<QList<int>>> getAllMergeGroups() const;
+
 signals:
     /**
      * @brief Emitted when an item is added

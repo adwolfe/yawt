@@ -33,6 +33,7 @@
 #include "trackingmanager.h"
 #include "trackingdatastorage.h"
 #include "version.h"
+#include "wormtimeline.h"
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
 // #include "videoloader.h"
 // #include "trackingcommon.h"
@@ -72,6 +73,8 @@ MainWindow::MainWindow(QWidget *parent)
     // ui->annoTableView->setModel(m_annotationTableModel);
 
     m_trackingDataStorage = m_appController->trackingDataStorage();
+    connect(m_trackingDataStorage, &TrackingDataStorage::itemsChanged,
+            this, [this](const QList<TableItems::ClickedItem>&) { updateWormTimeline(); });
 
     // Set up MiniLoader instances
     ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
@@ -94,6 +97,11 @@ MainWindow::MainWindow(QWidget *parent)
     ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+
+    if (ui->wormTimeline) {
+        connect(ui->wormTimeline, &WormTimeline::eventClicked,
+                this, [this](int frame, const QList<int>&) { seekFrame(frame); });
+    }
 
     // Jump to frame when a merge/split row is clicked
     connect(ui->mergeSplitTableView, &QTableView::clicked, this, [this](const QModelIndex &index){
@@ -652,7 +660,10 @@ void MainWindow::setupConnections() {
 
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
-    if (m_appController) connect(m_appController, &AppController::tracksUpdated, this, &MainWindow::acceptTracksFromManager);
+    if (m_appController) {
+        connect(m_appController, &AppController::tracksUpdated, this, &MainWindow::acceptTracksFromManager);
+        connect(m_appController, &AppController::trackingFinished, this, &MainWindow::updateWormTimeline);
+    }
 
     // Annotation table selection
     // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
@@ -809,6 +820,25 @@ void MainWindow::resizeTableColumns()
         // Make sure horizontal scrollbar is enabled when needed
         ui->wormTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     }
+}
+
+void MainWindow::updateWormTimeline()
+{
+    if (!ui->wormTimeline || !m_blobTableModel || !m_trackingDataStorage) return;
+
+    QMap<int, QColor> idColors;
+    const QList<TableItems::ClickedItem> items = m_blobTableModel->getAllItems();
+    for (const auto& item : items) {
+        idColors.insert(item.id, item.color);
+    }
+
+    int totalFrames = 0;
+    if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
+
+    ui->wormTimeline->setTotalFrames(totalFrames);
+    ui->wormTimeline->setKeyframeFrame(0);
+    ui->wormTimeline->setWormColors(idColors);
+    ui->wormTimeline->setMergeGroupsByFrame(m_trackingDataStorage->getAllMergeGroups());
 }
 
 
@@ -1070,6 +1100,7 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->framePosition_2->setValue(0);
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
     ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
+    updateWormTimeline();
 }
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {
@@ -1536,6 +1567,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
     // Perform memory cleanup after tracking is complete
     performPostTrackingMemoryCleanup();
+    updateWormTimeline();
 }
 
 void MainWindow::setupPlaybackSpeedComboBox() {

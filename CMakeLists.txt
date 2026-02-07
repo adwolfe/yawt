@@ -49,6 +49,7 @@ set(SOURCES
     # GUI widgets and delegates
     src/gui/widgets/mergeviewer.cpp
     src/gui/widgets/miniloader.cpp
+    src/gui/widgets/wormtimeline.cpp
    # src/gui/widgets/cachestatuswidget.cpp
     src/gui/widgets/videofiletreeview.cpp
     src/gui/widgets/frameloader.cpp
@@ -90,6 +91,7 @@ set(HEADERS
     # GUI widgets / delegates
     src/gui/widgets/mergeviewer.h
     src/gui/widgets/miniloader.h
+    src/gui/widgets/wormtimeline.h
   #  src/gui/widgets/cachestatuswidget.h
     src/gui/widgets/videofiletreeview.h
     src/gui/widgets/frameloader.h

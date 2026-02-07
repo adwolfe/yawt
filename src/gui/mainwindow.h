@@ -168,6 +168,7 @@ private:
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
     void setSideMiniLoadersPaused(bool paused);
+    void updateWormTimeline();
 
     /**
      * Keep the mirrored play/pause buttons in sync with the current playback state.

@@ -1055,7 +1055,10 @@ QToolButton#lastFrameButton {
        <attribute name="title">
         <string>Cleanup</string>
        </attribute>
-       <layout class="QVBoxLayout" name="verticalLayout_4" stretch="5,1,5,5">
+       <layout class="QVBoxLayout" name="verticalLayout_4" stretch="10,10,1,2">
+        <item>
+         <widget class="WormTimeline" name="wormTimeline" native="true"/>
+        </item>
         <item>
          <layout class="QHBoxLayout" name="horizontalLayout_12">
           <property name="leftMargin">
@@ -1310,34 +1313,6 @@ QToolButton#lastFrameButton_2 {
          </layout>
         </item>
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_13">
-          <property name="leftMargin">
-           <number>20</number>
-          </property>
-          <property name="topMargin">
-           <number>0</number>
-          </property>
-          <property name="rightMargin">
-           <number>20</number>
-          </property>
-          <item>
-           <widget class="QWidget" name="mmn2" native="true"/>
-          </item>
-          <item>
-           <widget class="QWidget" name="mmn1" native="true"/>
-          </item>
-          <item>
-           <widget class="QWidget" name="mergeMap" native="true"/>
-          </item>
-          <item>
-           <widget class="QWidget" name="mmp1" native="true"/>
-          </item>
-          <item>
-           <widget class="QWidget" name="mmp2" native="true"/>
-          </item>
-         </layout>
-        </item>
-        <item>
          <layout class="QHBoxLayout" name="horizontalLayout_14">
           <property name="topMargin">
            <number>0</number>
@@ -1382,6 +1357,11 @@ QToolButton#lastFrameButton_2 {
    <extends>QWidget</extends>
    <header>miniloader.h</header>
    <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>WormTimeline</class>
+   <extends>QWidget</extends>
+   <header>wormtimeline.h</header>
   </customwidget>
  </customwidgets>
  <resources>

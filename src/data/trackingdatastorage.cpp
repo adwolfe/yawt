@@ -320,6 +320,10 @@ QList<QList<int>> TrackingDataStorage::getMergeGroupsForFrame(int frameNumber) c
     return m_mergeHistory.value(frameNumber);
 }
 
+QMap<int, QList<QList<int>>> TrackingDataStorage::getAllMergeGroups() const {
+    return m_mergeHistory;
+}
+
 // --- Detected blob persistence API ---
 
 /**
