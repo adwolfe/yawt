@@ -155,9 +155,13 @@ void WormTimeline::rebuildEventNodes()
 
     QMap<QString, QList<int>> prevGroups;
     QMap<QString, int> activeSpans;
+    int earliestMergeFrame = -1;
     for (int frame = 0; frame < m_totalFrames; ++frame) {
         QMap<QString, QList<int>> currGroups;
         const QList<QList<int>> groups = m_mergeGroupsByFrame.value(frame);
+        if (earliestMergeFrame < 0 && !groups.isEmpty()) {
+            earliestMergeFrame = frame;
+        }
         for (const QList<int>& group : groups) {
             if (group.size() < 2) continue;
             QList<int> ids = group;
@@ -208,6 +212,19 @@ void WormTimeline::rebuildEventNodes()
         span.endFrame = m_totalFrames - 1;
         span.wormIds = prevGroups.value(it.key());
         m_mergeSpans.append(span);
+    }
+
+    // If merge history doesn't show an initial merged state, synthesize one at the start.
+    if (earliestMergeFrame > 0) {
+        QList<int> allIds = m_wormColors.keys();
+        if (allIds.size() > 1) {
+            std::sort(allIds.begin(), allIds.end());
+            MergeSpan span;
+            span.startFrame = 0;
+            span.endFrame = earliestMergeFrame;
+            span.wormIds = allIds;
+            m_mergeSpans.append(span);
+        }
     }
 }
 
@@ -303,13 +320,19 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         QPainterPath path;
         path.moveTo(virtualLeft, y);
 
+        struct SpanCandidate {
+            double startX;
+            double endX;
+            double targetY;
+            int priority;
+        };
         struct SpanAffect {
             double startX;
             double endX;
             double targetY;
         };
-        QVector<SpanAffect> affects;
-        affects.reserve(m_mergeSpans.size());
+        QVector<SpanCandidate> candidates;
+        candidates.reserve(m_mergeSpans.size());
 
         for (const MergeSpan& span : m_mergeSpans) {
             double startX = frameToXWithZoom(span.startFrame, contentRect);
@@ -338,22 +361,65 @@ void WormTimeline::paintEvent(QPaintEvent* event)
             }
             double mergeY = (count > 0) ? (sumY / static_cast<double>(count)) : y;
 
+            int duration = std::max(1, span.endFrame - span.startFrame + 1);
+            int basePriority = static_cast<int>(span.wormIds.size()) * 100000 + duration;
             bool inGroup = span.wormIds.contains(id);
             if (inGroup) {
-                affects.append({startX, endX, mergeY});
-            } else {
-                if (y >= minY && y <= maxY && count > 1) {
-                    double targetY = (std::abs(y - minY) <= std::abs(y - maxY)) ? minY : maxY;
-                    if (targetY != y) {
-                        affects.append({startX, endX, targetY});
-                    }
+                QList<int> sortedGroup = span.wormIds;
+                std::sort(sortedGroup.begin(), sortedGroup.end());
+                int idx = sortedGroup.indexOf(id);
+                int n = sortedGroup.size();
+                double step = std::min(rowSpacing * 0.2, static_cast<double>(m_lineThickness));
+                double offset = 0.0;
+                if (n > 1 && idx >= 0) {
+                    offset = (static_cast<double>(idx) - (static_cast<double>(n - 1) / 2.0)) * step;
+                }
+                candidates.append({startX, endX, mergeY + offset, basePriority});
+            } else if (y >= minY && y <= maxY && count > 1) {
+                double targetY = (std::abs(y - minY) <= std::abs(y - maxY)) ? minY : maxY;
+                if (targetY != y) {
+                    candidates.append({startX, endX, targetY, basePriority - 1});
                 }
             }
         }
 
-        std::sort(affects.begin(), affects.end(), [&](const SpanAffect& a, const SpanAffect& b) {
-            return a.startX < b.startX;
-        });
+        QVector<SpanAffect> affects;
+        if (!candidates.isEmpty()) {
+            QVector<double> bounds;
+            bounds.reserve(candidates.size() * 2 + 2);
+            bounds.append(virtualLeft);
+            bounds.append(virtualRight);
+            for (const SpanCandidate& c : candidates) {
+                bounds.append(std::max(virtualLeft, std::min(virtualRight, c.startX)));
+                bounds.append(std::max(virtualLeft, std::min(virtualRight, c.endX)));
+            }
+            std::sort(bounds.begin(), bounds.end());
+            bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+
+            auto pickBest = [&](double midX) -> const SpanCandidate* {
+                const SpanCandidate* best = nullptr;
+                for (const SpanCandidate& c : candidates) {
+                    if (midX < c.startX || midX > c.endX) continue;
+                    if (!best || c.priority > best->priority) best = &c;
+                }
+                return best;
+            };
+
+            for (int i = 0; i + 1 < bounds.size(); ++i) {
+                double a = bounds[i];
+                double b = bounds[i + 1];
+                if (b <= a) continue;
+                double mid = (a + b) * 0.5;
+                const SpanCandidate* best = pickBest(mid);
+                if (!best) continue;
+                if (!affects.isEmpty() && std::abs(affects.last().targetY - best->targetY) < 0.01
+                    && std::abs(affects.last().endX - a) < 0.01) {
+                    affects.last().endX = b;
+                } else {
+                    affects.append({a, b, best->targetY});
+                }
+            }
+        }
 
         for (int spanIndex = 0; spanIndex < affects.size(); ++spanIndex) {
             const SpanAffect& span = affects[spanIndex];
