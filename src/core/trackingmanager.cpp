@@ -928,6 +928,9 @@ void TrackingManager::processFrameSpecificMerge(int signedWormId, int frameNumbe
         // Update the physical blob's representation with this new information
         matchedPhysicalBlob->currentBoundingBox = matchedPhysicalBlob->currentBoundingBox.united(reportedFullBlob.boundingBox);
         matchedPhysicalBlob->currentArea = qMax(matchedPhysicalBlob->currentArea, reportedFullBlob.area); // ideally should not change
+        if (!reportedFullBlob.contourPoints.empty()) {
+            matchedPhysicalBlob->contourPoints = reportedFullBlob.contourPoints;
+        }
         if(matchedPhysicalBlob->currentBoundingBox.isValid()){
             QPointF newCenter = matchedPhysicalBlob->currentBoundingBox.center();
             matchedPhysicalBlob->currentCentroid = cv::Point2f(static_cast<float>(newCenter.x()), static_cast<float>(newCenter.y()));
@@ -946,6 +949,7 @@ void TrackingManager::processFrameSpecificMerge(int signedWormId, int frameNumbe
             newPhysicalBlob.currentCentroid = cv::Point2f(static_cast<float>(reportedFullBlob.centroid.x()), static_cast<float>(reportedFullBlob.centroid.y()));
         }
         newPhysicalBlob.currentArea = reportedFullBlob.area;
+        newPhysicalBlob.contourPoints = reportedFullBlob.contourPoints;
         newPhysicalBlob.participatingWormTrackerIDs.insert(signedWormId);
         // newPhysicalBlob.timeFirstReported = QDateTime::currentDateTime();
 
@@ -990,6 +994,9 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
         if (existingBlob) {
             // Add this WT to the existing blob's participants
             existingBlob->participatingWormTrackerIDs.insert(signedWormId);
+            if (!candidate.contourPoints.empty()) {
+                existingBlob->contourPoints = candidate.contourPoints;
+            }
             currentBlobId = existingBlob->uniqueId;
             candidatePhysicalBlobIds.append(currentBlobId);
             TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Matched existing PhysicalBlobID:").arg(signedWormId).arg(frameNumber) << currentBlobId;
@@ -1001,6 +1008,7 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             newPhysicalBlob.currentBoundingBox = candidate.boundingBox;
             newPhysicalBlob.currentCentroid = cv::Point2f(static_cast<float>(candidate.centroid.x()), static_cast<float>(candidate.centroid.y()));
             newPhysicalBlob.currentArea = candidate.area;
+            newPhysicalBlob.contourPoints = candidate.contourPoints;
             newPhysicalBlob.participatingWormTrackerIDs.insert(signedWormId);
             newPhysicalBlob.selectedByWormTrackerId = 0; // Initially unselected
 
@@ -1133,6 +1141,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
                     blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
+                    blobToAssign.contourPoints = blob.contourPoints;
 
                     TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** CLAIMED PREFERRED BLOB ***").arg(signedWormId).arg(frameNumber) << preferredBlobId
                                       << "Area:" << blobToAssign.area
@@ -1213,6 +1222,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
                 blobToAssign.centroid = QPointF(closestBlob->currentCentroid.x, closestBlob->currentCentroid.y);
                 blobToAssign.boundingBox = closestBlob->currentBoundingBox;
                 blobToAssign.area = closestBlob->currentArea;
+                blobToAssign.contourPoints = closestBlob->contourPoints;
 
                 TRACKING_DEBUG() << QString("TM: %1|FN%2|*** CLAIMED ALTERNATIVE BLOB ***").arg(signedWormId).arg(frameNumber) << closestBlob->uniqueId
                                   << "Area:" << blobToAssign.area
@@ -1240,6 +1250,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
                     blobToAssign.centroid = QPointF(blob.currentCentroid.x, blob.currentCentroid.y);
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
+                    blobToAssign.contourPoints = blob.contourPoints;
 
                     TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** CLAIMED FALLBACK BLOB ***").arg(signedWormId).arg(frameNumber) << blob.uniqueId
                                       << "Area:" << blobToAssign.area
