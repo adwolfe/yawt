@@ -322,7 +322,7 @@ private:
                                    const QList<Tracking::DetectedBlob>& allSplitCandidates,
                                    const Tracking::DetectedBlob& chosenCandidate,
                                    WormTracker* reportingTrackerInstance);
-    bool attemptImmediateSplitResolution(int conceptualWormId, int frameNumber, 
+    bool attemptImmediateSplitResolution(int signedWormId, int frameNumber, 
                                      const QList<Tracking::DetectedBlob>& allCandidates,
                                      const Tracking::DetectedBlob& chosenCandidate,
                                      WormTracker* trackerInstance);
