@@ -249,33 +249,29 @@ MainWindow::~MainWindow()
 }
 
 void MainWindow::setPlayButtonsState(bool playing, bool blockSignals) {
-    // Helper: set playback state and keep both mirrored buttons consistent.
+    // Helper: set playback state and keep the play button consistent.
     if (!ui) return;
     if (blockSignals) {
         ui->playPauseButton->blockSignals(true);
-        ui->playPauseButton_2->blockSignals(true);
     }
 
     ui->playPauseButton->setChecked(playing);
-    ui->playPauseButton_2->setChecked(playing);
 
     QIcon icon = playing ? QIcon::fromTheme("media-playback-pause", QIcon(":/icons/pause.png"))
                         : QIcon::fromTheme("media-playback-start", QIcon(":/icons/play.png"));
     ui->playPauseButton->setIcon(icon);
-    ui->playPauseButton_2->setIcon(icon);
 
     if (playing) ui->videoLoader->play();
     else ui->videoLoader->pause();
 
     if (blockSignals) {
         ui->playPauseButton->blockSignals(false);
-        ui->playPauseButton_2->blockSignals(false);
     }
 }
 
 bool MainWindow::arePlayButtonsChecked() const {
     if (!ui) return false;
-    return ui->playPauseButton->isChecked() || ui->playPauseButton_2->isChecked();
+    return ui->playPauseButton->isChecked();
 }
 
 void MainWindow::setupInteractionModeButtonGroup() {
@@ -332,16 +328,11 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
     connect(ui->videoLoader, &VideoLoader::playbackStateChanged, this, &MainWindow::onPlaybackStateChanged);
 
-    // Playback controls (mirrored buttons) - use helper to keep them in sync
+    // Playback controls
     connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });
-    connect(ui->playPauseButton_2, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });
     connect(ui->firstFrameButton, &QToolButton::clicked, this, &MainWindow::goToFirstFrame);
-    connect(ui->firstFrameButton_2, &QToolButton::clicked, this, &MainWindow::goToFirstFrame);
     connect(ui->lastFrameButton, &QToolButton::clicked, this, &MainWindow::goToLastFrame);
-    connect(ui->lastFrameButton_2, &QToolButton::clicked, this, &MainWindow::goToLastFrame);
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
-    // Mirror the frame position spinbox for the secondary UI (framePosition_2)
-    connect(ui->framePosition_2, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
 
     // Interaction Mode Buttons -> VideoLoader (via slots that call VideoLoader)
@@ -655,9 +646,6 @@ void MainWindow::setupConnections() {
     // Playback speed control
     connect(ui->comboPlaybackSpeed, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onPlaybackSpeedChanged);
-    // Mirror playback speed control for the secondary combobox (comboPlaybackSpeed_2)
-    connect(ui->comboPlaybackSpeed_2, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MainWindow::onPlaybackSpeedChanged);
 
     // Update combobox when VideoLoader speed changes (optional - for consistency)
     connect(ui->videoLoader, &VideoLoader::playbackSpeedChanged,
@@ -759,8 +747,6 @@ void MainWindow::initializeUIStates() {
     ui->dirSelected->setText(initialDirectory);
 
     ui->framePosition->setKeyboardTracking(false);
-    // Ensure the duplicated spinbox does not emit continuous keyboard-tracking updates
-    ui->framePosition_2->setKeyboardTracking(false);
     ui->frameSlider->setMinimum(0);
     ui->frameSlider->setSingleStep(10);
     ui->frameSlider->setPageStep(100);
@@ -1144,9 +1130,6 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->frameSlider->setValue(0);
     ui->framePosition->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
     ui->framePosition->setValue(0);
-    // Mirror maximum and initial value for the secondary frame position widget
-    ui->framePosition_2->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
-    ui->framePosition_2->setValue(0);
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
     ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
     updateWormTimeline();
@@ -1158,8 +1141,6 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
         ui->frameSlider->setValue(currentFrameNumber);
     }
     ui->framePosition->setValue(currentFrameNumber);
-    // Keep the duplicated frame position in sync
-    ui->framePosition_2->setValue(currentFrameNumber);
 
     if (ui->wormTimeline) {
         ui->wormTimeline->setCurrentFrame(currentFrameNumber);
@@ -1499,9 +1480,6 @@ void MainWindow::goToFirstFrame() {
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(0);
     }
-    if (!ui->framePosition_2->hasFocus()) {
-        ui->framePosition_2->setValue(0);
-    }
 }
 
 void MainWindow::goToLastFrame() {
@@ -1513,9 +1491,6 @@ void MainWindow::goToLastFrame() {
     }
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(lastFrame);
-    }
-    if (!ui->framePosition_2->hasFocus()) {
-        ui->framePosition_2->setValue(lastFrame);
     }
     if (arePlayButtonsChecked())
     {
@@ -1642,9 +1617,8 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 }
 
 void MainWindow::setupPlaybackSpeedComboBox() {
-    // Clear any existing items on both comboboxes
+    // Clear any existing items on the combobox
     ui->comboPlaybackSpeed->clear();
-    ui->comboPlaybackSpeed_2->clear();
 
     // Helper lambda to populate a combobox with identical entries
     auto populate = [](QComboBox* cb) {
@@ -1665,9 +1639,7 @@ void MainWindow::setupPlaybackSpeedComboBox() {
     };
 
     populate(ui->comboPlaybackSpeed);
-    populate(ui->comboPlaybackSpeed_2);
-
-    qDebug() << "MainWindow: Playback speed comboboxes (primary and secondary) initialized";
+    qDebug() << "MainWindow: Playback speed combobox initialized";
 }
 
 void MainWindow::onPlaybackSpeedChanged(int index) {
@@ -1692,22 +1664,16 @@ void MainWindow::onPlaybackSpeedChanged(int index) {
 }
 
 void MainWindow::updatePlaybackSpeedComboBox(double speedMultiplier) {
-    // Update both comboboxes to reflect the given speed multiplier
-    auto updateOne = [&](QComboBox* cb) {
-        for (int i = 0; i < cb->count(); ++i) {
-            double itemSpeed = cb->itemData(i).toDouble();
-            if (qFuzzyCompare(itemSpeed, speedMultiplier)) {
-                // Block signals to avoid recursive calls
-                cb->blockSignals(true);
-                cb->setCurrentIndex(i);
-                cb->blockSignals(false);
-                break;
-            }
+    for (int i = 0; i < ui->comboPlaybackSpeed->count(); ++i) {
+        double itemSpeed = ui->comboPlaybackSpeed->itemData(i).toDouble();
+        if (qFuzzyCompare(itemSpeed, speedMultiplier)) {
+            // Block signals to avoid recursive calls
+            ui->comboPlaybackSpeed->blockSignals(true);
+            ui->comboPlaybackSpeed->setCurrentIndex(i);
+            ui->comboPlaybackSpeed->blockSignals(false);
+            break;
         }
-    };
-
-    updateOne(ui->comboPlaybackSpeed);
-    updateOne(ui->comboPlaybackSpeed_2);
+    }
 }
 
 void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
@@ -1748,9 +1714,6 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
     // Update the frame position display
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(targetFrame);
-    }
-    if (!ui->framePosition_2->hasFocus()) {
-        ui->framePosition_2->setValue(targetFrame);
     }
 
     // Select the corresponding worm in the blob table
