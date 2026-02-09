@@ -33,6 +33,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     struct EventNode {
@@ -50,7 +51,7 @@ private:
     double frameToX(int frame, const QRect& contentRect) const;
     double frameToXWithZoom(int frame, const QRect& contentRect) const;
     int xToFrameWithZoom(double x, const QRect& contentRect) const;
-    void updatePanForZoom(const QRect& contentRect, double zoomFactor, double cursorX);
+    void updatePanForZoom(const QRect& contentRect, double zoomFactorX, double zoomFactorY, const QPointF& cursorPos);
     QList<int> sortedWormIds() const;
 
     int m_totalFrames = 0;
@@ -62,16 +63,20 @@ private:
     QList<EventNode> m_eventNodes;
     QList<MergeSpan> m_mergeSpans;
     int m_selectedNodeIndex = -1;
+    int m_hoveredNodeIndex = -1;
 
     double m_zoom = 1.0;
     double m_panX = 0.0;
+    double m_zoomY = 1.0;
+    double m_panY = 0.0;
     bool m_isPanning = false;
     double m_lastPanX = 0.0;
+    double m_lastPanY = 0.0;
     bool m_isDraggingFrame = false;
 
     int m_lineThickness = 6;
     int m_minRowSpacing = 12;
-    int m_leftPadding = 12;
+    int m_leftPadding = 8;
     int m_rightLabelWidth = 90;
     int m_topPadding = 12;
     int m_bottomPadding = 12;

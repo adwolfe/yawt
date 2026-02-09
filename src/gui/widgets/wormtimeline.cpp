@@ -7,6 +7,7 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 #include <QString>
+#include <QStringList>
 #include <cmath>
 
 #include <algorithm>
@@ -17,6 +18,7 @@ WormTimeline::WormTimeline(QWidget* parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
     setMinimumHeight(140);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
+    setMouseTracking(true);
 }
 
 void WormTimeline::setTotalFrames(int totalFrames)
@@ -118,33 +120,65 @@ static int niceFrameStep(int frameSpan)
     return targets[9];
 }
 
-void WormTimeline::updatePanForZoom(const QRect& contentRect, double zoomFactor, double cursorX)
+static QString wormIdsTooltip(const QList<int>& ids)
+{
+    if (ids.isEmpty()) return QStringLiteral("Worms: none");
+    QStringList parts;
+    parts.reserve(ids.size());
+    for (int id : ids) {
+        parts.append(QString::number(id));
+    }
+    return QStringLiteral("Worms: %1").arg(parts.join(", "));
+}
+
+void WormTimeline::updatePanForZoom(const QRect& contentRect, double zoomFactorX, double zoomFactorY, const QPointF& cursorPos)
 {
     if (m_totalFrames <= 1) {
         m_zoom = 1.0;
         m_panX = 0.0;
+        m_zoomY = 1.0;
+        m_panY = 0.0;
         return;
     }
 
     double prevVirtualWidth = contentRect.width() * m_zoom;
-    double newZoom = std::clamp(zoomFactor, 1.0, 6.0);
-    double newVirtualWidth = contentRect.width() * newZoom;
+    double newZoomX = std::clamp(zoomFactorX, 1.0, 12.0);
+    double newVirtualWidth = contentRect.width() * newZoomX;
 
     double t = 0.0;
     if (prevVirtualWidth > 0.0) {
-        t = (cursorX - contentRect.left() + m_panX) / prevVirtualWidth;
+        t = (cursorPos.x() - contentRect.left() + m_panX) / prevVirtualWidth;
     }
     t = std::clamp(t, 0.0, 1.0);
 
-    m_zoom = newZoom;
+    m_zoom = newZoomX;
     if (newVirtualWidth <= contentRect.width()) {
         m_panX = 0.0;
+    } else {
+        double desiredPan = t * newVirtualWidth - (cursorPos.x() - contentRect.left());
+        double maxPan = newVirtualWidth - contentRect.width();
+        m_panX = std::clamp(desiredPan, 0.0, maxPan);
+    }
+
+    double prevVirtualHeight = contentRect.height() * m_zoomY;
+    double newZoomY = std::clamp(zoomFactorY, 1.0, 12.0);
+    double newVirtualHeight = contentRect.height() * newZoomY;
+
+    double ty = 0.0;
+    if (prevVirtualHeight > 0.0) {
+        ty = (cursorPos.y() - contentRect.top() + m_panY) / prevVirtualHeight;
+    }
+    ty = std::clamp(ty, 0.0, 1.0);
+
+    m_zoomY = newZoomY;
+    if (newVirtualHeight <= contentRect.height()) {
+        m_panY = 0.0;
         return;
     }
 
-    double desiredPan = t * newVirtualWidth - (cursorX - contentRect.left());
-    double maxPan = newVirtualWidth - contentRect.width();
-    m_panX = std::clamp(desiredPan, 0.0, maxPan);
+    double desiredPanY = ty * newVirtualHeight - (cursorPos.y() - contentRect.top());
+    double maxPanY = newVirtualHeight - contentRect.height();
+    m_panY = std::clamp(desiredPanY, 0.0, maxPanY);
 }
 
 void WormTimeline::rebuildEventNodes()
@@ -235,15 +269,24 @@ void WormTimeline::paintEvent(QPaintEvent* event)
     p.setRenderHint(QPainter::Antialiasing, true);
     p.fillRect(rect(), palette().window());
 
-    const QRect contentRect(
+    const int labelGap = 3;
+    const int rightPad = 6;
+    const QRect labelRect(
         m_leftPadding,
         m_topPadding,
-        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        m_rightLabelWidth,
+        std::max(1, height() - m_topPadding - m_bottomPadding)
+    );
+    const QRect contentRect(
+        labelRect.right() + 1 + labelGap,
+        m_topPadding,
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - labelGap - rightPad),
         std::max(1, height() - m_topPadding - m_bottomPadding)
     );
     const double virtualLeft = contentRect.left() - m_panX;
     const double virtualWidth = contentRect.width() * m_zoom;
     const double virtualRight = virtualLeft + virtualWidth;
+    const double virtualHeight = contentRect.height() * m_zoomY;
 
     QList<int> ids = sortedWormIds();
     if (ids.isEmpty()) {
@@ -259,17 +302,22 @@ void WormTimeline::paintEvent(QPaintEvent* event)
     }
 
     int rows = ids.size();
-    int rowSpacing = contentRect.height() / rows;
-    rowSpacing = std::max(m_minRowSpacing, rowSpacing);
-    if (rowSpacing * rows > contentRect.height()) {
-        rowSpacing = std::max(8, contentRect.height() / rows);
+    const double baseSpacing = (rows > 0) ? (static_cast<double>(contentRect.height()) / static_cast<double>(rows)) : 0.0;
+    const double minSpacingFloor = static_cast<double>(m_minRowSpacing);
+    const double rowSpacing = baseSpacing * m_zoomY;
+    const double totalRowsHeight = rowSpacing * rows;
+    const double startY = 0.0;
+    const double spacingScale = (minSpacingFloor > 0.0) ? (rowSpacing / minSpacingFloor) : 1.0;
+    double crowdScale = 1.0;
+    if (rowSpacing > 0.0 && rowSpacing < minSpacingFloor) {
+        crowdScale = std::clamp(spacingScale, 0.4, 1.0);
     }
-    int totalRowsHeight = rowSpacing * rows;
-    int startY = contentRect.top() + (contentRect.height() - totalRowsHeight) / 2;
+    const double lineScale = std::clamp(spacingScale, 0.4, 1.6);
 
     QMap<int, int> yForId;
     for (int i = 0; i < rows; ++i) {
-        int y = startY + i * rowSpacing + rowSpacing / 2;
+        double yVirtual = startY + i * rowSpacing + rowSpacing * 0.5;
+        int y = static_cast<int>(std::round(contentRect.top() + (yVirtual - m_panY)));
         yForId.insert(ids[i], y);
     }
 
@@ -279,8 +327,11 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         QPen curPen(QColor(20, 20, 20));
         curPen.setStyle(Qt::DashLine);
         curPen.setWidthF(2.0);
+        p.save();
+        p.setClipRect(contentRect);
         p.setPen(curPen);
         p.drawLine(QPointF(curX, contentRect.top()), QPointF(curX, contentRect.bottom()));
+        p.restore();
     }
 
     // Precompute event positions and index per worm
@@ -313,7 +364,8 @@ void WormTimeline::paintEvent(QPaintEvent* event)
     p.setClipRect(contentRect);
     for (int id : ids) {
         QColor c = m_wormColors.value(id, QColor(120, 120, 120));
-        QPen linePen(c, m_lineThickness, Qt::SolidLine, Qt::RoundCap);
+        const double effectiveThickness = std::clamp(m_lineThickness * lineScale, 2.0, 10.0);
+        QPen linePen(c, effectiveThickness, Qt::SolidLine, Qt::RoundCap);
         p.setPen(linePen);
         int y = yForId.value(id);
 
@@ -369,14 +421,14 @@ void WormTimeline::paintEvent(QPaintEvent* event)
                 std::sort(sortedGroup.begin(), sortedGroup.end());
                 int idx = sortedGroup.indexOf(id);
                 int n = sortedGroup.size();
-                double step = std::min(rowSpacing * 0.2, static_cast<double>(m_lineThickness));
+                double step = std::min(rowSpacing * 0.2, effectiveThickness);
                 double offset = 0.0;
                 if (n > 1 && idx >= 0) {
                     offset = (static_cast<double>(idx) - (static_cast<double>(n - 1) / 2.0)) * step;
                 }
                 candidates.append({startX, endX, mergeY + offset, basePriority});
             } else if (y >= minY && y <= maxY && count > 1) {
-                double targetY = (std::abs(y - minY) <= std::abs(y - maxY)) ? minY : maxY;
+                double targetY = (y <= mergeY) ? minY : maxY;
                 if (targetY != y) {
                     candidates.append({startX, endX, targetY, basePriority - 1});
                 }
@@ -455,15 +507,17 @@ void WormTimeline::paintEvent(QPaintEvent* event)
     }
     p.restore();
 
-    // Draw event nodes on top of lines
+    // Draw event nodes on top of lines (clipped to the timeline window)
     m_selectedNodeIndex = std::min(m_selectedNodeIndex, static_cast<int>(m_eventNodes.size()) - 1);
+    p.save();
+    p.setClipRect(contentRect);
     for (int i = 0; i < m_eventNodes.size(); ++i) {
         EventNode& node = m_eventNodes[i];
         double x = eventPos[i].x;
         double y = eventPos[i].y;
         if (x <= 0.0 && y <= 0.0) continue;
 
-        const double r = 8.0;
+        const double r = std::clamp(8.0 * lineScale, 3.0, 12.0);
         QRectF circleRect(x - r, y - r, r * 2.0, r * 2.0);
         node.bounds = circleRect.adjusted(-3, -3, 3, 3);
 
@@ -473,10 +527,15 @@ void WormTimeline::paintEvent(QPaintEvent* event)
             fill = QColor(200, 200, 200);
             border = QColor(20, 20, 20);
         }
+        if (i == m_hoveredNodeIndex) {
+            fill.setAlphaF(0.2);
+            border.setAlphaF(0.2);
+        }
         p.setPen(QPen(border, 2.0));
         p.setBrush(fill);
         p.drawEllipse(circleRect);
     }
+    p.restore();
 
     // Scale bar (frame ticks) below the worm lines
     {
@@ -500,7 +559,11 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         int firstTick = (leftFrame / step) * step;
 
         QFont tickFont = font();
-        tickFont.setPointSizeF(std::max(8.0, tickFont.pointSizeF() - 1));
+        double tickSize = std::max(8.0, tickFont.pointSizeF() - 1);
+        if (crowdScale < 1.0) {
+            tickSize = std::max(6.0, tickSize * crowdScale);
+        }
+        tickFont.setPointSizeF(tickSize);
         p.setFont(tickFont);
         QFontMetrics fm(tickFont);
 
@@ -514,18 +577,28 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         }
     }
 
-    // Labels on the right (scroll with timeline)
+    // Timeline window border and fixed labels on the left
+    p.setPen(QPen(palette().mid().color(), 1.0));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(contentRect.adjusted(0, 0, -1, -1));
+
     p.setPen(palette().text().color());
     QFont labelFont = font();
     labelFont.setBold(true);
+    if (crowdScale < 1.0) {
+        labelFont.setPointSizeF(std::max(6.0, labelFont.pointSizeF() * crowdScale));
+    }
     p.setFont(labelFont);
+    p.save();
+    p.setClipRect(labelRect);
     for (int id : ids) {
         QColor c = m_wormColors.value(id, QColor(120, 120, 120));
         p.setPen(c);
         int y = yForId.value(id);
         QString label = QString("Worm %1").arg(id);
-        p.drawText(QPointF(virtualRight + 12, y + 4), label);
+        p.drawText(QPointF(labelRect.left() + 4, y + 4), label);
     }
+    p.restore();
 }
 
 void WormTimeline::mousePressEvent(QMouseEvent* event)
@@ -535,10 +608,12 @@ void WormTimeline::mousePressEvent(QMouseEvent* event)
         return;
     }
 
+    const int labelGap = 3;
+    const int rightPad = 6;
     const QRect contentRect(
-        m_leftPadding,
+        m_leftPadding + m_rightLabelWidth + labelGap,
         m_topPadding,
-        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - labelGap - rightPad),
         std::max(1, height() - m_topPadding - m_bottomPadding)
     );
     const double curX = frameToXWithZoom(m_currentFrame, contentRect);
@@ -548,27 +623,30 @@ void WormTimeline::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    for (int i = 0; i < m_eventNodes.size(); ++i) {
-        const EventNode& node = m_eventNodes[i];
-        if (node.bounds.contains(event->position())) {
-            m_selectedNodeIndex = i;
-            update();
-            emit eventClicked(node.frame, node.wormIds);
-            return;
+        for (int i = 0; i < m_eventNodes.size(); ++i) {
+            const EventNode& node = m_eventNodes[i];
+            if (node.bounds.contains(event->position())) {
+                m_selectedNodeIndex = i;
+                update();
+                emit eventClicked(node.frame, node.wormIds);
+                return;
+            }
         }
-    }
     m_isPanning = true;
     m_lastPanX = event->position().x();
+    m_lastPanY = event->position().y();
     event->accept();
 }
 
 void WormTimeline::mouseMoveEvent(QMouseEvent* event)
 {
     if (m_isDraggingFrame) {
+        const int labelGap = 3;
+        const int rightPad = 6;
         const QRect contentRect(
-            m_leftPadding,
+            m_leftPadding + m_rightLabelWidth + labelGap,
             m_topPadding,
-            std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+            std::max(1, width() - m_leftPadding - m_rightLabelWidth - labelGap - rightPad),
             std::max(1, height() - m_topPadding - m_bottomPadding)
         );
         int frame = xToFrameWithZoom(event->position().x(), contentRect);
@@ -579,29 +657,53 @@ void WormTimeline::mouseMoveEvent(QMouseEvent* event)
         return;
     }
     if (!m_isPanning) {
+        int hoveredIndex = -1;
+        for (int i = 0; i < m_eventNodes.size(); ++i) {
+            if (m_eventNodes[i].bounds.contains(event->position())) {
+                hoveredIndex = i;
+                break;
+            }
+        }
+        if (hoveredIndex != m_hoveredNodeIndex) {
+            m_hoveredNodeIndex = hoveredIndex;
+            if (m_hoveredNodeIndex >= 0) {
+                setToolTip(wormIdsTooltip(m_eventNodes[m_hoveredNodeIndex].wormIds));
+            } else {
+                setToolTip(QString());
+            }
+            update();
+        }
         QWidget::mouseMoveEvent(event);
         return;
     }
 
+    const int labelGap = 3;
+    const int rightPad = 6;
     const QRect contentRect(
-        m_leftPadding,
+        m_leftPadding + m_rightLabelWidth + labelGap,
         m_topPadding,
-        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - labelGap - rightPad),
         std::max(1, height() - m_topPadding - m_bottomPadding)
     );
 
     const double dx = event->position().x() - m_lastPanX;
+    const double dy = event->position().y() - m_lastPanY;
     m_lastPanX = event->position().x();
+    m_lastPanY = event->position().y();
 
     double virtualWidth = contentRect.width() * m_zoom;
+    double virtualHeight = contentRect.height() * m_zoomY;
     if (virtualWidth <= contentRect.width()) {
         m_panX = 0.0;
-        update();
-        event->accept();
-        return;
+    } else {
+        m_panX = std::clamp(m_panX - dx, 0.0, virtualWidth - contentRect.width());
     }
 
-    m_panX = std::clamp(m_panX - dx, 0.0, virtualWidth - contentRect.width());
+    if (virtualHeight <= contentRect.height()) {
+        m_panY = 0.0;
+    } else {
+        m_panY = std::clamp(m_panY - dy, 0.0, virtualHeight - contentRect.height());
+    }
     update();
     event->accept();
 }
@@ -615,12 +717,24 @@ void WormTimeline::mouseReleaseEvent(QMouseEvent* event)
     QWidget::mouseReleaseEvent(event);
 }
 
+void WormTimeline::leaveEvent(QEvent* event)
+{
+    if (m_hoveredNodeIndex != -1) {
+        m_hoveredNodeIndex = -1;
+        setToolTip(QString());
+        update();
+    }
+    QWidget::leaveEvent(event);
+}
+
 void WormTimeline::wheelEvent(QWheelEvent* event)
 {
+    const int labelGap = 3;
+    const int rightPad = 6;
     const QRect contentRect(
-        m_leftPadding,
+        m_leftPadding + m_rightLabelWidth + labelGap,
         m_topPadding,
-        std::max(1, width() - m_leftPadding - m_rightLabelWidth - 6),
+        std::max(1, width() - m_leftPadding - m_rightLabelWidth - labelGap - rightPad),
         std::max(1, height() - m_topPadding - m_bottomPadding)
     );
 
@@ -631,7 +745,7 @@ void WormTimeline::wheelEvent(QWheelEvent* event)
     }
 
     const double factor = (delta > 0.0) ? 1.1 : (1.0 / 1.1);
-    updatePanForZoom(contentRect, m_zoom * factor, event->position().x());
+    updatePanForZoom(contentRect, m_zoom * factor, m_zoomY * factor, event->position());
     update();
     event->accept();
 }

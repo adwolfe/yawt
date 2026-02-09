@@ -560,7 +560,20 @@ QToolButton#lastFrameButton {
           </layout>
          </item>
          <item>
-          <widget class="WormTimeline" name="wormTimeline" native="true"/>
+          <widget class="WormTimeline" name="wormTimeline" native="true">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>10</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>200</height>
+            </size>
+           </property>
+          </widget>
          </item>
         </layout>
        </widget>
