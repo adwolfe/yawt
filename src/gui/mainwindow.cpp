@@ -87,7 +87,7 @@ MainWindow::MainWindow(QWidget *parent)
         TableItems::ItemType::Worm,
         TableItems::ItemType::Fix
     });
-    ui->wormTreeView->setModel(m_wormProxyModel);
+    ui->wormTableView->setModel(m_wormProxyModel);
 
     m_roiProxyModel = new ItemTypeFilterProxyModel(this);
     m_roiProxyModel->setSourceModel(m_blobTableModel);
@@ -97,7 +97,7 @@ MainWindow::MainWindow(QWidget *parent)
         TableItems::ItemType::EndPoint,
         TableItems::ItemType::ControlPoint
     });
-    ui->roiTreeView->setModel(m_roiProxyModel);
+    ui->roiTableView->setModel(m_roiProxyModel);
 
     m_annotationTableModel = m_appController->annotationTableModel();
     // ui->annoTableView->setModel(m_annotationTableModel);
@@ -154,7 +154,7 @@ MainWindow::MainWindow(QWidget *parent)
                         for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
                             QModelIndex idx = m_wormProxyModel->index(row, idCol);
                             if (m_wormProxyModel->data(idx, Qt::DisplayRole).toInt() == chosenId) {
-                                ui->wormTreeView->selectRow(row);
+                                ui->wormTableView->selectRow(row);
                                 break;
                             }
                         }
@@ -169,9 +169,9 @@ MainWindow::MainWindow(QWidget *parent)
         if (!index.isValid()) return;
         // Determine currently selected worm in the worm table (if any) so overlay shows correct worm
         int selectedWormId = -1;
-        if (ui->wormTreeView->selectionModel() && !ui->wormTreeView->selectionModel()->selectedIndexes().isEmpty()
+        if (ui->wormTableView->selectionModel() && !ui->wormTableView->selectionModel()->selectedIndexes().isEmpty()
             && m_wormProxyModel) {
-            int selRow = ui->wormTreeView->selectionModel()->selectedIndexes().first().row();
+            int selRow = ui->wormTableView->selectionModel()->selectedIndexes().first().row();
             QModelIndex proxyIdx = m_wormProxyModel->index(selRow, 0);
             QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
             if (srcIdx.isValid()) selectedWormId = m_blobTableModel->getItem(srcIdx.row()).id;
@@ -188,41 +188,41 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
     m_itemTypeDelegate = new ItemTypeDelegate(this);
-    ui->wormTreeView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
-    ui->roiTreeView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
+    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
+    ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
 
     m_colorDelegate = new ColorDelegate(this);
-    ui->wormTreeView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
-    ui->roiTreeView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
+    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
+    ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
 
-    ui->wormTreeView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    ui->wormTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
     // Don't stretch last section - we'll handle column widths in resizeTableColumns()
-    ui->wormTreeView->horizontalHeader()->setStretchLastSection(false);
+    ui->wormTableView->horizontalHeader()->setStretchLastSection(false);
     // Set header to always be visible, even for empty tables
-    ui->wormTreeView->horizontalHeader()->setVisible(true);
+    ui->wormTableView->horizontalHeader()->setVisible(true);
     // Ensure horizontal scrollbar appears when needed
-    ui->wormTreeView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ui->wormTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     // Configure selection behavior to select entire rows and allow only single selection
-    ui->wormTreeView->setSelectionBehavior(QAbstractItemView::SelectRows);
-    ui->wormTreeView->setSelectionMode(QAbstractItemView::SingleSelection);
+    ui->wormTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
 
     // Configure Show/Hide column with checkboxes
-    ui->wormTreeView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
+    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
     // Allow checking checkboxes in the header
-    ui->wormTreeView->horizontalHeader()->setSectionsClickable(true);
-    ui->wormTreeView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
+    ui->wormTableView->horizontalHeader()->setSectionsClickable(true);
+    ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
 
-    ui->roiTreeView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
-    ui->roiTreeView->horizontalHeader()->setStretchLastSection(false);
-    ui->roiTreeView->horizontalHeader()->setVisible(true);
-    ui->roiTreeView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    ui->roiTreeView->setSelectionBehavior(QAbstractItemView::SelectRows);
-    ui->roiTreeView->setSelectionMode(QAbstractItemView::SingleSelection);
-    ui->roiTreeView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr);
-    ui->roiTreeView->horizontalHeader()->setSectionsClickable(true);
-    ui->roiTreeView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
-    ui->roiTreeView->setColumnHidden(BlobTableModel::Column::Frame, true);
+    ui->roiTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
+    ui->roiTableView->horizontalHeader()->setStretchLastSection(false);
+    ui->roiTableView->horizontalHeader()->setVisible(true);
+    ui->roiTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ui->roiTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    ui->roiTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr);
+    ui->roiTableView->horizontalHeader()->setSectionsClickable(true);
+    ui->roiTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
+    ui->roiTableView->setColumnHidden(BlobTableModel::Column::Frame, true);
 
     // Configure annotation table view
     // ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
@@ -430,7 +430,7 @@ void MainWindow::setupConnections() {
         connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
 
         // Allow the overlay to respond to selection changes
-        connect(ui->wormTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
                 ui->miniLoaderOverlay, [this](const QItemSelection &selected, const QItemSelection&) {
                     // Build the list of selected ClickedItem(s) and call overlay's handler
                     QList<TableItems::ClickedItem> selItems;
@@ -456,11 +456,11 @@ void MainWindow::setupConnections() {
     // Retracking combo removed
 
     // Table View Selection -> VideoLoader
-    connect(ui->wormTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &MainWindow::updateVisibleTracksInVideoLoader);
 
     // When selection changes, update merge/split events table
-    connect(ui->wormTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection&) {
         if (selected.isEmpty()) {
             m_mergeSplitModel->removeRows(0, m_mergeSplitModel->rowCount());
@@ -579,23 +579,23 @@ void MainWindow::setupConnections() {
 
     // Enable/disable delete button based on selection state
     auto updateDeleteState = [this]() {
-        const bool wormSelected = ui->wormTreeView->selectionModel() &&
-                                  ui->wormTreeView->selectionModel()->hasSelection();
-        const bool roiSelected = ui->roiTreeView->selectionModel() &&
-                                 ui->roiTreeView->selectionModel()->hasSelection();
+        const bool wormSelected = ui->wormTableView->selectionModel() &&
+                                  ui->wormTableView->selectionModel()->hasSelection();
+        const bool roiSelected = ui->roiTableView->selectionModel() &&
+                                 ui->roiTableView->selectionModel()->hasSelection();
         ui->deleteButton->setEnabled(wormSelected || roiSelected);
     };
-    connect(ui->wormTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [updateDeleteState](const QItemSelection&, const QItemSelection&) {
         updateDeleteState();
     });
-    connect(ui->roiTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(ui->roiTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [updateDeleteState](const QItemSelection&, const QItemSelection&) {
         updateDeleteState();
     });
 
     // Table View Selection -> MiniLoader Overlays
-    connect(ui->wormTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         Q_UNUSED(deselected)
 
@@ -693,7 +693,7 @@ void MainWindow::setupConnections() {
 
 
     // Table View Selection -> MiniLoader (update crop when selection changes)
-    connect(ui->wormTreeView->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         Q_UNUSED(selected)
         Q_UNUSED(deselected)
@@ -734,7 +734,7 @@ void MainWindow::setupConnections() {
         }
     };
 
-    connect(ui->wormTreeView->horizontalHeader(), &QHeaderView::sectionClicked,
+    connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
             [this, toggleVisibilityForTypes](int logicalIndex) {
         if (logicalIndex != BlobTableModel::Column::Show) return;
         toggleVisibilityForTypes(QSet<TableItems::ItemType>{
@@ -743,7 +743,7 @@ void MainWindow::setupConnections() {
         });
     });
 
-    connect(ui->roiTreeView->horizontalHeader(), &QHeaderView::sectionClicked,
+    connect(ui->roiTableView->horizontalHeader(), &QHeaderView::sectionClicked,
             [this, toggleVisibilityForTypes](int logicalIndex) {
         if (logicalIndex != BlobTableModel::Column::Show) return;
         toggleVisibilityForTypes(QSet<TableItems::ItemType>{
@@ -773,8 +773,8 @@ void MainWindow::setupConnections() {
             this, [this](Qt::Orientation orientation, int first, int last) {
         if (orientation == Qt::Horizontal && first <= BlobTableModel::Column::Show && last >= BlobTableModel::Column::Show) {
             // Update the table view when header checkbox state changes
-            ui->wormTreeView->update();
-            ui->roiTreeView->update();
+            ui->wormTableView->update();
+            ui->roiTableView->update();
         }
     });
 
@@ -912,8 +912,8 @@ void MainWindow::resizeTableColumns()
         }
     };
 
-    resizeView(ui->wormTreeView);
-    resizeView(ui->roiTreeView);
+    resizeView(ui->wormTableView);
+    resizeView(ui->roiTableView);
 }
 
 void MainWindow::updateWormTimeline()
@@ -1121,8 +1121,8 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
             QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
             QModelIndex proxyIndex = m_wormProxyModel->mapFromSource(srcIndex);
             if (proxyIndex.isValid()) {
-                ui->wormTreeView->setCurrentIndex(proxyIndex);
-                ui->wormTreeView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                ui->wormTableView->setCurrentIndex(proxyIndex);
+                ui->wormTableView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
             }
         }
 
@@ -1158,8 +1158,8 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
             QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
             QModelIndex proxyIndex = m_roiProxyModel->mapFromSource(srcIndex);
             if (proxyIndex.isValid()) {
-                ui->roiTreeView->setCurrentIndex(proxyIndex);
-                ui->roiTreeView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                ui->roiTableView->setCurrentIndex(proxyIndex);
+                ui->roiTableView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
             }
         }
         resizeTableColumns();
@@ -1199,8 +1199,8 @@ void MainWindow::handlePointDefined(const QPointF& point) {
         QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
         QModelIndex proxyIndex = m_roiProxyModel->mapFromSource(srcIndex);
         if (proxyIndex.isValid()) {
-            ui->roiTreeView->setCurrentIndex(proxyIndex);
-            ui->roiTreeView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+            ui->roiTableView->setCurrentIndex(proxyIndex);
+            ui->roiTableView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         }
     }
     resizeTableColumns();
@@ -1224,11 +1224,11 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
     QTableView* activeView = nullptr;
     ItemTypeFilterProxyModel* activeProxy = nullptr;
 
-    if (ui->wormTreeView->selectionModel() && ui->wormTreeView->selectionModel()->hasSelection()) {
-        activeView = ui->wormTreeView;
+    if (ui->wormTableView->selectionModel() && ui->wormTableView->selectionModel()->hasSelection()) {
+        activeView = ui->wormTableView;
         activeProxy = m_wormProxyModel;
-    } else if (ui->roiTreeView->selectionModel() && ui->roiTreeView->selectionModel()->hasSelection()) {
-        activeView = ui->roiTreeView;
+    } else if (ui->roiTableView->selectionModel() && ui->roiTableView->selectionModel()->hasSelection()) {
+        activeView = ui->roiTableView;
         activeProxy = m_roiProxyModel;
     }
 
@@ -1438,7 +1438,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     bool foundCenterPoint = false;
 
     // First priority: if a worm is selected, use its centroid (for the current/central frame)
-    QModelIndexList selectedIndexes = ui->wormTreeView->selectionModel()->selectedIndexes();
+    QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
     if (!selectedIndexes.isEmpty() && m_wormProxyModel) {
         QModelIndex proxyIdx = selectedIndexes.first();
         QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
@@ -1915,7 +1915,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
         ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
-        ui->wormTreeView->selectAll();
+        ui->wormTableView->selectAll();
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
 
@@ -2053,13 +2053,13 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
     // Select the row in the worm table if found
     if (blobTableRow >= 0 && m_wormProxyModel) {
         QModelIndex blobIndex = m_wormProxyModel->index(blobTableRow, 0);
-        ui->wormTreeView->setCurrentIndex(blobIndex);
-        ui->wormTreeView->selectionModel()->select(blobIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        ui->wormTreeView->scrollTo(blobIndex, QAbstractItemView::EnsureVisible);
+        ui->wormTableView->setCurrentIndex(blobIndex);
+        ui->wormTableView->selectionModel()->select(blobIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        ui->wormTableView->scrollTo(blobIndex, QAbstractItemView::EnsureVisible);
         qDebug() << "MainWindow: Selected worm" << targetWormId << "in worm table (row" << blobTableRow << ")";
     } else {
         // Clear selection if worm not found in worm table
-        ui->wormTreeView->clearSelection();
+        ui->wormTableView->clearSelection();
         qDebug() << "MainWindow: Worm" << targetWormId << "not found in worm table, cleared selection";
     }
 

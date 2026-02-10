@@ -120,7 +120,7 @@
          </layout>
         </item>
         <item>
-         <widget class="QTableView" name="wormTreeView">
+         <widget class="QTableView" name="wormTableView">
           <property name="dragDropOverwriteMode">
            <bool>false</bool>
           </property>
@@ -133,7 +133,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QTableView" name="roiTreeView">
+         <widget class="QTableView" name="roiTableView">
           <property name="dragDropOverwriteMode">
            <bool>false</bool>
           </property>
