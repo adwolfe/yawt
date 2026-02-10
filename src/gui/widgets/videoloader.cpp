@@ -839,6 +839,32 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         painter.drawRect(QRect(m_roiStartPointWidget, m_roiEndPointWidget).normalized());
     }
 
+    auto drawPointMarker = [&](const QPointF& centerWidget, const QColor& color) {
+        QPen pointPen(color, 2);
+        painter.setPen(pointPen);
+        painter.setBrush(Qt::NoBrush);
+        const qreal radius = 6.0;
+        const qreal plusHalf = 4.0;
+        painter.drawEllipse(centerWidget, radius, radius);
+        painter.drawLine(QPointF(centerWidget.x() - plusHalf, centerWidget.y()),
+                         QPointF(centerWidget.x() + plusHalf, centerWidget.y()));
+        painter.drawLine(QPointF(centerWidget.x(), centerWidget.y() - plusHalf),
+                         QPointF(centerWidget.x(), centerWidget.y() + plusHalf));
+    };
+
+    auto isPointItem = [](const TableItems::ClickedItem& item) {
+        if (item.type == TableItems::ItemType::StartPoint ||
+            item.type == TableItems::ItemType::EndPoint ||
+            item.type == TableItems::ItemType::ControlPoint) {
+            return true;
+        }
+        if (item.type == TableItems::ItemType::ROI) {
+            const QRectF& ob = item.originalClickedBoundingBox;
+            return ob.isNull() || ob.isEmpty() || ob.width() <= 0.0 || ob.height() <= 0.0;
+        }
+        return false;
+    };
+
     // --- MODIFIED BLOB DRAWING LOGIC ---
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
         if (!m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
@@ -910,6 +936,14 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                 // No need to filter by selection - visibility is controlled only by the checkbox
 
                 QColor itemColor = getTrackColor(item.id);
+
+                if (isPointItem(item)) {
+                    QPointF centroidWidget = mapPointFromVideo(item.initialCentroid);
+                    if (centroidWidget.x() >= 0) {
+                        drawPointMarker(centroidWidget, itemColor);
+                    }
+                    continue;
+                }
 
                 // Draw Initial Bounding Box
                 QRectF bboxVideo = item.initialBoundingBox;
@@ -1016,6 +1050,15 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 m_isDefiningRoi = true; update(); event->accept();
             } else { m_isDefiningRoi = false; }
             return;
+        }
+
+        if (m_currentInteractionMode == InteractionMode::Point) {
+            QPointF videoPoint = mapPointToVideo(event->position());
+            if (videoPoint.x() >= 0) {
+                emit pointDefined(videoPoint);
+                event->accept();
+                return;
+            }
         }
 
         // For other modes, first attempt mode-specific handling, otherwise fall back to panning.
@@ -1287,6 +1330,7 @@ void VideoLoader::updateCursorShape() {
         setCursor(Qt::OpenHandCursor);
         break;
     case InteractionMode::DrawROI:
+    case InteractionMode::Point:
     case InteractionMode::Crop:
         setCursor(Qt::CrossCursor);
         break;

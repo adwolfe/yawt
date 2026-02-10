@@ -101,6 +101,7 @@ public:
     enum class InteractionMode {
         PanZoom,        // For panning and zooming the video
         DrawROI,        // For drawing a Region of Interest
+        Point,          // For selecting a single point marker
         Crop,           // For defining a crop area (uses DrawROI mechanics initially)
         EditBlobs,      // For selecting/clicking blobs on the thresholded image to add to BlobTableModel
         EditTracks      // For interacting with displayed tracks (e.g., selecting, merging - future)
@@ -236,6 +237,7 @@ signals:
     void frameChanged(int currentFrameNumber, const QImage& currentFrame); // QImage is current frame (raw or thresholded based on ViewMode)
     void playbackStateChanged(bool isPlaying, double currentSpeed);
     void roiDefined(const QRectF &roi); // For the general purpose ROI
+    void pointDefined(const QPointF &point); // For the point marker tool
     void zoomFactorChanged(double newZoomFactor);
 
     void interactionModeChanged(InteractionMode newMode);

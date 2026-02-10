@@ -291,6 +291,7 @@ bool MainWindow::arePlayButtonsChecked() const {
 void MainWindow::setupInteractionModeButtonGroup() {
     // Interaction Mode Buttons - These should be checkable QToolButtons
     m_interactionModeButtonGroup->addButton(ui->panModeButton);
+    m_interactionModeButtonGroup->addButton(ui->pointButton);
     m_interactionModeButtonGroup->addButton(ui->roiModeButton);
     m_interactionModeButtonGroup->addButton(ui->cropModeButton);
     m_interactionModeButtonGroup->addButton(ui->selectionModeButton);  // Rename in UI to "Edit Blobs"
@@ -340,6 +341,7 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
+    connect(ui->videoLoader, &VideoLoader::pointDefined, this, &MainWindow::handlePointDefined);
     connect(ui->videoLoader, &VideoLoader::playbackStateChanged, this, &MainWindow::onPlaybackStateChanged);
 
     // Playback controls
@@ -351,6 +353,7 @@ void MainWindow::setupConnections() {
 
     // Interaction Mode Buttons -> VideoLoader (via slots that call VideoLoader)
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeButtonClicked);
+    connect(ui->pointButton, &QToolButton::clicked, this, &MainWindow::pointModeButtonClicked);
     connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeButtonClicked);
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeButtonClicked);
     connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::editBlobsModeButtonClicked);
@@ -880,6 +883,9 @@ void MainWindow::updateWormTimeline()
 void MainWindow::panModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
 }
+void MainWindow::pointModeButtonClicked() {
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::Point);
+}
 void MainWindow::roiModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::DrawROI);
 }
@@ -938,6 +944,7 @@ void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode
     // This will be handled by QButtonGroup if buttons are added to it correctly
     // Or, if not using QButtonGroup for these specific buttons for some reason:
     ui->panModeButton->setChecked(newMode == VideoLoader::InteractionMode::PanZoom);
+    ui->pointButton->setChecked(newMode == VideoLoader::InteractionMode::Point);
     ui->roiModeButton->setChecked(newMode == VideoLoader::InteractionMode::DrawROI);
     ui->cropModeButton->setChecked(newMode == VideoLoader::InteractionMode::Crop);
     ui->selectionModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditBlobs);
@@ -1070,6 +1077,7 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
 
 void MainWindow::handleRoiDefined(const QRectF& roi) {
     if (!ui->videoLoader->isVideoLoaded()) return;
+    if (roi.isNull() || roi.isEmpty() || roi.width() <= 0.0 || roi.height() <= 0.0) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
 
     // Convert ROI rect to centroid and bounding box in video coords
@@ -1088,6 +1096,43 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
         resizeTableColumns();
         statusBar()->showMessage(QString("Added ROI at frame %1").arg(currentFrame), 3000);
     }
+}
+
+void MainWindow::handlePointDefined(const QPointF& point) {
+    if (!ui->videoLoader->isVideoLoaded()) return;
+    if (point.isNull() || point.x() < 0.0 || point.y() < 0.0) return;
+    int currentFrame = ui->videoLoader->getCurrentFrameNumber();
+
+    bool hasStart = false;
+    bool hasEnd = false;
+    bool hasControl = false;
+    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
+    for (const auto& item : items) {
+        if (item.type == TableItems::ItemType::StartPoint) hasStart = true;
+        else if (item.type == TableItems::ItemType::EndPoint) hasEnd = true;
+        else if (item.type == TableItems::ItemType::ControlPoint) hasControl = true;
+    }
+
+    TableItems::ItemType pointType = TableItems::ItemType::ROI;
+    if (!hasStart) pointType = TableItems::ItemType::StartPoint;
+    else if (!hasEnd) pointType = TableItems::ItemType::EndPoint;
+    else if (!hasControl) pointType = TableItems::ItemType::ControlPoint;
+
+    QRectF pointBox(point.x(), point.y(), 0.0, 0.0);
+    int newId = m_trackingDataStorage->addItem(point, pointBox, currentFrame, pointType);
+    if (newId <= 0) return;
+
+    m_trackingDataStorage->setItemColor(newId, QColor(255, 255, 255));
+
+    ui->deleteButton->setEnabled(true);
+    int lastRow = m_blobTableModel->rowCount() - 1;
+    QModelIndex newIndex = m_blobTableModel->index(lastRow, 0);
+    ui->wormTableView->setCurrentIndex(newIndex);
+    ui->wormTableView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    resizeTableColumns();
+    statusBar()->showMessage(QString("Added %1 at frame %2")
+                             .arg(TableItems::itemTypeToString(pointType))
+                             .arg(currentFrame), 3000);
 }
 
 void MainWindow::handleRemoveBlobsClicked() {

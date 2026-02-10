@@ -106,6 +106,7 @@ public slots:
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();
     void roiModeButtonClicked();
+    void pointModeButtonClicked();
     void cropModeButtonClicked();
     void editBlobsModeButtonClicked();
     void editTracksModeButtonClicked();
@@ -153,6 +154,7 @@ public slots:
      * @param roi Rectangle in video coordinates drawn by the user.
      */
     void handleRoiDefined(const QRectF& roi);
+    void handlePointDefined(const QPointF& point);
 
     // Slots to react to VideoLoader mode changes (for UI sync)
     void syncInteractionModeButtons(VideoLoader::InteractionMode newMode);
