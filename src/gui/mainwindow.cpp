@@ -97,7 +97,8 @@ MainWindow::MainWindow(QWidget *parent)
         TableItems::ItemType::ROI,
         TableItems::ItemType::StartPoint,
         TableItems::ItemType::EndPoint,
-        TableItems::ItemType::ControlPoint
+        TableItems::ItemType::ControlPoint,
+        TableItems::ItemType::CenterPoint
     });
     ui->roiTableView->setModel(m_roiProxyModel);
 
@@ -1710,9 +1711,9 @@ void MainWindow::resultsButtonClicked() {
 
     m_analysisDialog = new AnalysisDialog(m_trackingDataStorage, this);
     ui->resultsButton->setChecked(true);
-    m_analysisDialog->setPixelSizePixelsPerUm(ui->pixelSizeSpinBoxD->value());
+    m_analysisDialog->setPixelSizeUmPerPixel(ui->pixelSizeSpinBoxD->value());
     connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
-            m_analysisDialog, &AnalysisDialog::setPixelSizePixelsPerUm);
+            m_analysisDialog, &AnalysisDialog::setPixelSizeUmPerPixel);
     connect(m_analysisDialog, &QDialog::finished, this, [this](int) {
         ui->resultsButton->setChecked(false);
         m_analysisDialog = nullptr;

@@ -718,7 +718,7 @@ QToolButton#lastFrameButton {
            <item>
             <widget class="QLabel" name="label_8">
              <property name="enabled">
-              <bool>false</bool>
+              <bool>true</bool>
              </property>
              <property name="sizePolicy">
               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
@@ -740,7 +740,7 @@ QToolButton#lastFrameButton {
            <item>
             <widget class="QDoubleSpinBox" name="pixelSizeSpinBoxD">
              <property name="enabled">
-              <bool>false</bool>
+              <bool>true</bool>
              </property>
              <property name="sizePolicy">
               <sizepolicy hsizetype="Minimum" vsizetype="Fixed">

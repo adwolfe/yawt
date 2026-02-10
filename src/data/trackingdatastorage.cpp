@@ -315,7 +315,8 @@ static bool isRoiPointType(TableItems::ItemType type) {
     return type == TableItems::ItemType::ROI ||
            type == TableItems::ItemType::StartPoint ||
            type == TableItems::ItemType::EndPoint ||
-           type == TableItems::ItemType::ControlPoint;
+           type == TableItems::ItemType::ControlPoint ||
+           type == TableItems::ItemType::CenterPoint;
 }
 
 static bool parseItemFromJsonObject(const QJsonObject& obj, TableItems::ClickedItem& item) {

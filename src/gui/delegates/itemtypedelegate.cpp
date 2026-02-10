@@ -22,6 +22,7 @@ QWidget *ItemTypeDelegate::createEditor(QWidget *parent,
           << itemTypeToString(TableItems::ItemType::StartPoint)
           << itemTypeToString(TableItems::ItemType::EndPoint)
           << itemTypeToString(TableItems::ItemType::ControlPoint)
+          << itemTypeToString(TableItems::ItemType::CenterPoint)
           << itemTypeToString(TableItems::ItemType::Undefined);
     editor->addItems(types);
 
