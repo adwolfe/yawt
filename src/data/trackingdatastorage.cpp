@@ -20,6 +20,10 @@
 #include <stdexcept>
 #include <QtMath>
 #include "../utils/loggingcategories.h"
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 // Define a default small ROI size for when no worms are present or dimensions are zero
 const QSizeF DEFAULT_ROI_SIZE(20.0, 20.0);
@@ -280,6 +284,186 @@ void TrackingDataStorage::clearAllTracks() {
     m_frameIndex.clear();
     
     emit allDataChanged();
+}
+
+void TrackingDataStorage::clearAllData() {
+    QList<int> removedIds;
+    for (const auto& item : m_items) {
+        removedIds.append(item.id);
+    }
+
+    m_items.clear();
+    m_tracks.clear();
+    m_mergeHistory.clear();
+    m_detectedBlobsByFrame.clear();
+    m_frameIndex.clear();
+    m_idToIndexMap.clear();
+    m_nextId = 1;
+
+    recalculateGlobalMetricsAndROIs();
+
+    for (int id : removedIds) {
+        emit itemRemoved(id);
+        emit trackRemoved(id);
+    }
+
+    emit allDataChanged();
+    emit itemsChanged(m_items);
+}
+
+bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "TrackingDataStorage: Cannot read worms.json:" << filePath;
+        return false;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "TrackingDataStorage: JSON parse error in worms.json:" << parseError.errorString();
+        return false;
+    }
+
+    QJsonObject root = doc.object();
+
+    clearAllData();
+
+    bool hasMetrics = false;
+    if (root.contains("metrics") && root["metrics"].isObject()) {
+        QJsonObject metricsObj = root["metrics"].toObject();
+        if (metricsObj.contains("roiSizeMultiplier")) {
+            m_roiSizeMultiplier = metricsObj.value("roiSizeMultiplier").toDouble(m_roiSizeMultiplier);
+        }
+        if (metricsObj.contains("currentFixedRoiSize") && metricsObj["currentFixedRoiSize"].isObject()) {
+            QJsonObject fixedObj = metricsObj["currentFixedRoiSize"].toObject();
+            QSizeF fixedSize(fixedObj.value("width").toDouble(), fixedObj.value("height").toDouble());
+            if (fixedSize.isValid()) {
+                m_currentFixedRoiSize = fixedSize;
+                hasMetrics = true;
+            }
+        }
+        if (metricsObj.contains("minObservedArea")) m_minObservedArea = metricsObj.value("minObservedArea").toDouble(m_minObservedArea);
+        if (metricsObj.contains("maxObservedArea")) m_maxObservedArea = metricsObj.value("maxObservedArea").toDouble(m_maxObservedArea);
+        if (metricsObj.contains("minObservedAspectRatio")) m_minObservedAspectRatio = metricsObj.value("minObservedAspectRatio").toDouble(m_minObservedAspectRatio);
+        if (metricsObj.contains("maxObservedAspectRatio")) m_maxObservedAspectRatio = metricsObj.value("maxObservedAspectRatio").toDouble(m_maxObservedAspectRatio);
+    }
+
+    if (root.contains("items") && root["items"].isArray()) {
+        QJsonArray itemsArr = root["items"].toArray();
+        int maxId = 0;
+        for (const QJsonValue& v : itemsArr) {
+            if (!v.isObject()) continue;
+            QJsonObject obj = v.toObject();
+            TableItems::ClickedItem item;
+            item.id = obj.value("id").toInt();
+            maxId = qMax(maxId, item.id);
+            item.type = TableItems::stringToItemType(obj.value("type").toString());
+            item.visible = obj.value("visible").toBool(true);
+            item.frameOfSelection = obj.value("frameOfSelection").toInt(0);
+
+            if (obj.contains("color") && obj["color"].isObject()) {
+                QJsonObject colorObj = obj["color"].toObject();
+                if (colorObj.contains("r") && colorObj.contains("g") && colorObj.contains("b")) {
+                    int r = colorObj.value("r").toInt(0);
+                    int g = colorObj.value("g").toInt(0);
+                    int b = colorObj.value("b").toInt(0);
+                    int a = colorObj.value("a").toInt(255);
+                    item.color = QColor(r, g, b, a);
+                } else if (colorObj.contains("hex")) {
+                    item.color = QColor(colorObj.value("hex").toString());
+                }
+            }
+
+            if (obj.contains("initialCentroid") && obj["initialCentroid"].isObject()) {
+                QJsonObject c = obj["initialCentroid"].toObject();
+                item.initialCentroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
+            }
+            if (obj.contains("initialBoundingBox") && obj["initialBoundingBox"].isObject()) {
+                QJsonObject b = obj["initialBoundingBox"].toObject();
+                item.initialBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                                 b.value("width").toDouble(), b.value("height").toDouble());
+            }
+            if (obj.contains("originalClickedBoundingBox") && obj["originalClickedBoundingBox"].isObject()) {
+                QJsonObject b = obj["originalClickedBoundingBox"].toObject();
+                item.originalClickedBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                                         b.value("width").toDouble(), b.value("height").toDouble());
+            }
+
+            m_items.append(item);
+        }
+        m_nextId = maxId + 1;
+    }
+
+    if (root.contains("tracks") && root["tracks"].isObject()) {
+        QJsonObject tracksObj = root["tracks"].toObject();
+        for (auto it = tracksObj.constBegin(); it != tracksObj.constEnd(); ++it) {
+            bool ok = false;
+            int wormId = it.key().toInt(&ok);
+            if (!ok || !it.value().isArray()) continue;
+            QJsonArray pointsArr = it.value().toArray();
+            std::vector<Tracking::WormTrackPoint> points;
+            points.reserve(pointsArr.size());
+            for (const QJsonValue& pv : pointsArr) {
+                if (!pv.isObject()) continue;
+                QJsonObject pObj = pv.toObject();
+                Tracking::WormTrackPoint p;
+                p.frameNumberOriginal = pObj.value("frame").toInt();
+                if (pObj.contains("position") && pObj["position"].isObject()) {
+                    QJsonObject pos = pObj["position"].toObject();
+                    p.position = cv::Point2f(static_cast<float>(pos.value("x").toDouble()),
+                                             static_cast<float>(pos.value("y").toDouble()));
+                }
+                if (pObj.contains("roi") && pObj["roi"].isObject()) {
+                    QJsonObject r = pObj["roi"].toObject();
+                    p.roi = QRectF(r.value("x").toDouble(), r.value("y").toDouble(),
+                                   r.value("width").toDouble(), r.value("height").toDouble());
+                }
+                p.quality = static_cast<Tracking::TrackPointQuality>(pObj.value("quality").toInt(static_cast<int>(p.quality)));
+                points.push_back(p);
+            }
+            m_tracks[wormId] = points;
+        }
+    }
+
+    if (root.contains("mergeGroupsByFrame") && root["mergeGroupsByFrame"].isObject()) {
+        QJsonObject mergeObj = root["mergeGroupsByFrame"].toObject();
+        for (auto it = mergeObj.constBegin(); it != mergeObj.constEnd(); ++it) {
+            bool ok = false;
+            int frameNum = it.key().toInt(&ok);
+            if (!ok || !it.value().isArray()) continue;
+            QJsonArray groupsArr = it.value().toArray();
+            QList<QList<int>> groups;
+            for (const QJsonValue& gv : groupsArr) {
+                if (!gv.isArray()) continue;
+                QJsonArray groupArr = gv.toArray();
+                QList<int> group;
+                for (const QJsonValue& idv : groupArr) {
+                    group.append(idv.toInt());
+                }
+                groups.append(group);
+            }
+            m_mergeHistory.insert(frameNum, groups);
+        }
+    }
+
+    updateIdToIndexMap();
+    buildFrameIndex();
+
+    if (!hasMetrics) {
+        recalculateGlobalMetricsAndROIs();
+    } else {
+        emit globalMetricsUpdated(m_minObservedArea, m_maxObservedArea,
+                                  m_minObservedAspectRatio, m_maxObservedAspectRatio,
+                                  m_currentFixedRoiSize);
+    }
+
+    emit allDataChanged();
+    emit itemsChanged(m_items);
+    return true;
 }
 
 /**

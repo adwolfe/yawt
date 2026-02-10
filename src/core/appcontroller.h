@@ -93,7 +93,8 @@ public:
                                           int keyFrame,
                                           const Thresholding::ThresholdSettings& settings,
                                           const std::vector<Tracking::InitialWormInfo>& initialWorms,
-                                          int totalFrames);
+                                          int totalFrames,
+                                          const QString& dataDirectory);
     Q_INVOKABLE void cancelTracking();
 
     // Higher-level orchestration: start tracking using the current BlobTableModel contents.
@@ -103,7 +104,8 @@ public:
                                             int keyFrame,
                                             const Thresholding::ThresholdSettings& settings,
                                             bool onlyTrackMissing,
-                                            int totalFrames);
+                                            int totalFrames,
+                                            const QString& dataDirectory);
 
     // Helper queries for UI
     // - Returns the number of items currently marked as worms in the blob model
@@ -135,6 +137,7 @@ public:
                                         const Thresholding::ThresholdSettings& settings,
                                         bool onlyTrackMissing,
                                         int totalFrames,
+                                        const QString& dataDirectory,
                                         QWidget* parent = nullptr);
 
 signals:
@@ -215,6 +218,7 @@ private:
     Thresholding::ThresholdSettings m_dialogSettings;
     bool m_dialogOnlyTrackMissing = true;
     int m_dialogTotalFrames = 0;
+    QString m_dialogDataDirectory;
 
     // Controller-owned tracking progress dialog (created on demand, parented to provided 'parent' widget)
     TrackingProgressDialog* m_trackingDialog = nullptr;

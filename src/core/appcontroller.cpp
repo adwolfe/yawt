@@ -209,7 +209,8 @@ void AppController::requestStartTracking(const QString& videoPath,
                                         int keyFrame,
                                         const Thresholding::ThresholdSettings& settings,
                                         const std::vector<Tracking::InitialWormInfo>& initialWorms,
-                                        int totalFrames)
+                                        int totalFrames,
+                                        const QString& dataDirectory)
 {
     if (!m_manager) {
         YAWT_WARN(lcCoreAppController) << "requestStartTracking: TrackingManager not available";
@@ -220,8 +221,6 @@ void AppController::requestStartTracking(const QString& videoPath,
     // Emit that tracking is starting
     emit trackingStarted();
 
-    // For now, dataDirectory left empty; UI (MainWindow) may decide to extend this API to pass it explicitly.
-    QString dataDirectory;
     m_manager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
 }
 
@@ -322,7 +321,8 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
                                           int keyFrame,
                                           const Thresholding::ThresholdSettings& settings,
                                           bool onlyTrackMissing,
-                                          int totalFrames)
+                                          int totalFrames,
+                                          const QString& dataDirectory)
 {
     if (!m_manager) {
         YAWT_WARN(lcCoreAppController) << "beginTrackingFromModel: TrackingManager not available";
@@ -343,8 +343,6 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
 
     emit trackingStarted();
 
-    // Data directory currently empty - MainWindow may extend to pass an explicit directory if needed.
-    QString dataDirectory;
     m_manager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
 }
 
@@ -377,6 +375,7 @@ void AppController::showTrackingDialog(const QString& videoPath,
                                        const Thresholding::ThresholdSettings& settings,
                                        bool onlyTrackMissing,
                                        int totalFrames,
+                                       const QString& dataDirectory,
                                        QWidget* parent)
 {
     // Store provided parameters so the dialog begin handler can use them.
@@ -385,6 +384,7 @@ void AppController::showTrackingDialog(const QString& videoPath,
     m_dialogSettings = settings;
     m_dialogOnlyTrackMissing = onlyTrackMissing;
     m_dialogTotalFrames = totalFrames;
+    m_dialogDataDirectory = dataDirectory;
 
     if (!m_trackingDialog) {
         // Create dialog parented to provided widget or to nullptr (will use application's top-level)
@@ -446,8 +446,7 @@ void AppController::onDialogBeginRequested()
 
     // Start tracking via the manager using stored dialog parameters.
     emit trackingStarted();
-    QString dataDirectory; // left empty for now; could be exposed in the dialog API later
-    m_manager->startFullTrackingProcess(m_dialogVideoPath, dataDirectory, m_dialogKeyFrame,
+    m_manager->startFullTrackingProcess(m_dialogVideoPath, m_dialogDataDirectory, m_dialogKeyFrame,
                                         initialWorms, m_dialogSettings, m_dialogTotalFrames);
 
     // Leave the dialog open — progress/status signals from the manager will be forwarded to it.

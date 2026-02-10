@@ -50,6 +50,15 @@
 #include <QButtonGroup> // For m_interactionModeButtonGroup
 #include <QSet>
 #include <QGraphicsOpacityEffect>
+#include <QAction>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMenu>
+#include <QMenuBar>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -223,6 +232,11 @@ MainWindow::MainWindow(QWidget *parent)
     setupPlaybackSpeedComboBox(); // Initialize playback speed options
     setupConnections();
     initializeUIStates();
+
+    QMenu* fileMenu = menuBar()->addMenu("File");
+    QAction* loadRunAction = new QAction("Load Run...", this);
+    fileMenu->addAction(loadRunAction);
+    connect(loadRunAction, &QAction::triggered, this, &MainWindow::loadRunFromDirectory);
 
     // Set initial modes in VideoLoader (after connections are set up)
     // Interaction mode buttons will be synced by syncInteractionModeButtons via the signal
@@ -1125,6 +1139,103 @@ void MainWindow::chooseWorkingDirectory() {
     }
 }
 
+void MainWindow::loadRunFromDirectory() {
+    QString startDir = ui->dirSelected->text();
+    if (startDir.isEmpty()) {
+        startDir = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    }
+
+    QString selectedDir = QFileDialog::getExistingDirectory(this, "Select run directory", startDir, QFileDialog::ShowDirsOnly);
+    if (selectedDir.isEmpty()) {
+        return;
+    }
+
+    QDir procDir(selectedDir);
+    QString wormsPath = procDir.absoluteFilePath("worms.json");
+    QString thresholdPath = procDir.absoluteFilePath("thresholding.json");
+    QStringList csvFiles = procDir.entryList(QStringList() << "*_tracks.csv", QDir::Files);
+
+    if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath) || csvFiles.isEmpty()) {
+        QMessageBox::warning(this, "Load Run", "Selected folder is missing required files (worms.json, thresholding.json, *_tracks.csv).");
+        return;
+    }
+
+    QDir cursor(procDir);
+    QString yawtPath;
+    while (true) {
+        if (cursor.dirName() == "yawt") {
+            yawtPath = cursor.absolutePath();
+            break;
+        }
+        if (!cursor.cdUp()) break;
+    }
+    if (yawtPath.isEmpty()) {
+        QMessageBox::warning(this, "Load Run", "Could not locate a parent 'yawt' directory for the selected run.");
+        return;
+    }
+
+    QDir yawtDir(yawtPath);
+    if (!yawtDir.cdUp()) {
+        QMessageBox::warning(this, "Load Run", "Could not locate the video directory above 'yawt'.");
+        return;
+    }
+    QString videoDirPath = yawtDir.absolutePath();
+
+    QString videoBaseName = QFileInfo(procDir.absolutePath()).dir().dirName();
+    QDir videoDir(videoDirPath);
+    QString videoPath;
+    QStringList videoFiles = videoDir.entryList(QDir::Files | QDir::Readable);
+    for (const QString& fileName : videoFiles) {
+        QFileInfo fi(videoDir.absoluteFilePath(fileName));
+        if (fi.completeBaseName() == videoBaseName) {
+            videoPath = fi.absoluteFilePath();
+            break;
+        }
+    }
+    if (videoPath.isEmpty()) {
+        QMessageBox::warning(this, "Load Run", "Could not find a video matching the run name in the directory above 'yawt'.");
+        return;
+    }
+
+    if (ui->videoLoader) {
+        ui->videoLoader->pause();
+    }
+    if (m_trackingDataStorage) {
+        m_trackingDataStorage->clearAllData();
+    }
+    if (ui->videoLoader) {
+        ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
+        ui->videoLoader->setTracksToDisplay(Tracking::AllWormTracks());
+        ui->videoLoader->setVisibleTrackIDs(QSet<int>());
+    }
+    m_hasCompletedTracking = false;
+
+    ui->dirSelected->setText(QFileInfo(videoDirPath).absoluteFilePath());
+    ui->videoTreeView->setRootDirectory(QFileInfo(videoDirPath).absoluteFilePath());
+
+    if (!ui->videoLoader->loadVideo(videoPath)) {
+        QMessageBox::warning(this, "Load Run", "Failed to load the associated video.");
+        return;
+    }
+
+    if (!applyThresholdSettingsFromJsonFile(thresholdPath)) {
+        QMessageBox::warning(this, "Load Run", "Failed to load thresholding settings.");
+        return;
+    }
+
+    if (!m_trackingDataStorage || !m_trackingDataStorage->loadFromWormsJson(wormsPath)) {
+        QMessageBox::warning(this, "Load Run", "Failed to load worms.json.");
+        return;
+    }
+
+    ui->videoLoader->updateItemsToDisplay(m_trackingDataStorage->getAllItems());
+    ui->videoLoader->setTracksToDisplay(m_trackingDataStorage->getAllTracks());
+    ui->videoLoader->setVisibleTrackIDs(m_trackingDataStorage->getAllItemIds());
+
+    resizeTableColumns();
+    updateWormTimeline();
+}
+
 void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize) {
     ui->frameSlider->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
     ui->frameSlider->setValue(0);
@@ -1369,6 +1480,61 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     // No-op placeholder to preserve function structure.
 }
 
+bool MainWindow::applyThresholdSettingsFromJsonFile(const QString& filePath) {
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        return false;
+    }
+
+    Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
+    QJsonObject obj = doc.object();
+    settings.algorithm = static_cast<Thresholding::ThresholdAlgorithm>(
+        obj.value("algorithm").toInt(static_cast<int>(settings.algorithm)));
+    settings.globalThresholdValue = obj.value("globalThresholdValue").toInt(settings.globalThresholdValue);
+    settings.adaptiveBlockSize = obj.value("adaptiveBlockSize").toInt(settings.adaptiveBlockSize);
+    settings.adaptiveCValue = obj.value("adaptiveCValue").toDouble(settings.adaptiveCValue);
+    settings.assumeLightBackground = obj.value("assumeLightBackground").toBool(settings.assumeLightBackground);
+    settings.enableBlur = obj.value("enableBlur").toBool(settings.enableBlur);
+    settings.blurKernelSize = obj.value("blurKernelSize").toInt(settings.blurKernelSize);
+    settings.blurSigmaX = obj.value("blurSigmaX").toDouble(settings.blurSigmaX);
+
+    ui->bgCombo->setCurrentIndex(settings.assumeLightBackground ? 0 : 1);
+
+    if (settings.algorithm == Thresholding::ThresholdAlgorithm::Global ||
+        settings.algorithm == Thresholding::ThresholdAlgorithm::Otsu) {
+        ui->globalRadio->setChecked(true);
+        ui->adaptiveRadio->setChecked(false);
+        ui->globalThreshAutoCheck->setChecked(settings.algorithm == Thresholding::ThresholdAlgorithm::Otsu);
+        ui->globalThreshSlider->setValue(settings.globalThresholdValue);
+        ui->globalThreshValueSpin->setValue(settings.globalThresholdValue);
+        updateThresholdAlgorithmSettings();
+        setGlobalThresholdType(settings.algorithm == Thresholding::ThresholdAlgorithm::Otsu);
+    } else {
+        ui->adaptiveRadio->setChecked(true);
+        ui->globalRadio->setChecked(false);
+        updateThresholdAlgorithmSettings();
+        ui->adaptiveTypeCombo->setCurrentIndex(settings.algorithm == Thresholding::ThresholdAlgorithm::AdaptiveGaussian ? 0 : 1);
+        ui->blockSizeSpin->setValue(settings.adaptiveBlockSize);
+        ui->tuningDoubleSpin->setValue(settings.adaptiveCValue);
+        setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
+    }
+
+    ui->blurCheck->setChecked(settings.enableBlur);
+    ui->blurKernelSpin->setValue(settings.blurKernelSize);
+    ui->videoLoader->setBlurSigmaX(settings.blurSigmaX);
+
+    return true;
+}
+
 void MainWindow::onPlaybackStateChanged(bool isPlaying, double currentSpeed) {
     Q_UNUSED(currentSpeed);
     m_isVideoPlaying = isPlaying;
@@ -1538,7 +1704,8 @@ void MainWindow::onStartTrackingActionTriggered() {
     // Delegate dialog creation and orchestration to AppController.
     if (m_appController) {
         bool onlyTrackMissing = true; // Default behavior; dialog can override when created by controller.
-        m_appController->showTrackingDialog(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames, this);
+        QString dataDirectory = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
+        m_appController->showTrackingDialog(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames, dataDirectory, this);
     } else {
         QMessageBox::critical(this, "Error", "Internal error: AppController missing.");
     }
@@ -1558,7 +1725,8 @@ void MainWindow::handleBeginTrackingFromDialog() {
     // Delegate building initial worms and starting tracking to the AppController.
     // Let the controller handle filtering (only-missing) and orchestration.
     bool onlyTrackMissing = true;
-    m_appController->beginTrackingFromModel(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames);
+    QString dataDirectory = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
+    m_appController->beginTrackingFromModel(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames, dataDirectory);
 }
 
 void MainWindow::handleCancelTrackingFromDialog() {

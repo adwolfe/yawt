@@ -59,10 +59,12 @@
 #include <QTextStream>
 #include <QPair>
 #include <QRectF>
+#include <QSizeF>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QThread>
+#include <QDateTime>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -410,6 +412,19 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
     return true;
 }
 
+static QString findLatestProcessingDirectory(const QString& videoSpecificDirectory) {
+    if (videoSpecificDirectory.isEmpty()) return QString();
+    QDir baseDir(videoSpecificDirectory);
+    if (!baseDir.exists()) return QString();
+
+    QStringList procDirs = baseDir.entryList(QStringList() << "PROC_*",
+                                             QDir::Dirs | QDir::NoDotAndDotDot,
+                                             QDir::Name);
+    if (procDirs.isEmpty()) return QString();
+
+    return baseDir.absoluteFilePath(procDirs.constLast());
+}
+
 // No-storage constructor implementation
 TrackingManager::TrackingManager(QObject* parent)
     : QObject(parent),
@@ -499,36 +514,40 @@ void TrackingManager::startFullTrackingProcess(
     m_thresholdSettings = settings;
     m_totalFramesInVideoHint = totalFramesInVideoHint;
 
-    // Create video-specific directory and save JSON files
+    // Create video-specific directory, try loading latest run state, then create new processing output directory
     m_videoSpecificDirectory = createVideoSpecificDirectory(dataDirectory, videoPath);
+    m_processingOutputDirectory.clear();
     if (!m_videoSpecificDirectory.isEmpty()) {
-        saveThresholdSettings(m_videoSpecificDirectory, settings);
-        saveInputBlobs(m_videoSpecificDirectory, initialWorms);
-
-        // Check if threshold settings differ from existing ones
-        QString thresholdFilePath = QDir(m_videoSpecificDirectory).absoluteFilePath("thresh_settings.json");
-        if (QFile::exists(thresholdFilePath)) {
-            bool settingsMatch = compareThresholdSettings(thresholdFilePath, settings);
-            if (!settingsMatch) {
-                TRACKING_DEBUG() << "Current threshold settings differ from stored settings in" << thresholdFilePath;
-                emit trackingStatusUpdate("Threshold settings differ from previous run");
-            } else {
-                // Threshold/settings match — attempt to load previously saved frame-atomic state
-                // This will populate m_nextPhysicalBlobId, m_frameMergeRecords, m_splitResolutionMap and m_wormToPhysicalBlobIdMap
-                bool loaded = loadFrameAtomicStateFromJson(m_videoSpecificDirectory,
-                                                          m_nextPhysicalBlobId,
-                                                          m_frameMergeRecords,
-                                                          m_splitResolutionMap,
-                                                          m_wormToPhysicalBlobIdMap,
-                                                          m_thresholdSettings);
-                if (loaded) {
-                    TRACKING_DEBUG() << "TrackingManager: Loaded saved frame-atomic state from"
-                                     << QDir(m_videoSpecificDirectory).absoluteFilePath("frame_atomic_state.json");
-                    emit trackingStatusUpdate("Loaded previous merge/split state (retracking enabled)");
+        const QString latestProcDir = findLatestProcessingDirectory(m_videoSpecificDirectory);
+        if (!latestProcDir.isEmpty()) {
+            QString thresholdFilePath = QDir(latestProcDir).absoluteFilePath("thresholding.json");
+            if (QFile::exists(thresholdFilePath)) {
+                bool settingsMatch = compareThresholdSettings(thresholdFilePath, settings);
+                if (!settingsMatch) {
+                    TRACKING_DEBUG() << "Current threshold settings differ from stored settings in" << thresholdFilePath;
+                    emit trackingStatusUpdate("Threshold settings differ from previous run");
                 } else {
-                    TRACKING_DEBUG() << "TrackingManager: No valid saved frame-atomic state found (or load failed).";
+                    bool loaded = loadFrameAtomicStateFromJson(latestProcDir,
+                                                              m_nextPhysicalBlobId,
+                                                              m_frameMergeRecords,
+                                                              m_splitResolutionMap,
+                                                              m_wormToPhysicalBlobIdMap,
+                                                              m_thresholdSettings);
+                    if (loaded) {
+                        TRACKING_DEBUG() << "TrackingManager: Loaded saved frame-atomic state from"
+                                         << QDir(latestProcDir).absoluteFilePath("frame_atomic_state.json");
+                        emit trackingStatusUpdate("Loaded previous merge/split state (retracking enabled)");
+                    } else {
+                        TRACKING_DEBUG() << "TrackingManager: No valid saved frame-atomic state found (or load failed).";
+                    }
                 }
             }
+        }
+
+        m_processingOutputDirectory = createProcessingOutputDirectory(m_videoSpecificDirectory);
+        if (!m_processingOutputDirectory.isEmpty()) {
+            saveThresholdingJson(m_processingOutputDirectory, settings);
+            saveInputBlobs(m_processingOutputDirectory, initialWorms);
         }
     }
     m_isTrackingRunning = true;
@@ -1401,7 +1420,9 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
             emit allTracksUpdated(m_finalTracks);
             QString csvPath;
-            if (m_videoPath.isEmpty()) {
+            if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
+                csvPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+            } else if (m_videoPath.isEmpty()) {
                 csvPath = "tracks.csv";
             } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
                 csvPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
@@ -1415,13 +1436,20 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                 // Populate merge history storage in one batch before saving JSON state
                 populateMergeHistoryInStorage();
 
-                // Save frame-atomic JSON state instead of thresholded video
-                saveFrameAtomicStateToJson(m_videoSpecificDirectory,
-                                           m_nextPhysicalBlobId,
-                                           m_frameMergeRecords,
-                                           m_splitResolutionMap,
-                                           m_wormToPhysicalBlobIdMap,
-                                           m_thresholdSettings);
+                if (!m_processingOutputDirectory.isEmpty()) {
+                    // Save frame-atomic JSON state to processing folder
+                    saveFrameAtomicStateToJson(m_processingOutputDirectory,
+                                               m_nextPhysicalBlobId,
+                                               m_frameMergeRecords,
+                                               m_splitResolutionMap,
+                                               m_wormToPhysicalBlobIdMap,
+                                               m_thresholdSettings);
+
+                    // Save full worms.json (storage snapshot) for recovery
+                    if (!saveWormsJson(m_processingOutputDirectory)) {
+                        emit trackingStatusUpdate("Warning: Failed to save worms.json");
+                    }
+                }
 
                 emit trackingFinishedSuccessfully(csvPath);
             }
@@ -1504,6 +1532,36 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
     return videoSpecificPath;
 }
 
+QString TrackingManager::createProcessingOutputDirectory(const QString& videoSpecificDirectory) {
+    if (videoSpecificDirectory.isEmpty()) {
+        qWarning() << "TrackingManager: Invalid video-specific directory";
+        return QString();
+    }
+
+    QDir baseDir(videoSpecificDirectory);
+    if (!baseDir.exists()) {
+        qWarning() << "TrackingManager: Video-specific directory does not exist:" << videoSpecificDirectory;
+        return QString();
+    }
+
+    QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss");
+    QString procDirName = QString("PROC_%1").arg(timestamp);
+    QString procPath = baseDir.absoluteFilePath(procDirName);
+
+    if (QDir(procPath).exists()) {
+        TRACKING_DEBUG() << "TrackingManager: Processing directory already exists:" << procPath;
+        return procPath;
+    }
+
+    if (QDir().mkpath(procPath)) {
+        TRACKING_DEBUG() << "TrackingManager: Created processing directory:" << procPath;
+        return procPath;
+    }
+
+    qWarning() << "TrackingManager: Failed to create processing directory:" << procPath;
+    return QString();
+}
+
 // Batch-populate merge groups into the central TrackingDataStorage.
 // Converts FrameSpecificPhysicalBlob records (m_frameMergeRecords) into
 // the storage representation: QMap<int, QList<QList<int>>> (frame -> list of groups).
@@ -1550,6 +1608,148 @@ void TrackingManager::saveThresholdSettings(const QString& directoryPath, const 
     } else {
         qWarning() << "TrackingManager: Failed to save threshold settings to:" << filePath;
     }
+}
+
+void TrackingManager::saveThresholdingJson(const QString& directoryPath, const Thresholding::ThresholdSettings& settings) {
+    if (directoryPath.isEmpty()) {
+        qWarning() << "TrackingManager: Cannot save thresholding - empty directory path";
+        return;
+    }
+
+    QJsonObject jsonObj = thresholdSettingsToJson(settings);
+    QJsonDocument doc(jsonObj);
+
+    QString filePath = QDir(directoryPath).absoluteFilePath("thresholding.json");
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(doc.toJson());
+        file.close();
+        TRACKING_DEBUG() << "TrackingManager: Saved thresholding to:" << filePath;
+    } else {
+        qWarning() << "TrackingManager: Failed to save thresholding to:" << filePath;
+    }
+}
+
+bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
+    if (!m_storage) {
+        qWarning() << "TrackingManager: Cannot save worms.json - storage missing";
+        return false;
+    }
+    if (directoryPath.isEmpty()) {
+        qWarning() << "TrackingManager: Cannot save worms.json - empty directory path";
+        return false;
+    }
+
+    QJsonObject root;
+    root["version"] = 1;
+    root["videoPath"] = m_videoPath;
+    root["keyFrame"] = m_keyFrameNum;
+
+    QJsonObject metricsObj;
+    metricsObj["roiSizeMultiplier"] = m_storage->getRoiSizeMultiplier();
+    QSizeF fixed = m_storage->getCurrentFixedRoiSize();
+    QJsonObject fixedObj;
+    fixedObj["width"] = fixed.width();
+    fixedObj["height"] = fixed.height();
+    metricsObj["currentFixedRoiSize"] = fixedObj;
+    metricsObj["minObservedArea"] = m_storage->getMinObservedArea();
+    metricsObj["maxObservedArea"] = m_storage->getMaxObservedArea();
+    metricsObj["minObservedAspectRatio"] = m_storage->getMinObservedAspectRatio();
+    metricsObj["maxObservedAspectRatio"] = m_storage->getMaxObservedAspectRatio();
+    root["metrics"] = metricsObj;
+
+    QJsonArray itemsArr;
+    const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
+    for (const TableItems::ClickedItem& item : items) {
+        QJsonObject itemObj;
+        itemObj["id"] = item.id;
+        itemObj["type"] = TableItems::itemTypeToString(item.type);
+        itemObj["visible"] = item.visible;
+        itemObj["frameOfSelection"] = item.frameOfSelection;
+
+        QJsonObject colorObj;
+        colorObj["r"] = item.color.red();
+        colorObj["g"] = item.color.green();
+        colorObj["b"] = item.color.blue();
+        colorObj["a"] = item.color.alpha();
+        colorObj["hex"] = item.color.name(QColor::HexArgb);
+        itemObj["color"] = colorObj;
+
+        QJsonObject centroidObj;
+        centroidObj["x"] = item.initialCentroid.x();
+        centroidObj["y"] = item.initialCentroid.y();
+        itemObj["initialCentroid"] = centroidObj;
+
+        QJsonObject bboxObj;
+        bboxObj["x"] = item.initialBoundingBox.x();
+        bboxObj["y"] = item.initialBoundingBox.y();
+        bboxObj["width"] = item.initialBoundingBox.width();
+        bboxObj["height"] = item.initialBoundingBox.height();
+        itemObj["initialBoundingBox"] = bboxObj;
+
+        QJsonObject origBoxObj;
+        origBoxObj["x"] = item.originalClickedBoundingBox.x();
+        origBoxObj["y"] = item.originalClickedBoundingBox.y();
+        origBoxObj["width"] = item.originalClickedBoundingBox.width();
+        origBoxObj["height"] = item.originalClickedBoundingBox.height();
+        itemObj["originalClickedBoundingBox"] = origBoxObj;
+
+        itemsArr.append(itemObj);
+    }
+    root["items"] = itemsArr;
+    root["itemsCount"] = itemsArr.size();
+
+    QJsonObject tracksObj;
+    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        QJsonArray pointsArr;
+        const std::vector<Tracking::WormTrackPoint>& points = it->second;
+        for (const Tracking::WormTrackPoint& p : points) {
+            QJsonObject pObj;
+            pObj["frame"] = p.frameNumberOriginal;
+            QJsonObject posObj;
+            posObj["x"] = p.position.x;
+            posObj["y"] = p.position.y;
+            pObj["position"] = posObj;
+            QJsonObject roiObj;
+            roiObj["x"] = p.roi.x();
+            roiObj["y"] = p.roi.y();
+            roiObj["width"] = p.roi.width();
+            roiObj["height"] = p.roi.height();
+            pObj["roi"] = roiObj;
+            pObj["quality"] = static_cast<int>(p.quality);
+            pointsArr.append(pObj);
+        }
+        tracksObj[QString::number(it->first)] = pointsArr;
+    }
+    root["tracks"] = tracksObj;
+    root["tracksCount"] = static_cast<int>(tracks.size());
+
+    QJsonObject mergeObj;
+    QMap<int, QList<QList<int>>> mergeGroups = m_storage->getAllMergeGroups();
+    for (auto it = mergeGroups.constBegin(); it != mergeGroups.constEnd(); ++it) {
+        QJsonArray groupsArr;
+        for (const QList<int>& group : it.value()) {
+            QJsonArray groupArr;
+            for (int id : group) groupArr.append(id);
+            groupsArr.append(groupArr);
+        }
+        mergeObj[QString::number(it.key())] = groupsArr;
+    }
+    root["mergeGroupsByFrame"] = mergeObj;
+
+    QJsonDocument doc(root);
+    QString filePath = QDir(directoryPath).absoluteFilePath("worms.json");
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(doc.toJson(QJsonDocument::Indented));
+        file.close();
+        TRACKING_DEBUG() << "TrackingManager: Saved worms.json to:" << filePath;
+        return true;
+    }
+
+    qWarning() << "TrackingManager: Failed to save worms.json to:" << filePath;
+    return false;
 }
 
 void TrackingManager::saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms) {

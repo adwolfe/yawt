@@ -148,6 +148,18 @@ public:
      * @brief Clear all track data for all items
      */
     void clearAllTracks();
+
+    /**
+     * @brief Clear all stored data (items, tracks, merge history, detected blobs, and indexes).
+     */
+    void clearAllData();
+
+    /**
+     * @brief Load storage contents from a worms.json file.
+     * @param filePath Path to worms.json
+     * @return True if the file was loaded and parsed successfully
+     */
+    bool loadFromWormsJson(const QString& filePath);
     
     /**
      * @brief Clear track data and compact memory usage

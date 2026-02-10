@@ -771,7 +771,7 @@ QToolButton#lastFrameButton {
             <enum>QTabWidget::TabShape::Rounded</enum>
            </property>
            <property name="currentIndex">
-            <number>1</number>
+            <number>0</number>
            </property>
            <widget class="QFrame" name="frame">
             <property name="frameShape">

@@ -347,8 +347,11 @@ private:
     
     // JSON storage methods
     QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
+    QString createProcessingOutputDirectory(const QString& videoSpecificDirectory);
     void saveThresholdSettings(const QString& directoryPath, const Thresholding::ThresholdSettings& settings);
+    void saveThresholdingJson(const QString& directoryPath, const Thresholding::ThresholdSettings& settings);
     void saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms);
+    bool saveWormsJson(const QString& directoryPath) const;
     bool compareThresholdSettings(const QString& filePath, const Thresholding::ThresholdSettings& currentSettings);
     QJsonObject thresholdSettingsToJson(const Thresholding::ThresholdSettings& settings) const;
     QJsonObject initialWormInfoToJson(const Tracking::InitialWormInfo& worm) const;
@@ -357,6 +360,7 @@ private:
     QString m_videoPath;
     QString m_dataDirectory;
     QString m_videoSpecificDirectory;
+    QString m_processingOutputDirectory;
     int m_keyFrameNum;
     std::vector<Tracking::InitialWormInfo> m_initialWormInfos;
     Thresholding::ThresholdSettings m_thresholdSettings;

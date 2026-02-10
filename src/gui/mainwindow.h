@@ -86,6 +86,7 @@ protected:
 public slots:
     // File/Directory Operations
     void chooseWorkingDirectory();
+    void loadRunFromDirectory();
 
     // Video Playback and Frame Navigation
     void initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize);
@@ -169,6 +170,7 @@ private:
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
     void setSideMiniLoadersPaused(bool paused);
     void updateWormTimeline();
+    bool applyThresholdSettingsFromJsonFile(const QString& filePath);
 
     /**
      * Keep the mirrored play/pause buttons in sync with the current playback state.
