@@ -16,6 +16,7 @@ class BlobTableModel;
 class AnnotationTableModel;
 class ColorDelegate;
 class ItemTypeDelegate;
+class ItemTypeFilterProxyModel;
 class TrackingDataStorage;
 class AppController; // Application controller (owns core non-UI components)
 
@@ -193,7 +194,7 @@ private:
     Ui::MainWindow *ui;
 
     // Models & delegates
-    /** Non-owning pointer to the blob model (owned by AppController). Bound to worm table view. */
+    /** Non-owning pointer to the blob model (owned by AppController). Bound via proxy models to views. */
     BlobTableModel *m_blobTableModel;
     /** Non-owning pointer to the annotation model (owned by AppController). Bound to annotation view. */
     AnnotationTableModel *m_annotationTableModel;
@@ -201,6 +202,9 @@ private:
     ColorDelegate *m_colorDelegate;
     /** Item type delegate created/parented to MainWindow; owned by MainWindow unless reparented. */
     ItemTypeDelegate *m_itemTypeDelegate;
+    /** Proxy models to split worms vs ROI/points in separate views. */
+    ItemTypeFilterProxyModel *m_wormProxyModel = nullptr;
+    ItemTypeFilterProxyModel *m_roiProxyModel = nullptr;
 
     // Controller and storage
     /**

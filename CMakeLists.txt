@@ -41,6 +41,7 @@ set(SOURCES
     src/models/annotationtablemodel.cpp
     src/models/blobtablemodel.cpp
     src/models/folderfirstsortproxymodel.cpp
+    src/models/itemtypefilterproxymodel.cpp
 
     # GUI (top-level)
     src/gui/mainwindow.cpp
@@ -83,6 +84,7 @@ set(HEADERS
     src/models/annotationtablemodel.h
     src/models/blobtablemodel.h
     src/models/folderfirstsortproxymodel.h
+    src/models/itemtypefilterproxymodel.h
 
     # GUI
     src/gui/mainwindow.h

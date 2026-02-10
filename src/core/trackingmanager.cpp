@@ -1449,6 +1449,9 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                     if (!saveWormsJson(m_processingOutputDirectory)) {
                         emit trackingStatusUpdate("Warning: Failed to save worms.json");
                     }
+                    if (!saveRoiPointsJson(m_processingOutputDirectory)) {
+                        emit trackingStatusUpdate("Warning: Failed to save roi_points.json");
+                    }
                 }
 
                 emit trackingFinishedSuccessfully(csvPath);
@@ -1661,6 +1664,9 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
     QJsonArray itemsArr;
     const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
     for (const TableItems::ClickedItem& item : items) {
+        if (item.type != TableItems::ItemType::Worm && item.type != TableItems::ItemType::Fix) {
+            continue;
+        }
         QJsonObject itemObj;
         itemObj["id"] = item.id;
         itemObj["type"] = TableItems::itemTypeToString(item.type);
@@ -1749,6 +1755,82 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
     }
 
     qWarning() << "TrackingManager: Failed to save worms.json to:" << filePath;
+    return false;
+}
+
+bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
+    if (!m_storage) {
+        qWarning() << "TrackingManager: Cannot save roi_points.json - storage missing";
+        return false;
+    }
+    if (directoryPath.isEmpty()) {
+        qWarning() << "TrackingManager: Cannot save roi_points.json - empty directory path";
+        return false;
+    }
+
+    QJsonObject root;
+    root["version"] = 1;
+    root["videoPath"] = m_videoPath;
+    root["keyFrame"] = m_keyFrameNum;
+
+    QJsonArray itemsArr;
+    const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
+    for (const TableItems::ClickedItem& item : items) {
+        if (item.type != TableItems::ItemType::ROI &&
+            item.type != TableItems::ItemType::StartPoint &&
+            item.type != TableItems::ItemType::EndPoint &&
+            item.type != TableItems::ItemType::ControlPoint) {
+            continue;
+        }
+        QJsonObject itemObj;
+        itemObj["id"] = item.id;
+        itemObj["type"] = TableItems::itemTypeToString(item.type);
+        itemObj["visible"] = item.visible;
+        itemObj["frameOfSelection"] = item.frameOfSelection;
+
+        QJsonObject colorObj;
+        colorObj["r"] = item.color.red();
+        colorObj["g"] = item.color.green();
+        colorObj["b"] = item.color.blue();
+        colorObj["a"] = item.color.alpha();
+        colorObj["hex"] = item.color.name(QColor::HexArgb);
+        itemObj["color"] = colorObj;
+
+        QJsonObject centroidObj;
+        centroidObj["x"] = item.initialCentroid.x();
+        centroidObj["y"] = item.initialCentroid.y();
+        itemObj["initialCentroid"] = centroidObj;
+
+        QJsonObject bboxObj;
+        bboxObj["x"] = item.initialBoundingBox.x();
+        bboxObj["y"] = item.initialBoundingBox.y();
+        bboxObj["width"] = item.initialBoundingBox.width();
+        bboxObj["height"] = item.initialBoundingBox.height();
+        itemObj["initialBoundingBox"] = bboxObj;
+
+        QJsonObject origBoxObj;
+        origBoxObj["x"] = item.originalClickedBoundingBox.x();
+        origBoxObj["y"] = item.originalClickedBoundingBox.y();
+        origBoxObj["width"] = item.originalClickedBoundingBox.width();
+        origBoxObj["height"] = item.originalClickedBoundingBox.height();
+        itemObj["originalClickedBoundingBox"] = origBoxObj;
+
+        itemsArr.append(itemObj);
+    }
+    root["items"] = itemsArr;
+    root["itemsCount"] = itemsArr.size();
+
+    QJsonDocument doc(root);
+    QString filePath = QDir(directoryPath).absoluteFilePath("roi_points.json");
+    QFile file(filePath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(doc.toJson(QJsonDocument::Indented));
+        file.close();
+        TRACKING_DEBUG() << "TrackingManager: Saved roi_points.json to:" << filePath;
+        return true;
+    }
+
+    qWarning() << "TrackingManager: Failed to save roi_points.json to:" << filePath;
     return false;
 }
 

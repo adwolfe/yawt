@@ -311,6 +311,49 @@ void TrackingDataStorage::clearAllData() {
     emit itemsChanged(m_items);
 }
 
+static bool isRoiPointType(TableItems::ItemType type) {
+    return type == TableItems::ItemType::ROI ||
+           type == TableItems::ItemType::StartPoint ||
+           type == TableItems::ItemType::EndPoint ||
+           type == TableItems::ItemType::ControlPoint;
+}
+
+static bool parseItemFromJsonObject(const QJsonObject& obj, TableItems::ClickedItem& item) {
+    item.id = obj.value("id").toInt();
+    item.type = TableItems::stringToItemType(obj.value("type").toString());
+    item.visible = obj.value("visible").toBool(true);
+    item.frameOfSelection = obj.value("frameOfSelection").toInt(0);
+
+    if (obj.contains("color") && obj["color"].isObject()) {
+        QJsonObject colorObj = obj["color"].toObject();
+        if (colorObj.contains("r") && colorObj.contains("g") && colorObj.contains("b")) {
+            int r = colorObj.value("r").toInt(0);
+            int g = colorObj.value("g").toInt(0);
+            int b = colorObj.value("b").toInt(0);
+            int a = colorObj.value("a").toInt(255);
+            item.color = QColor(r, g, b, a);
+        } else if (colorObj.contains("hex")) {
+            item.color = QColor(colorObj.value("hex").toString());
+        }
+    }
+
+    if (obj.contains("initialCentroid") && obj["initialCentroid"].isObject()) {
+        QJsonObject c = obj["initialCentroid"].toObject();
+        item.initialCentroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
+    }
+    if (obj.contains("initialBoundingBox") && obj["initialBoundingBox"].isObject()) {
+        QJsonObject b = obj["initialBoundingBox"].toObject();
+        item.initialBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                         b.value("width").toDouble(), b.value("height").toDouble());
+    }
+    if (obj.contains("originalClickedBoundingBox") && obj["originalClickedBoundingBox"].isObject()) {
+        QJsonObject b = obj["originalClickedBoundingBox"].toObject();
+        item.originalClickedBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                                 b.value("width").toDouble(), b.value("height").toDouble());
+    }
+    return true;
+}
+
 bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -359,39 +402,8 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
             if (!v.isObject()) continue;
             QJsonObject obj = v.toObject();
             TableItems::ClickedItem item;
-            item.id = obj.value("id").toInt();
+            parseItemFromJsonObject(obj, item);
             maxId = qMax(maxId, item.id);
-            item.type = TableItems::stringToItemType(obj.value("type").toString());
-            item.visible = obj.value("visible").toBool(true);
-            item.frameOfSelection = obj.value("frameOfSelection").toInt(0);
-
-            if (obj.contains("color") && obj["color"].isObject()) {
-                QJsonObject colorObj = obj["color"].toObject();
-                if (colorObj.contains("r") && colorObj.contains("g") && colorObj.contains("b")) {
-                    int r = colorObj.value("r").toInt(0);
-                    int g = colorObj.value("g").toInt(0);
-                    int b = colorObj.value("b").toInt(0);
-                    int a = colorObj.value("a").toInt(255);
-                    item.color = QColor(r, g, b, a);
-                } else if (colorObj.contains("hex")) {
-                    item.color = QColor(colorObj.value("hex").toString());
-                }
-            }
-
-            if (obj.contains("initialCentroid") && obj["initialCentroid"].isObject()) {
-                QJsonObject c = obj["initialCentroid"].toObject();
-                item.initialCentroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
-            }
-            if (obj.contains("initialBoundingBox") && obj["initialBoundingBox"].isObject()) {
-                QJsonObject b = obj["initialBoundingBox"].toObject();
-                item.initialBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
-                                                 b.value("width").toDouble(), b.value("height").toDouble());
-            }
-            if (obj.contains("originalClickedBoundingBox") && obj["originalClickedBoundingBox"].isObject()) {
-                QJsonObject b = obj["originalClickedBoundingBox"].toObject();
-                item.originalClickedBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
-                                                         b.value("width").toDouble(), b.value("height").toDouble());
-            }
 
             m_items.append(item);
         }
@@ -461,6 +473,57 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                                   m_currentFixedRoiSize);
     }
 
+    emit allDataChanged();
+    emit itemsChanged(m_items);
+    return true;
+}
+
+bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "TrackingDataStorage: Cannot read roi_points.json:" << filePath;
+        return false;
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "TrackingDataStorage: JSON parse error in roi_points.json:" << parseError.errorString();
+        return false;
+    }
+
+    QJsonObject root = doc.object();
+    if (!root.contains("items") || !root["items"].isArray()) {
+        return true;
+    }
+
+    QSet<int> existingIds;
+    for (const auto& item : std::as_const(m_items)) {
+        existingIds.insert(item.id);
+    }
+
+    QJsonArray itemsArr = root["items"].toArray();
+    for (const QJsonValue& v : itemsArr) {
+        if (!v.isObject()) continue;
+        QJsonObject obj = v.toObject();
+        TableItems::ClickedItem item;
+        parseItemFromJsonObject(obj, item);
+        if (!isRoiPointType(item.type)) continue;
+
+        if (item.id <= 0 || existingIds.contains(item.id)) {
+            item.id = m_nextId++;
+        } else if (item.id >= m_nextId) {
+            m_nextId = item.id + 1;
+        }
+        existingIds.insert(item.id);
+        m_items.append(item);
+    }
+
+    updateIdToIndexMap();
+    recalculateGlobalMetricsAndROIs();
     emit allDataChanged();
     emit itemsChanged(m_items);
     return true;

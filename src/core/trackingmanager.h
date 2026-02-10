@@ -352,6 +352,7 @@ private:
     void saveThresholdingJson(const QString& directoryPath, const Thresholding::ThresholdSettings& settings);
     void saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms);
     bool saveWormsJson(const QString& directoryPath) const;
+    bool saveRoiPointsJson(const QString& directoryPath) const;
     bool compareThresholdSettings(const QString& filePath, const Thresholding::ThresholdSettings& currentSettings);
     QJsonObject thresholdSettingsToJson(const Thresholding::ThresholdSettings& settings) const;
     QJsonObject initialWormInfoToJson(const Tracking::InitialWormInfo& worm) const;

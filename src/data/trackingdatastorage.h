@@ -160,6 +160,13 @@ public:
      * @return True if the file was loaded and parsed successfully
      */
     bool loadFromWormsJson(const QString& filePath);
+
+    /**
+     * @brief Load ROI/point items from a separate JSON file (does not clear existing data).
+     * @param filePath Path to roi_points.json
+     * @return True if the file was loaded and parsed successfully
+     */
+    bool loadFromRoiJson(const QString& filePath);
     
     /**
      * @brief Clear track data and compact memory usage
