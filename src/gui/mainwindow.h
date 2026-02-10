@@ -9,6 +9,7 @@
 #include <QList>
 #include <QSet>
 #include <QTimer>
+#include <QPointer>
 
 // Forward declarations
 namespace Ui { class MainWindow; }
@@ -19,6 +20,7 @@ class ItemTypeDelegate;
 class ItemTypeFilterProxyModel;
 class TrackingDataStorage;
 class AppController; // Application controller (owns core non-UI components)
+class AnalysisDialog;
 
 // Include VideoLoader header for enums and QFlags type
 #include "widgets/videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
@@ -166,6 +168,7 @@ public slots:
     // Poll timer tick: periodically poll MiniLoader(s) for visible IDs (fallback if signal missed)
     void onMiniLoaderPollTimeout();
     void onPlaybackStateChanged(bool isPlaying, double currentSpeed);
+    void resultsButtonClicked();
 
 private:
     void setupConnections();
@@ -218,6 +221,8 @@ private:
      * Owned by AppController; retrieved for convenience to avoid repeated lookups.
      */
     TrackingDataStorage *m_trackingDataStorage;
+
+    QPointer<AnalysisDialog> m_analysisDialog;
 
     /** Button group for interaction modes (Pan, ROI, Crop, EditBlobs, EditTracks). Owned by MainWindow. */
     QButtonGroup *m_interactionModeButtonGroup;

@@ -262,7 +262,7 @@
             </widget>
            </item>
            <item>
-            <widget class="QToolButton" name="trackModeButton">
+            <widget class="QToolButton" name="resultsButton">
              <property name="enabled">
               <bool>true</bool>
              </property>
@@ -270,14 +270,13 @@
               <string>Show/Hide Tracks</string>
              </property>
              <property name="statusTip">
-              <string>Show/hide tracks</string>
+              <string>Show/hide Results</string>
              </property>
              <property name="text">
               <string>...</string>
              </property>
              <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/trax_alt2.svg</normaloff>:/resources/trax_alt2.svg</iconset>
+              <iconset theme="QIcon::ThemeIcon::DialogError"/>
              </property>
              <property name="checkable">
               <bool>true</bool>

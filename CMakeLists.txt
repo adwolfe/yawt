@@ -45,6 +45,7 @@ set(SOURCES
 
     # GUI (top-level)
     src/gui/mainwindow.cpp
+    src/gui/analysisdialog.cpp
     src/gui/trackingprogressdialog.cpp
 
     # GUI widgets and delegates
@@ -88,6 +89,7 @@ set(HEADERS
 
     # GUI
     src/gui/mainwindow.h
+    src/gui/analysisdialog.h
     src/gui/trackingprogressdialog.h
 
     # GUI widgets / delegates

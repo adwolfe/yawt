@@ -29,6 +29,7 @@
 #include "colordelegate.h"
 #include "itemtypedelegate.h"
 // #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
+#include "analysisdialog.h"
 #include "trackingprogressdialog.h"
 #include "../core/appcontroller.h"
 #include "trackingmanager.h"
@@ -326,8 +327,8 @@ void MainWindow::setupInteractionModeButtonGroup() {
     m_interactionModeButtonGroup->addButton(ui->pointButton);
     m_interactionModeButtonGroup->addButton(ui->roiModeButton);
     m_interactionModeButtonGroup->addButton(ui->cropModeButton);
-    m_interactionModeButtonGroup->addButton(ui->selectionModeButton);  // Rename in UI to "Edit Blobs"
-    m_interactionModeButtonGroup->addButton(ui->trackModeButton);      // Rename in UI to "Edit Tracks"
+    m_interactionModeButtonGroup->addButton(ui->selectionModeButton);
+    //m_interactionModeButtonGroup->addButton(ui->trackModeButton);
     m_interactionModeButtonGroup->setExclusive(true);
     // No QButtonGroup for view modes as they are independent toggles now
 }
@@ -389,7 +390,7 @@ void MainWindow::setupConnections() {
     connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeButtonClicked);
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeButtonClicked);
     connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::editBlobsModeButtonClicked);
-    connect(ui->trackModeButton, &QToolButton::clicked, this, &MainWindow::editTracksModeButtonClicked);
+    connect(ui->resultsButton, &QToolButton::clicked, this, &MainWindow::resultsButtonClicked);
 
     // View Mode Option Buttons (Checkable QToolButtons or QCheckBoxes) -> VideoLoader
     // Assuming ui->showThreshButton is checkable
@@ -1007,7 +1008,7 @@ void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode
     ui->roiModeButton->setChecked(newMode == VideoLoader::InteractionMode::DrawROI);
     ui->cropModeButton->setChecked(newMode == VideoLoader::InteractionMode::Crop);
     ui->selectionModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditBlobs);
-    ui->trackModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditTracks);
+    //ui->trackModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditTracks);
     YAWT_DEBUG(lcGuiMainWindow) << "Interaction mode UI synced to" << static_cast<int>(newMode);
 }
 
@@ -1698,6 +1699,23 @@ void MainWindow::onPlaybackStateChanged(bool isPlaying, double currentSpeed) {
             updateMiniLoaderCrop(currentFrame, currentImage);
         }
     }
+}
+
+void MainWindow::resultsButtonClicked() {
+    if (m_analysisDialog) {
+        m_analysisDialog->close();
+        return;
+    }
+
+    m_analysisDialog = new AnalysisDialog(m_trackingDataStorage, this);
+    ui->resultsButton->setChecked(true);
+    connect(m_analysisDialog, &QDialog::finished, this, [this](int) {
+        ui->resultsButton->setChecked(false);
+        m_analysisDialog = nullptr;
+    });
+    m_analysisDialog->show();
+    m_analysisDialog->raise();
+    m_analysisDialog->activateWindow();
 }
 
 void MainWindow::setSideMiniLoadersPaused(bool paused) {
