@@ -5,6 +5,7 @@
 #include <QDebug>
 #include "../../utils/loggingcategories.h"
 #include <QFileSystemModel> // <<< Make sure this is included
+#include <QFileInfo>
 
 VideoFileTreeView::VideoFileTreeView(QWidget *parent) : QTreeView(parent) {
     // Initialize the source file system model
@@ -97,7 +98,19 @@ void VideoFileTreeView::onItemDoubleClicked(const QModelIndex &proxyIndex) {
     // Now query properties using the sourceIndex and fileSystemModel
     bool isDir = fileSystemModel->isDir(sourceIndex);
     if (isDir) {
-        return; // Do nothing for directories on double-click
+        QString dirPath = fileSystemModel->filePath(sourceIndex);
+        QFileInfo dirInfo(dirPath);
+        if (dirInfo.fileName().startsWith("PROC_")) {
+            QDir procDir(dirPath);
+            QString wormsPath = procDir.absoluteFilePath("worms.json");
+            QString thresholdPath = procDir.absoluteFilePath("thresholding.json");
+            QStringList csvFiles = procDir.entryList(QStringList() << "*_tracks.csv", QDir::Files);
+            if (QFileInfo::exists(wormsPath) && QFileInfo::exists(thresholdPath) && !csvFiles.isEmpty()) {
+                YAWT_INFO(lcGuiVideoLoader) << "PROC directory double-clicked:" << dirPath;
+                emit runDirectoryDoubleClicked(dirPath);
+            }
+        }
+        return;
     }
 
     QString filePath = fileSystemModel->filePath(sourceIndex);

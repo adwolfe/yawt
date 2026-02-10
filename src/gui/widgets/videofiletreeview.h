@@ -27,6 +27,7 @@ public:
 
 signals:
     void videoFileDoubleClicked(const QString &filePath);
+    void runDirectoryDoubleClicked(const QString &directoryPath);
 
 private slots:
     void onItemDoubleClicked(const QModelIndex &index);

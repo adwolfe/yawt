@@ -692,6 +692,7 @@ void MainWindow::setupConnections() {
 
     // Video File Tree View -> VideoLoader
     connect(ui->videoTreeView, &VideoFileTreeView::videoFileDoubleClicked, ui->videoLoader, &VideoLoader::loadVideo);
+    connect(ui->videoTreeView, &VideoFileTreeView::runDirectoryDoubleClicked, this, &MainWindow::loadRunFromDirectoryPath);
 
     // Tracking Process
     connect(ui->trackingDialogButton, &QPushButton::clicked, this, &MainWindow::onStartTrackingActionTriggered);
@@ -1149,6 +1150,20 @@ void MainWindow::loadRunFromDirectory() {
     if (selectedDir.isEmpty()) {
         return;
     }
+    loadRunFromDirectoryInternal(selectedDir);
+}
+
+void MainWindow::loadRunFromDirectoryPath(const QString& directoryPath) {
+    if (directoryPath.isEmpty()) {
+        return;
+    }
+    loadRunFromDirectoryInternal(directoryPath);
+}
+
+bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
+    if (selectedDir.isEmpty()) {
+        return false;
+    }
 
     QDir procDir(selectedDir);
     QString wormsPath = procDir.absoluteFilePath("worms.json");
@@ -1157,7 +1172,7 @@ void MainWindow::loadRunFromDirectory() {
 
     if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath) || csvFiles.isEmpty()) {
         QMessageBox::warning(this, "Load Run", "Selected folder is missing required files (worms.json, thresholding.json, *_tracks.csv).");
-        return;
+        return false;
     }
 
     QDir cursor(procDir);
@@ -1171,13 +1186,13 @@ void MainWindow::loadRunFromDirectory() {
     }
     if (yawtPath.isEmpty()) {
         QMessageBox::warning(this, "Load Run", "Could not locate a parent 'yawt' directory for the selected run.");
-        return;
+        return false;
     }
 
     QDir yawtDir(yawtPath);
     if (!yawtDir.cdUp()) {
         QMessageBox::warning(this, "Load Run", "Could not locate the video directory above 'yawt'.");
-        return;
+        return false;
     }
     QString videoDirPath = yawtDir.absolutePath();
 
@@ -1194,7 +1209,7 @@ void MainWindow::loadRunFromDirectory() {
     }
     if (videoPath.isEmpty()) {
         QMessageBox::warning(this, "Load Run", "Could not find a video matching the run name in the directory above 'yawt'.");
-        return;
+        return false;
     }
 
     if (ui->videoLoader) {
@@ -1215,17 +1230,17 @@ void MainWindow::loadRunFromDirectory() {
 
     if (!ui->videoLoader->loadVideo(videoPath)) {
         QMessageBox::warning(this, "Load Run", "Failed to load the associated video.");
-        return;
+        return false;
     }
 
     if (!applyThresholdSettingsFromJsonFile(thresholdPath)) {
         QMessageBox::warning(this, "Load Run", "Failed to load thresholding settings.");
-        return;
+        return false;
     }
 
     if (!m_trackingDataStorage || !m_trackingDataStorage->loadFromWormsJson(wormsPath)) {
         QMessageBox::warning(this, "Load Run", "Failed to load worms.json.");
-        return;
+        return false;
     }
 
     ui->videoLoader->updateItemsToDisplay(m_trackingDataStorage->getAllItems());
@@ -1234,6 +1249,7 @@ void MainWindow::loadRunFromDirectory() {
 
     resizeTableColumns();
     updateWormTimeline();
+    return true;
 }
 
 void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize) {

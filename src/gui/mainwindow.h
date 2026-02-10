@@ -87,6 +87,7 @@ public slots:
     // File/Directory Operations
     void chooseWorkingDirectory();
     void loadRunFromDirectory();
+    void loadRunFromDirectoryPath(const QString& directoryPath);
 
     // Video Playback and Frame Navigation
     void initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize);
@@ -171,6 +172,7 @@ private:
     void setSideMiniLoadersPaused(bool paused);
     void updateWormTimeline();
     bool applyThresholdSettingsFromJsonFile(const QString& filePath);
+    bool loadRunFromDirectoryInternal(const QString& directoryPath);
 
     /**
      * Keep the mirrored play/pause buttons in sync with the current playback state.
