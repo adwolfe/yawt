@@ -49,6 +49,7 @@
 #include <QIcon>
 #include <QMessageBox>
 #include <QDebug>
+#include <QDoubleSpinBox>
 #include <QButtonGroup> // For m_interactionModeButtonGroup
 #include <QSet>
 #include <QGraphicsOpacityEffect>
@@ -1709,6 +1710,9 @@ void MainWindow::resultsButtonClicked() {
 
     m_analysisDialog = new AnalysisDialog(m_trackingDataStorage, this);
     ui->resultsButton->setChecked(true);
+    m_analysisDialog->setPixelSizePixelsPerUm(ui->pixelSizeSpinBoxD->value());
+    connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            m_analysisDialog, &AnalysisDialog::setPixelSizePixelsPerUm);
     connect(m_analysisDialog, &QDialog::finished, this, [this](int) {
         ui->resultsButton->setChecked(false);
         m_analysisDialog = nullptr;
