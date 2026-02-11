@@ -1499,6 +1499,24 @@ void VideoLoader::applyThresholding() {
         cv::cvtColor(currentCvFrame, grayFrame, cv::COLOR_BGR2GRAY);
     else
         grayFrame = currentCvFrame.clone();
+
+    // Ensure 8-bit grayscale for thresholding; some videos can load as 16-bit.
+    if (grayFrame.type() != CV_8UC1) {
+        cv::Mat gray8;
+        double minVal = 0.0;
+        double maxVal = 0.0;
+        cv::minMaxLoc(grayFrame, &minVal, &maxVal);
+        if (maxVal > minVal) {
+            grayFrame.convertTo(
+                gray8,
+                CV_8U,
+                255.0 / (maxVal - minVal),
+                -minVal * 255.0 / (maxVal - minVal));
+        } else {
+            gray8 = cv::Mat::zeros(grayFrame.size(), CV_8U);
+        }
+        grayFrame = gray8;
+    }
     if (m_enableBlur && m_blurKernelSize >= 3) {
         try {
             cv::GaussianBlur(grayFrame, grayFrame,

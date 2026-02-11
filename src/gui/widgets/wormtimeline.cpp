@@ -120,6 +120,16 @@ static int niceFrameStep(int frameSpan)
     return targets[9];
 }
 
+static QString mergeKeyForIds(const QList<int>& ids)
+{
+    QString key;
+    for (int id : ids) {
+        if (!key.isEmpty()) key += "-";
+        key += QString::number(id);
+    }
+    return key;
+}
+
 static QString wormIdsTooltip(const QList<int>& ids)
 {
     if (ids.isEmpty()) return QStringLiteral("Worms: none");
@@ -187,6 +197,8 @@ void WormTimeline::rebuildEventNodes()
     m_mergeSpans.clear();
     if (m_totalFrames <= 0 || m_mergeGroupsByFrame.isEmpty()) return;
 
+    const int minTransientFrames = 6;
+
     QMap<QString, QList<int>> prevGroups;
     QMap<QString, int> activeSpans;
     int earliestMergeFrame = -1;
@@ -209,23 +221,12 @@ void WormTimeline::rebuildEventNodes()
         }
 
         for (auto it = currGroups.constBegin(); it != currGroups.constEnd(); ++it) {
-            if (!prevGroups.contains(it.key())) {
-                EventNode node;
-                node.frame = frame;
-                node.wormIds = it.value();
-                m_eventNodes.append(node);
-            }
             if (!activeSpans.contains(it.key())) {
                 activeSpans.insert(it.key(), frame);
             }
         }
         for (auto it = prevGroups.constBegin(); it != prevGroups.constEnd(); ++it) {
             if (!currGroups.contains(it.key())) {
-                EventNode node;
-                node.frame = frame;
-                node.wormIds = it.value();
-                m_eventNodes.append(node);
-
                 if (activeSpans.contains(it.key())) {
                     MergeSpan span;
                     span.startFrame = activeSpans.value(it.key());
@@ -259,6 +260,48 @@ void WormTimeline::rebuildEventNodes()
             span.wormIds = allIds;
             m_mergeSpans.append(span);
         }
+    }
+
+    QMap<QString, QList<MergeSpan>> spansByKey;
+    for (const MergeSpan& span : m_mergeSpans) {
+        spansByKey[mergeKeyForIds(span.wormIds)].append(span);
+    }
+
+    m_mergeSpans.clear();
+    for (auto it = spansByKey.begin(); it != spansByKey.end(); ++it) {
+        QList<MergeSpan>& spans = it.value();
+        std::sort(spans.begin(), spans.end(), [](const MergeSpan& a, const MergeSpan& b) {
+            return a.startFrame < b.startFrame;
+        });
+
+        for (int i = 0; i + 1 < spans.size();) {
+            int gap = spans[i + 1].startFrame - spans[i].endFrame;
+            if (gap <= minTransientFrames) {
+                spans[i].endFrame = std::max(spans[i].endFrame, spans[i + 1].endFrame);
+                spans.removeAt(i + 1);
+                continue;
+            }
+            ++i;
+        }
+
+        for (const MergeSpan& span : spans) {
+            int duration = std::max(0, span.endFrame - span.startFrame + 1);
+            if (duration < minTransientFrames) continue;
+            m_mergeSpans.append(span);
+        }
+    }
+
+    m_eventNodes.clear();
+    for (const MergeSpan& span : m_mergeSpans) {
+        EventNode startNode;
+        startNode.frame = span.startFrame;
+        startNode.wormIds = span.wormIds;
+        m_eventNodes.append(startNode);
+
+        EventNode endNode;
+        endNode.frame = span.endFrame;
+        endNode.wormIds = span.wormIds;
+        m_eventNodes.append(endNode);
     }
 }
 
@@ -315,10 +358,12 @@ void WormTimeline::paintEvent(QPaintEvent* event)
     const double lineScale = std::clamp(spacingScale, 0.4, 1.6);
 
     QMap<int, int> yForId;
+    QMap<int, int> indexForId;
     for (int i = 0; i < rows; ++i) {
         double yVirtual = startY + i * rowSpacing + rowSpacing * 0.5;
         int y = static_cast<int>(std::round(contentRect.top() + (yVirtual - m_panY)));
         yForId.insert(ids[i], y);
+        indexForId.insert(ids[i], i);
     }
 
     // Current-frame dashed line
@@ -392,6 +437,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
             if (endX < virtualLeft || startX > virtualRight) continue;
 
             double sumY = 0.0;
+            double sumIdx = 0.0;
             int count = 0;
             double minY = y;
             double maxY = y;
@@ -400,6 +446,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
                 if (yForId.contains(wid)) {
                     double wy = yForId.value(wid);
                     sumY += wy;
+                    sumIdx += indexForId.value(wid, 0);
                     ++count;
                     if (first) {
                         minY = wy;
@@ -412,6 +459,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
                 }
             }
             double mergeY = (count > 0) ? (sumY / static_cast<double>(count)) : y;
+            double mergeIndex = (count > 0) ? (sumIdx / static_cast<double>(count)) : indexForId.value(id, 0);
 
             int duration = std::max(1, span.endFrame - span.startFrame + 1);
             int basePriority = static_cast<int>(span.wormIds.size()) * 100000 + duration;
@@ -428,7 +476,8 @@ void WormTimeline::paintEvent(QPaintEvent* event)
                 }
                 candidates.append({startX, endX, mergeY + offset, basePriority});
             } else if (y >= minY && y <= maxY && count > 1) {
-                double targetY = (y <= mergeY) ? minY : maxY;
+                int idx = indexForId.value(id, 0);
+                double targetY = (static_cast<double>(idx) <= mergeIndex) ? minY : maxY;
                 if (targetY != y) {
                     candidates.append({startX, endX, targetY, basePriority - 1});
                 }
@@ -517,7 +566,7 @@ void WormTimeline::paintEvent(QPaintEvent* event)
         double y = eventPos[i].y;
         if (x <= 0.0 && y <= 0.0) continue;
 
-        const double r = std::clamp(8.0 * lineScale, 3.0, 12.0);
+        const double r = std::clamp(6.0 * lineScale, 2.5, 10.0);
         QRectF circleRect(x - r, y - r, r * 2.0, r * 2.0);
         node.bounds = circleRect.adjusted(-3, -3, 3, 3);
 

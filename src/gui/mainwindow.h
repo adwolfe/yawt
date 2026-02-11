@@ -230,6 +230,7 @@ private:
     // Tracking/view state
     /** Whether initial tracking has been completed in the current session. Pure UI state. */
     bool m_hasCompletedTracking;
+    double m_videoFps = 0.0;
     bool m_isVideoPlaying = false;
     int m_lastMiniLoaderFrame = -1;
 

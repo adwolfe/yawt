@@ -1391,9 +1391,14 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->frameSlider->setValue(0);
     ui->framePosition->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
     ui->framePosition->setValue(0);
+    m_videoFps = fps;
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
     ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
     updateWormTimeline();
+
+    if (m_analysisDialog) {
+        m_analysisDialog->setVideoFps(m_videoFps);
+    }
 }
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {
@@ -1712,6 +1717,7 @@ void MainWindow::resultsButtonClicked() {
     m_analysisDialog = new AnalysisDialog(m_trackingDataStorage, this);
     ui->resultsButton->setChecked(true);
     m_analysisDialog->setPixelSizeUmPerPixel(ui->pixelSizeSpinBoxD->value());
+    m_analysisDialog->setVideoFps(m_videoFps);
     connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
             m_analysisDialog, &AnalysisDialog::setPixelSizeUmPerPixel);
     connect(m_analysisDialog, &QDialog::finished, this, [this](int) {

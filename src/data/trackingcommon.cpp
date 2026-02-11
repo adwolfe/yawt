@@ -21,27 +21,49 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
         return result;
     }
 
+    cv::Point clickCvPoint(qRound(clickPointVideoCoords.x()), qRound(clickPointVideoCoords.y()));
+    if (clickCvPoint.x < 0 || clickCvPoint.y < 0 ||
+        clickCvPoint.x >= binaryImage.cols || clickCvPoint.y >= binaryImage.rows) {
+        YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Click out of bounds. Click:"
+                                 << clickPointVideoCoords << "Image size:"
+                                 << QSize(binaryImage.cols, binaryImage.rows);
+        return result;
+    }
+
+    const int clickPixel = static_cast<int>(binaryImage.at<uchar>(clickCvPoint));
+    YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Click:"
+                             << clickPointVideoCoords
+                             << "Pixel:" << clickPixel
+                             << "Image size:" << QSize(binaryImage.cols, binaryImage.rows)
+                             << "Min/Max area:" << minArea << "/" << maxArea
+                             << "Max dist:" << maxDistanceForSelection;
+
     std::vector<std::vector<cv::Point>> contours;
     // Use a copy of binaryImage for findContours if it modifies the input
     cv::findContours(binaryImage.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
     if (contours.empty()) {
-        // qDebug() << "findClickedBlob: No contours found in the image.";
+        YAWT_DEBUG(lcDataCommon) << "findClickedBlob: No contours found.";
         return result;
     }
 
-    cv::Point clickCvPoint(qRound(clickPointVideoCoords.x()), qRound(clickPointVideoCoords.y()));
     int bestContourIdx = -1;
     double minDistanceSqToCentroid = std::numeric_limits<double>::max();
     bool clickInsideABlob = false;
+    int areaPassedCount = 0;
+    double minContourArea = std::numeric_limits<double>::max();
+    double maxContourArea = 0.0;
 
     // Pass 1: Check for contours whose bounding box *contains* the click point.
     // Prioritize these. If multiple, could pick smallest area or closest centroid.
     for (size_t i = 0; i < contours.size(); ++i) {
         double area = cv::contourArea(contours[i]);
+        if (area < minContourArea) minContourArea = area;
+        if (area > maxContourArea) maxContourArea = area;
         if (area < minArea || area > maxArea) { // Apply area filter
             continue;
         }
+        areaPassedCount++;
         cv::Rect br = cv::boundingRect(contours[i]);
         if (br.contains(clickCvPoint)) {
             // This contour is a strong candidate.
@@ -102,6 +124,22 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
             result.isValid = true;
             // touchesROIboundary is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
         }
+        YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Selected contour idx:"
+                                 << bestContourIdx
+                                 << "Centroid:" << result.centroid
+                                 << "Area:" << result.area
+                                 << "BBox:" << result.boundingBox;
+    } else {
+        const double minAreaForLog = (minContourArea == std::numeric_limits<double>::max()) ? 0.0 : minContourArea;
+        const double dist = (minDistanceSqToCentroid == std::numeric_limits<double>::max())
+                                ? -1.0
+                                : qSqrt(minDistanceSqToCentroid);
+        YAWT_DEBUG(lcDataCommon) << "findClickedBlob: No valid blob."
+                                 << "Contours:" << contours.size()
+                                 << "Area-passing:" << areaPassedCount
+                                 << "Area min/max:" << minAreaForLog << "/" << maxContourArea
+                                 << "Click inside bbox:" << clickInsideABlob
+                                 << "Nearest centroid dist:" << dist;
     }
 
     return result;
