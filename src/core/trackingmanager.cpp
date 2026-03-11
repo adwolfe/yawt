@@ -65,8 +65,10 @@
 #include <QJsonArray>
 #include <QThread>
 #include <QDateTime>
+#include <QSet>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
 
 #include <algorithm> // For std::reverse, std::min, std::max
@@ -78,6 +80,196 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+
+// --- MergeWatershedWorker Implementation ---
+MergeWatershedWorker::MergeWatershedWorker(QObject* parent)
+    : QObject(parent)
+{
+}
+
+void MergeWatershedWorker::setInputs(const QMap<int, QList<FrameSpecificPhysicalBlob>>* mergeRecords,
+                                     const QMap<int, QMap<int, QPointF>>* seedsByFrame,
+                                     const std::vector<cv::Mat>* forwardFrames,
+                                     const std::vector<cv::Mat>* reversedFrames,
+                                     int keyFrameNum,
+                                     cv::Size frameSize)
+{
+    m_mergeRecords = mergeRecords;
+    m_seedsByFrame = seedsByFrame;
+    m_forwardFrames = forwardFrames;
+    m_reversedFrames = reversedFrames;
+    m_keyFrameNum = keyFrameNum;
+    m_frameSize = frameSize;
+}
+
+static bool getProcessedFrameForNumber(int frameNumber,
+                                       const std::vector<cv::Mat>* forwardFrames,
+                                       const std::vector<cv::Mat>* reversedFrames,
+                                       int keyFrameNum,
+                                       cv::Mat& outFrame)
+{
+    if (!forwardFrames || !reversedFrames) return false;
+    if (frameNumber >= keyFrameNum) {
+        int idx = frameNumber - keyFrameNum;
+        if (idx < 0 || idx >= static_cast<int>(forwardFrames->size())) return false;
+        outFrame = (*forwardFrames)[idx];
+        return !outFrame.empty();
+    }
+    int revIdx = (keyFrameNum - 1) - frameNumber;
+    if (revIdx < 0 || revIdx >= static_cast<int>(reversedFrames->size())) return false;
+    outFrame = (*reversedFrames)[revIdx];
+    return !outFrame.empty();
+}
+
+static bool buildDetectedBlobFromMask(const cv::Mat& mask, Tracking::DetectedBlob& outBlob, const cv::Size& frameSize)
+{
+    if (mask.empty()) return false;
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    if (contours.empty()) return false;
+
+    size_t bestIdx = 0;
+    double bestArea = 0.0;
+    for (size_t i = 0; i < contours.size(); ++i) {
+        double area = cv::contourArea(contours[i]);
+        if (area > bestArea) {
+            bestArea = area;
+            bestIdx = i;
+        }
+    }
+    if (bestArea <= 0.0) return false;
+
+    const std::vector<cv::Point>& contour = contours[bestIdx];
+    cv::Moments mu = cv::moments(contour);
+    if (mu.m00 == 0.0) return false;
+
+    cv::Rect bbox = cv::boundingRect(contour);
+    QPointF centroid(mu.m10 / mu.m00, mu.m01 / mu.m00);
+
+    outBlob.centroid = centroid;
+    outBlob.boundingBox = QRectF(bbox.x, bbox.y, bbox.width, bbox.height);
+    outBlob.area = bestArea;
+    outBlob.contourPoints = contour;
+    outBlob.isValid = true;
+    outBlob.touchesROIboundary = (bbox.x <= 0 || bbox.y <= 0 ||
+                                  (bbox.x + bbox.width) >= frameSize.width ||
+                                  (bbox.y + bbox.height) >= frameSize.height);
+
+    std::vector<cv::Point> hull;
+    cv::convexHull(contour, hull);
+    outBlob.convexHullArea = cv::contourArea(hull);
+
+    return true;
+}
+
+void MergeWatershedWorker::processFrames(const QList<int>& framesToProcess)
+{
+    QList<ResolvedWormBlob> results;
+    if (!m_mergeRecords || !m_seedsByFrame || !m_forwardFrames || !m_reversedFrames) {
+        emit rangeProcessingComplete(results);
+        return;
+    }
+
+    for (int frameNumber : framesToProcess) {
+        if (QThread::currentThread()->isInterruptionRequested()) break;
+
+        if (!m_mergeRecords->contains(frameNumber)) continue;
+        const QList<FrameSpecificPhysicalBlob>& blobs = m_mergeRecords->value(frameNumber);
+        if (blobs.isEmpty()) continue;
+
+        cv::Mat frame;
+        if (!getProcessedFrameForNumber(frameNumber, m_forwardFrames, m_reversedFrames, m_keyFrameNum, frame)) {
+            continue;
+        }
+        if (frame.empty()) continue;
+
+        for (const FrameSpecificPhysicalBlob& physicalBlob : blobs) {
+            if (physicalBlob.participatingWormTrackerIDs.size() < 2) continue;
+            if (physicalBlob.contourPoints.empty()) continue;
+
+            QMap<int, QPointF> seedsForFrame = m_seedsByFrame->value(frameNumber);
+            if (seedsForFrame.isEmpty()) continue;
+
+            // Build merged mask from contour
+            cv::Mat mergedMask = cv::Mat::zeros(frame.size(), CV_8UC1);
+            std::vector<std::vector<cv::Point>> contourList{physicalBlob.contourPoints};
+            cv::fillPoly(mergedMask, contourList, cv::Scalar(255));
+            cv::bitwise_and(mergedMask, frame, mergedMask);
+            if (cv::countNonZero(mergedMask) == 0) continue;
+
+            // Distance transform
+            cv::Mat dist;
+            cv::distanceTransform(mergedMask, dist, cv::DIST_L2, 3);
+            cv::Mat dist8u;
+            cv::normalize(dist, dist8u, 0, 255, cv::NORM_MINMAX, CV_8U);
+            cv::Mat distBgr;
+            cv::cvtColor(dist8u, distBgr, cv::COLOR_GRAY2BGR);
+
+            // Markers
+            cv::Mat markers = cv::Mat::zeros(mergedMask.size(), CV_32S);
+
+            QList<int> participatingWormIds;
+            for (int signedId : physicalBlob.participatingWormTrackerIDs) {
+                int wormId = qAbs(signedId);
+                if (!participatingWormIds.contains(wormId)) participatingWormIds.append(wormId);
+            }
+
+            int label = 1;
+            QMap<int, int> wormIdToLabel;
+            for (int wormId : participatingWormIds) {
+                if (!seedsForFrame.contains(wormId)) continue;
+                QPointF seed = seedsForFrame.value(wormId);
+                cv::Point seedPt(static_cast<int>(std::round(seed.x())),
+                                 static_cast<int>(std::round(seed.y())));
+
+                if (seedPt.x < 0 || seedPt.y < 0 || seedPt.x >= mergedMask.cols || seedPt.y >= mergedMask.rows ||
+                    mergedMask.at<unsigned char>(seedPt) == 0) {
+                    // Snap to nearest contour point if seed is outside
+                    double bestDistSq = std::numeric_limits<double>::max();
+                    cv::Point bestPt = physicalBlob.contourPoints.front();
+                    for (const cv::Point& pt : physicalBlob.contourPoints) {
+                        double dx = pt.x - seedPt.x;
+                        double dy = pt.y - seedPt.y;
+                        double d2 = dx * dx + dy * dy;
+                        if (d2 < bestDistSq) {
+                            bestDistSq = d2;
+                            bestPt = pt;
+                        }
+                    }
+                    seedPt = bestPt;
+                }
+
+                cv::circle(markers, seedPt, 2, cv::Scalar(label), -1);
+                wormIdToLabel[wormId] = label;
+                label++;
+            }
+
+            if (wormIdToLabel.size() < 2) continue;
+
+            cv::watershed(distBgr, markers);
+
+            for (auto it = wormIdToLabel.constBegin(); it != wormIdToLabel.constEnd(); ++it) {
+                int wormId = it.key();
+                int lbl = it.value();
+                cv::Mat labelMask = (markers == lbl);
+                labelMask.convertTo(labelMask, CV_8U, 255);
+                cv::bitwise_and(labelMask, mergedMask, labelMask);
+                if (cv::countNonZero(labelMask) == 0) continue;
+
+                Tracking::DetectedBlob blob;
+                if (!buildDetectedBlobFromMask(labelMask, blob, m_frameSize)) continue;
+
+                ResolvedWormBlob result;
+                result.frameNumber = frameNumber;
+                result.wormId = wormId;
+                result.blob = blob;
+                results.append(result);
+            }
+        }
+    }
+
+    emit rangeProcessingComplete(results);
+}
 
 // Helper: Save frame-atomic merge/split state to JSON.
 // Implemented as a free function in this translation unit so we don't need to modify headers.
@@ -439,6 +631,10 @@ TrackingManager::TrackingManager(QObject* parent)
       m_expectedTrackersToFinish(0),
       m_finishedTrackersCount(0),
       m_videoProcessingOverallProgress(0),
+      m_postProcessThreadsFinished(0),
+      m_postProcessThreadsExpected(0),
+      m_postProcessingOverallProgress(0),
+      m_postProcessingActive(false),
       m_nextPhysicalBlobId(1), // Start IDs from 1
       m_storage(nullptr)
 {
@@ -458,6 +654,10 @@ TrackingManager::TrackingManager(TrackingDataStorage* storage, QObject* parent)
     m_expectedTrackersToFinish(0),
     m_finishedTrackersCount(0),
     m_videoProcessingOverallProgress(0),
+    m_postProcessThreadsFinished(0),
+    m_postProcessThreadsExpected(0),
+    m_postProcessingOverallProgress(0),
+    m_postProcessingActive(false),
     m_nextPhysicalBlobId(1), // Start IDs from 1
     m_storage(storage)
 {
@@ -474,6 +674,8 @@ void TrackingManager::registerMetaTypes()
     qRegisterMetaType<QList<Tracking::DetectedBlob>>("QList<Tracking::DetectedBlob>");
     qRegisterMetaType<Tracking::DetectedBlob>("Tracking::DetectedBlob");
     qRegisterMetaType<Tracking::TrackerState>("Tracking::TrackerState");
+    qRegisterMetaType<ResolvedWormBlob>("ResolvedWormBlob");
+    qRegisterMetaType<QList<ResolvedWormBlob>>("QList<ResolvedWormBlob>");
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") created with frame-atomic logic. Timer eliminated for direct resolution.";
 }
 
@@ -563,6 +765,11 @@ void TrackingManager::startFullTrackingProcess(
     m_frameMergeRecords.clear();
     m_splitResolutionMap.clear();
     m_wormToPhysicalBlobIdMap.clear();
+    m_postProcessingActive = false;
+    m_postProcessingOverallProgress = 0;
+    m_postProcessThreadsFinished = 0;
+    m_postProcessThreadsExpected = 0;
+    m_postProcessSeedsByFrame.clear();
 
     qDeleteAll(m_wormObjectsMap);
     m_wormObjectsMap.clear();
@@ -670,6 +877,7 @@ void TrackingManager::cancelTracking() {
     locker.unlock();
     emit trackingStatusUpdate("Cancellation requested...");
     for (QPointer<QThread> thread : m_videoProcessorThreads) { if (thread && thread->isRunning()) thread->requestInterruption(); }
+    for (QPointer<QThread> thread : m_postProcessThreads) { if (thread && thread->isRunning()) thread->requestInterruption(); }
     QList<WormTracker*> trackersToStop;
     locker.relock(); trackersToStop = m_wormTrackersList; locker.unlock();
     for (WormTracker* tracker : trackersToStop) { if (tracker) QMetaObject::invokeMethod(tracker, "stopTracking", Qt::QueuedConnection); }
@@ -696,6 +904,22 @@ void TrackingManager::cleanupThreadsAndObjects() {
     m_trackerThreads.clear();
     for (QPointer<QThread> thread : trackerThreadsToClean) { /* ... quit, wait, delete ... */
         if (thread) { if (thread->isRunning()) { thread->requestInterruption(); thread->quit(); if (!thread->wait(1000)) { thread->terminate(); thread->wait();}} delete thread;}
+    }
+
+    QList<QPointer<QThread>> postThreadsToClean = m_postProcessThreads;
+    m_postProcessThreads.clear();
+    for (QPointer<QThread> thread : postThreadsToClean) {
+        if (thread) {
+            if (thread->isRunning()) {
+                thread->requestInterruption();
+                thread->quit();
+                if (!thread->wait(1000)) {
+                    thread->terminate();
+                    thread->wait();
+                }
+            }
+            delete thread;
+        }
     }
 
     // Clean up video saver thread
@@ -750,6 +974,13 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
     m_wormToPhysicalBlobIdMap.clear();
     QMap<int, int>().swap(m_wormToPhysicalBlobIdMap);
+
+    m_postProcessSeedsByFrame.clear();
+    QMap<int, QMap<int, QPointF>>().swap(m_postProcessSeedsByFrame);
+    m_postProcessingActive = false;
+    m_postProcessingOverallProgress = 0;
+    m_postProcessThreadsFinished = 0;
+    m_postProcessThreadsExpected = 0;
 
     // Reset state flags
     m_isTrackingRunning = false;
@@ -1381,9 +1612,12 @@ void TrackingManager::launchWormTrackers() { /* ... same as your version ... */
 }
 void TrackingManager::updateOverallProgress() { /* ... same as your version ... */
     if (m_cancelRequested && !m_isTrackingRunning) { emit overallTrackingProgress(m_videoProcessingOverallProgress); return; }
-    if (!m_isTrackingRunning && !m_cancelRequested) { emit overallTrackingProgress(0); return; }
-    double totalProgressValue = 0.0; double videoProcWeight = (m_expectedTrackersToFinish > 0 || m_initialWormInfos.empty()) ? 0.20 : 1.0;
-    double trackersWeight = 1.0 - videoProcWeight;
+    if (!m_isTrackingRunning && !m_cancelRequested && !m_postProcessingActive) { emit overallTrackingProgress(0); return; }
+    double totalProgressValue = 0.0;
+    double postWeight = m_postProcessingActive ? 0.10 : 0.0;
+    double videoProcWeight = (m_expectedTrackersToFinish > 0 || m_initialWormInfos.empty()) ? 0.20 : 1.0;
+    double trackersWeight = 1.0 - videoProcWeight - postWeight;
+    if (trackersWeight < 0.0) trackersWeight = 0.0;
     totalProgressValue += (static_cast<double>(m_videoProcessingOverallProgress) / 100.0) * videoProcWeight;
     double overallTrackerPercentage = 0.0;
     { QMutexLocker locker(&m_dataMutex);
@@ -1396,7 +1630,12 @@ void TrackingManager::updateOverallProgress() { /* ... same as your version ... 
         } else if (m_videoProcessingOverallProgress == 100 && m_initialWormInfos.empty()) overallTrackerPercentage = 1.0;
         else if (m_videoProcessingOverallProgress == 100 && m_expectedTrackersToFinish == 0 && !m_initialWormInfos.empty()) overallTrackerPercentage = 0.0;
     }
-    if (m_expectedTrackersToFinish > 0 || (m_initialWormInfos.empty() && videoProcWeight < 1.0) ) totalProgressValue += overallTrackerPercentage * trackersWeight;
+    if (m_expectedTrackersToFinish > 0 || (m_initialWormInfos.empty() && videoProcWeight < 1.0) ) {
+        totalProgressValue += overallTrackerPercentage * trackersWeight;
+    }
+    if (m_postProcessingActive) {
+        totalProgressValue += (static_cast<double>(m_postProcessingOverallProgress) / 100.0) * postWeight;
+    }
     emit overallTrackingProgress(qBound(0, static_cast<int>(totalProgressValue * 100.0), 100));
 }
 void TrackingManager::checkForAllTrackersFinished() { /* ... same as your version ... */
@@ -1412,60 +1651,200 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
         m_splitResolutionMap.clear();
 
         locker.unlock();
-        if (wasCancelled) {
-            m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
-            if (!m_finalTracks.empty()) emit allTracksUpdated(m_finalTracks);
-            emit trackingStatusUpdate("Tracking cancelled."); emit trackingCancelled();
-        } else {
-            m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
-            emit allTracksUpdated(m_finalTracks);
-            QString csvPath;
-            if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
-                csvPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
-            } else if (m_videoPath.isEmpty()) {
-                csvPath = "tracks.csv";
-            } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
-                csvPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
-            } else {
-                // Fallback to video directory if video-specific directory is not available
-                csvPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+        if (!wasCancelled) {
+            if (startWatershedPostProcessing()) {
+                return;
             }
-            if (outputTracksToCsv(m_finalTracks, csvPath)) {
-                emit trackingStatusUpdate("Tracks saved: " + csvPath);
-
-                // Populate merge history storage in one batch before saving JSON state
-                populateMergeHistoryInStorage();
-
-                if (!m_processingOutputDirectory.isEmpty()) {
-                    // Save frame-atomic JSON state to processing folder
-                    saveFrameAtomicStateToJson(m_processingOutputDirectory,
-                                               m_nextPhysicalBlobId,
-                                               m_frameMergeRecords,
-                                               m_splitResolutionMap,
-                                               m_wormToPhysicalBlobIdMap,
-                                               m_thresholdSettings);
-
-                    // Save full worms.json (storage snapshot) for recovery
-                    if (!saveWormsJson(m_processingOutputDirectory)) {
-                        emit trackingStatusUpdate("Warning: Failed to save worms.json");
-                    }
-                    if (!saveRoiPointsJson(m_processingOutputDirectory)) {
-                        emit trackingStatusUpdate("Warning: Failed to save roi_points.json");
-                    }
-                }
-
-                emit trackingFinishedSuccessfully(csvPath);
-            }
-            else { emit trackingStatusUpdate("Failed to save CSV: " + csvPath); emit trackingFailed("Failed to save CSV."); }
         }
-        // Only cleanup immediately if not saving video, otherwise defer until video saving completes
-        if (!m_isVideoSaving) {
-            QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
-        } else {
-            TRACKING_DEBUG() << "TrackingManager: Deferring memory cleanup until video saving completes";
-        }
+        finalizeTrackingRun(wasCancelled);
     } else if (!m_isTrackingRunning && m_cancelRequested) {
         locker.unlock(); emit trackingCancelled();
+    }
+}
+
+void TrackingManager::finalizeTrackingRun(bool wasCancelled)
+{
+    if (wasCancelled) {
+        m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
+        if (!m_finalTracks.empty()) emit allTracksUpdated(m_finalTracks);
+        emit trackingStatusUpdate("Tracking cancelled."); emit trackingCancelled();
+    } else {
+        m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
+        emit allTracksUpdated(m_finalTracks);
+        QString csvPath;
+        if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
+            csvPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+        } else if (m_videoPath.isEmpty()) {
+            csvPath = "tracks.csv";
+        } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
+            csvPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+        } else {
+            // Fallback to video directory if video-specific directory is not available
+            csvPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+        }
+        if (outputTracksToCsv(m_finalTracks, csvPath)) {
+            emit trackingStatusUpdate("Tracks saved: " + csvPath);
+
+            // Populate merge history storage in one batch before saving JSON state
+            populateMergeHistoryInStorage();
+
+            if (!m_processingOutputDirectory.isEmpty()) {
+                // Save frame-atomic JSON state to processing folder
+                saveFrameAtomicStateToJson(m_processingOutputDirectory,
+                                           m_nextPhysicalBlobId,
+                                           m_frameMergeRecords,
+                                           m_splitResolutionMap,
+                                           m_wormToPhysicalBlobIdMap,
+                                           m_thresholdSettings);
+
+                // Save full worms.json (storage snapshot) for recovery
+                if (!saveWormsJson(m_processingOutputDirectory)) {
+                    emit trackingStatusUpdate("Warning: Failed to save worms.json");
+                }
+                if (!saveRoiPointsJson(m_processingOutputDirectory)) {
+                    emit trackingStatusUpdate("Warning: Failed to save roi_points.json");
+                }
+            }
+
+            emit trackingFinishedSuccessfully(csvPath);
+        }
+        else { emit trackingStatusUpdate("Failed to save CSV: " + csvPath); emit trackingFailed("Failed to save CSV."); }
+    }
+    // Only cleanup immediately if not saving video, otherwise defer until video saving completes
+    if (!m_isVideoSaving) {
+        QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
+    } else {
+        TRACKING_DEBUG() << "TrackingManager: Deferring memory cleanup until video saving completes";
+    }
+}
+
+void TrackingManager::buildWatershedSeeds()
+{
+    m_postProcessSeedsByFrame.clear();
+    if (m_frameMergeRecords.isEmpty()) return;
+
+    QMap<int, QSet<int>> wormIdsByFrame;
+    for (auto it = m_frameMergeRecords.constBegin(); it != m_frameMergeRecords.constEnd(); ++it) {
+        int frameNumber = it.key();
+        const QList<FrameSpecificPhysicalBlob>& blobs = it.value();
+        for (const FrameSpecificPhysicalBlob& blob : blobs) {
+            if (blob.participatingWormTrackerIDs.size() < 2) continue;
+            for (int signedId : blob.participatingWormTrackerIDs) {
+                wormIdsByFrame[frameNumber].insert(qAbs(signedId));
+            }
+        }
+    }
+
+    if (wormIdsByFrame.isEmpty()) return;
+
+    for (WormObject* worm : m_wormObjectsMap.values()) {
+        if (!worm) continue;
+        int wormId = worm->getId();
+        const std::vector<Tracking::WormTrackPoint>& track = worm->getTrackHistory();
+        for (const Tracking::WormTrackPoint& tp : track) {
+            int frameNumber = tp.frameNumberOriginal;
+            if (!wormIdsByFrame.contains(frameNumber)) continue;
+            if (!wormIdsByFrame[frameNumber].contains(wormId)) continue;
+            m_postProcessSeedsByFrame[frameNumber].insert(wormId, QPointF(tp.position.x, tp.position.y));
+        }
+    }
+}
+
+bool TrackingManager::startWatershedPostProcessing()
+{
+    if (m_postProcessingActive) return true;
+    if (m_frameMergeRecords.isEmpty()) return false;
+    if (m_finalProcessedForwardFrames.empty() && m_finalProcessedReversedFrames.empty()) return false;
+
+    buildWatershedSeeds();
+    if (m_postProcessSeedsByFrame.isEmpty()) return false;
+
+    QList<int> framesToProcess;
+    for (auto it = m_frameMergeRecords.constBegin(); it != m_frameMergeRecords.constEnd(); ++it) {
+        const QList<FrameSpecificPhysicalBlob>& blobs = it.value();
+        bool hasMergedBlob = false;
+        for (const FrameSpecificPhysicalBlob& blob : blobs) {
+            if (blob.participatingWormTrackerIDs.size() >= 2 && !blob.contourPoints.empty()) {
+                hasMergedBlob = true;
+                break;
+            }
+        }
+        if (hasMergedBlob) framesToProcess.append(it.key());
+    }
+
+    if (framesToProcess.isEmpty()) return false;
+
+    int numThreads = qMin(8, framesToProcess.size());
+    if (numThreads <= 0) return false;
+
+    m_postProcessingActive = true;
+    m_postProcessingOverallProgress = 0;
+    m_postProcessThreadsFinished = 0;
+    m_postProcessThreadsExpected = numThreads;
+
+    emit trackingStatusUpdate(QString("Post-processing merged blobs (watershed) across %1 threads...").arg(numThreads));
+    updateOverallProgress();
+
+    int framesPerThread = std::max(1, static_cast<int>(std::ceil(static_cast<double>(framesToProcess.size()) / numThreads)));
+    for (int i = 0; i < framesToProcess.size(); i += framesPerThread) {
+        QList<int> chunk = framesToProcess.mid(i, framesPerThread);
+        if (chunk.isEmpty()) continue;
+
+        MergeWatershedWorker* worker = new MergeWatershedWorker();
+        QThread* thr = new QThread();
+        worker->setInputs(&m_frameMergeRecords,
+                          &m_postProcessSeedsByFrame,
+                          &m_finalProcessedForwardFrames,
+                          &m_finalProcessedReversedFrames,
+                          m_keyFrameNum,
+                          m_videoFrameSize);
+        worker->moveToThread(thr);
+        m_postProcessThreads.append(thr);
+
+        connect(thr, &QThread::started, worker, [worker, chunk]() { worker->processFrames(chunk); });
+        connect(worker, &MergeWatershedWorker::rangeProcessingComplete, this, &TrackingManager::handleWatershedRangeComplete);
+        connect(worker, &MergeWatershedWorker::rangeProcessingComplete, thr, &QThread::quit);
+        connect(thr, &QThread::finished, worker, &QObject::deleteLater);
+        connect(thr, &QThread::finished, this, &TrackingManager::handlePostProcessingThreadsFinished);
+        thr->start();
+    }
+
+    return true;
+}
+
+void TrackingManager::handleWatershedRangeComplete(const QList<ResolvedWormBlob>& results)
+{
+    for (const ResolvedWormBlob& result : results) {
+        WormObject* worm = m_wormObjectsMap.value(result.wormId, nullptr);
+        if (worm && result.blob.isValid) {
+            Tracking::WormTrackPoint point;
+            point.frameNumberOriginal = result.frameNumber;
+            point.position = cv::Point2f(static_cast<float>(result.blob.centroid.x()),
+                                         static_cast<float>(result.blob.centroid.y()));
+            point.roi = result.blob.boundingBox;
+            point.quality = Tracking::TrackPointQuality::Split;
+            worm->updateTrackPoint(point);
+        }
+        if (m_storage && result.blob.isValid) {
+            m_storage->setDetectedBlobForFrame(result.frameNumber, result.wormId, result.blob);
+        }
+    }
+}
+
+void TrackingManager::handlePostProcessingThreadsFinished()
+{
+    if (!m_postProcessingActive) return;
+    m_postProcessThreadsFinished++;
+    if (m_postProcessThreadsExpected > 0) {
+        m_postProcessingOverallProgress = qBound(0, static_cast<int>(
+            (static_cast<double>(m_postProcessThreadsFinished) / m_postProcessThreadsExpected) * 100.0), 100);
+        updateOverallProgress();
+    }
+    if (m_postProcessThreadsFinished >= m_postProcessThreadsExpected) {
+        m_postProcessingActive = false;
+        m_postProcessingOverallProgress = 100;
+        updateOverallProgress();
+        finalizeTrackingRun(false);
     }
 }
 void TrackingManager::handleWormTrackerFinished() { /* ... same as your version ... */

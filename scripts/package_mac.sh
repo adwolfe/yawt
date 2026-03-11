@@ -12,6 +12,11 @@ BUILD_TYPE="Release"
 CLEAN_BUILD=false
 SKIP_BUILD=false
 USE_DEVELOPER_ID=false
+USE_MACDEPLOYQT=true
+MACDEPLOYQT_VERBOSE=2
+
+# Ensure common Homebrew paths are available when running non-interactive.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -23,6 +28,20 @@ print_step() { echo -e "${BLUE}=== $1 ===${NC}"; }
 print_success() { echo -e "${GREEN}✓ $1${NC}"; }
 print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 print_error() { echo -e "${RED}✗ $1${NC}"; }
+print_info() { echo -e "[`date +%H:%M:%S`] $1"; }
+trap 'print_error "Failed at line $LINENO: $BASH_COMMAND"' ERR
+
+run_timed() {
+    local label="$1"
+    shift
+    local start_ts end_ts elapsed
+    start_ts=$(date +%s)
+    print_info "START: $label"
+    "$@"
+    end_ts=$(date +%s)
+    elapsed=$((end_ts - start_ts))
+    print_info "DONE: $label (${elapsed}s)"
+}
 
 usage() {
     cat << EOF
@@ -33,6 +52,8 @@ Options:
   -c, --clean          Clean build directory before building
   -n, --no-build       Skip build step (assumes build/yawt.app exists)
   --developer-id       Sign with Apple Developer ID if available
+  --no-macdeployqt     Skip macdeployqt (use manual Qt bundling)
+  --mdqt-verbose N     macdeployqt verbosity (0-3, default: 2)
   -h, --help           Show this help
 EOF
 }
@@ -43,6 +64,15 @@ while [[ $# -gt 0 ]]; do
         -c|--clean) CLEAN_BUILD=true; shift ;;
         -n|--no-build) SKIP_BUILD=true; shift ;;
         --developer-id) USE_DEVELOPER_ID=true; shift ;;
+        --no-macdeployqt) USE_MACDEPLOYQT=false; shift ;;
+        --mdqt-verbose)
+            if [ $# -lt 2 ] || ! [[ "$2" =~ ^[0-3]$ ]]; then
+                print_error "--mdqt-verbose requires a value 0..3"
+                exit 1
+            fi
+            MACDEPLOYQT_VERBOSE="$2"
+            shift 2
+            ;;
         -h|--help) usage; exit 0 ;;
         *) print_error "Unknown option: $1"; usage; exit 1 ;;
     esac
@@ -53,6 +83,8 @@ echo "Build Type: $BUILD_TYPE"
 echo "Clean Build: $CLEAN_BUILD"
 echo "Skip Build: $SKIP_BUILD"
 echo "Developer ID Signing: $USE_DEVELOPER_ID"
+echo "Use macdeployqt: $USE_MACDEPLOYQT"
+echo "macdeployqt verbosity: $MACDEPLOYQT_VERBOSE"
 echo
 
 if $CLEAN_BUILD; then
@@ -72,8 +104,8 @@ if ! $SKIP_BUILD; then
         print_error "qtpaths/qtpaths6 not found in PATH"
         exit 1
     fi
-    cmake .. -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCMAKE_PREFIX_PATH="$QT_PREFIX"
-    make -j"$(sysctl -n hw.logicalcpu)"
+    run_timed "cmake configure" cmake .. -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCMAKE_PREFIX_PATH="$QT_PREFIX"
+    run_timed "build (make)" make -j"$(sysctl -n hw.logicalcpu)"
     popd >/dev/null
 fi
 
@@ -81,6 +113,7 @@ if [ ! -d "$BUILD_DIR/$APP_NAME.app" ]; then
     print_error "App not found at $BUILD_DIR/$APP_NAME.app"
     exit 1
 fi
+
 
 # Detect Homebrew prefix (Apple Silicon default /opt/homebrew, Intel default /usr/local)
 if command -v brew >/dev/null 2>&1; then
@@ -94,7 +127,46 @@ else
     fi
 fi
 
+if $USE_MACDEPLOYQT; then
+    print_step "Running macdeployqt"
+    if [ -n "${MACDEPLOYQT_BIN:-}" ] && [ -x "$MACDEPLOYQT_BIN" ]; then
+        true
+    elif [ -x "/opt/homebrew/bin/macdeployqt" ]; then
+        MACDEPLOYQT_BIN="/opt/homebrew/bin/macdeployqt"
+    elif [ -x "/usr/local/bin/macdeployqt" ]; then
+        MACDEPLOYQT_BIN="/usr/local/bin/macdeployqt"
+    elif command -v macdeployqt >/dev/null 2>&1; then
+        MACDEPLOYQT_BIN="macdeployqt"
+    else
+        if command -v qtpaths >/dev/null 2>&1; then
+            QT_PREFIX="$(qtpaths --install-prefix)"
+        elif command -v qtpaths6 >/dev/null 2>&1; then
+            QT_PREFIX="$(qtpaths6 --install-prefix)"
+        else
+            QT_PREFIX="$HOMEBREW_PREFIX/opt/qt"
+        fi
+        MACDEPLOYQT_BIN="$QT_PREFIX/bin/macdeployqt"
+    fi
+    if [ ! -x "$MACDEPLOYQT_BIN" ]; then
+        print_error "macdeployqt not found (tried: $MACDEPLOYQT_BIN)"
+        exit 1
+    fi
+    echo "Using macdeployqt: $MACDEPLOYQT_BIN"
+    if command -v stdbuf >/dev/null 2>&1; then
+        stdbuf -oL -eL "$MACDEPLOYQT_BIN" "$BUILD_DIR/$APP_NAME.app" -verbose="$MACDEPLOYQT_VERBOSE" 2>&1 | \
+            while IFS= read -r line; do
+                printf '[%s] [macdeployqt] %s\n' "$(date +%H:%M:%S)" "$line"
+            done
+    else
+        "$MACDEPLOYQT_BIN" "$BUILD_DIR/$APP_NAME.app" -verbose="$MACDEPLOYQT_VERBOSE" 2>&1 | \
+            while IFS= read -r line; do
+                printf '[%s] [macdeployqt] %s\n' "$(date +%H:%M:%S)" "$line"
+            done
+    fi
+fi
+
 print_step "Bundling Dependencies"
+print_info "Preparing Frameworks and PlugIns directories"
 
 pushd "$BUILD_DIR" >/dev/null
 
@@ -102,34 +174,68 @@ FRAMEWORKS_DIR="$APP_NAME.app/Contents/Frameworks"
 PLUGINS_DIR="$APP_NAME.app/Contents/PlugIns"
 mkdir -p "$FRAMEWORKS_DIR" "$PLUGINS_DIR/platforms" "$PLUGINS_DIR/imageformats"
 
-QT_LIB_PATH="$HOMEBREW_PREFIX/opt/qt/lib"
-for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
-    if [ -d "$QT_LIB_PATH/$framework.framework" ]; then
-        cp -R "$QT_LIB_PATH/$framework.framework" "$FRAMEWORKS_DIR/"
-        chmod -R u+w "$FRAMEWORKS_DIR/$framework.framework"
-        rm -rf "$FRAMEWORKS_DIR/$framework.framework/Versions/A/Headers" 2>/dev/null || true
-        rm -rf "$FRAMEWORKS_DIR/$framework.framework/Headers" 2>/dev/null || true
-        rm -f "$FRAMEWORKS_DIR/$framework.framework/Versions/A"/*.prl 2>/dev/null || true
-    else
-        print_warning "$framework.framework not found"
-    fi
-done
-
-if [ -d "$HOMEBREW_PREFIX/lib/qt6/plugins" ]; then
-    QT_PLUGINS_PATH="$HOMEBREW_PREFIX/lib/qt6/plugins"
+if command -v qtpaths >/dev/null 2>&1; then
+    QT_PREFIX="$(qtpaths --install-prefix)"
+elif command -v qtpaths6 >/dev/null 2>&1; then
+    QT_PREFIX="$(qtpaths6 --install-prefix)"
 else
-    QT_PLUGINS_PATH="$HOMEBREW_PREFIX/share/qt/plugins"
+    QT_PREFIX="$HOMEBREW_PREFIX/opt/qt"
 fi
-if [ -f "$QT_PLUGINS_PATH/platforms/libqcocoa.dylib" ]; then
-    cp "$QT_PLUGINS_PATH/platforms/libqcocoa.dylib" "$PLUGINS_DIR/platforms/"
+
+QT_BASE_PREFIX=""
+if command -v brew >/dev/null 2>&1; then
+    QT_BASE_PREFIX="$(brew --prefix qtbase 2>/dev/null || true)"
 fi
-for plugin in libqjpeg.dylib libqpng.dylib libqgif.dylib libqico.dylib libqsvg.dylib; do
-    if [ -f "$QT_PLUGINS_PATH/imageformats/$plugin" ]; then
-        cp "$QT_PLUGINS_PATH/imageformats/$plugin" "$PLUGINS_DIR/imageformats/"
+if [ -z "$QT_BASE_PREFIX" ]; then
+    if [ -d "$HOMEBREW_PREFIX/opt/qtbase" ]; then
+        QT_BASE_PREFIX="$HOMEBREW_PREFIX/opt/qtbase"
+    fi
+fi
+
+QT_LIB_PATH="$QT_PREFIX/lib"
+if ! $USE_MACDEPLOYQT; then
+    print_info "Manual Qt framework copy enabled"
+    for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
+        if [ -d "$QT_LIB_PATH/$framework.framework" ]; then
+            print_info "Copy framework: $framework.framework"
+            cp -R "$QT_LIB_PATH/$framework.framework" "$FRAMEWORKS_DIR/"
+            chmod -R u+w "$FRAMEWORKS_DIR/$framework.framework"
+            rm -rf "$FRAMEWORKS_DIR/$framework.framework/Versions/A/Headers" 2>/dev/null || true
+            rm -rf "$FRAMEWORKS_DIR/$framework.framework/Headers" 2>/dev/null || true
+            rm -f "$FRAMEWORKS_DIR/$framework.framework/Versions/A"/*.prl 2>/dev/null || true
+        else
+            print_warning "$framework.framework not found"
+        fi
+    done
+fi
+
+QT_PLUGINS_PATH=""
+for candidate in \
+    "$QT_PREFIX/plugins" \
+    "$QT_PREFIX/lib/qt6/plugins" \
+    "$QT_PREFIX/share/qt/plugins" \
+    "$HOMEBREW_PREFIX/lib/qt6/plugins" \
+    "$HOMEBREW_PREFIX/share/qt/plugins"; do
+    if [ -d "$candidate" ]; then
+        QT_PLUGINS_PATH="$candidate"
+        break
     fi
 done
+if ! $USE_MACDEPLOYQT; then
+    if [ -f "$QT_PLUGINS_PATH/platforms/libqcocoa.dylib" ]; then
+        print_info "Copy plugin: platforms/libqcocoa.dylib"
+        cp "$QT_PLUGINS_PATH/platforms/libqcocoa.dylib" "$PLUGINS_DIR/platforms/"
+    fi
+    for plugin in libqjpeg.dylib libqpng.dylib libqgif.dylib libqico.dylib libqsvg.dylib; do
+        if [ -f "$QT_PLUGINS_PATH/imageformats/$plugin" ]; then
+            print_info "Copy plugin: imageformats/$plugin"
+            cp "$QT_PLUGINS_PATH/imageformats/$plugin" "$PLUGINS_DIR/imageformats/"
+        fi
+    done
+fi
 
-OPENCV_LIBS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | grep "$HOMEBREW_PREFIX.*opencv" | awk '{print $1}')
+OPENCV_LIBS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | grep "$HOMEBREW_PREFIX.*opencv" | awk '{print $1}' || true)
+print_info "Copying OpenCV libraries directly referenced by executable"
 for lib_path in $OPENCV_LIBS; do
     if [ -f "$lib_path" ]; then
         lib_name=$(basename "$lib_path")
@@ -145,49 +251,37 @@ elif [ -d "$HOMEBREW_PREFIX/opt/opencv@4/lib" ]; then
 else
     OPENCV_LIB_DIR=""
 fi
-if [ -d "$OPENCV_LIB_DIR" ]; then
-    for lib in "$OPENCV_LIB_DIR"/libopencv_*.dylib; do
-        [ -f "$lib" ] || continue
-        lib_name=$(basename "$lib")
-        if [ ! -f "$FRAMEWORKS_DIR/$lib_name" ]; then
-            cp "$lib" "$FRAMEWORKS_DIR/"
-            chmod u+w "$FRAMEWORKS_DIR/$lib_name"
+
+RPATH_OPENCV_LIBS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | awk '{print $1}' | grep '^@rpath/libopencv_.*\.dylib$' || true)
+if [ -n "$RPATH_OPENCV_LIBS" ]; then
+    print_info "Resolving @rpath OpenCV libraries referenced by executable"
+    for rpath_dep in $RPATH_OPENCV_LIBS; do
+        dep_name=$(basename "$rpath_dep")
+        dep_source=""
+        if [ -n "$OPENCV_LIB_DIR" ] && [ -f "$OPENCV_LIB_DIR/$dep_name" ]; then
+            dep_source="$OPENCV_LIB_DIR/$dep_name"
+        elif [ -f "$HOMEBREW_PREFIX/lib/$dep_name" ]; then
+            dep_source="$HOMEBREW_PREFIX/lib/$dep_name"
         fi
-    done
-else
-    for lib in "$HOMEBREW_PREFIX/lib"/libopencv_*.dylib; do
-        [ -f "$lib" ] || continue
-        lib_name=$(basename "$lib")
-        if [ ! -f "$FRAMEWORKS_DIR/$lib_name" ]; then
-            cp "$lib" "$FRAMEWORKS_DIR/"
-            chmod u+w "$FRAMEWORKS_DIR/$lib_name"
+        if [ -n "$dep_source" ] && [ ! -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+            cp "$dep_source" "$FRAMEWORKS_DIR/"
+            chmod u+w "$FRAMEWORKS_DIR/$dep_name"
+            print_info "Copied resolved OpenCV lib: $dep_name"
+        elif [ ! -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+            print_warning "Could not resolve OpenCV dependency: $dep_name"
         fi
     done
 fi
-
-for opencv_lib in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
-    if [ -f "$opencv_lib" ]; then
-        DEPS=$(otool -L "$opencv_lib" | grep "$HOMEBREW_PREFIX" | grep -v opencv | awk '{print $1}')
-        for dep in $DEPS; do
-            if [ -f "$dep" ]; then
-                dep_name=$(basename "$dep")
-                if [ ! -f "$FRAMEWORKS_DIR/$dep_name" ]; then
-                    cp "$dep" "$FRAMEWORKS_DIR/"
-                    chmod u+w "$FRAMEWORKS_DIR/$dep_name"
-                fi
-            fi
-        done
-    fi
-done
 
 CHANGED=true
 PASS=0
 while $CHANGED && [ $PASS -lt 5 ]; do
     CHANGED=false
     PASS=$((PASS+1))
+    print_info "Dependency closure pass $PASS"
     for f in "$APP_NAME.app/Contents/MacOS/$APP_NAME" "$FRAMEWORKS_DIR"/*.dylib "$FRAMEWORKS_DIR"/Qt*.framework/Versions/A/* "$PLUGINS_DIR"/*/*.dylib; do
         [ -f "$f" ] || continue
-        DEPS=$(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep "^$HOMEBREW_PREFIX/" || true)
+        DEPS=$(otool -L "$f" 2>/dev/null | awk '{print $1}' | grep -E "^($HOMEBREW_PREFIX|$QT_PREFIX|$QT_BASE_PREFIX)/" || true)
         for dep in $DEPS; do
             dep_name=$(basename "$dep")
             if [[ "$dep" == *"/Qt"*"framework/Versions/"*"/*" ]]; then
@@ -210,25 +304,14 @@ while $CHANGED && [ $PASS -lt 5 ]; do
     done
 done
 
-for libglob in \
-    "$HOMEBREW_PREFIX"/lib/libdouble-conversion*.dylib \
-    "$HOMEBREW_PREFIX"/opt/double-conversion/lib/libdouble-conversion*.dylib \
-    "$HOMEBREW_PREFIX"/lib/libmd4c*.dylib \
-    "$HOMEBREW_PREFIX"/opt/md4c/lib/libmd4c*.dylib; do
-    [ -f "$libglob" ] || continue
-    b=$(basename "$libglob")
-    if [ ! -f "$FRAMEWORKS_DIR/$b" ]; then
-        cp "$libglob" "$FRAMEWORKS_DIR/"
-        chmod u+w "$FRAMEWORKS_DIR/$b"
-    fi
-done
-
 cat > "$APP_NAME.app/Contents/Resources/qt.conf" << 'EOF'
 [Paths]
 Plugins = PlugIns
 EOF
 
 print_step "Fixing Library Paths"
+print_info "Rewriting install names and rpaths"
+fix_start_ts=$(date +%s)
 
 fix_lib_path() {
     local old_path="$1"
@@ -242,16 +325,28 @@ fix_lib_path() {
 }
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+print_info "Patching executable link paths"
 for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
-    old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
+    old_path="$QT_LIB_PATH/$framework.framework/Versions/A/$framework"
     new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
     fix_lib_path "$old_path" "$new_path" "$APP_NAME.app/Contents/MacOS/$APP_NAME"
+    if [ -n "$QT_BASE_PREFIX" ]; then
+        old_path="$QT_BASE_PREFIX/lib/$framework.framework/Versions/A/$framework"
+        fix_lib_path "$old_path" "$new_path" "$APP_NAME.app/Contents/MacOS/$APP_NAME"
+    fi
 done
 for lib_path in $OPENCV_LIBS; do
     lib_name=$(basename "$lib_path")
     fix_lib_path "$lib_path" "@executable_path/../Frameworks/$lib_name" "$APP_NAME.app/Contents/MacOS/$APP_NAME"
 done
 
+framework_bin_total=0
+for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
+    if [ -f "$FRAMEWORKS_DIR/$framework.framework/Versions/A/$framework" ]; then
+        framework_bin_total=$((framework_bin_total + 1))
+    fi
+done
+print_info "Setting install ids for $framework_bin_total Qt framework binaries"
 for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     if [ -f "$FRAMEWORKS_DIR/$framework.framework/Versions/A/$framework" ]; then
         install_name_tool -id "@executable_path/../Frameworks/$framework.framework/Versions/A/$framework" \
@@ -259,11 +354,18 @@ for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     fi
 done
 
+lib_total=$(find "$FRAMEWORKS_DIR" -maxdepth 1 -name "*.dylib" | wc -l | xargs)
+lib_idx=0
+print_info "Patching $lib_total framework dylibs"
 for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
     [ -f "$lib_file" ] || continue
+    lib_idx=$((lib_idx + 1))
+    if [ $((lib_idx % 10)) -eq 0 ] || [ "$lib_idx" -eq 1 ] || [ "$lib_idx" -eq "$lib_total" ]; then
+        print_info "Framework dylib progress: $lib_idx/$lib_total ($(basename "$lib_file"))"
+    fi
     lib_name=$(basename "$lib_file")
     install_name_tool -id "@executable_path/../Frameworks/$lib_name" "$lib_file" 2>/dev/null || true
-    DEPS=$(otool -L "$lib_file" 2>/dev/null | grep "$HOMEBREW_PREFIX" | awk '{print $1}' || true)
+    DEPS=$(otool -L "$lib_file" 2>/dev/null | awk '{print $1}' | grep -E "^($HOMEBREW_PREFIX|$QT_PREFIX|$QT_BASE_PREFIX)/" || true)
     for dep_path in $DEPS; do
         dep_name=$(basename "$dep_path")
         if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
@@ -271,9 +373,13 @@ for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
         fi
     done
     for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
-        old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
+        old_path="$QT_LIB_PATH/$framework.framework/Versions/A/$framework"
         new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
         fix_lib_path "$old_path" "$new_path" "$lib_file"
+        if [ -n "$QT_BASE_PREFIX" ]; then
+            old_path="$QT_BASE_PREFIX/lib/$framework.framework/Versions/A/$framework"
+            fix_lib_path "$old_path" "$new_path" "$lib_file"
+        fi
     done
     if otool -L "$lib_file" 2>/dev/null | grep -q "@rpath/libopencv_"; then
         for cv in "$FRAMEWORKS_DIR"/libopencv_*.dylib; do
@@ -286,14 +392,25 @@ for lib_file in "$FRAMEWORKS_DIR"/*.dylib; do
     fi
 done
 
+plugin_total=$(find "$PLUGINS_DIR" -name "*.dylib" | wc -l | xargs)
+plugin_idx=0
+print_info "Patching $plugin_total Qt plugins"
 for plugin in "$PLUGINS_DIR"/*/*.dylib; do
     [ -f "$plugin" ] || continue
+    plugin_idx=$((plugin_idx + 1))
+    if [ $((plugin_idx % 5)) -eq 0 ] || [ "$plugin_idx" -eq 1 ] || [ "$plugin_idx" -eq "$plugin_total" ]; then
+        print_info "Plugin progress: $plugin_idx/$plugin_total ($(basename "$plugin"))"
+    fi
     for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
-        old_path="$HOMEBREW_PREFIX/opt/qt/lib/$framework.framework/Versions/A/$framework"
+        old_path="$QT_LIB_PATH/$framework.framework/Versions/A/$framework"
         new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
         fix_lib_path "$old_path" "$new_path" "$plugin"
+        if [ -n "$QT_BASE_PREFIX" ]; then
+            old_path="$QT_BASE_PREFIX/lib/$framework.framework/Versions/A/$framework"
+            fix_lib_path "$old_path" "$new_path" "$plugin"
+        fi
     done
-    DEPS=$(otool -L "$plugin" 2>/dev/null | awk '{print $1}' | grep "^$HOMEBREW_PREFIX/" || true)
+    DEPS=$(otool -L "$plugin" 2>/dev/null | awk '{print $1}' | grep -E "^($HOMEBREW_PREFIX|$QT_PREFIX|$QT_BASE_PREFIX)/" || true)
     for dep_path in $DEPS; do
         dep_name=$(basename "$dep_path")
         if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
@@ -308,8 +425,12 @@ for plugin in "$PLUGINS_DIR"/*/*.dylib; do
         fi
     done
 done
+fix_end_ts=$(date +%s)
+print_info "Completed library path fixes in $((fix_end_ts - fix_start_ts))s"
 
 print_step "Signing"
+print_info "Removing extended attributes from app bundle"
+xattr -rc "$APP_NAME.app" 2>/dev/null || true
 
 SIGN_ID="-"
 ENTITLEMENTS_FILE=""
@@ -357,28 +478,53 @@ fi
 codesign --remove-signature "$APP_NAME.app" 2>/dev/null || true
 
 if [ "$SIGN_ID" = "-" ]; then
+    dylib_count=$(find "$FRAMEWORKS_DIR" -name "*.dylib" | wc -l | xargs)
+    qt_bin_count=$(find "$FRAMEWORKS_DIR" -name "Qt*" -type f -path "*/Versions/A/*" | wc -l | xargs)
+    plugin_count=$(find "$PLUGINS_DIR" -name "*.dylib" | wc -l | xargs)
+    print_info "Ad-hoc signing $dylib_count framework dylibs"
     find "$FRAMEWORKS_DIR" -name "*.dylib" -exec codesign --force --sign - {} \; 2>/dev/null
+    print_info "Ad-hoc signing $qt_bin_count Qt framework binaries"
     find "$FRAMEWORKS_DIR" -name "Qt*" -type f -path "*/Versions/A/*" -exec codesign --force --sign - {} \; 2>/dev/null
+    print_info "Ad-hoc signing $plugin_count plugin dylibs"
     find "$PLUGINS_DIR" -name "*.dylib" -exec codesign --force --sign - {} \; 2>/dev/null
-    codesign --force --sign - "$APP_NAME.app/Contents/MacOS/$APP_NAME"
-    codesign --force --sign - "$APP_NAME.app"
+    run_timed "codesign app executable" codesign --force --sign - "$APP_NAME.app/Contents/MacOS/$APP_NAME"
+    run_timed "codesign app bundle" codesign --force --sign - "$APP_NAME.app"
+    run_timed "deep codesign app bundle" codesign --force --sign - --deep "$APP_NAME.app"
 else
+    dylib_count=$(find "$APP_NAME.app" -name "*.dylib" | wc -l | xargs)
+    framework_count=$(find "$APP_NAME.app" -name "*.framework" | wc -l | xargs)
+    print_info "Developer ID signing $dylib_count dylibs"
     find "$APP_NAME.app" -name "*.dylib" -exec codesign --force --sign "$SIGN_ID" --timestamp --options runtime {} \;
+    print_info "Developer ID signing $framework_count frameworks"
     find "$APP_NAME.app" -name "*.framework" -exec codesign --force --sign "$SIGN_ID" --timestamp --options runtime {} \;
     if [ -n "$ENTITLEMENTS_FILE" ]; then
-        codesign --force --sign "$SIGN_ID" --timestamp --options runtime --entitlements "$ENTITLEMENTS_FILE" "$APP_NAME.app/Contents/MacOS/$APP_NAME"
-        codesign --force --sign "$SIGN_ID" --timestamp --options runtime --entitlements "$ENTITLEMENTS_FILE" "$APP_NAME.app"
+        run_timed "codesign app executable (entitlements)" codesign --force --sign "$SIGN_ID" --timestamp --options runtime --entitlements "$ENTITLEMENTS_FILE" "$APP_NAME.app/Contents/MacOS/$APP_NAME"
+        run_timed "codesign app bundle (entitlements)" codesign --force --sign "$SIGN_ID" --timestamp --options runtime --entitlements "$ENTITLEMENTS_FILE" "$APP_NAME.app"
     else
-        codesign --force --sign "$SIGN_ID" --timestamp --options runtime "$APP_NAME.app/Contents/MacOS/$APP_NAME"
-        codesign --force --sign "$SIGN_ID" --timestamp --options runtime "$APP_NAME.app"
+        run_timed "codesign app executable" codesign --force --sign "$SIGN_ID" --timestamp --options runtime "$APP_NAME.app/Contents/MacOS/$APP_NAME"
+        run_timed "codesign app bundle" codesign --force --sign "$SIGN_ID" --timestamp --options runtime "$APP_NAME.app"
     fi
 fi
 
+print_step "Verifying Signature"
+print_info "Running strict signature verification"
+xattr -rc "$APP_NAME.app" 2>/dev/null || true
+if ! codesign --verify --deep --strict --verbose=2 "$APP_NAME.app"; then
+    print_error "Code signing verification failed"
+    exit 1
+fi
+
 print_step "Packaging"
-xattr -dr com.apple.quarantine "$APP_NAME.app" 2>/dev/null || true
+xattr -rc "$APP_NAME.app" 2>/dev/null || true
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 ARCHIVE_NAME="$APP_NAME-macos-$TIMESTAMP.zip"
-zip -r "$ARCHIVE_NAME" "$APP_NAME.app" >/dev/null
+if command -v ditto >/dev/null 2>&1; then
+    # Preserve symlinks and bundle metadata so signatures remain valid after transfer.
+    run_timed "archive app (ditto)" ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "$ARCHIVE_NAME"
+else
+    # Fallback: preserve symlinks if ditto is unavailable.
+    run_timed "archive app (zip fallback)" zip -yr "$ARCHIVE_NAME" "$APP_NAME.app" >/dev/null
+fi
 
 if [ -n "$ENTITLEMENTS_FILE" ]; then
     rm -f "$ENTITLEMENTS_FILE"

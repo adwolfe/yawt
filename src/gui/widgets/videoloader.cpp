@@ -1,4 +1,5 @@
 #include "videoloader.h"
+#include <opencv2/imgproc.hpp>
 #include "frameloader.h"
 
 #include <QDebug>
@@ -970,6 +971,87 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
     }
     // --- END OF MODIFIED BLOB DRAWING LOGIC ---
+
+    // Draw Skeletons if ViewMode is Skeletons
+    if (m_activeViewModes.testFlag(ViewModeOption::Skeletons) && m_storage && currentFrameIdx >= 0) {
+        const QMap<int, Tracking::DetectedBlob> blobs = m_storage->getDetectedBlobsForFrame(currentFrameIdx);
+        if (!blobs.isEmpty()) {
+            auto skeletonize = [](const cv::Mat& binaryMask) -> cv::Mat {
+                cv::Mat img;
+                if (binaryMask.type() != CV_8UC1) {
+                    binaryMask.convertTo(img, CV_8UC1);
+                } else {
+                    img = binaryMask.clone();
+                }
+                cv::threshold(img, img, 0, 255, cv::THRESH_BINARY);
+                cv::Mat skel = cv::Mat::zeros(img.size(), CV_8UC1);
+                cv::Mat temp, eroded;
+                cv::Mat element = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+                bool done = false;
+                while (!done) {
+                    cv::erode(img, eroded, element);
+                    cv::dilate(eroded, temp, element);
+                    cv::subtract(img, temp, temp);
+                    cv::bitwise_or(skel, temp, skel);
+                    eroded.copyTo(img);
+                    done = (cv::countNonZero(img) == 0);
+                }
+                return skel;
+            };
+
+            for (auto it = blobs.constBegin(); it != blobs.constEnd(); ++it) {
+                int wormId = it.key();
+                const Tracking::DetectedBlob& blob = it.value();
+                if (!blob.isValid || blob.contourPoints.empty()) continue;
+                if (!m_visibleTrackIDs.contains(wormId)) continue;
+
+                // Only show skeletons for items with visible checkbox checked
+                bool isVisible = false;
+                const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+                if (item) isVisible = item->visible;
+                if (!isVisible) continue;
+
+                QRectF bbox = blob.boundingBox;
+                if (!bbox.isValid()) continue;
+
+                int x = qMax(0, static_cast<int>(std::floor(bbox.x())));
+                int y = qMax(0, static_cast<int>(std::floor(bbox.y())));
+                int w = static_cast<int>(std::ceil(bbox.width()));
+                int h = static_cast<int>(std::ceil(bbox.height()));
+                if (w <= 1 || h <= 1) continue;
+
+                if (x + w > originalFrameSize.width()) w = originalFrameSize.width() - x;
+                if (y + h > originalFrameSize.height()) h = originalFrameSize.height() - y;
+                if (w <= 1 || h <= 1) continue;
+
+                cv::Mat mask = cv::Mat::zeros(h, w, CV_8UC1);
+                std::vector<std::vector<cv::Point>> contourList;
+                contourList.emplace_back();
+                contourList.back().reserve(blob.contourPoints.size());
+                for (const cv::Point& pt : blob.contourPoints) {
+                    contourList.back().push_back(cv::Point(pt.x - x, pt.y - y));
+                }
+                cv::fillPoly(mask, contourList, cv::Scalar(255));
+
+                cv::Mat skel = skeletonize(mask);
+                if (cv::countNonZero(skel) == 0) continue;
+
+                QColor color = getTrackColor(wormId);
+                QPen skelPen(color, 1);
+                painter.setPen(skelPen);
+                for (int row = 0; row < skel.rows; ++row) {
+                    const uchar* rowPtr = skel.ptr<uchar>(row);
+                    for (int col = 0; col < skel.cols; ++col) {
+                        if (rowPtr[col] == 0) continue;
+                        QPointF videoPt(static_cast<double>(x + col), static_cast<double>(y + row));
+                        QPointF widgetPt = mapPointFromVideo(videoPt);
+                        if (widgetPt.x() < 0) continue;
+                        painter.drawPoint(widgetPt);
+                    }
+                }
+            }
+        }
+    }
 
 
     // Draw Tracks if ViewMode is Tracks
