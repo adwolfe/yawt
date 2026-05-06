@@ -76,6 +76,14 @@ MainWindow::MainWindow(QWidget *parent)
     , roiFactorSpinBoxD(1.5) // Initialize ROI factor to default value 1.5
 {
     ui->setupUi(this);
+    ui->pointButton->setText("SE");
+    ui->pointButton->setToolTip("Select Start/End points");
+    ui->pointButton->setStatusTip("Click once for Start, then once for End");
+    ui->pointButton->setCheckable(true);
+    ui->pointButton->setAutoRaise(true);
+    ui->pointButton->setIcon(QIcon());
+    ui->pointButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    ui->pointButton->setMinimumWidth(36);
 
     // Initialize AppController which owns storage, manager and models.
     m_appController = new AppController(this);

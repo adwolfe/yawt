@@ -865,6 +865,22 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         return false;
     };
 
+    auto drawPersistentPointItems = [&]() {
+        const QList<TableItems::ClickedItem>& itemsToDisplay =
+            m_storage ? m_storage->getAllItems() : m_itemsToDisplay;
+
+        for (const TableItems::ClickedItem& item : std::as_const(itemsToDisplay)) {
+            if (!item.visible || !isPointItem(item)) {
+                continue;
+            }
+
+            const QPointF centroidWidget = mapPointFromVideo(item.initialCentroid);
+            if (centroidWidget.x() >= 0) {
+                drawPointMarker(centroidWidget, getTrackColor(item.id));
+            }
+        }
+    };
+
     // --- MODIFIED BLOB DRAWING LOGIC ---
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
         if (!m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
@@ -937,13 +953,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
                 QColor itemColor = getTrackColor(item.id);
 
-                if (isPointItem(item)) {
-                    QPointF centroidWidget = mapPointFromVideo(item.initialCentroid);
-                    if (centroidWidget.x() >= 0) {
-                        drawPointMarker(centroidWidget, itemColor);
-                    }
-                    continue;
-                }
+                if (isPointItem(item)) continue;
 
                 // Draw Initial Bounding Box
                 QRectF bboxVideo = item.initialBoundingBox;
@@ -970,6 +980,8 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
     }
     // --- END OF MODIFIED BLOB DRAWING LOGIC ---
+
+    drawPersistentPointItems();
 
 
     // Draw Tracks if ViewMode is Tracks

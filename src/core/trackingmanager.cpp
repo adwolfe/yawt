@@ -529,11 +529,14 @@ QByteArray buildWorkbookXml()
     xml.writeAttribute("sheetId", "2");
     xml.writeAttribute("r:id", "rId2");
 
+<<<<<<< Updated upstream
     xml.writeEmptyElement("sheet");
     xml.writeAttribute("name", "Parameters");
     xml.writeAttribute("sheetId", "3");
     xml.writeAttribute("r:id", "rId3");
 
+=======
+>>>>>>> Stashed changes
     xml.writeEndElement();
     xml.writeEndElement();
     xml.writeEndDocument();
@@ -564,11 +567,14 @@ QByteArray buildWorkbookRelsXml()
 
     xml.writeEmptyElement("Relationship");
     xml.writeAttribute("Id", "rId3");
+<<<<<<< Updated upstream
     xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
     xml.writeAttribute("Target", "worksheets/sheet3.xml");
 
     xml.writeEmptyElement("Relationship");
     xml.writeAttribute("Id", "rId4");
+=======
+>>>>>>> Stashed changes
     xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles");
     xml.writeAttribute("Target", "styles.xml");
 
@@ -714,10 +720,13 @@ QByteArray buildContentTypesXml()
     xml.writeAttribute("PartName", "/xl/worksheets/sheet2.xml");
     xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
 
+<<<<<<< Updated upstream
     xml.writeEmptyElement("Override");
     xml.writeAttribute("PartName", "/xl/worksheets/sheet3.xml");
     xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
 
+=======
+>>>>>>> Stashed changes
     xml.writeEndElement();
     xml.writeEndDocument();
 
@@ -1872,6 +1881,7 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
         } else {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
             emit allTracksUpdated(m_finalTracks);
+<<<<<<< Updated upstream
             QString outputPath;
             if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
                 outputPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
@@ -1885,6 +1895,21 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
             }
             if (outputTracksToWorkbook(m_finalTracks, outputPath)) {
                 emit trackingStatusUpdate("Tracks saved: " + outputPath);
+=======
+            QString workbookPath;
+            if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
+                workbookPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
+            } else if (m_videoPath.isEmpty()) {
+                workbookPath = "tracks.xlsx";
+            } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
+                workbookPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
+            } else {
+                // Fallback to video directory if video-specific directory is not available
+                workbookPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
+            }
+            if (outputTracksToWorkbook(m_finalTracks, workbookPath)) {
+                emit trackingStatusUpdate("Tracks saved: " + workbookPath);
+>>>>>>> Stashed changes
 
                 // Populate merge history storage in one batch before saving JSON state
                 populateMergeHistoryInStorage();
@@ -1907,9 +1932,15 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                     }
                 }
 
+<<<<<<< Updated upstream
                 emit trackingFinishedSuccessfully(outputPath);
             }
             else { emit trackingStatusUpdate("Failed to save workbook: " + outputPath); emit trackingFailed("Failed to save workbook."); }
+=======
+                emit trackingFinishedSuccessfully(workbookPath);
+            }
+            else { emit trackingStatusUpdate("Failed to save workbook: " + workbookPath); emit trackingFailed("Failed to save workbook."); }
+>>>>>>> Stashed changes
         }
         // Only cleanup immediately if not saving video, otherwise defer until video saving completes
         if (!m_isVideoSaving) {
@@ -1953,6 +1984,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
     if (outputFilePath.isEmpty()) {
         return false;
     }
+<<<<<<< Updated upstream
 
     QList<WorkbookRow> trackRows;
     trackRows.append(WorkbookRow{
@@ -2068,7 +2100,83 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
 
     return writeStoredZip(outputFilePath, workbookEntries);
 }
+=======
+>>>>>>> Stashed changes
 
+    QList<WorkbookRow> trackRows;
+    trackRows.append(WorkbookRow{
+        stringCell("WormID"),
+        stringCell("Frame"),
+        stringCell("PositionX"),
+        stringCell("PositionY"),
+        stringCell("RoiX"),
+        stringCell("RoiY"),
+        stringCell("RoiWidth"),
+        stringCell("RoiHeight"),
+        stringCell("Quality")
+    });
+
+    for (auto const& [wormId, trackPoints] : tracks) {
+        std::vector<Tracking::WormTrackPoint> sortedTrackPoints = trackPoints;
+        std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
+                  [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
+                      return lhs.frameNumberOriginal < rhs.frameNumberOriginal;
+                  });
+
+        for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+            trackRows.append(WorkbookRow{
+                numberCell(QString::number(wormId)),
+                numberCell(QString::number(point.frameNumberOriginal)),
+                numberCell(QString::number(static_cast<double>(point.position.x), 'f', 4)),
+                numberCell(QString::number(static_cast<double>(point.position.y), 'f', 4)),
+                numberCell(QString::number(point.roi.x(), 'f', 2)),
+                numberCell(QString::number(point.roi.y(), 'f', 2)),
+                numberCell(QString::number(point.roi.width(), 'f', 2)),
+                numberCell(QString::number(point.roi.height(), 'f', 2)),
+                numberCell(QString::number(static_cast<int>(point.quality)))
+            });
+        }
+    }
+
+    QList<WorkbookRow> startEndRows;
+    startEndRows.append(WorkbookRow{
+        stringCell("PointType"),
+        stringCell("SourceItemID"),
+        stringCell("FrameSelected"),
+        stringCell("PositionX"),
+        stringCell("PositionY")
+    });
+
+    if (m_storage) {
+        const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
+        for (const TableItems::ClickedItem& item : items) {
+            if (item.type != TableItems::ItemType::StartPoint &&
+                item.type != TableItems::ItemType::EndPoint) {
+                continue;
+            }
+
+            startEndRows.append(WorkbookRow{
+                stringCell(TableItems::itemTypeToString(item.type)),
+                numberCell(QString::number(item.id)),
+                numberCell(QString::number(item.frameOfSelection)),
+                numberCell(QString::number(item.initialCentroid.x(), 'f', 4)),
+                numberCell(QString::number(item.initialCentroid.y(), 'f', 4))
+            });
+        }
+    }
+
+    QList<ZipEntry> workbookEntries{
+        ZipEntry{"[Content_Types].xml", buildContentTypesXml()},
+        ZipEntry{"_rels/.rels", buildRootRelsXml()},
+        ZipEntry{"xl/workbook.xml", buildWorkbookXml()},
+        ZipEntry{"xl/_rels/workbook.xml.rels", buildWorkbookRelsXml()},
+        ZipEntry{"xl/styles.xml", buildStylesXml()},
+        ZipEntry{"xl/worksheets/sheet1.xml", buildWorksheetXml(trackRows)},
+        ZipEntry{"xl/worksheets/sheet2.xml", buildWorksheetXml(startEndRows)}
+    };
+
+    return writeStoredZip(outputFilePath, workbookEntries);
+}
 QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath) {
     if (dataDirectory.isEmpty() || videoPath.isEmpty()) {
         qWarning() << "TrackingManager: Invalid data directory or video path";
