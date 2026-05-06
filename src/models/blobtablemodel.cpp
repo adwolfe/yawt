@@ -155,6 +155,38 @@ bool BlobTableModel::setData(const QModelIndex &index, const QVariant &value, in
                 QString typeStr = value.toString();
                 TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
                 if (item.type != newType) {
+                    const bool oldTypeIsStartEnd =
+                        item.type == TableItems::ItemType::StartPoint ||
+                        item.type == TableItems::ItemType::EndPoint;
+                    const bool newTypeIsStartEnd =
+                        newType == TableItems::ItemType::StartPoint ||
+                        newType == TableItems::ItemType::EndPoint;
+
+                    if (oldTypeIsStartEnd && newTypeIsStartEnd) {
+                        const auto pointColorForType = [](TableItems::ItemType pointType) {
+                            return pointType == TableItems::ItemType::StartPoint ? QColor(Qt::green)
+                                                                                 : QColor(Qt::red);
+                        };
+
+                        int swappedItemId = -1;
+                        const QList<TableItems::ClickedItem>& allItems = m_storage->getAllItems();
+                        for (const TableItems::ClickedItem& otherItem : allItems) {
+                            if (otherItem.id != itemId && otherItem.type == newType) {
+                                swappedItemId = otherItem.id;
+                                break;
+                            }
+                        }
+
+                        if (swappedItemId >= 0) {
+                            m_storage->setItemType(swappedItemId, item.type);
+                            m_storage->setItemColor(swappedItemId, pointColorForType(item.type));
+                        }
+
+                        m_storage->setItemType(itemId, newType);
+                        m_storage->setItemColor(itemId, pointColorForType(newType));
+                        return true;
+                    }
+
                     m_storage->setItemType(itemId, newType);
                     return true;
                 }
@@ -363,4 +395,3 @@ void BlobTableModel::onStorageGlobalMetricsUpdated(double minArea, double maxAre
     // Forward the signal
     emit globalMetricsUpdated(minArea, maxArea, minAspectRatio, maxAspectRatio, fixedRoiSize);
 }
-

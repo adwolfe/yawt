@@ -104,8 +104,8 @@ void VideoFileTreeView::onItemDoubleClicked(const QModelIndex &proxyIndex) {
             QDir procDir(dirPath);
             QString wormsPath = procDir.absoluteFilePath("worms.json");
             QString thresholdPath = procDir.absoluteFilePath("thresholding.json");
-            QStringList csvFiles = procDir.entryList(QStringList() << "*_tracks.csv", QDir::Files);
-            if (QFileInfo::exists(wormsPath) && QFileInfo::exists(thresholdPath) && !csvFiles.isEmpty()) {
+            QStringList trackFiles = procDir.entryList(QStringList() << "*_tracks.csv" << "*_tracks.xlsx", QDir::Files);
+            if (QFileInfo::exists(wormsPath) && QFileInfo::exists(thresholdPath) && !trackFiles.isEmpty()) {
                 YAWT_INFO(lcGuiVideoLoader) << "PROC directory double-clicked:" << dirPath;
                 emit runDirectoryDoubleClicked(dirPath);
             }

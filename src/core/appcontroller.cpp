@@ -205,6 +205,16 @@ void AppController::setRoiSizeMultiplier(double factor)
     m_blobModel->updateRoiSizeMultiplier(factor);
 }
 
+void AppController::setPixelSizePixelsPerUm(double value)
+{
+    if (!m_manager) {
+        YAWT_WARN(lcCoreAppController) << "setPixelSizePixelsPerUm: TrackingManager not available";
+        return;
+    }
+
+    m_manager->setPixelSizePixelsPerUm(value);
+}
+
 void AppController::requestStartTracking(const QString& videoPath,
                                         int keyFrame,
                                         const Thresholding::ThresholdSettings& settings,

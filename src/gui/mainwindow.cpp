@@ -79,6 +79,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Initialize AppController which owns storage, manager and models.
     m_appController = new AppController(this);
+    m_appController->setPixelSizePixelsPerUm(ui->pixelSizeSpinBoxD->value());
 
     // Obtain models and storage from the controller (controller manages lifetimes).
     m_blobTableModel = m_appController->blobTableModel();
@@ -209,6 +210,9 @@ MainWindow::MainWindow(QWidget *parent)
     // Configure selection behavior to select entire rows and allow only single selection
     ui->wormTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    ui->wormTableView->setEditTriggers(QAbstractItemView::DoubleClicked |
+                                       QAbstractItemView::SelectedClicked |
+                                       QAbstractItemView::EditKeyPressed);
 
     // Configure Show/Hide column with checkboxes
     ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
@@ -222,6 +226,9 @@ MainWindow::MainWindow(QWidget *parent)
     ui->roiTableView->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     ui->roiTableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     ui->roiTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+    ui->roiTableView->setEditTriggers(QAbstractItemView::DoubleClicked |
+                                      QAbstractItemView::SelectedClicked |
+                                      QAbstractItemView::EditKeyPressed);
     ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr);
     ui->roiTableView->horizontalHeader()->setSectionsClickable(true);
     ui->roiTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
@@ -364,6 +371,8 @@ void MainWindow::setupConnections() {
     // Connect ROI factor spinbox to BlobTableModel
     connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
+    connect(ui->pixelSizeSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            m_appController, &AppController::setPixelSizePixelsPerUm);
 
     // File/Directory
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
@@ -946,7 +955,15 @@ void MainWindow::panModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
 }
 void MainWindow::pointModeButtonClicked() {
+    m_startEndSelectionActive = true;
+    m_nextStartEndPointType = TableItems::ItemType::StartPoint;
+
+    if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Blobs)) {
+        ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
+    }
+
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::Point);
+    statusBar()->showMessage("Start/End Mode: click the Start point, then the End point", 5000);
 }
 void MainWindow::roiModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::DrawROI);
@@ -1003,6 +1020,11 @@ void MainWindow::onViewTracksToggled(bool checked) {
 
 // --- Slots to sync UI buttons with VideoLoader's state ---
 void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode) {
+    if (newMode != VideoLoader::InteractionMode::Point) {
+        m_startEndSelectionActive = false;
+        m_nextStartEndPointType = TableItems::ItemType::StartPoint;
+    }
+
     // This will be handled by QButtonGroup if buttons are added to it correctly
     // Or, if not using QButtonGroup for these specific buttons for some reason:
     ui->panModeButton->setChecked(newMode == VideoLoader::InteractionMode::PanZoom);
@@ -1172,44 +1194,69 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
 
 void MainWindow::handlePointDefined(const QPointF& point) {
     if (!ui->videoLoader->isVideoLoaded()) return;
-    if (point.isNull() || point.x() < 0.0 || point.y() < 0.0) return;
+    if (point.x() < 0.0 || point.y() < 0.0) return;
+    if (!m_startEndSelectionActive || !m_trackingDataStorage) return;
+
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
 
-    bool hasStart = false;
-    bool hasEnd = false;
-    bool hasControl = false;
-    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
-    for (const auto& item : items) {
-        if (item.type == TableItems::ItemType::StartPoint) hasStart = true;
-        else if (item.type == TableItems::ItemType::EndPoint) hasEnd = true;
-        else if (item.type == TableItems::ItemType::ControlPoint) hasControl = true;
-    }
+    const auto removeExistingPointType = [this](TableItems::ItemType type) {
+        QList<int> idsToRemove;
+        const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
+        for (const TableItems::ClickedItem& item : items) {
+            if (item.type == type) {
+                idsToRemove.append(item.id);
+            }
+        }
 
-    TableItems::ItemType pointType = TableItems::ItemType::ROI;
-    if (!hasStart) pointType = TableItems::ItemType::StartPoint;
-    else if (!hasEnd) pointType = TableItems::ItemType::EndPoint;
-    else if (!hasControl) pointType = TableItems::ItemType::ControlPoint;
+        for (int itemId : idsToRemove) {
+            m_trackingDataStorage->removeItem(itemId);
+        }
+    };
+
+    const auto selectPointRow = [this](int itemId) {
+        if (!m_roiProxyModel) {
+            return;
+        }
+
+        const int sourceRow = m_trackingDataStorage->getIndexFromId(itemId);
+        if (sourceRow < 0) {
+            return;
+        }
+
+        const QModelIndex sourceIndex = m_blobTableModel->index(sourceRow, 0);
+        const QModelIndex proxyIndex = m_roiProxyModel->mapFromSource(sourceIndex);
+        if (!proxyIndex.isValid()) {
+            return;
+        }
+
+        ui->roiTableView->setCurrentIndex(proxyIndex);
+        ui->roiTableView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    };
+
+    const TableItems::ItemType pointType = m_nextStartEndPointType;
+    removeExistingPointType(pointType);
 
     QRectF pointBox(point.x(), point.y(), 0.0, 0.0);
     int newId = m_trackingDataStorage->addItem(point, pointBox, currentFrame, pointType);
     if (newId <= 0) return;
 
-    m_trackingDataStorage->setItemColor(newId, QColor(255, 255, 255));
+    const QColor pointColor = (pointType == TableItems::ItemType::StartPoint) ? QColor(Qt::green) : QColor(Qt::red);
+    m_trackingDataStorage->setItemColor(newId, pointColor);
 
     ui->deleteButton->setEnabled(true);
-    int lastRow = m_blobTableModel->rowCount() - 1;
-    if (m_roiProxyModel) {
-        QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
-        QModelIndex proxyIndex = m_roiProxyModel->mapFromSource(srcIndex);
-        if (proxyIndex.isValid()) {
-            ui->roiTableView->setCurrentIndex(proxyIndex);
-            ui->roiTableView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        }
-    }
+    selectPointRow(newId);
     resizeTableColumns();
-    statusBar()->showMessage(QString("Added %1 at frame %2")
-                             .arg(TableItems::itemTypeToString(pointType))
-                             .arg(currentFrame), 3000);
+
+    if (pointType == TableItems::ItemType::StartPoint) {
+        m_nextStartEndPointType = TableItems::ItemType::EndPoint;
+        statusBar()->showMessage("Start point set. Click the End point.", 5000);
+        return;
+    }
+
+    m_startEndSelectionActive = false;
+    m_nextStartEndPointType = TableItems::ItemType::StartPoint;
+    ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
+    statusBar()->showMessage("Start/End points updated.", 3000);
 }
 
 void MainWindow::handleRemoveBlobsClicked() {
@@ -1296,10 +1343,10 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
     QString wormsPath = procDir.absoluteFilePath("worms.json");
     QString thresholdPath = procDir.absoluteFilePath("thresholding.json");
     QString roiPath = procDir.absoluteFilePath("roi_points.json");
-    QStringList csvFiles = procDir.entryList(QStringList() << "*_tracks.csv", QDir::Files);
+    QStringList trackFiles = procDir.entryList(QStringList() << "*_tracks.csv" << "*_tracks.xlsx", QDir::Files);
 
-    if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath) || csvFiles.isEmpty()) {
-        QMessageBox::warning(this, "Load Run", "Selected folder is missing required files (worms.json, thresholding.json, *_tracks.csv).");
+    if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath) || trackFiles.isEmpty()) {
+        QMessageBox::warning(this, "Load Run", "Selected folder is missing required files (worms.json, thresholding.json, and a *_tracks.csv or *_tracks.xlsx export).");
         return false;
     }
 

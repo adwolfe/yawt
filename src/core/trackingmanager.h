@@ -211,6 +211,8 @@ public:
                                bool replaceExisting,
                                bool extendTrack);
 
+    void setPixelSizePixelsPerUm(double value);
+
 public slots:
     /**
      * @brief Start a full multi-worm tracking run.
@@ -336,7 +338,7 @@ private:
     void launchWormTrackers();
     void updateOverallProgress();
     void checkForAllTrackersFinished();
-    bool outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
+    bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
     size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
@@ -380,6 +382,7 @@ private:
     std::vector<cv::Mat> m_finalProcessedForwardFrames;
     std::vector<cv::Mat> m_finalProcessedReversedFrames;
     double m_videoFps;
+    double m_pixelSizePixelsPerUm = 0.0;
     cv::Size m_videoFrameSize;
 
     // Worm object and tracker management

@@ -233,6 +233,8 @@ private:
     double m_videoFps = 0.0;
     bool m_isVideoPlaying = false;
     int m_lastMiniLoaderFrame = -1;
+    bool m_startEndSelectionActive = false;
+    TableItems::ItemType m_nextStartEndPointType = TableItems::ItemType::StartPoint;
 
     /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;

@@ -53,6 +53,7 @@
 #define TRACKING_DEBUG() YAWT_DEBUG(lcCoreTrackingManager)
 
 #include <QDebug>
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -65,6 +66,7 @@
 #include <QJsonArray>
 #include <QThread>
 #include <QDateTime>
+#include <QXmlStreamWriter>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -412,6 +414,452 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
     return true;
 }
 
+namespace {
+
+constexpr const char* kSpreadsheetMainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+constexpr const char* kOfficeDocumentRelsNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+constexpr const char* kPackageRelsNs = "http://schemas.openxmlformats.org/package/2006/relationships";
+constexpr const char* kContentTypesNs = "http://schemas.openxmlformats.org/package/2006/content-types";
+
+struct WorkbookCell {
+    QString value;
+    bool isString = true;
+};
+
+using WorkbookRow = QList<WorkbookCell>;
+
+struct ZipEntry {
+    QString name;
+    QByteArray data;
+    quint32 crc32 = 0;
+    quint32 offset = 0;
+};
+
+WorkbookCell stringCell(const QString& value)
+{
+    return WorkbookCell{value, true};
+}
+
+WorkbookCell numberCell(const QString& value)
+{
+    return WorkbookCell{value, false};
+}
+
+QString excelColumnName(int zeroBasedColumn)
+{
+    QString result;
+    int column = zeroBasedColumn;
+    do {
+        const int remainder = column % 26;
+        result.prepend(QChar(static_cast<char>('A' + remainder)));
+        column = (column / 26) - 1;
+    } while (column >= 0);
+
+    return result;
+}
+
+QByteArray buildWorksheetXml(const QList<WorkbookRow>& rows)
+{
+    QByteArray xmlData;
+    QBuffer buffer(&xmlData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QXmlStreamWriter xml(&buffer);
+    xml.writeStartDocument();
+    xml.writeStartElement("worksheet");
+    xml.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
+    xml.writeStartElement("sheetData");
+
+    for (int rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+        const WorkbookRow& row = rows.at(rowIndex);
+        const int excelRow = rowIndex + 1;
+
+        xml.writeStartElement("row");
+        xml.writeAttribute("r", QString::number(excelRow));
+
+        for (int columnIndex = 0; columnIndex < row.size(); ++columnIndex) {
+            const WorkbookCell& cell = row.at(columnIndex);
+            const QString cellReference = excelColumnName(columnIndex) + QString::number(excelRow);
+
+            xml.writeStartElement("c");
+            xml.writeAttribute("r", cellReference);
+
+            if (cell.isString) {
+                xml.writeAttribute("t", "inlineStr");
+                xml.writeStartElement("is");
+                xml.writeTextElement("t", cell.value);
+                xml.writeEndElement();
+            } else {
+                xml.writeTextElement("v", cell.value);
+            }
+
+            xml.writeEndElement();
+        }
+
+        xml.writeEndElement();
+    }
+
+    xml.writeEndElement();
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    return xmlData;
+}
+
+QByteArray buildWorkbookXml()
+{
+    QByteArray xmlData;
+    QBuffer buffer(&xmlData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QXmlStreamWriter xml(&buffer);
+    xml.writeStartDocument();
+    xml.writeStartElement("workbook");
+    xml.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
+    xml.writeNamespace(QString::fromLatin1(kOfficeDocumentRelsNs), "r");
+    xml.writeStartElement("sheets");
+
+    xml.writeEmptyElement("sheet");
+    xml.writeAttribute("name", "Tracks");
+    xml.writeAttribute("sheetId", "1");
+    xml.writeAttribute("r:id", "rId1");
+
+    xml.writeEmptyElement("sheet");
+    xml.writeAttribute("name", "start-end coords");
+    xml.writeAttribute("sheetId", "2");
+    xml.writeAttribute("r:id", "rId2");
+
+    xml.writeEmptyElement("sheet");
+    xml.writeAttribute("name", "Parameters");
+    xml.writeAttribute("sheetId", "3");
+    xml.writeAttribute("r:id", "rId3");
+
+    xml.writeEndElement();
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    return xmlData;
+}
+
+QByteArray buildWorkbookRelsXml()
+{
+    QByteArray xmlData;
+    QBuffer buffer(&xmlData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QXmlStreamWriter xml(&buffer);
+    xml.writeStartDocument();
+    xml.writeStartElement("Relationships");
+    xml.writeDefaultNamespace(QString::fromLatin1(kPackageRelsNs));
+
+    xml.writeEmptyElement("Relationship");
+    xml.writeAttribute("Id", "rId1");
+    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
+    xml.writeAttribute("Target", "worksheets/sheet1.xml");
+
+    xml.writeEmptyElement("Relationship");
+    xml.writeAttribute("Id", "rId2");
+    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
+    xml.writeAttribute("Target", "worksheets/sheet2.xml");
+
+    xml.writeEmptyElement("Relationship");
+    xml.writeAttribute("Id", "rId3");
+    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
+    xml.writeAttribute("Target", "worksheets/sheet3.xml");
+
+    xml.writeEmptyElement("Relationship");
+    xml.writeAttribute("Id", "rId4");
+    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles");
+    xml.writeAttribute("Target", "styles.xml");
+
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    return xmlData;
+}
+
+QByteArray buildRootRelsXml()
+{
+    QByteArray xmlData;
+    QBuffer buffer(&xmlData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QXmlStreamWriter xml(&buffer);
+    xml.writeStartDocument();
+    xml.writeStartElement("Relationships");
+    xml.writeDefaultNamespace(QString::fromLatin1(kPackageRelsNs));
+
+    xml.writeEmptyElement("Relationship");
+    xml.writeAttribute("Id", "rId1");
+    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument");
+    xml.writeAttribute("Target", "xl/workbook.xml");
+
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    return xmlData;
+}
+
+QByteArray buildStylesXml()
+{
+    QByteArray xmlData;
+    QBuffer buffer(&xmlData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QXmlStreamWriter xml(&buffer);
+    xml.writeStartDocument();
+    xml.writeStartElement("styleSheet");
+    xml.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
+
+    xml.writeStartElement("fonts");
+    xml.writeAttribute("count", "1");
+    xml.writeStartElement("font");
+    xml.writeEmptyElement("sz");
+    xml.writeAttribute("val", "11");
+    xml.writeEmptyElement("name");
+    xml.writeAttribute("val", "Calibri");
+    xml.writeEmptyElement("family");
+    xml.writeAttribute("val", "2");
+    xml.writeEndElement();
+    xml.writeEndElement();
+
+    xml.writeStartElement("fills");
+    xml.writeAttribute("count", "2");
+    xml.writeStartElement("fill");
+    xml.writeEmptyElement("patternFill");
+    xml.writeAttribute("patternType", "none");
+    xml.writeEndElement();
+    xml.writeStartElement("fill");
+    xml.writeEmptyElement("patternFill");
+    xml.writeAttribute("patternType", "gray125");
+    xml.writeEndElement();
+    xml.writeEndElement();
+
+    xml.writeStartElement("borders");
+    xml.writeAttribute("count", "1");
+    xml.writeStartElement("border");
+    xml.writeEmptyElement("left");
+    xml.writeEmptyElement("right");
+    xml.writeEmptyElement("top");
+    xml.writeEmptyElement("bottom");
+    xml.writeEmptyElement("diagonal");
+    xml.writeEndElement();
+    xml.writeEndElement();
+
+    xml.writeStartElement("cellStyleXfs");
+    xml.writeAttribute("count", "1");
+    xml.writeEmptyElement("xf");
+    xml.writeAttribute("numFmtId", "0");
+    xml.writeAttribute("fontId", "0");
+    xml.writeAttribute("fillId", "0");
+    xml.writeAttribute("borderId", "0");
+    xml.writeEndElement();
+
+    xml.writeStartElement("cellXfs");
+    xml.writeAttribute("count", "1");
+    xml.writeEmptyElement("xf");
+    xml.writeAttribute("numFmtId", "0");
+    xml.writeAttribute("fontId", "0");
+    xml.writeAttribute("fillId", "0");
+    xml.writeAttribute("borderId", "0");
+    xml.writeAttribute("xfId", "0");
+    xml.writeEndElement();
+
+    xml.writeStartElement("cellStyles");
+    xml.writeAttribute("count", "1");
+    xml.writeEmptyElement("cellStyle");
+    xml.writeAttribute("name", "Normal");
+    xml.writeAttribute("xfId", "0");
+    xml.writeAttribute("builtinId", "0");
+    xml.writeEndElement();
+
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    return xmlData;
+}
+
+QByteArray buildContentTypesXml()
+{
+    QByteArray xmlData;
+    QBuffer buffer(&xmlData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QXmlStreamWriter xml(&buffer);
+    xml.writeStartDocument();
+    xml.writeStartElement("Types");
+    xml.writeDefaultNamespace(QString::fromLatin1(kContentTypesNs));
+
+    xml.writeEmptyElement("Default");
+    xml.writeAttribute("Extension", "rels");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-package.relationships+xml");
+
+    xml.writeEmptyElement("Default");
+    xml.writeAttribute("Extension", "xml");
+    xml.writeAttribute("ContentType", "application/xml");
+
+    xml.writeEmptyElement("Override");
+    xml.writeAttribute("PartName", "/xl/workbook.xml");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml");
+
+    xml.writeEmptyElement("Override");
+    xml.writeAttribute("PartName", "/xl/styles.xml");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml");
+
+    xml.writeEmptyElement("Override");
+    xml.writeAttribute("PartName", "/xl/worksheets/sheet1.xml");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
+
+    xml.writeEmptyElement("Override");
+    xml.writeAttribute("PartName", "/xl/worksheets/sheet2.xml");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
+
+    xml.writeEmptyElement("Override");
+    xml.writeAttribute("PartName", "/xl/worksheets/sheet3.xml");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
+
+    xml.writeEndElement();
+    xml.writeEndDocument();
+
+    return xmlData;
+}
+
+quint32 crc32ForData(const QByteArray& data)
+{
+    static quint32 table[256];
+    static bool initialized = false;
+    if (!initialized) {
+        for (quint32 i = 0; i < 256; ++i) {
+            quint32 crc = i;
+            for (int bit = 0; bit < 8; ++bit) {
+                crc = (crc & 1U) ? (0xEDB88320U ^ (crc >> 1U)) : (crc >> 1U);
+            }
+            table[i] = crc;
+        }
+        initialized = true;
+    }
+
+    quint32 crc = 0xFFFFFFFFU;
+    for (unsigned char byte : data) {
+        crc = table[(crc ^ byte) & 0xFFU] ^ (crc >> 8U);
+    }
+    return crc ^ 0xFFFFFFFFU;
+}
+
+bool writeUInt16(QFile& file, quint16 value)
+{
+    const char bytes[2] = {
+        static_cast<char>(value & 0xFF),
+        static_cast<char>((value >> 8) & 0xFF)
+    };
+    return file.write(bytes, sizeof(bytes)) == sizeof(bytes);
+}
+
+bool writeUInt32(QFile& file, quint32 value)
+{
+    const char bytes[4] = {
+        static_cast<char>(value & 0xFF),
+        static_cast<char>((value >> 8) & 0xFF),
+        static_cast<char>((value >> 16) & 0xFF),
+        static_cast<char>((value >> 24) & 0xFF)
+    };
+    return file.write(bytes, sizeof(bytes)) == sizeof(bytes);
+}
+
+quint16 dosTime(const QDateTime& dateTime)
+{
+    const QTime time = dateTime.time();
+    return static_cast<quint16>(((time.hour() & 0x1F) << 11) |
+                                ((time.minute() & 0x3F) << 5) |
+                                ((time.second() / 2) & 0x1F));
+}
+
+quint16 dosDate(const QDateTime& dateTime)
+{
+    const QDate date = dateTime.date();
+    const int year = std::max(1980, date.year());
+    return static_cast<quint16>((((year - 1980) & 0x7F) << 9) |
+                                ((date.month() & 0x0F) << 5) |
+                                (date.day() & 0x1F));
+}
+
+bool writeStoredZip(const QString& outputFilePath, QList<ZipEntry> entries)
+{
+    QFile file(outputFilePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+
+    const QDateTime now = QDateTime::currentDateTime();
+    const quint16 modTime = dosTime(now);
+    const quint16 modDate = dosDate(now);
+
+    for (ZipEntry& entry : entries) {
+        const QByteArray nameBytes = entry.name.toUtf8();
+        entry.crc32 = crc32ForData(entry.data);
+        entry.offset = static_cast<quint32>(file.pos());
+
+        if (!writeUInt32(file, 0x04034B50U) ||
+            !writeUInt16(file, 20) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, modTime) ||
+            !writeUInt16(file, modDate) ||
+            !writeUInt32(file, entry.crc32) ||
+            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
+            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
+            !writeUInt16(file, static_cast<quint16>(nameBytes.size())) ||
+            !writeUInt16(file, 0) ||
+            file.write(nameBytes) != nameBytes.size() ||
+            file.write(entry.data) != entry.data.size()) {
+            file.close();
+            return false;
+        }
+    }
+
+    const quint32 centralDirectoryOffset = static_cast<quint32>(file.pos());
+    for (const ZipEntry& entry : std::as_const(entries)) {
+        const QByteArray nameBytes = entry.name.toUtf8();
+        if (!writeUInt32(file, 0x02014B50U) ||
+            !writeUInt16(file, 20) ||
+            !writeUInt16(file, 20) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, modTime) ||
+            !writeUInt16(file, modDate) ||
+            !writeUInt32(file, entry.crc32) ||
+            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
+            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
+            !writeUInt16(file, static_cast<quint16>(nameBytes.size())) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt16(file, 0) ||
+            !writeUInt32(file, 0) ||
+            !writeUInt32(file, entry.offset) ||
+            file.write(nameBytes) != nameBytes.size()) {
+            file.close();
+            return false;
+        }
+    }
+
+    const quint32 centralDirectorySize = static_cast<quint32>(file.pos()) - centralDirectoryOffset;
+    const quint16 entryCount = static_cast<quint16>(entries.size());
+    const bool success = writeUInt32(file, 0x06054B50U) &&
+                         writeUInt16(file, 0) &&
+                         writeUInt16(file, 0) &&
+                         writeUInt16(file, entryCount) &&
+                         writeUInt16(file, entryCount) &&
+                         writeUInt32(file, centralDirectorySize) &&
+                         writeUInt32(file, centralDirectoryOffset) &&
+                         writeUInt16(file, 0);
+
+    file.close();
+    return success && file.error() == QFile::NoError;
+}
+
+} // namespace
+
 static QString findLatestProcessingDirectory(const QString& videoSpecificDirectory) {
     if (videoSpecificDirectory.isEmpty()) return QString();
     QDir baseDir(videoSpecificDirectory);
@@ -491,6 +939,11 @@ TrackingManager::~TrackingManager() {
     // Force a final cleanup to ensure all resources are released
     cleanupThreadsAndObjects();
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
+}
+
+void TrackingManager::setPixelSizePixelsPerUm(double value)
+{
+    m_pixelSizePixelsPerUm = std::max(0.0, value);
 }
 
 // Main entry point for tracking
@@ -1325,7 +1778,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
 // --- Helper and Utility functions (calculateIoU, launchWormTrackers, progress, finish handlers etc.) ---
 // These remain largely the same as your version with parallel video processing.
 // calculateIoU is used by processFrameSpecificMerge.
-// launchWormTrackers, updateOverallProgress, checkForAllTrackersFinished, outputTracksToCsv,
+// launchWormTrackers, updateOverallProgress, checkForAllTrackersFinished, outputTracksToWorkbook,
 // handleWormTrackerFinished, handleWormTrackerError, handleWormTrackerProgress are mostly independent
 // of the merge group internal logic, dealing with tracker lifecycle and overall progress.
 
@@ -1419,19 +1872,19 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
         } else {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
             emit allTracksUpdated(m_finalTracks);
-            QString csvPath;
+            QString outputPath;
             if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
-                csvPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+                outputPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
             } else if (m_videoPath.isEmpty()) {
-                csvPath = "tracks.csv";
+                outputPath = "tracks.xlsx";
             } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
-                csvPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+                outputPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
             } else {
                 // Fallback to video directory if video-specific directory is not available
-                csvPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.csv");
+                outputPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
             }
-            if (outputTracksToCsv(m_finalTracks, csvPath)) {
-                emit trackingStatusUpdate("Tracks saved: " + csvPath);
+            if (outputTracksToWorkbook(m_finalTracks, outputPath)) {
+                emit trackingStatusUpdate("Tracks saved: " + outputPath);
 
                 // Populate merge history storage in one batch before saving JSON state
                 populateMergeHistoryInStorage();
@@ -1454,9 +1907,9 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                     }
                 }
 
-                emit trackingFinishedSuccessfully(csvPath);
+                emit trackingFinishedSuccessfully(outputPath);
             }
-            else { emit trackingStatusUpdate("Failed to save CSV: " + csvPath); emit trackingFailed("Failed to save CSV."); }
+            else { emit trackingStatusUpdate("Failed to save workbook: " + outputPath); emit trackingFailed("Failed to save workbook."); }
         }
         // Only cleanup immediately if not saving video, otherwise defer until video saving completes
         if (!m_isVideoSaving) {
@@ -1496,18 +1949,124 @@ void TrackingManager::handleWormTrackerProgress(int, int percentDone) { /* ... s
     if (m_cancelRequested || !m_isTrackingRunning) return; WormTracker* trk = qobject_cast<WormTracker*>(sender());
     QMutexLocker locker(&m_dataMutex); if (trk && m_wormTrackersList.contains(trk)) { m_individualTrackerProgress[trk] = percentDone; locker.unlock(); updateOverallProgress(); }
 }
-bool TrackingManager::outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const { /* ... same as your version ... */
-    if (outputFilePath.isEmpty()) return false; QFile f(outputFilePath); if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) return false;
-    QTextStream o(&f); o << "WormID,Frame,PositionX,PositionY,RoiX,RoiY,RoiWidth,RoiHeight,Quality\n";
-    for (auto const& [wId, tps] : tracks) {
-        for (const Tracking::WormTrackPoint& p : tps) {
-            o << wId << "," << p.frameNumberOriginal << "," << QString::number(p.position.x, 'f', 4) << "," << QString::number(p.position.y, 'f', 4) << ","
-              << QString::number(p.roi.x(), 'f', 2) << "," << QString::number(p.roi.y(), 'f', 2) << ","
-              << QString::number(p.roi.width(), 'f', 2) << "," << QString::number(p.roi.height(), 'f', 2) << ","
-              << static_cast<int>(p.quality) << "\n"; }
-        o << "\n";
+bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const {
+    if (outputFilePath.isEmpty()) {
+        return false;
     }
-    f.close(); return f.error() == QFile::NoError;
+
+    QList<WorkbookRow> trackRows;
+    trackRows.append(WorkbookRow{
+        stringCell("WormID"),
+        stringCell("SourceItemID"),
+        stringCell("Frame"),
+        stringCell("PositionX"),
+        stringCell("PositionY"),
+        stringCell("RoiX"),
+        stringCell("RoiY"),
+        stringCell("RoiWidth"),
+        stringCell("RoiHeight"),
+        stringCell("Quality")
+    });
+
+    QMap<int, int> sourceToExportId;
+    int nextExportId = 1;
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        sourceToExportId.insert(it->first, nextExportId++);
+    }
+
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        const int sourceItemId = it->first;
+        const int exportWormId = sourceToExportId.value(sourceItemId);
+        std::vector<Tracking::WormTrackPoint> sortedTrackPoints = it->second;
+        std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
+                  [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
+                      return lhs.frameNumberOriginal < rhs.frameNumberOriginal;
+                  });
+
+        for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+            trackRows.append(WorkbookRow{
+                numberCell(QString::number(exportWormId)),
+                numberCell(QString::number(sourceItemId)),
+                numberCell(QString::number(point.frameNumberOriginal)),
+                numberCell(QString::number(static_cast<double>(point.position.x), 'f', 4)),
+                numberCell(QString::number(static_cast<double>(point.position.y), 'f', 4)),
+                numberCell(QString::number(point.roi.x(), 'f', 2)),
+                numberCell(QString::number(point.roi.y(), 'f', 2)),
+                numberCell(QString::number(point.roi.width(), 'f', 2)),
+                numberCell(QString::number(point.roi.height(), 'f', 2)),
+                numberCell(QString::number(static_cast<int>(point.quality)))
+            });
+        }
+    }
+
+    QList<WorkbookRow> startEndRows;
+    startEndRows.append(WorkbookRow{
+        stringCell("PointType"),
+        stringCell("SourceItemID"),
+        stringCell("FrameSelected"),
+        stringCell("PositionX"),
+        stringCell("PositionY")
+    });
+
+    const TableItems::ClickedItem* startPoint = nullptr;
+    const TableItems::ClickedItem* endPoint = nullptr;
+    if (m_storage) {
+        const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
+        for (const TableItems::ClickedItem& item : items) {
+            if (item.type == TableItems::ItemType::StartPoint) {
+                startPoint = &item;
+            } else if (item.type == TableItems::ItemType::EndPoint) {
+                endPoint = &item;
+            }
+        }
+    }
+
+    const auto appendPointRow = [&startEndRows](const TableItems::ClickedItem* item) {
+        if (!item) {
+            return;
+        }
+
+        startEndRows.append(WorkbookRow{
+            stringCell(TableItems::itemTypeToString(item->type)),
+            numberCell(QString::number(item->id)),
+            numberCell(QString::number(item->frameOfSelection)),
+            numberCell(QString::number(item->initialCentroid.x(), 'f', 4)),
+            numberCell(QString::number(item->initialCentroid.y(), 'f', 4))
+        });
+    };
+
+    appendPointRow(startPoint);
+    appendPointRow(endPoint);
+
+    QList<WorkbookRow> parameterRows;
+    parameterRows.append(WorkbookRow{
+        stringCell("Parameter"),
+        stringCell("Value"),
+        stringCell("Unit")
+    });
+    parameterRows.append(WorkbookRow{
+        stringCell("Capture Rate"),
+        numberCell(QString::number(m_videoFps, 'f', 6)),
+        stringCell("fps")
+    });
+    parameterRows.append(WorkbookRow{
+        stringCell("Pixel Size"),
+        numberCell(QString::number(m_pixelSizePixelsPerUm, 'f', 6)),
+        stringCell("pixels/um")
+    });
+
+    QList<ZipEntry> workbookEntries{
+        ZipEntry{"[Content_Types].xml", buildContentTypesXml()},
+        ZipEntry{"_rels/.rels", buildRootRelsXml()},
+        ZipEntry{"xl/workbook.xml", buildWorkbookXml()},
+        ZipEntry{"xl/_rels/workbook.xml.rels", buildWorkbookRelsXml()},
+        ZipEntry{"xl/styles.xml", buildStylesXml()},
+        ZipEntry{"xl/worksheets/sheet1.xml", buildWorksheetXml(trackRows)},
+        ZipEntry{"xl/worksheets/sheet2.xml", buildWorksheetXml(startEndRows)},
+        ZipEntry{"xl/worksheets/sheet3.xml", buildWorksheetXml(parameterRows)}
+    };
+
+    return writeStoredZip(outputFilePath, workbookEntries);
 }
 
 QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath) {

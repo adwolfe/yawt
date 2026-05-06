@@ -192,12 +192,21 @@
             </widget>
            </item>
            <item>
-            <widget class="QToolButton" name="pointButton">
-             <property name="text">
-              <string>...</string>
+           <widget class="QToolButton" name="pointButton">
+             <property name="toolTip">
+              <string>Select Start/End points</string>
              </property>
-             <property name="icon">
-              <iconset theme="QIcon::ThemeIcon::ListAdd"/>
+             <property name="statusTip">
+              <string>Click once for Start, then once for End</string>
+             </property>
+             <property name="text">
+              <string>SE</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+             <property name="autoRaise">
+              <bool>true</bool>
              </property>
             </widget>
            </item>

@@ -10,20 +10,26 @@ QWidget *ItemTypeDelegate::createEditor(QWidget *parent,
                                         const QStyleOptionViewItem &option,
                                         const QModelIndex &index) const {
     Q_UNUSED(option);
-    Q_UNUSED(index); // Not strictly needed here as the editor is the same for all items in the column
 
     // Create a QComboBox as the editor
     QComboBox *editor = new QComboBox(parent);
 
-    // Populate the QComboBox with the string representations of ItemType
-    // The order here should match the ItemType enum if possible, or be user-friendly
+    const QString currentTypeStr = index.model()->data(index, Qt::EditRole).toString();
+    const TableItems::ItemType currentType = TableItems::stringToItemType(currentTypeStr);
+
     QStringList types;
-    types << itemTypeToString(TableItems::ItemType::Worm)
-          << itemTypeToString(TableItems::ItemType::StartPoint)
-          << itemTypeToString(TableItems::ItemType::EndPoint)
-          << itemTypeToString(TableItems::ItemType::ControlPoint)
-          << itemTypeToString(TableItems::ItemType::CenterPoint)
-          << itemTypeToString(TableItems::ItemType::Undefined);
+    if (currentType == TableItems::ItemType::StartPoint ||
+        currentType == TableItems::ItemType::EndPoint) {
+        types << itemTypeToString(TableItems::ItemType::StartPoint)
+              << itemTypeToString(TableItems::ItemType::EndPoint);
+    } else if (currentType == TableItems::ItemType::Worm ||
+               currentType == TableItems::ItemType::Fix) {
+        types << itemTypeToString(TableItems::ItemType::Worm)
+              << itemTypeToString(TableItems::ItemType::Fix);
+    } else {
+        types << currentTypeStr;
+    }
+
     editor->addItems(types);
 
     return editor;

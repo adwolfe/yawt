@@ -78,6 +78,7 @@ public:
     Q_INVOKABLE void removeAllBlobs();
     Q_INVOKABLE void deleteBlobById(int id);
     Q_INVOKABLE void setRoiSizeMultiplier(double factor);
+    Q_INVOKABLE void setPixelSizePixelsPerUm(double value);
 
     // Tracking control API (high-level)
     // Note: Thresholding::ThresholdSettings and Tracking::InitialWormInfo are defined in trackingcommon.h
