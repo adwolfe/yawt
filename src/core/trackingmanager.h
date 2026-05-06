@@ -105,49 +105,6 @@ struct FrameSpecificPhysicalBlob {
     FrameSpecificPhysicalBlob() : uniqueId(-1), currentArea(0.0), frameNumber(-1), selectedByWormTrackerId(-1) {}
 };
 
-/**
- * @brief Result of post-processing (watershed) for a single worm on a single frame.
- */
-struct ResolvedWormBlob {
-    int frameNumber = -1;
-    int wormId = -1;
-    Tracking::DetectedBlob blob;
-};
-
-Q_DECLARE_METATYPE(ResolvedWormBlob)
-Q_DECLARE_METATYPE(QList<ResolvedWormBlob>)
-
-/**
- * @brief Background worker that resolves merged blobs using seeded watershed.
- */
-class MergeWatershedWorker : public QObject {
-    Q_OBJECT
-
-public:
-    explicit MergeWatershedWorker(QObject* parent = nullptr);
-
-    void setInputs(const QMap<int, QList<FrameSpecificPhysicalBlob>>* mergeRecords,
-                   const QMap<int, QMap<int, QPointF>>* seedsByFrame,
-                   const std::vector<cv::Mat>* forwardFrames,
-                   const std::vector<cv::Mat>* reversedFrames,
-                   int keyFrameNum,
-                   cv::Size frameSize);
-
-public slots:
-    void processFrames(const QList<int>& framesToProcess);
-
-signals:
-    void rangeProcessingComplete(const QList<ResolvedWormBlob>& results);
-
-private:
-    const QMap<int, QList<FrameSpecificPhysicalBlob>>* m_mergeRecords = nullptr;
-    const QMap<int, QMap<int, QPointF>>* m_seedsByFrame = nullptr;
-    const std::vector<cv::Mat>* m_forwardFrames = nullptr;
-    const std::vector<cv::Mat>* m_reversedFrames = nullptr;
-    int m_keyFrameNum = 0;
-    cv::Size m_frameSize;
-};
-
 // No longer using pause mechanism - split resolution is immediate
 
 
@@ -312,10 +269,6 @@ private slots:
     void handleVideoSavingComplete(const QString& savedVideoPath);
     void handleVideoSavingError(const QString& errorMessage);
 
-    // Post-processing (watershed) slots
-    void handleWatershedRangeComplete(const QList<ResolvedWormBlob>& results);
-    void handlePostProcessingThreadsFinished();
-
 signals:
     /**
      * @brief Aggregate percent progress (0–100) across video processing and all trackers.
@@ -383,7 +336,6 @@ private:
     void launchWormTrackers();
     void updateOverallProgress();
     void checkForAllTrackersFinished();
-    void finalizeTrackingRun(bool wasCancelled);
     bool outputTracksToCsv(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
@@ -392,10 +344,6 @@ private:
     
     // Video saving functionality
     void startVideoSaving(); // Start background video saving process
-
-    // Post-processing (watershed) functionality
-    bool startWatershedPostProcessing();
-    void buildWatershedSeeds();
     
     // JSON storage methods
     QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
@@ -466,13 +414,6 @@ private:
     //   Enables quick lookups of the physical blob membership for continuity across frames.
     QMap<int, int> m_wormToPhysicalBlobIdMap;
 
-    // Post-processing (watershed) members
-    QList<QPointer<QThread>> m_postProcessThreads;
-    int m_postProcessThreadsFinished;
-    int m_postProcessThreadsExpected;
-    int m_postProcessingOverallProgress;
-    bool m_postProcessingActive;
-    QMap<int, QMap<int, QPointF>> m_postProcessSeedsByFrame;
 
     // Video saving members
     QPointer<QThread> m_videoSaverThread; // Background worker thread for thresholded video saving (optional)
