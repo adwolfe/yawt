@@ -59,6 +59,7 @@
 #include "processing/videoprocessor.h" // For VideoProcessor type, not direct instantiation here
 #include "wormtracker.h"    // For WormTracker type and enums
 #include "../data/trackingdatastorage.h" // Central data storage
+#include "centerlineworker.h"
 
 // Constants for matching physical blobs on a frame
 // PHYSICAL_BLOB_IOU_THRESHOLD:
@@ -243,6 +244,7 @@ public slots:
      * Safe to call after cancel/fail or before a new run; idempotent.
      */
     void cleanupThreadsAndObjects(); // Made public slot so it can be called via QMetaObject::invokeMethod
+    void startCenterlineComputation(); // Launch post-tracking centerline worker via QMetaObject::invokeMethod
 
 private slots:
     // Video processing slots
@@ -272,6 +274,10 @@ private slots:
     void handleVideoSavingComplete(const QString& savedVideoPath);
     void handleVideoSavingError(const QString& errorMessage);
 
+    // Centerline computation slots
+    void handleCenterlineFinished();
+    void handleCenterlineFailed(const QString& reason);
+
 signals:
     /**
      * @brief Aggregate percent progress (0–100) across video processing and all trackers.
@@ -300,7 +306,16 @@ signals:
      * @brief Emitted when user/system cancellation completes.
      */
     void trackingCancelled();
-    
+
+    /**
+     * @brief Percent complete (0–100) for the post-tracking centerline computation phase.
+     */
+    void centerlineProgress(int percentage);
+    /**
+     * @brief Emitted when post-tracking centerline computation finishes.
+     */
+    void centerlineFinished();
+
     /**
      * @brief Send processed frames to the background video-saver worker thread.
      * @param reversedFrames Backward-direction frames (reverse order for output concatenation).
@@ -347,6 +362,8 @@ private:
     
     // Video saving functionality
     void startVideoSaving(); // Start background video saving process
+
+    // (startCenterlineComputation is declared as a public slot above)
     
     // JSON storage methods
     QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
@@ -422,6 +439,10 @@ private:
     // Video saving members
     QPointer<QThread> m_videoSaverThread; // Background worker thread for thresholded video saving (optional)
     QString m_savedVideoPath; // Path where the thresholded video will be saved
+
+    // Centerline computation members (post-tracking background phase)
+    QPointer<QThread> m_centerlineThread;
+    QPointer<CenterlineWorker> m_centerlineWorker;
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures

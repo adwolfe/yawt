@@ -111,6 +111,11 @@ void AppController::connectTrackingManagerSignals()
     connect(m_manager, &TrackingManager::trackingCancelled,
             this, &AppController::onTrackingManagerCancelled);
 
+    connect(m_manager, &TrackingManager::centerlineProgress,
+            this, &AppController::onTrackingManagerCenterlineProgress);
+    connect(m_manager, &TrackingManager::centerlineFinished,
+            this, &AppController::onTrackingManagerCenterlineFinished);
+
     // All tracks updated: handle storage and re-emit
     connect(m_manager, &TrackingManager::allTracksUpdated,
             this, &AppController::onTrackingManagerAllTracksUpdated);
@@ -296,6 +301,16 @@ void AppController::onTrackingManagerCancelled()
     emit trackingCancelled();
 }
 
+void AppController::onTrackingManagerCenterlineProgress(int percentage)
+{
+    emit centerlineProgress(percentage);
+}
+
+void AppController::onTrackingManagerCenterlineFinished()
+{
+    emit centerlineFinished();
+}
+
 // Build vector<InitialWormInfo> from BlobTableModel, optionally filtering out items that already have tracks.
 std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel(bool onlyTrackMissing) const
 {
@@ -412,6 +427,8 @@ void AppController::showTrackingDialog(const QString& videoPath,
         connect(this, &AppController::trackingFinished, m_trackingDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
         connect(this, &AppController::trackingFailed, m_trackingDialog, &TrackingProgressDialog::onTrackingFailed);
         connect(this, &AppController::trackingCancelled, m_trackingDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
+        connect(this, &AppController::centerlineProgress, m_trackingDialog, &TrackingProgressDialog::onCenterlineProgress);
+        connect(this, &AppController::centerlineFinished, m_trackingDialog, &TrackingProgressDialog::onCenterlineFinished);
     }
 
     // Provide the dialog with accurate context using the parameters passed in and model/storage counts.

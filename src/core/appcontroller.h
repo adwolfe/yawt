@@ -168,6 +168,11 @@ signals:
     void trackingCancelled();
     /** @} */
 
+    /** Percent progress (0–100) for the post-tracking centerline computation phase. */
+    void centerlineProgress(int percentage);
+    /** Emitted when post-tracking centerline computation completes. */
+    void centerlineFinished();
+
     /** Generic status message stream for detailed updates (can be verbose). */
     void trackingStatusMessage(const QString& message);
 
@@ -179,6 +184,8 @@ private slots:
     void onTrackingManagerFinishedSuccessfully(const QString& outputPath);
     void onTrackingManagerFailed(const QString& reason);
     void onTrackingManagerCancelled();
+    void onTrackingManagerCenterlineProgress(int percentage);
+    void onTrackingManagerCenterlineFinished();
 
     // Slots to receive dialog requests (when controller owns the dialog)
     void onDialogBeginRequested();

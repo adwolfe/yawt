@@ -233,13 +233,30 @@ void TrackingProgressDialog::updateOverallProgress(int percentage) {
 
 void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
     m_isTrackingRunning = false;
-    ui->statusLabel->setText("Tracking finished successfully!");
-    ui->overallProgressBar->setValue(100);
-    ui->overallProgressBar->setStyleSheet(""); // Reset stylesheet
+    ui->statusLabel->setText("Tracking complete. Computing centerlines...");
+    ui->overallProgressBar->setValue(0);
+    ui->overallProgressBar->setStyleSheet("");
+    ui->overallProgressBar->setVisible(true);
 
     QPushButton *beginButton = ui->buttonBox->button(QDialogButtonBox::Apply);
     if (!beginButton) beginButton = findChild<QPushButton*>("beginButton");
-    if (beginButton) beginButton->setEnabled(true); // Or change text to "View Results"
+    if (beginButton) beginButton->setEnabled(false);
+
+    QPushButton *cancelButton = ui->buttonBox->button(QDialogButtonBox::Cancel);
+    if (!cancelButton) cancelButton = findChild<QPushButton*>("cancelButton");
+    if (cancelButton) {
+        cancelButton->setText("Please wait...");
+        cancelButton->setEnabled(false);
+    }
+}
+
+void TrackingProgressDialog::onCenterlineProgress(int percentage) {
+    ui->overallProgressBar->setValue(percentage);
+}
+
+void TrackingProgressDialog::onCenterlineFinished() {
+    ui->statusLabel->setText("Tracking and centerline computation finished!");
+    ui->overallProgressBar->setValue(100);
 
     QPushButton *cancelButton = ui->buttonBox->button(QDialogButtonBox::Cancel);
     if (!cancelButton) cancelButton = findChild<QPushButton*>("cancelButton");
@@ -247,7 +264,7 @@ void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
         cancelButton->setText("Close");
         cancelButton->setEnabled(true);
         disconnect(cancelButton, &QPushButton::clicked, this, &TrackingProgressDialog::onCancelButtonClicked);
-        connect(cancelButton, &QPushButton::clicked, this, &TrackingProgressDialog::accept); // Close dialog
+        connect(cancelButton, &QPushButton::clicked, this, &TrackingProgressDialog::accept);
     }
 }
 

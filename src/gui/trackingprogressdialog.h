@@ -45,6 +45,8 @@ public slots:
     void onTrackingSuccessfullyFinished();
     void onTrackingFailed(const QString& reason);
     void onTrackingCancelledByManager();
+    void onCenterlineProgress(int percentage);
+    void onCenterlineFinished();
 
 signals:
     void beginTrackingRequested();

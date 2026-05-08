@@ -2025,6 +2025,11 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                 }
 
                 emit trackingFinishedSuccessfully(outputPath);
+
+                // Launch post-tracking centerline computation in background.
+                // cleanup is deferred until handleCenterlineFinished.
+                QMetaObject::invokeMethod(this, "startCenterlineComputation", Qt::QueuedConnection);
+                return; // skip the cleanup block below; centerline handler will call it
             }
             else { emit trackingStatusUpdate("Failed to save workbook: " + outputPath); emit trackingFailed("Failed to save workbook."); }
         }
@@ -3040,4 +3045,44 @@ bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath
     emit trackingStatusUpdate(QString("Retracking for Fix Blob ID %1 completed (placeholder)").arg(fixBlobId));
 
     return true;
+}
+
+void TrackingManager::startCenterlineComputation() {
+    if (!m_storage) {
+        emit centerlineFinished();
+        return;
+    }
+
+    emit trackingStatusUpdate("Computing centerlines...");
+
+    auto* thread = new QThread(this);
+    auto* worker = new CenterlineWorker(m_storage);
+    worker->moveToThread(thread);
+
+    m_centerlineThread = thread;
+    m_centerlineWorker = worker;
+
+    connect(thread, &QThread::started, worker, &CenterlineWorker::doWork);
+    connect(worker, &CenterlineWorker::progress, this, &TrackingManager::centerlineProgress);
+    connect(worker, &CenterlineWorker::finished, this, &TrackingManager::handleCenterlineFinished);
+    connect(worker, &CenterlineWorker::failed, this, &TrackingManager::handleCenterlineFailed);
+    connect(worker, &CenterlineWorker::finished, thread, &QThread::quit);
+    connect(worker, &CenterlineWorker::failed, thread, &QThread::quit);
+    connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+
+    thread->start();
+}
+
+void TrackingManager::handleCenterlineFinished() {
+    emit trackingStatusUpdate("Centerline computation complete.");
+    emit centerlineFinished();
+    QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
+}
+
+void TrackingManager::handleCenterlineFailed(const QString& reason) {
+    qWarning() << "TrackingManager: Centerline computation failed:" << reason;
+    emit trackingStatusUpdate("Warning: Centerline computation failed - " + reason);
+    emit centerlineFinished();
+    QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
 }
