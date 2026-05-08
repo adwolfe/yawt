@@ -1061,6 +1061,20 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             painter.drawEllipse(tailPoint, endpointRadius, endpointRadius);
             painter.setBrush(QColor(255, 255, 0));   // yellow = centerline-centroid
             painter.drawEllipse(midPoint, centroidRadius, centroidRadius);
+
+            if (blob.hasCenterlineCutPoint) {
+                const QPointF cutPoint = mapPointFromVideo(
+                    QPointF(blob.centerlineCutPoint.x, blob.centerlineCutPoint.y));
+                if (cutPoint.x() >= 0) {
+                    const qreal cutRadius = CENTERLINE_LINE_WIDTH * 1.25;
+                    painter.setPen(QPen(Qt::black, 1.0));
+                    painter.setBrush(QColor(255, 0, 255));
+                    painter.drawRect(QRectF(cutPoint.x() - cutRadius,
+                                            cutPoint.y() - cutRadius,
+                                            cutRadius * 2.0,
+                                            cutRadius * 2.0));
+                }
+            }
         }
     }
 

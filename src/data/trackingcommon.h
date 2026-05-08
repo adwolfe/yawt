@@ -168,11 +168,19 @@ struct DetectedBlob {
     std::vector<cv::Point> contourPoints;                   // Outer contour points (in video coordinates)
     std::vector<std::vector<cv::Point>> holeContourPoints;  // Inner hole contours (ring topology from coiled worm)
     std::vector<cv::Point2f> centerlinePoints;              // Ordered centerline points from one body end to the other
+    cv::Point2f centerlineCutPoint;                         // Debug/overlay point where a ring mask was cut open
+    bool hasCenterlineCutPoint = false;                     // True when centerlineCutPoint is meaningful
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
     // Default constructor
-    DetectedBlob() : area(0.0), convexHullArea(0.0), isValid(false), touchesROIboundary(false) {}
+    DetectedBlob()
+        : area(0.0),
+          convexHullArea(0.0),
+          centerlineCutPoint(0.f, 0.f),
+          hasCenterlineCutPoint(false),
+          isValid(false),
+          touchesROIboundary(false) {}
 };
 
 enum class TrackPointQuality {

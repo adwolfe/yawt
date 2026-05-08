@@ -95,6 +95,7 @@ static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, in
 struct CenterlineState {
     std::vector<cv::Point2f> points;
     cv::Point2f blobCentroid;
+    Tracking::DetectedBlob blob;
     bool valid = false;
 
     cv::Point2f nose()     const { return points.front(); }
@@ -197,7 +198,8 @@ static bool buildSplitRingCandidate(const Tracking::DetectedBlob& blob,
                                     const cv::Point2f& cutHint,
                                     int cutThickness,
                                     int nPoints,
-                                    std::vector<cv::Point2f>& outPts)
+                                    std::vector<cv::Point2f>& outPts,
+                                    cv::Point2f& outCutPoint)
 {
     if (blob.contourPoints.empty() || blob.holeContourPoints.empty()) {
         return false;
@@ -209,6 +211,7 @@ static bool buildSplitRingCandidate(const Tracking::DetectedBlob& blob,
     }
 
     const cv::Point2f outerPoint = nearestContourPoint(blob.contourPoints, cutHint);
+    outCutPoint = outerPoint;
     Tracking::DetectedBlob splitBlob = blob;
     if (!Tracking::populateCenterlineFromContourWithCut(splitBlob, outerPoint, holePoint, cutThickness)) {
         return false;
@@ -219,6 +222,215 @@ static bool buildSplitRingCandidate(const Tracking::DetectedBlob& blob,
         outPts = resample(outPts, nPoints);
     }
     return outPts.size() >= 2;
+}
+
+static bool buildSplitRingCandidateWithCut(const Tracking::DetectedBlob& blob,
+                                           const cv::Point2f& cutStart,
+                                           const cv::Point2f& cutEnd,
+                                           int cutThickness,
+                                           int nPoints,
+                                           std::vector<cv::Point2f>& outPts,
+                                           cv::Point2f& outCutPoint)
+{
+    Tracking::DetectedBlob splitBlob = blob;
+    if (!Tracking::populateCenterlineFromContourWithCut(splitBlob, cutStart, cutEnd, cutThickness)) {
+        return false;
+    }
+
+    outPts.assign(splitBlob.centerlinePoints.begin(), splitBlob.centerlinePoints.end());
+    if (static_cast<int>(outPts.size()) != nPoints) {
+        outPts = resample(outPts, nPoints);
+    }
+    outCutPoint = (cutStart + cutEnd) * 0.5f;
+    return outPts.size() >= 2;
+}
+
+static void fillBlobMask(cv::Mat& mask,
+                         const Tracking::DetectedBlob& blob,
+                         const cv::Rect& bounds,
+                         const cv::Point2f& offset)
+{
+    std::vector<std::vector<cv::Point>> outerContours(1);
+    outerContours.front().reserve(blob.contourPoints.size());
+    for (const cv::Point& pt : blob.contourPoints) {
+        outerContours.front().push_back(cv::Point(
+            static_cast<int>(std::lround(static_cast<float>(pt.x) + offset.x - bounds.x)),
+            static_cast<int>(std::lround(static_cast<float>(pt.y) + offset.y - bounds.y))));
+    }
+    cv::fillPoly(mask, outerContours, cv::Scalar(255));
+
+    for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
+        std::vector<std::vector<cv::Point>> holeContour(1);
+        holeContour.front().reserve(hole.size());
+        for (const cv::Point& pt : hole) {
+            holeContour.front().push_back(cv::Point(
+                static_cast<int>(std::lround(static_cast<float>(pt.x) + offset.x - bounds.x)),
+                static_cast<int>(std::lround(static_cast<float>(pt.y) + offset.y - bounds.y))));
+        }
+        cv::fillPoly(mask, holeContour, cv::Scalar(0));
+    }
+}
+
+static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
+                             const CenterlineState& prev,
+                             const cv::Point2f& expectedOffset,
+                             const cv::Point2f& expectedNose,
+                             const cv::Point2f& expectedTail,
+                             cv::Point2f& outCutStart,
+                             cv::Point2f& outCutEnd,
+                             cv::Point2f& outCutCenter)
+{
+    if (!prev.valid || prev.blob.contourPoints.empty() || current.contourPoints.empty()) {
+        return false;
+    }
+
+    cv::Rect currentBounds = cv::boundingRect(current.contourPoints);
+    std::vector<cv::Point> shiftedPrevContour;
+    shiftedPrevContour.reserve(prev.blob.contourPoints.size());
+    for (const cv::Point& pt : prev.blob.contourPoints) {
+        shiftedPrevContour.push_back(cv::Point(
+            static_cast<int>(std::lround(static_cast<float>(pt.x) + expectedOffset.x)),
+            static_cast<int>(std::lround(static_cast<float>(pt.y) + expectedOffset.y))));
+    }
+    cv::Rect prevBounds = cv::boundingRect(shiftedPrevContour);
+    cv::Rect bounds = currentBounds | prevBounds;
+    bounds.x -= 2;
+    bounds.y -= 2;
+    bounds.width += 4;
+    bounds.height += 4;
+    if (bounds.width <= 1 || bounds.height <= 1) {
+        return false;
+    }
+
+    cv::Mat currentMask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
+    cv::Mat previousMask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
+    fillBlobMask(currentMask, current, bounds, cv::Point2f(0.f, 0.f));
+    fillBlobMask(previousMask, prev.blob, bounds, expectedOffset);
+
+    cv::Mat inversePrevious;
+    cv::bitwise_not(previousMask, inversePrevious);
+    cv::Mat delta;
+    cv::bitwise_and(currentMask, inversePrevious, delta);
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int componentCount =
+        cv::connectedComponentsWithStats(delta, labels, stats, centroids, 8, CV_32S);
+    if (componentCount <= 1) {
+        return false;
+    }
+
+    const cv::Point2f expectedGapMid = (expectedNose + expectedTail) * 0.5f;
+    int bestLabel = -1;
+    float bestScore = std::numeric_limits<float>::max();
+    for (int label = 1; label < componentCount; ++label) {
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if (area < 2) {
+            continue;
+        }
+        const cv::Point2f centroid(
+            static_cast<float>(centroids.at<double>(label, 0) + bounds.x),
+            static_cast<float>(centroids.at<double>(label, 1) + bounds.y));
+        const float score = ptDist(centroid, expectedGapMid) - 0.15f * static_cast<float>(area);
+        if (score < bestScore) {
+            bestScore = score;
+            bestLabel = label;
+        }
+    }
+    if (bestLabel < 0) {
+        return false;
+    }
+
+    cv::Point2f componentCentroid(
+        static_cast<float>(centroids.at<double>(bestLabel, 0) + bounds.x),
+        static_cast<float>(centroids.at<double>(bestLabel, 1) + bounds.y));
+    const cv::Point2f nearestFeature =
+        ptDist(componentCentroid, expectedNose) <= ptDist(componentCentroid, expectedTail)
+            ? expectedNose
+            : expectedTail;
+
+    std::vector<cv::Point2f> componentPoints;
+    componentPoints.reserve(static_cast<size_t>(stats.at<int>(bestLabel, cv::CC_STAT_AREA)));
+    float farthestDistance = -1.f;
+    for (int y = 0; y < labels.rows; ++y) {
+        const int* labelRow = labels.ptr<int>(y);
+        for (int x = 0; x < labels.cols; ++x) {
+            if (labelRow[x] != bestLabel) {
+                continue;
+            }
+            const cv::Point2f point(static_cast<float>(bounds.x + x),
+                                    static_cast<float>(bounds.y + y));
+            componentPoints.push_back(point);
+            const float distance = ptDist(point, nearestFeature);
+            if (distance > farthestDistance) {
+                farthestDistance = distance;
+            }
+        }
+    }
+
+    if (componentPoints.empty() || farthestDistance <= 0.f) {
+        return false;
+    }
+
+    std::vector<cv::Point2f> farEdgePoints;
+    farEdgePoints.reserve(componentPoints.size());
+    const float bandWidth = 2.5f;
+    for (const cv::Point2f& point : componentPoints) {
+        if (ptDist(point, nearestFeature) >= farthestDistance - bandWidth) {
+            farEdgePoints.push_back(point);
+        }
+    }
+    if (farEdgePoints.empty()) {
+        return false;
+    }
+
+    cv::Point2f center(0.f, 0.f);
+    for (const cv::Point2f& point : farEdgePoints) {
+        center += point;
+    }
+    center *= 1.f / static_cast<float>(farEdgePoints.size());
+
+    cv::Point2f direction(0.f, 0.f);
+    if (farEdgePoints.size() >= 2) {
+        double xx = 0.0;
+        double xy = 0.0;
+        double yy = 0.0;
+        for (const cv::Point2f& point : farEdgePoints) {
+            const double dx = static_cast<double>(point.x - center.x);
+            const double dy = static_cast<double>(point.y - center.y);
+            xx += dx * dx;
+            xy += dx * dy;
+            yy += dy * dy;
+        }
+        const double theta = 0.5 * std::atan2(2.0 * xy, xx - yy);
+        direction = cv::Point2f(static_cast<float>(std::cos(theta)),
+                                static_cast<float>(std::sin(theta)));
+    }
+    if (ptDist(direction, cv::Point2f(0.f, 0.f)) < 1e-3f) {
+        const cv::Point2f away = center - nearestFeature;
+        direction = cv::Point2f(-away.y, away.x);
+    }
+    const float directionLen = ptDist(direction, cv::Point2f(0.f, 0.f));
+    if (directionLen < 1e-3f) {
+        return false;
+    }
+    direction *= 1.f / directionLen;
+
+    float minProjection = std::numeric_limits<float>::max();
+    float maxProjection = -std::numeric_limits<float>::max();
+    for (const cv::Point2f& point : farEdgePoints) {
+        const cv::Point2f delta = point - center;
+        const float projection = delta.x * direction.x + delta.y * direction.y;
+        minProjection = std::min(minProjection, projection);
+        maxProjection = std::max(maxProjection, projection);
+    }
+
+    const float halfLength = std::max(4.f, 0.5f * (maxProjection - minProjection) + 2.f);
+    outCutStart = center - direction * halfLength;
+    outCutEnd = center + direction * halfLength;
+    outCutCenter = center;
+    return true;
 }
 
 // Compute, orient, validate and (if needed) repair the centerline for one frame.
@@ -232,6 +444,7 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
                             CenterlineState& out)
 {
     if (!blob.isValid || blob.contourPoints.empty()) return false;
+    blob.hasCenterlineCutPoint = false;
 
     if (blob.centerlinePoints.empty())
         Tracking::populateCenterlineFromContour(blob);
@@ -273,25 +486,49 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
         const cv::Point2f expectedMid = prev.midpoint() + expectedOffset;
         const cv::Point2f expectedEndGapMid = (expectedNose + expectedTail) * 0.5f;
 
-        std::vector<cv::Point2f> cutHints{
-            expectedEndGapMid,
-            expectedNose,
-            expectedTail,
-            expectedMid,
-            expectedNose * 0.75f + expectedTail * 0.25f,
-            expectedNose * 0.25f + expectedTail * 0.75f
+        struct CutCandidateSeed {
+            cv::Point2f start;
+            cv::Point2f end;
+            cv::Point2f hint;
+            bool hasSegment = false;
         };
+
+        std::vector<CutCandidateSeed> cutSeeds;
+        cv::Point2f diffCutStart;
+        cv::Point2f diffCutEnd;
+        cv::Point2f diffCutCenter;
+        if (diffBasedCutHint(blob, prev, expectedOffset, expectedNose, expectedTail,
+                             diffCutStart, diffCutEnd, diffCutCenter)) {
+            cutSeeds.push_back(CutCandidateSeed{diffCutStart, diffCutEnd, diffCutCenter, true});
+        }
+        std::vector<cv::Point2f> cutHints;
+        cutHints.push_back(expectedEndGapMid);
+        cutHints.push_back(expectedNose);
+        cutHints.push_back(expectedTail);
+        cutHints.push_back(expectedMid);
+        cutHints.push_back(expectedNose * 0.75f + expectedTail * 0.25f);
+        cutHints.push_back(expectedNose * 0.25f + expectedTail * 0.75f);
+        for (const cv::Point2f& hint : cutHints) {
+            cutSeeds.push_back(CutCandidateSeed{cv::Point2f(), cv::Point2f(), hint, false});
+        }
 
         std::vector<cv::Point2f> currentForScore = pts;
         const float currentScore =
             continuityScore(currentForScore, prev, expectedOffset, refLength);
         float bestScore = std::numeric_limits<float>::max();
         std::vector<cv::Point2f> bestPts;
+        cv::Point2f bestCutPoint;
         const int cutThickness = 3;
 
-        for (const cv::Point2f& hint : cutHints) {
+        for (const CutCandidateSeed& seed : cutSeeds) {
             std::vector<cv::Point2f> candidate;
-            if (!buildSplitRingCandidate(blob, hint, cutThickness, nPoints, candidate)) {
+            cv::Point2f cutPoint;
+            const bool built = seed.hasSegment
+                ? buildSplitRingCandidateWithCut(blob, seed.start, seed.end, cutThickness,
+                                                 nPoints, candidate, cutPoint)
+                : buildSplitRingCandidate(blob, seed.hint, cutThickness,
+                                          nPoints, candidate, cutPoint);
+            if (!built) {
                 continue;
             }
             const float score =
@@ -299,12 +536,15 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
             if (score < bestScore) {
                 bestScore = score;
                 bestPts = std::move(candidate);
+                bestCutPoint = cutPoint;
             }
         }
 
         if (!bestPts.empty() &&
             (needsRepair || bestScore + 2.f < currentScore)) {
             pts = std::move(bestPts);
+            blob.centerlineCutPoint = bestCutPoint;
+            blob.hasCenterlineCutPoint = true;
         }
     }
     // ─── Fallback B: non-ring blobs ──────────────────────────────────────
@@ -358,6 +598,7 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
     blob.centerlinePoints.assign(pts.begin(), pts.end());
     out.points = pts;
     out.blobCentroid = curBlobCentroid;
+    out.blob = blob;
     out.valid  = true;
     return true;
 }

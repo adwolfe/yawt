@@ -234,6 +234,14 @@ static void saveFrameAtomicStateToJson(const QString& directoryPath,
             }
             dbObj["centerlinePoints"] = dbCenterlineArr;
 
+            dbObj["hasCenterlineCutPoint"] = db.hasCenterlineCutPoint;
+            if (db.hasCenterlineCutPoint) {
+                QJsonObject cutObj;
+                cutObj["x"] = static_cast<double>(db.centerlineCutPoint.x);
+                cutObj["y"] = static_cast<double>(db.centerlineCutPoint.y);
+                dbObj["centerlineCutPoint"] = cutObj;
+            }
+
             // Serialize hole contours
             QJsonArray dbHolesArr;
             for (const auto& hole : db.holeContourPoints) {
@@ -474,6 +482,17 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
                 }
                 if (db.isValid && db.centerlinePoints.empty() && !db.contourPoints.empty()) {
                     Tracking::populateCenterlineFromContour(db);
+                }
+
+                db.hasCenterlineCutPoint = dbObj.value("hasCenterlineCutPoint").toBool(false);
+                if (db.hasCenterlineCutPoint &&
+                    dbObj.contains("centerlineCutPoint") && dbObj["centerlineCutPoint"].isObject()) {
+                    QJsonObject cutObj = dbObj["centerlineCutPoint"].toObject();
+                    db.centerlineCutPoint = cv::Point2f(
+                        static_cast<float>(cutObj.value("x").toDouble()),
+                        static_cast<float>(cutObj.value("y").toDouble()));
+                } else {
+                    db.hasCenterlineCutPoint = false;
                 }
 
                 // Deserialize hole contours for DetectedBlob if present
