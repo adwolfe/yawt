@@ -80,13 +80,36 @@ static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, in
     return out;
 }
 
-// Endpoints/midpoint we carry from one frame to the next.
+// Centerline state we carry from one frame to the next.  Storing the entire
+// resampled point sequence (not just nose/tail/midpoint) lets us orient by
+// shape correspondence rather than endpoint distance — which is far more
+// robust when the worm coils, because nose and tail can become spatially
+// close yet the *order* along the line still distinguishes them.
 struct CenterlineState {
-    cv::Point2f nose;      // centerlinePoints.front()
-    cv::Point2f tail;      // centerlinePoints.back()
-    cv::Point2f midpoint;  // centerlinePoints[N/2]
+    std::vector<cv::Point2f> points;
     bool valid = false;
+
+    cv::Point2f nose()     const { return points.front(); }
+    cv::Point2f tail()     const { return points.back();  }
+    cv::Point2f midpoint() const { return points[points.size() / 2]; }
 };
+
+// Orient pts by shape correspondence with prev: pick whichever orientation
+// (forward or reversed) minimises the sum of pointwise distances to prev.
+// Both vectors must have the same length.
+static void orientByShape(std::vector<cv::Point2f>& pts,
+                          const std::vector<cv::Point2f>& prev)
+{
+    if (pts.size() < 2 || pts.size() != prev.size()) return;
+    float fwdSum = 0.f, revSum = 0.f;
+    int n = static_cast<int>(pts.size());
+    for (int i = 0; i < n; ++i) {
+        fwdSum += ptDist(pts[i], prev[i]);
+        revSum += ptDist(pts[i], prev[n - 1 - i]);
+    }
+    if (revSum < fwdSum)
+        std::reverse(pts.begin(), pts.end());
+}
 
 // Compute, orient, validate and (if needed) repair the centerline for one frame.
 // Returns the resulting CenterlineState (always valid if the function returns
@@ -107,57 +130,64 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
     std::vector<cv::Point2f> pts(blob.centerlinePoints.begin(),
                                  blob.centerlinePoints.end());
 
-    // Orient using prev.nose so that pts.front() is the head end.
-    if (prev.valid) {
-        if (ptDist(pts.back(), prev.nose) < ptDist(pts.front(), prev.nose))
-            std::reverse(pts.begin(), pts.end());
-    }
+    // Always resample to a consistent point count so shape-correspondence
+    // comparisons are meaningful.
+    if (static_cast<int>(pts.size()) != nPoints)
+        pts = resample(pts, nPoints);
 
-    bool isRing = !blob.holeContourPoints.empty();
+    // Orient by shape correspondence with the previous frame.  This is more
+    // robust than nose-distance alone because nose and tail can be spatially
+    // close on a coiled worm; the *order* along the polyline still
+    // distinguishes them when matched against the previous frame's ordering.
+    if (prev.valid && prev.points.size() == pts.size())
+        orientByShape(pts, prev.points);
+
+    bool isRing  = !blob.holeContourPoints.empty();
     float curLen = arcLen(pts);
 
-    // Fallback: if the skeleton path is too short relative to the worm's known
-    // body length, walk the outer contour from the nearest point to the
-    // last-known nose.  Try both directions; if we have a previous tail we
-    // pick whichever direction's far end is closer to it (preserves head/tail
-    // orientation as well as length).
-    bool used_fallback = false;
-    if (refLength > 0.f && curLen < minArcFraction * refLength) {
-        cv::Point2f startHint = prev.valid ? prev.nose : pts.front();
+    // Contour-walk fallback is only correct for ring blobs.  For a coiled
+    // worm the outer contour traces the body itself, so walking it for
+    // refLength pixels gives a true centerline-like path.  For an uncoiled
+    // worm the outer contour wraps the full perimeter (~2× body length),
+    // so the walk would follow one *edge* rather than the body interior —
+    // worse than the original skeleton.  Trust the skeleton in that case.
+    if (isRing && refLength > 0.f && curLen < minArcFraction * refLength) {
+        cv::Point2f startHint = prev.valid ? prev.nose() : pts.front();
         int startIdx = nearestContourIdx(blob.contourPoints, startHint);
         auto fwd = walkContour(blob.contourPoints, startIdx, +1, refLength);
         auto bwd = walkContour(blob.contourPoints, startIdx, -1, refLength);
 
         std::vector<cv::Point2f>* best = nullptr;
         if (prev.valid && !fwd.empty() && !bwd.empty()) {
-            float dFwd = ptDist(fwd.back(), prev.tail);
-            float dBwd = ptDist(bwd.back(), prev.tail);
+            float dFwd = ptDist(fwd.back(), prev.tail());
+            float dBwd = ptDist(bwd.back(), prev.tail());
             best = (dFwd <= dBwd) ? &fwd : &bwd;
         } else {
             best = (arcLen(fwd) >= arcLen(bwd)) ? &fwd : &bwd;
         }
         if (best && arcLen(*best) > curLen) {
             pts = resample(*best, nPoints);
-            used_fallback = true;
+            // Re-apply shape correspondence after fallback to keep the
+            // ordering consistent with the previous frame.
+            if (prev.valid && prev.points.size() == pts.size())
+                orientByShape(pts, prev.points);
         }
     }
-
-    if (!used_fallback && static_cast<int>(pts.size()) != nPoints)
-        pts = resample(pts, nPoints);
 
     if (pts.size() < 2) return false;
 
     blob.centerlinePoints.assign(pts.begin(), pts.end());
-    out.nose     = pts.front();
-    out.tail     = pts.back();
-    out.midpoint = pts[pts.size() / 2];
-    out.valid    = true;
+    out.points = pts;
+    out.valid  = true;
     return true;
 }
 
 // ── CenterlineWorker ────────────────────────────────────────────────────────
 
-static constexpr int   kCenterlinePoints     = 10;
+// 20 points gives ~5 % body-length spacing for a typical worm, so adjacent
+// points are close enough that shape-correspondence orientation is reliable
+// even when nose and tail collapse spatially during a tight coil.
+static constexpr int   kCenterlinePoints     = 20;
 static constexpr float kMinArcLengthFraction = 0.5f;
 
 CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage, QObject* parent)
