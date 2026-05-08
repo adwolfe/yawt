@@ -199,12 +199,34 @@ bool populateCenterlineFromContour(DetectedBlob& blob)
     }
 
     cv::Mat mask = cv::Mat::zeros(localBounds.height, localBounds.width, CV_8UC1);
-    std::vector<std::vector<cv::Point>> contours(1);
-    contours.front().reserve(blob.contourPoints.size());
-    for (const cv::Point& point : blob.contourPoints) {
-        contours.front().push_back(cv::Point(point.x - localBounds.x, point.y - localBounds.y));
+    {
+        std::vector<std::vector<cv::Point>> outerContours(1);
+        outerContours.front().reserve(blob.contourPoints.size());
+        for (const cv::Point& pt : blob.contourPoints) {
+            outerContours.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
+        }
+        cv::fillPoly(mask, outerContours, cv::Scalar(255));
+
+        // Erase hole regions so the mask represents the ring, not a filled disk.
+        // Without this, skeletonization runs on a filled disk and the resulting
+        // centerline passes straight through the hole (mid-air for a coiled worm).
+        for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
+            std::vector<std::vector<cv::Point>> holeContour(1);
+            holeContour.front().reserve(hole.size());
+            for (const cv::Point& pt : hole) {
+                holeContour.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
+            }
+            cv::fillPoly(mask, holeContour, cv::Scalar(0));
+        }
+
+        // Morphological closing: seal pixel-thin gaps that appear at the self-touch
+        // point as the worm's ring contact shifts frame to frame.  A 3×3 kernel is
+        // enough to bridge 1–2 pixel cracks without significantly altering blob shape.
+        if (!blob.holeContourPoints.empty()) {
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+            cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+        }
     }
-    cv::fillPoly(mask, contours, cv::Scalar(255));
 
     cv::Mat skeleton = skeletonizeBinaryMask(mask);
     if (cv::countNonZero(skeleton) < 2) {
