@@ -1040,6 +1040,27 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             painter.setPen(centerlinePen);
             painter.setBrush(Qt::NoBrush);
             painter.drawPolyline(centerlinePolyline);
+
+            // Mark nose (front), tail (back) and centerline-centroid (middle).
+            // Different fills make head/tail orientation legible at a glance and
+            // the centroid distinguishes the centerline-derived center from the
+            // blob centroid (which can be inside the hole of a coiled worm).
+            const qreal endpointRadius = CENTERLINE_LINE_WIDTH * 1.4;
+            const qreal centroidRadius = CENTERLINE_LINE_WIDTH * 1.1;
+            const QPointF nosePoint = centerlinePolyline.first();
+            const QPointF tailPoint = centerlinePolyline.last();
+            const QPointF midPoint  = centerlinePolyline.at(centerlinePolyline.size() / 2);
+
+            QPen dotPen(Qt::black, 1.0);
+            dotPen.setCosmetic(true);
+            painter.setPen(dotPen);
+
+            painter.setBrush(QColor(0, 200, 255));   // cyan = nose
+            painter.drawEllipse(nosePoint, endpointRadius, endpointRadius);
+            painter.setBrush(QColor(255, 80, 80));   // red  = tail
+            painter.drawEllipse(tailPoint, endpointRadius, endpointRadius);
+            painter.setBrush(QColor(255, 255, 0));   // yellow = centerline-centroid
+            painter.drawEllipse(midPoint, centroidRadius, centroidRadius);
         }
     }
 

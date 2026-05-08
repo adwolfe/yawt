@@ -21,15 +21,6 @@ static float arcLen(const std::vector<cv::Point2f>& pts)
     return len;
 }
 
-// Orient pts so front is closer to headHint than back is.
-static void orientToHead(std::vector<cv::Point2f>& pts, const cv::Point2f& headHint)
-{
-    if (pts.size() < 2) return;
-    if (ptDist(pts.back(), headHint) < ptDist(pts.front(), headHint))
-        std::reverse(pts.begin(), pts.end());
-}
-
-// Index of the contour point nearest to target (video coordinates).
 static int nearestContourIdx(const std::vector<cv::Point>& contour,
                              const cv::Point2f& target)
 {
@@ -44,7 +35,7 @@ static int nearestContourIdx(const std::vector<cv::Point>& contour,
     return best;
 }
 
-// Walk the contour (in direction dir = +1 or -1) from startIdx until we have
+// Walk the contour from startIdx in direction dir (+1 or -1) until we have
 // accumulated targetLength pixels of arc, then return the raw point list.
 static std::vector<cv::Point2f> walkContour(const std::vector<cv::Point>& contour,
                                             int startIdx, int dir,
@@ -52,8 +43,7 @@ static std::vector<cv::Point2f> walkContour(const std::vector<cv::Point>& contou
 {
     int n = static_cast<int>(contour.size());
     std::vector<cv::Point2f> pts;
-    pts.push_back(cv::Point2f(contour[startIdx].x,
-                              contour[startIdx].y));
+    pts.push_back(cv::Point2f(contour[startIdx].x, contour[startIdx].y));
     float acc = 0.f;
     for (int step = 1; step < n; ++step) {
         int cur  = ((startIdx + dir * step      ) % n + n) % n;
@@ -67,11 +57,9 @@ static std::vector<cv::Point2f> walkContour(const std::vector<cv::Point>& contou
     return pts;
 }
 
-// Resample a polyline to exactly nPoints evenly spaced points.
 static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, int nPoints)
 {
-    if (static_cast<int>(pts.size()) <= nPoints) return pts;
-    // Build cumulative arc-length table
+    if (static_cast<int>(pts.size()) <= 1 || nPoints < 2) return pts;
     std::vector<float> cum(pts.size(), 0.f);
     for (size_t i = 1; i < pts.size(); ++i)
         cum[i] = cum[i - 1] + ptDist(pts[i - 1], pts[i]);
@@ -92,12 +80,84 @@ static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, in
     return out;
 }
 
+// Endpoints/midpoint we carry from one frame to the next.
+struct CenterlineState {
+    cv::Point2f nose;      // centerlinePoints.front()
+    cv::Point2f tail;      // centerlinePoints.back()
+    cv::Point2f midpoint;  // centerlinePoints[N/2]
+    bool valid = false;
+};
+
+// Compute, orient, validate and (if needed) repair the centerline for one frame.
+// Returns the resulting CenterlineState (always valid if the function returns
+// true; invalid if no usable centerline could be produced).
+static bool processOneFrame(Tracking::DetectedBlob& blob,
+                            const CenterlineState& prev,
+                            float refLength,
+                            int nPoints,
+                            float minArcFraction,
+                            CenterlineState& out)
+{
+    if (!blob.isValid || blob.contourPoints.empty()) return false;
+
+    if (blob.centerlinePoints.empty())
+        Tracking::populateCenterlineFromContour(blob);
+    if (blob.centerlinePoints.empty()) return false;
+
+    std::vector<cv::Point2f> pts(blob.centerlinePoints.begin(),
+                                 blob.centerlinePoints.end());
+
+    // Orient using prev.nose so that pts.front() is the head end.
+    if (prev.valid) {
+        if (ptDist(pts.back(), prev.nose) < ptDist(pts.front(), prev.nose))
+            std::reverse(pts.begin(), pts.end());
+    }
+
+    bool isRing = !blob.holeContourPoints.empty();
+    float curLen = arcLen(pts);
+
+    // Fallback: if the skeleton path is too short relative to the worm's known
+    // body length, walk the outer contour from the nearest point to the
+    // last-known nose.  Try both directions; if we have a previous tail we
+    // pick whichever direction's far end is closer to it (preserves head/tail
+    // orientation as well as length).
+    bool used_fallback = false;
+    if (refLength > 0.f && curLen < minArcFraction * refLength) {
+        cv::Point2f startHint = prev.valid ? prev.nose : pts.front();
+        int startIdx = nearestContourIdx(blob.contourPoints, startHint);
+        auto fwd = walkContour(blob.contourPoints, startIdx, +1, refLength);
+        auto bwd = walkContour(blob.contourPoints, startIdx, -1, refLength);
+
+        std::vector<cv::Point2f>* best = nullptr;
+        if (prev.valid && !fwd.empty() && !bwd.empty()) {
+            float dFwd = ptDist(fwd.back(), prev.tail);
+            float dBwd = ptDist(bwd.back(), prev.tail);
+            best = (dFwd <= dBwd) ? &fwd : &bwd;
+        } else {
+            best = (arcLen(fwd) >= arcLen(bwd)) ? &fwd : &bwd;
+        }
+        if (best && arcLen(*best) > curLen) {
+            pts = resample(*best, nPoints);
+            used_fallback = true;
+        }
+    }
+
+    if (!used_fallback && static_cast<int>(pts.size()) != nPoints)
+        pts = resample(pts, nPoints);
+
+    if (pts.size() < 2) return false;
+
+    blob.centerlinePoints.assign(pts.begin(), pts.end());
+    out.nose     = pts.front();
+    out.tail     = pts.back();
+    out.midpoint = pts[pts.size() / 2];
+    out.valid    = true;
+    return true;
+}
+
 // ── CenterlineWorker ────────────────────────────────────────────────────────
 
-static constexpr int   kCenterlinePoints    = 10;
-// If the skeleton path length is below this fraction of the reference body
-// length, the skeletonisation failed to trace the full worm and we fall back
-// to contour traversal.
+static constexpr int   kCenterlinePoints     = 10;
 static constexpr float kMinArcLengthFraction = 0.5f;
 
 CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage, QObject* parent)
@@ -123,23 +183,29 @@ void CenterlineWorker::doWork()
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
         int wormId = it->first;
 
-        // Sort a local copy of track points by frame so we can process them
-        // in temporal order (essential for head/tail continuity).
-        std::vector<Tracking::WormTrackPoint> trackPoints = it->second;
-        std::sort(trackPoints.begin(), trackPoints.end(),
+        // Track points are processed in temporal order.  The blob centerlines
+        // are written back to storage but the WormTrackPoint.position values
+        // are *not* modified — the original blob centroid is preserved.
+        std::vector<Tracking::WormTrackPoint> sortedPoints = it->second;
+        std::sort(sortedPoints.begin(), sortedPoints.end(),
                   [](const Tracking::WormTrackPoint& a,
                      const Tracking::WormTrackPoint& b) {
                       return a.frameNumberOriginal < b.frameNumberOriginal;
                   });
 
-        // ── Pass 1: compute centerlines and learn reference body length ───
-        // Reference length is taken only from single (non-ring) frames because
-        // the skeleton is most reliable there.  Ring frames are deliberately
-        // excluded: their skeleton path may be shorter than the full body.
-        float totalRefLen = 0.f;
-        int   refCount    = 0;
+        // Per-worm keyframe: the frame on which the user originally clicked
+        // this worm.  Centerline correction propagates outward from there in
+        // both directions because the keyframe is guaranteed to have a clean,
+        // separated blob (worms are picked when they're individually visible).
+        int keyframe = -1;
+        if (const TableItems::ClickedItem* item = m_storage->getItem(wormId))
+            keyframe = item->frameOfSelection;
 
-        for (Tracking::WormTrackPoint& tp : trackPoints) {
+        // ── Pass 1: compute first-pass centerlines, learn body length ──
+        std::vector<float> validLengths;
+        validLengths.reserve(sortedPoints.size());
+
+        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
             if (tp.quality == Tracking::TrackPointQuality::Merged ||
                 tp.quality == Tracking::TrackPointQuality::Lost)
                 continue;
@@ -155,96 +221,96 @@ void CenterlineWorker::doWork()
                 Tracking::populateCenterlineFromContour(blob);
 
             if (!blob.centerlinePoints.empty()) {
-                // Accumulate reference length only from uncoiled (non-ring) frames.
+                // Reference length is taken only from non-ring frames where
+                // the skeleton is reliable.
                 if (blob.holeContourPoints.empty()) {
-                    std::vector<cv::Point2f> clPts(blob.centerlinePoints.begin(),
-                                                   blob.centerlinePoints.end());
-                    totalRefLen += arcLen(clPts);
-                    ++refCount;
+                    std::vector<cv::Point2f> p(blob.centerlinePoints.begin(),
+                                               blob.centerlinePoints.end());
+                    validLengths.push_back(arcLen(p));
                 }
                 m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
             }
         }
 
-        float referenceLength = (refCount > 0) ? totalRefLen / refCount : 0.f;
+        // Use the median length as a robust reference (resistant to outliers).
+        float refLength = 0.f;
+        if (!validLengths.empty()) {
+            std::nth_element(validLengths.begin(),
+                             validLengths.begin() + validLengths.size() / 2,
+                             validLengths.end());
+            refLength = validLengths[validLengths.size() / 2];
+        }
 
-        // ── Pass 2: orient, validate, correct ───────────────────────────
-        // lastHead tracks the front endpoint of the previous valid centerline.
-        // It starts invalid (-1, -1) so the very first frame is used as-is.
-        cv::Point2f lastHead(-1.f, -1.f);
-        bool trackModified = false;
-
-        for (Tracking::WormTrackPoint& tp : trackPoints) {
-            if (tp.quality == Tracking::TrackPointQuality::Merged ||
-                tp.quality == Tracking::TrackPointQuality::Lost)
-                continue;
-
-            QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (!frameBlobs.contains(wormId)) continue;
-
-            Tracking::DetectedBlob blob = frameBlobs[wormId];
-            if (!blob.isValid || blob.contourPoints.empty()) continue;
-
-            if (blob.centerlinePoints.empty())
-                Tracking::populateCenterlineFromContour(blob);
-            if (blob.centerlinePoints.empty()) continue;
-
-            std::vector<cv::Point2f> clPts(blob.centerlinePoints.begin(),
-                                           blob.centerlinePoints.end());
-            bool isRing     = !blob.holeContourPoints.empty();
-            bool headKnown  = (lastHead.x >= 0.f);
-
-            // Orient so that clPts.front() is the head end.
-            if (headKnown)
-                orientToHead(clPts, lastHead);
-
-            // For ring blobs, validate the skeleton path against the reference
-            // body length.  When the path is too short it means skeletonisation
-            // lost part of the body (e.g. where the self-touch gap fluctuated).
-            // Fall back to contour traversal: the outer contour of a ring blob
-            // IS the worm body, so walking it for referenceLength pixels gives
-            // a reliable path regardless of skeleton topology.
-            if (isRing && referenceLength > 0.f &&
-                arcLen(clPts) < kMinArcLengthFraction * referenceLength) {
-
-                cv::Point2f startHint = headKnown ? lastHead : clPts.front();
-                int startIdx = nearestContourIdx(blob.contourPoints, startHint);
-
-                // Try both contour directions; keep the longer walk.
-                auto fwd = walkContour(blob.contourPoints, startIdx, +1, referenceLength);
-                auto bwd = walkContour(blob.contourPoints, startIdx, -1, referenceLength);
-                auto& best = (arcLen(fwd) >= arcLen(bwd)) ? fwd : bwd;
-
-                if (arcLen(best) > arcLen(clPts)) {
-                    clPts = resample(best, kCenterlinePoints);
-                    // Re-orient after fallback so head is still at front.
-                    if (headKnown)
-                        orientToHead(clPts, lastHead);
+        // ── Pass 2: keyframe-outward orientation and repair ──
+        // Find the index in sortedPoints whose frame == keyframe (or fall back
+        // to the first frame if the keyframe didn't yield a valid track point).
+        int keyframeIdx = -1;
+        if (keyframe >= 0) {
+            for (size_t i = 0; i < sortedPoints.size(); ++i) {
+                if (sortedPoints[i].frameNumberOriginal == keyframe) {
+                    keyframeIdx = static_cast<int>(i);
+                    break;
                 }
             }
+        }
+        if (keyframeIdx < 0) keyframeIdx = 0;
 
-            // Resample to a consistent point count for export / downstream use.
-            if (static_cast<int>(clPts.size()) != kCenterlinePoints)
-                clPts = resample(clPts, kCenterlinePoints);
+        auto runDirection = [&](int startIdx, int step,
+                                CenterlineState seedState) {
+            CenterlineState prev = seedState;
+            int n = static_cast<int>(sortedPoints.size());
+            for (int i = startIdx; i >= 0 && i < n; i += step) {
+                Tracking::WormTrackPoint& tp = sortedPoints[i];
+                if (tp.quality == Tracking::TrackPointQuality::Merged ||
+                    tp.quality == Tracking::TrackPointQuality::Lost) {
+                    // No prediction available across merged/lost gaps; keep
+                    // the first-pass guess for those frames untouched and
+                    // resume orientation when we see a clean frame again.
+                    prev.valid = false;
+                    continue;
+                }
 
-            // Update head for the next frame.
-            lastHead = clPts.front();
+                QMap<int, Tracking::DetectedBlob> frameBlobs =
+                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                if (!frameBlobs.contains(wormId)) continue;
 
-            // Write corrected centerline back to blob in storage.
-            blob.centerlinePoints.assign(clPts.begin(), clPts.end());
-            m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+                Tracking::DetectedBlob blob = frameBlobs[wormId];
 
-            // For ring blobs the geometric centroid is inside the hole.
-            // Use the centerline midpoint as the authoritative body position.
-            if (isRing) {
-                tp.position = clPts[clPts.size() / 2];
-                trackModified = true;
+                CenterlineState out;
+                if (processOneFrame(blob, prev, refLength,
+                                    kCenterlinePoints,
+                                    kMinArcLengthFraction, out)) {
+                    m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+                    prev = out;
+                } else {
+                    prev.valid = false;
+                }
+            }
+        };
+
+        // Seed from the keyframe itself; we orient it without history (its
+        // first-pass centerline simply defines our convention for this worm).
+        CenterlineState seed;
+        {
+            const Tracking::WormTrackPoint& tp = sortedPoints[keyframeIdx];
+            QMap<int, Tracking::DetectedBlob> frameBlobs =
+                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            if (frameBlobs.contains(wormId)) {
+                Tracking::DetectedBlob blob = frameBlobs[wormId];
+                CenterlineState out;
+                CenterlineState empty;
+                if (processOneFrame(blob, empty, refLength,
+                                    kCenterlinePoints,
+                                    kMinArcLengthFraction, out)) {
+                    m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+                    seed = out;
+                }
             }
         }
 
-        if (trackModified)
-            m_storage->setTrackForItem(wormId, trackPoints);
+        // Propagate forward and backward from the keyframe.
+        runDirection(keyframeIdx + 1, +1, seed);
+        runDirection(keyframeIdx - 1, -1, seed);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);
