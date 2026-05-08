@@ -16,6 +16,61 @@ namespace {
 
 constexpr int kCenterlinePaddingPixels = 2;
 
+void zhangSuenThinningIteration(cv::Mat& image, int iteration)
+{
+    cv::Mat marker = cv::Mat::zeros(image.size(), CV_8UC1);
+
+    for (int row = 1; row < image.rows - 1; ++row) {
+        const uchar* previousRow = image.ptr<uchar>(row - 1);
+        const uchar* currentRow = image.ptr<uchar>(row);
+        const uchar* nextRow = image.ptr<uchar>(row + 1);
+        uchar* markerRow = marker.ptr<uchar>(row);
+
+        for (int col = 1; col < image.cols - 1; ++col) {
+            if (currentRow[col] == 0) {
+                continue;
+            }
+
+            const int p2 = previousRow[col];
+            const int p3 = previousRow[col + 1];
+            const int p4 = currentRow[col + 1];
+            const int p5 = nextRow[col + 1];
+            const int p6 = nextRow[col];
+            const int p7 = nextRow[col - 1];
+            const int p8 = currentRow[col - 1];
+            const int p9 = previousRow[col - 1];
+
+            const int neighborCount = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+            if (neighborCount < 2 || neighborCount > 6) {
+                continue;
+            }
+
+            const int transitions =
+                (p2 == 0 && p3 == 1) +
+                (p3 == 0 && p4 == 1) +
+                (p4 == 0 && p5 == 1) +
+                (p5 == 0 && p6 == 1) +
+                (p6 == 0 && p7 == 1) +
+                (p7 == 0 && p8 == 1) +
+                (p8 == 0 && p9 == 1) +
+                (p9 == 0 && p2 == 1);
+            if (transitions != 1) {
+                continue;
+            }
+
+            const bool shouldRemove =
+                iteration == 0
+                    ? (p2 * p4 * p6 == 0 && p4 * p6 * p8 == 0)
+                    : (p2 * p4 * p8 == 0 && p2 * p6 * p8 == 0);
+            if (shouldRemove) {
+                markerRow[col] = 1;
+            }
+        }
+    }
+
+    image &= ~marker;
+}
+
 cv::Mat skeletonizeBinaryMask(const cv::Mat& binaryMask)
 {
     cv::Mat img;
@@ -27,22 +82,21 @@ cv::Mat skeletonizeBinaryMask(const cv::Mat& binaryMask)
 
     cv::threshold(img, img, 0, 255, cv::THRESH_BINARY);
 
-    cv::Mat skel = cv::Mat::zeros(img.size(), CV_8UC1);
-    cv::Mat temp;
-    cv::Mat eroded;
-    const cv::Mat element = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+    // Zhang-Suen thinning preserves connected curved bodies much better than
+    // iterative erosion/dilation skeletons for thick, bent worm masks.
+    img /= 255;
+    cv::Mat previous = cv::Mat::zeros(img.size(), CV_8UC1);
+    cv::Mat diff;
 
-    bool done = false;
-    while (!done) {
-        cv::erode(img, eroded, element);
-        cv::dilate(eroded, temp, element);
-        cv::subtract(img, temp, temp);
-        cv::bitwise_or(skel, temp, skel);
-        eroded.copyTo(img);
-        done = (cv::countNonZero(img) == 0);
-    }
+    do {
+        zhangSuenThinningIteration(img, 0);
+        zhangSuenThinningIteration(img, 1);
+        cv::absdiff(img, previous, diff);
+        img.copyTo(previous);
+    } while (cv::countNonZero(diff) > 0);
 
-    return skel;
+    img *= 255;
+    return img;
 }
 
 struct GraphSearchResult {
