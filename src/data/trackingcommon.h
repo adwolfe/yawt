@@ -256,6 +256,19 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
 bool populateCenterlineFromContour(DetectedBlob& blob);
 
 /**
+ * @brief Compute a centerline after cutting a ring blob mask open.
+ * @param blob Detected blob with ring topology. Updated with the best ordered centerline.
+ * @param cutStart First endpoint of the cut line in video coordinates.
+ * @param cutEnd Second endpoint of the cut line in video coordinates.
+ * @param cutThickness Thickness of the erased cut line in pixels.
+ * @return True when a usable centerline was found after applying the cut.
+ */
+bool populateCenterlineFromContourWithCut(DetectedBlob& blob,
+                                          const cv::Point2f& cutStart,
+                                          const cv::Point2f& cutEnd,
+                                          int cutThickness = 3);
+
+/**
  * @brief Extract an ordered skeleton centerline from a detected worm blob.
  * @param blob Detected blob with contour points in video coordinates.
  * @return Ordered centerline points in video coordinates. Empty if no valid skeleton can be extracted.

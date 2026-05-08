@@ -178,16 +178,8 @@ std::vector<cv::Point2f> reconstructCenterlinePath(const std::vector<cv::Point>&
     return path;
 }
 
-} // namespace
-
-bool populateCenterlineFromContour(DetectedBlob& blob)
+cv::Rect buildCenterlineMask(const DetectedBlob& blob, cv::Mat& mask)
 {
-    blob.centerlinePoints.clear();
-
-    if (!blob.isValid || blob.contourPoints.size() < 3) {
-        return false;
-    }
-
     cv::Rect localBounds = cv::boundingRect(blob.contourPoints);
     localBounds.x -= kCenterlinePaddingPixels;
     localBounds.y -= kCenterlinePaddingPixels;
@@ -195,42 +187,46 @@ bool populateCenterlineFromContour(DetectedBlob& blob)
     localBounds.height += 2 * kCenterlinePaddingPixels;
 
     if (localBounds.width <= 1 || localBounds.height <= 1) {
-        return false;
+        mask.release();
+        return localBounds;
     }
 
-    cv::Mat mask = cv::Mat::zeros(localBounds.height, localBounds.width, CV_8UC1);
-    {
-        std::vector<std::vector<cv::Point>> outerContours(1);
-        outerContours.front().reserve(blob.contourPoints.size());
-        for (const cv::Point& pt : blob.contourPoints) {
-            outerContours.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
-        }
-        cv::fillPoly(mask, outerContours, cv::Scalar(255));
+    mask = cv::Mat::zeros(localBounds.height, localBounds.width, CV_8UC1);
 
-        // Erase hole regions so the mask represents the ring, not a filled disk.
-        // Without this, skeletonization runs on a filled disk and the resulting
-        // centerline passes straight through the hole (mid-air for a coiled worm).
-        for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
-            std::vector<std::vector<cv::Point>> holeContour(1);
-            holeContour.front().reserve(hole.size());
-            for (const cv::Point& pt : hole) {
-                holeContour.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
-            }
-            cv::fillPoly(mask, holeContour, cv::Scalar(0));
-        }
+    std::vector<std::vector<cv::Point>> outerContours(1);
+    outerContours.front().reserve(blob.contourPoints.size());
+    for (const cv::Point& pt : blob.contourPoints) {
+        outerContours.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
+    }
+    cv::fillPoly(mask, outerContours, cv::Scalar(255));
 
-        // Morphological closing: seal pixel-thin gaps that appear at the self-touch
-        // point as the worm's ring contact shifts frame to frame.  A 3×3 kernel is
-        // enough to bridge 1–2 pixel cracks without significantly altering blob shape.
-        if (!blob.holeContourPoints.empty()) {
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-            cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+    for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
+        std::vector<std::vector<cv::Point>> holeContour(1);
+        holeContour.front().reserve(hole.size());
+        for (const cv::Point& pt : hole) {
+            holeContour.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
         }
+        cv::fillPoly(mask, holeContour, cv::Scalar(0));
+    }
+
+    if (!blob.holeContourPoints.empty()) {
+        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+        cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+    }
+
+    return localBounds;
+}
+
+std::vector<cv::Point2f> extractCenterlineFromMask(const cv::Mat& mask,
+                                                   const cv::Point2f& offset)
+{
+    if (mask.empty()) {
+        return {};
     }
 
     cv::Mat skeleton = skeletonizeBinaryMask(mask);
     if (cv::countNonZero(skeleton) < 2) {
-        return false;
+        return {};
     }
 
     cv::Mat indexImage(skeleton.size(), CV_32SC1, cv::Scalar(-1));
@@ -250,7 +246,7 @@ bool populateCenterlineFromContour(DetectedBlob& blob)
     }
 
     if (skeletonPoints.size() < 2) {
-        return false;
+        return {};
     }
 
     std::vector<std::vector<int>> adjacency(skeletonPoints.size());
@@ -329,11 +325,54 @@ bool populateCenterlineFromContour(DetectedBlob& blob)
         bestParents = std::move(secondSweep.parents);
     }
 
-    blob.centerlinePoints = reconstructCenterlinePath(
-        skeletonPoints,
-        bestParents,
-        bestStart,
-        bestEnd,
+    return reconstructCenterlinePath(skeletonPoints, bestParents, bestStart, bestEnd, offset);
+}
+
+} // namespace
+
+bool populateCenterlineFromContour(DetectedBlob& blob)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3) {
+        return false;
+    }
+
+    cv::Mat mask;
+    cv::Rect localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) return false;
+
+    blob.centerlinePoints = extractCenterlineFromMask(
+        mask,
+        cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
+
+    return blob.centerlinePoints.size() >= 2;
+}
+
+bool populateCenterlineFromContourWithCut(DetectedBlob& blob,
+                                          const cv::Point2f& cutStart,
+                                          const cv::Point2f& cutEnd,
+                                          int cutThickness)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3 || blob.holeContourPoints.empty()) {
+        return false;
+    }
+
+    cv::Mat mask;
+    cv::Rect localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) return false;
+
+    const cv::Point localStart(qRound(cutStart.x - localBounds.x),
+                               qRound(cutStart.y - localBounds.y));
+    const cv::Point localEnd(qRound(cutEnd.x - localBounds.x),
+                             qRound(cutEnd.y - localBounds.y));
+    const int thickness = std::max(1, cutThickness);
+    cv::line(mask, localStart, localEnd, cv::Scalar(0), thickness, cv::LINE_8);
+
+    blob.centerlinePoints = extractCenterlineFromMask(
+        mask,
         cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
 
     return blob.centerlinePoints.size() >= 2;

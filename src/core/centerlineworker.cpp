@@ -35,26 +35,33 @@ static int nearestContourIdx(const std::vector<cv::Point>& contour,
     return best;
 }
 
-// Walk the contour from startIdx in direction dir (+1 or -1) until we have
-// accumulated targetLength pixels of arc, then return the raw point list.
-static std::vector<cv::Point2f> walkContour(const std::vector<cv::Point>& contour,
-                                            int startIdx, int dir,
-                                            float targetLength)
+static cv::Point2f nearestContourPoint(const std::vector<cv::Point>& contour,
+                                       const cv::Point2f& target)
 {
-    int n = static_cast<int>(contour.size());
-    std::vector<cv::Point2f> pts;
-    pts.push_back(cv::Point2f(contour[startIdx].x, contour[startIdx].y));
-    float acc = 0.f;
-    for (int step = 1; step < n; ++step) {
-        int cur  = ((startIdx + dir * step      ) % n + n) % n;
-        int prev = ((startIdx + dir * (step - 1)) % n + n) % n;
-        float dx = contour[cur].x - contour[prev].x;
-        float dy = contour[cur].y - contour[prev].y;
-        acc += std::sqrt(dx * dx + dy * dy);
-        pts.push_back(cv::Point2f(contour[cur].x, contour[cur].y));
-        if (acc >= targetLength) break;
+    const int idx = nearestContourIdx(contour, target);
+    return cv::Point2f(static_cast<float>(contour[idx].x),
+                       static_cast<float>(contour[idx].y));
+}
+
+static bool nearestHolePoint(const Tracking::DetectedBlob& blob,
+                             const cv::Point2f& target,
+                             cv::Point2f& outPoint)
+{
+    bool found = false;
+    float bestD = std::numeric_limits<float>::max();
+    for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
+        for (const cv::Point& p : hole) {
+            const float dx = static_cast<float>(p.x) - target.x;
+            const float dy = static_cast<float>(p.y) - target.y;
+            const float d = dx * dx + dy * dy;
+            if (d < bestD) {
+                bestD = d;
+                outPoint = cv::Point2f(static_cast<float>(p.x), static_cast<float>(p.y));
+                found = true;
+            }
+        }
     }
-    return pts;
+    return found;
 }
 
 static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, int nPoints)
@@ -87,6 +94,7 @@ static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, in
 // close yet the *order* along the line still distinguishes them.
 struct CenterlineState {
     std::vector<cv::Point2f> points;
+    cv::Point2f blobCentroid;
     bool valid = false;
 
     cv::Point2f nose()     const { return points.front(); }
@@ -109,6 +117,108 @@ static void orientByShape(std::vector<cv::Point2f>& pts,
     }
     if (revSum < fwdSum)
         std::reverse(pts.begin(), pts.end());
+}
+
+static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
+{
+    return cv::Point2f(static_cast<float>(blob.centroid.x()),
+                       static_cast<float>(blob.centroid.y()));
+}
+
+static bool inconsistentWithPreviousFrame(const std::vector<cv::Point2f>& pts,
+                                          float curLen,
+                                          const CenterlineState& prev,
+                                          const cv::Point2f& curBlobCentroid,
+                                          float refLength)
+{
+    if (!prev.valid || pts.size() != prev.points.size() || pts.empty() ||
+        refLength <= 0.f || curLen <= 0.f) {
+        return false;
+    }
+
+    const cv::Point2f expectedOffset = curBlobCentroid - prev.blobCentroid;
+    const float midpointShift =
+        ptDist(pts[pts.size() / 2], prev.midpoint() + expectedOffset);
+
+    float pointwiseShift = 0.f;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        pointwiseShift += ptDist(pts[i], prev.points[i] + expectedOffset);
+    }
+    pointwiseShift /= static_cast<float>(pts.size());
+
+    const float prevLen = arcLen(prev.points);
+    const bool lengthShrank = prevLen > 0.f && curLen < 0.85f * prevLen;
+    const float allowedShift = std::max(8.f, 0.25f * refLength);
+
+    return lengthShrank &&
+           (midpointShift > allowedShift || pointwiseShift > allowedShift);
+}
+
+static float continuityScore(std::vector<cv::Point2f>& pts,
+                             const CenterlineState& prev,
+                             const cv::Point2f& expectedOffset,
+                             float refLength)
+{
+    if (!prev.valid || pts.size() != prev.points.size() || pts.empty()) {
+        return std::numeric_limits<float>::max();
+    }
+
+    auto scoreFor = [&](const std::vector<cv::Point2f>& candidate) {
+        float pointwise = 0.f;
+        for (size_t i = 0; i < candidate.size(); ++i) {
+            pointwise += ptDist(candidate[i], prev.points[i] + expectedOffset);
+        }
+        pointwise /= static_cast<float>(candidate.size());
+
+        const float midpoint =
+            ptDist(candidate[candidate.size() / 2], prev.midpoint() + expectedOffset);
+        const float endpoints =
+            ptDist(candidate.front(), prev.nose() + expectedOffset) +
+            ptDist(candidate.back(), prev.tail() + expectedOffset);
+        const float lengthPenalty = refLength > 0.f
+            ? std::abs(arcLen(candidate) - refLength) * 0.25f
+            : 0.f;
+
+        return pointwise + 0.75f * midpoint + 0.35f * endpoints + lengthPenalty;
+    };
+
+    const float forwardScore = scoreFor(pts);
+    std::vector<cv::Point2f> reversed = pts;
+    std::reverse(reversed.begin(), reversed.end());
+    const float reverseScore = scoreFor(reversed);
+    if (reverseScore < forwardScore) {
+        pts = std::move(reversed);
+        return reverseScore;
+    }
+    return forwardScore;
+}
+
+static bool buildSplitRingCandidate(const Tracking::DetectedBlob& blob,
+                                    const cv::Point2f& cutHint,
+                                    int cutThickness,
+                                    int nPoints,
+                                    std::vector<cv::Point2f>& outPts)
+{
+    if (blob.contourPoints.empty() || blob.holeContourPoints.empty()) {
+        return false;
+    }
+
+    cv::Point2f holePoint;
+    if (!nearestHolePoint(blob, cutHint, holePoint)) {
+        return false;
+    }
+
+    const cv::Point2f outerPoint = nearestContourPoint(blob.contourPoints, cutHint);
+    Tracking::DetectedBlob splitBlob = blob;
+    if (!Tracking::populateCenterlineFromContourWithCut(splitBlob, outerPoint, holePoint, cutThickness)) {
+        return false;
+    }
+
+    outPts.assign(splitBlob.centerlinePoints.begin(), splitBlob.centerlinePoints.end());
+    if (static_cast<int>(outPts.size()) != nPoints) {
+        outPts = resample(outPts, nPoints);
+    }
+    return outPts.size() >= 2;
 }
 
 // Compute, orient, validate and (if needed) repair the centerline for one frame.
@@ -145,28 +255,56 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
     bool isRing  = !blob.holeContourPoints.empty();
     float curLen = arcLen(pts);
     bool tooShort = (refLength > 0.f && curLen < minArcFraction * refLength);
+    const cv::Point2f curBlobCentroid = blobCentroid(blob);
+    const bool inconsistent =
+        inconsistentWithPreviousFrame(pts, curLen, prev, curBlobCentroid, refLength);
+    const bool needsRepair = tooShort || inconsistent;
 
     // ─── Fallback A: ring blobs ──────────────────────────────────────────
-    // For a coiled worm the outer contour traces the body itself, so walking
-    // it for refLength pixels gives a true centerline-like path.
-    if (isRing && tooShort) {
-        cv::Point2f startHint = prev.valid ? prev.nose() : pts.front();
-        int startIdx = nearestContourIdx(blob.contourPoints, startHint);
-        auto fwd = walkContour(blob.contourPoints, startIdx, +1, refLength);
-        auto bwd = walkContour(blob.contourPoints, startIdx, -1, refLength);
+    // A ring is a closed worm mask, not a fundamentally different body shape.
+    // Cut the ring open near the predicted closure seam, skeletonize the split
+    // mask, and choose the candidate that best preserves frame-to-frame shape.
+    if (isRing && prev.valid) {
+        const cv::Point2f expectedOffset = prev.valid
+            ? (curBlobCentroid - prev.blobCentroid)
+            : cv::Point2f(0.f, 0.f);
+        const cv::Point2f expectedNose = prev.nose() + expectedOffset;
+        const cv::Point2f expectedTail = prev.tail() + expectedOffset;
+        const cv::Point2f expectedMid = prev.midpoint() + expectedOffset;
+        const cv::Point2f expectedEndGapMid = (expectedNose + expectedTail) * 0.5f;
 
-        std::vector<cv::Point2f>* best = nullptr;
-        if (prev.valid && !fwd.empty() && !bwd.empty()) {
-            float dFwd = ptDist(fwd.back(), prev.tail());
-            float dBwd = ptDist(bwd.back(), prev.tail());
-            best = (dFwd <= dBwd) ? &fwd : &bwd;
-        } else {
-            best = (arcLen(fwd) >= arcLen(bwd)) ? &fwd : &bwd;
+        std::vector<cv::Point2f> cutHints{
+            expectedEndGapMid,
+            expectedNose,
+            expectedTail,
+            expectedMid,
+            expectedNose * 0.75f + expectedTail * 0.25f,
+            expectedNose * 0.25f + expectedTail * 0.75f
+        };
+
+        std::vector<cv::Point2f> currentForScore = pts;
+        const float currentScore =
+            continuityScore(currentForScore, prev, expectedOffset, refLength);
+        float bestScore = std::numeric_limits<float>::max();
+        std::vector<cv::Point2f> bestPts;
+        const int cutThickness = 3;
+
+        for (const cv::Point2f& hint : cutHints) {
+            std::vector<cv::Point2f> candidate;
+            if (!buildSplitRingCandidate(blob, hint, cutThickness, nPoints, candidate)) {
+                continue;
+            }
+            const float score =
+                continuityScore(candidate, prev, expectedOffset, refLength);
+            if (score < bestScore) {
+                bestScore = score;
+                bestPts = std::move(candidate);
+            }
         }
-        if (best && arcLen(*best) > curLen) {
-            pts = resample(*best, nPoints);
-            if (prev.valid && prev.points.size() == pts.size())
-                orientByShape(pts, prev.points);
+
+        if (!bestPts.empty() &&
+            (needsRepair || bestScore + 2.f < currentScore)) {
+            pts = std::move(bestPts);
         }
     }
     // ─── Fallback B: non-ring blobs ──────────────────────────────────────
@@ -178,7 +316,7 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
     // blob's centroid, then snap any point that lands outside the blob to
     // the nearest outer contour point.  Worms barely move between frames,
     // so the previous shape is a good estimate of the missing portion.
-    else if (!isRing && tooShort && prev.valid &&
+    else if (!isRing && needsRepair && prev.valid &&
              prev.points.size() == pts.size() &&
              !blob.contourPoints.empty()) {
 
@@ -210,7 +348,7 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
             }
         }
 
-        if (arcLen(templatePts) > curLen) {
+        if (inconsistent || arcLen(templatePts) > curLen) {
             pts = templatePts;  // already ordered, already nPoints long
         }
     }
@@ -219,6 +357,7 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
 
     blob.centerlinePoints.assign(pts.begin(), pts.end());
     out.points = pts;
+    out.blobCentroid = curBlobCentroid;
     out.valid  = true;
     return true;
 }
