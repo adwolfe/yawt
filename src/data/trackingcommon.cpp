@@ -649,10 +649,20 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                                       brInSub.width,
                                       brInSub.height);
 
-            // Offset contour points to be in full frame coordinates
+            // Offset outer contour points to full frame coordinates
             blob.contourPoints.reserve(contourInSub.size());
             for(const cv::Point& ptInSub : contourInSub) {
                 blob.contourPoints.push_back(cv::Point(ptInSub.x + actualRoiCv.x, ptInSub.y + actualRoiCv.y));
+            }
+
+            // Offset hole contour points to full frame coordinates
+            for (int childIdx = hierarchy[i][2]; childIdx != -1; childIdx = hierarchy[childIdx][0]) {
+                std::vector<cv::Point> holeInFullFrame;
+                holeInFullFrame.reserve(contoursInSubImage[childIdx].size());
+                for (const cv::Point& ptInSub : contoursInSubImage[childIdx]) {
+                    holeInFullFrame.push_back(cv::Point(ptInSub.x + actualRoiCv.x, ptInSub.y + actualRoiCv.y));
+                }
+                blob.holeContourPoints.push_back(std::move(holeInFullFrame));
             }
 
             // --- Set touchesROIboundary flag ---

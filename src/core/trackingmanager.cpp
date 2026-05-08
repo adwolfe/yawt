@@ -161,6 +161,20 @@ static void saveFrameAtomicStateToJson(const QString& directoryPath,
             }
             pbObj["contourPoints"] = contourArr;
 
+            // Serialize hole contours (for ring-shaped coiled worms)
+            QJsonArray holesArr;
+            for (const auto& hole : pb.holeContourPoints) {
+                QJsonArray holeArr;
+                for (const cv::Point& pt : hole) {
+                    QJsonArray ptArr;
+                    ptArr.append(pt.x);
+                    ptArr.append(pt.y);
+                    holeArr.append(ptArr);
+                }
+                holesArr.append(holeArr);
+            }
+            pbObj["holeContourPoints"] = holesArr;
+
             // participatingWormTrackerIDs (QSet<int>)
             QJsonArray partArr;
             for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
@@ -219,6 +233,20 @@ static void saveFrameAtomicStateToJson(const QString& directoryPath,
                 dbCenterlineArr.append(ptArr);
             }
             dbObj["centerlinePoints"] = dbCenterlineArr;
+
+            // Serialize hole contours
+            QJsonArray dbHolesArr;
+            for (const auto& hole : db.holeContourPoints) {
+                QJsonArray holeArr;
+                for (const cv::Point& pt : hole) {
+                    QJsonArray ptArr;
+                    ptArr.append(pt.x);
+                    ptArr.append(pt.y);
+                    holeArr.append(ptArr);
+                }
+                dbHolesArr.append(holeArr);
+            }
+            dbObj["holeContourPoints"] = dbHolesArr;
 
             wormMapObj[QString::number(wormId)] = dbObj;
         }
@@ -356,6 +384,23 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
                     }
                 }
 
+                // Deserialize hole contours if present
+                pb.holeContourPoints.clear();
+                if (pbObj.contains("holeContourPoints") && pbObj["holeContourPoints"].isArray()) {
+                    for (const QJsonValue& hv : pbObj["holeContourPoints"].toArray()) {
+                        if (!hv.isArray()) continue;
+                        std::vector<cv::Point> hole;
+                        for (const QJsonValue& ptv : hv.toArray()) {
+                            if (ptv.isArray()) {
+                                QJsonArray ptArr = ptv.toArray();
+                                if (ptArr.size() >= 2)
+                                    hole.push_back(cv::Point(ptArr.at(0).toInt(), ptArr.at(1).toInt()));
+                            }
+                        }
+                        pb.holeContourPoints.push_back(std::move(hole));
+                    }
+                }
+
                 pb.participatingWormTrackerIDs.clear();
                 if (pbObj.contains("participatingWormTrackerIDs") && pbObj["participatingWormTrackerIDs"].isArray()) {
                     QJsonArray part = pbObj["participatingWormTrackerIDs"].toArray();
@@ -429,6 +474,23 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
                 }
                 if (db.isValid && db.centerlinePoints.empty() && !db.contourPoints.empty()) {
                     Tracking::populateCenterlineFromContour(db);
+                }
+
+                // Deserialize hole contours for DetectedBlob if present
+                db.holeContourPoints.clear();
+                if (dbObj.contains("holeContourPoints") && dbObj["holeContourPoints"].isArray()) {
+                    for (const QJsonValue& hv : dbObj["holeContourPoints"].toArray()) {
+                        if (!hv.isArray()) continue;
+                        std::vector<cv::Point> hole;
+                        for (const QJsonValue& ptv : hv.toArray()) {
+                            if (ptv.isArray()) {
+                                QJsonArray ptArr = ptv.toArray();
+                                if (ptArr.size() >= 2)
+                                    hole.push_back(cv::Point(ptArr.at(0).toInt(), ptArr.at(1).toInt()));
+                            }
+                        }
+                        db.holeContourPoints.push_back(std::move(hole));
+                    }
                 }
                 inner.insert(wormId, db);
             }
@@ -1450,6 +1512,7 @@ void TrackingManager::processFrameSpecificMerge(int signedWormId, int frameNumbe
         matchedPhysicalBlob->currentArea = qMax(matchedPhysicalBlob->currentArea, reportedFullBlob.area); // ideally should not change
         if (!reportedFullBlob.contourPoints.empty()) {
             matchedPhysicalBlob->contourPoints = reportedFullBlob.contourPoints;
+            matchedPhysicalBlob->holeContourPoints = reportedFullBlob.holeContourPoints;
         }
         if(matchedPhysicalBlob->currentBoundingBox.isValid()){
             QPointF newCenter = matchedPhysicalBlob->currentBoundingBox.center();
@@ -1470,6 +1533,7 @@ void TrackingManager::processFrameSpecificMerge(int signedWormId, int frameNumbe
         }
         newPhysicalBlob.currentArea = reportedFullBlob.area;
         newPhysicalBlob.contourPoints = reportedFullBlob.contourPoints;
+        newPhysicalBlob.holeContourPoints = reportedFullBlob.holeContourPoints;
         newPhysicalBlob.participatingWormTrackerIDs.insert(signedWormId);
         // newPhysicalBlob.timeFirstReported = QDateTime::currentDateTime();
 
@@ -1516,6 +1580,7 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             existingBlob->participatingWormTrackerIDs.insert(signedWormId);
             if (!candidate.contourPoints.empty()) {
                 existingBlob->contourPoints = candidate.contourPoints;
+                existingBlob->holeContourPoints = candidate.holeContourPoints;
             }
             currentBlobId = existingBlob->uniqueId;
             candidatePhysicalBlobIds.append(currentBlobId);
@@ -1529,6 +1594,7 @@ void TrackingManager::processFrameSpecificSplit(int signedWormId, int frameNumbe
             newPhysicalBlob.currentCentroid = cv::Point2f(static_cast<float>(candidate.centroid.x()), static_cast<float>(candidate.centroid.y()));
             newPhysicalBlob.currentArea = candidate.area;
             newPhysicalBlob.contourPoints = candidate.contourPoints;
+            newPhysicalBlob.holeContourPoints = candidate.holeContourPoints;
             newPhysicalBlob.participatingWormTrackerIDs.insert(signedWormId);
             newPhysicalBlob.selectedByWormTrackerId = 0; // Initially unselected
 
@@ -1662,6 +1728,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
                     blobToAssign.contourPoints = blob.contourPoints;
+                    blobToAssign.holeContourPoints = blob.holeContourPoints;
 
                     TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** CLAIMED PREFERRED BLOB ***").arg(signedWormId).arg(frameNumber) << preferredBlobId
                                       << "Area:" << blobToAssign.area
@@ -1743,6 +1810,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
                 blobToAssign.boundingBox = closestBlob->currentBoundingBox;
                 blobToAssign.area = closestBlob->currentArea;
                 blobToAssign.contourPoints = closestBlob->contourPoints;
+                blobToAssign.holeContourPoints = closestBlob->holeContourPoints;
 
                 TRACKING_DEBUG() << QString("TM: %1|FN%2|*** CLAIMED ALTERNATIVE BLOB ***").arg(signedWormId).arg(frameNumber) << closestBlob->uniqueId
                                   << "Area:" << blobToAssign.area
@@ -1771,6 +1839,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
                     blobToAssign.boundingBox = blob.currentBoundingBox;
                     blobToAssign.area = blob.currentArea;
                     blobToAssign.contourPoints = blob.contourPoints;
+                    blobToAssign.holeContourPoints = blob.holeContourPoints;
 
                     TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** CLAIMED FALLBACK BLOB ***").arg(signedWormId).arg(frameNumber) << blob.uniqueId
                                       << "Area:" << blobToAssign.area

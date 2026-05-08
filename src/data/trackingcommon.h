@@ -165,8 +165,9 @@ struct DetectedBlob {
     QRectF boundingBox;                   // Bounding box of the blob in video coordinates
     double area = 0.0;                    // Area of the blob
     double convexHullArea = 0.0;          // Area of the convex hull (blob area without holes)
-    std::vector<cv::Point> contourPoints; // Raw contour points (in video coordinates)
-    std::vector<cv::Point2f> centerlinePoints; // Ordered centerline points from one body end to the other
+    std::vector<cv::Point> contourPoints;                   // Outer contour points (in video coordinates)
+    std::vector<std::vector<cv::Point>> holeContourPoints;  // Inner hole contours (ring topology from coiled worm)
+    std::vector<cv::Point2f> centerlinePoints;              // Ordered centerline points from one body end to the other
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 

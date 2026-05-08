@@ -438,6 +438,16 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
         // Build QPainterPath for blob and for crop rectangle (crop-local coords)
         QPainterPath blobPath;
         blobPath.addPolygon(blobCropPoly);
+        blobPath.closeSubpath();
+
+        // Punch out holes (ring topology from coiled/self-touching worm)
+        for (const auto& holeContour : blob.holeContourPoints) {
+            QPolygonF holePoly = contourToCropPolygon(holeContour, m_cropOffset);
+            QPainterPath holePath;
+            holePath.addPolygon(holePoly);
+            holePath.closeSubpath();
+            blobPath = blobPath.subtracted(holePath);
+        }
 
         QPainterPath cropPath;
         cropPath.addRect(QRectF(0.0, 0.0, m_croppedFrame.width(), m_croppedFrame.height())); // crop-local dims
@@ -636,6 +646,16 @@ void MiniLoader::updateWithCroppedFrames(int startFrameNumber,
             // Build QPainterPath for blob and for crop rectangle (crop-local coords)
             QPainterPath blobPath;
             blobPath.addPolygon(blobCropPoly);
+            blobPath.closeSubpath();
+
+            // Punch out holes (ring topology from coiled/self-touching worm)
+            for (const auto& holeContour : blob.holeContourPoints) {
+                QPolygonF holePoly = contourToCropPolygon(holeContour, cropOffsets[i]);
+                QPainterPath holePath;
+                holePath.addPolygon(holePoly);
+                holePath.closeSubpath();
+                blobPath = blobPath.subtracted(holePath);
+            }
 
             QPainterPath cropPath;
             cropPath.addRect(QRectF(0.0, 0.0, croppedFrames[i].width(), croppedFrames[i].height()));
