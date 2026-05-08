@@ -581,17 +581,33 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
 
     cv::Mat roiImage = binaryImage(actualRoiCv); // Extract the sub-image for contour finding
     std::vector<std::vector<cv::Point>> contoursInSubImage;
-    // Find contours within the sub-image (roiImage). Coordinates will be relative to roiImage.
-    cv::findContours(roiImage.clone(), contoursInSubImage, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    std::vector<cv::Vec4i> hierarchy;
+    // RETR_CCOMP gives a 2-level hierarchy (outer contours + their holes).
+    // This lets us subtract hole areas from outer contour areas, so a coiled worm
+    // whose thresholded shape is a ring is measured by actual pixel area rather than
+    // the much-larger disk area that RETR_EXTERNAL + contourArea would produce.
+    cv::findContours(roiImage.clone(), contoursInSubImage, hierarchy, cv::RETR_CCOMP, cv::CHAIN_APPROX_SIMPLE);
 
-    for (const auto& contourInSub : contoursInSubImage) {
-        double area = cv::contourArea(contourInSub);
-        
-        // Calculate convex hull area (area without holes)
+    for (size_t i = 0; i < contoursInSubImage.size(); ++i) {
+        // Only process outer contours (parent index == -1 in RETR_CCOMP)
+        if (hierarchy[i][3] != -1) continue;
+
+        const auto& contourInSub = contoursInSubImage[i];
+        double outerArea = cv::contourArea(contourInSub);
+
+        // Subtract areas of direct-child hole contours to get true foreground pixel area.
+        // This handles the ring topology produced by a self-touching coiled worm.
+        double holeArea = 0.0;
+        for (int childIdx = hierarchy[i][2]; childIdx != -1; childIdx = hierarchy[childIdx][0]) {
+            holeArea += cv::contourArea(contoursInSubImage[childIdx]);
+        }
+        double area = outerArea - holeArea;
+
+        // Calculate convex hull area using the outer boundary
         std::vector<cv::Point> hull;
         cv::convexHull(contourInSub, hull);
         double hullArea = cv::contourArea(hull);
-        
+
         if (area < minArea || area > maxArea) {
             continue; // Filter by area
         }
