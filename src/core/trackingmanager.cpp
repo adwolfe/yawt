@@ -484,6 +484,16 @@ QString excelColumnName(int zeroBasedColumn)
     return result;
 }
 
+double tipToTipDistance(const QList<QPointF>& points)
+{
+    if (points.size() < 2) {
+        return -1.0;
+    }
+
+    const QPointF delta = points.last() - points.first();
+    return std::hypot(delta.x(), delta.y());
+}
+
 QByteArray buildWorksheetXml(const QList<WorkbookRow>& rows)
 {
     QByteArray xmlData;
@@ -2097,7 +2107,8 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
     WorkbookRow centerlineHeader{
         stringCell("WormID"),
         stringCell("SourceItemID"),
-        stringCell("Frame")
+        stringCell("Frame"),
+        stringCell("TipToTipDistance")
     };
     for (int pointIndex = 1; pointIndex <= 10; ++pointIndex) {
         centerlineHeader.append(stringCell(QString("Point%1X").arg(pointIndex)));
@@ -2138,6 +2149,12 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                     numberCell(QString::number(sourceItemId)),
                     numberCell(QString::number(point.frameNumberOriginal))
                 };
+                const double distance = tipToTipDistance(centerlinePoints);
+                if (distance >= 0.0) {
+                    centerlineRow.append(numberCell(QString::number(distance, 'f', 4)));
+                } else {
+                    centerlineRow.append(stringCell(""));
+                }
                 for (int pointIndex = 0; pointIndex < 10; ++pointIndex) {
                     if (pointIndex < centerlinePoints.size()) {
                         const QPointF& centerlinePoint = centerlinePoints.at(pointIndex);
