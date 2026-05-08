@@ -211,6 +211,15 @@ static void saveFrameAtomicStateToJson(const QString& directoryPath,
             }
             dbObj["contourPoints"] = dbContourArr;
 
+            QJsonArray dbCenterlineArr;
+            for (const cv::Point2f& pt : db.centerlinePoints) {
+                QJsonArray ptArr;
+                ptArr.append(static_cast<double>(pt.x));
+                ptArr.append(static_cast<double>(pt.y));
+                dbCenterlineArr.append(ptArr);
+            }
+            dbObj["centerlinePoints"] = dbCenterlineArr;
+
             wormMapObj[QString::number(wormId)] = dbObj;
         }
         splitMapObj[QString::number(frameNum)] = wormMapObj;
@@ -404,6 +413,23 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
                         }
                     }
                 }
+                db.centerlinePoints.clear();
+                if (dbObj.contains("centerlinePoints") && dbObj["centerlinePoints"].isArray()) {
+                    QJsonArray dbCenterlineArr = dbObj["centerlinePoints"].toArray();
+                    for (const QJsonValue& ptv : dbCenterlineArr) {
+                        if (ptv.isArray()) {
+                            QJsonArray ptArr = ptv.toArray();
+                            if (ptArr.size() >= 2) {
+                                db.centerlinePoints.push_back(cv::Point2f(
+                                    static_cast<float>(ptArr.at(0).toDouble()),
+                                    static_cast<float>(ptArr.at(1).toDouble())));
+                            }
+                        }
+                    }
+                }
+                if (db.isValid && db.centerlinePoints.empty() && !db.contourPoints.empty()) {
+                    Tracking::populateCenterlineFromContour(db);
+                }
                 inner.insert(wormId, db);
             }
             outSplitResolutionMap.insert(frameNum, inner);
@@ -533,6 +559,11 @@ QByteArray buildWorkbookXml()
     xml.writeAttribute("name", "Parameters");
     xml.writeAttribute("sheetId", "3");
     xml.writeAttribute("r:id", "rId3");
+
+    xml.writeEmptyElement("sheet");
+    xml.writeAttribute("name", "Centerlines");
+    xml.writeAttribute("sheetId", "4");
+    xml.writeAttribute("r:id", "rId4");
     xml.writeEndElement();
     xml.writeEndElement();
     xml.writeEndDocument();
@@ -568,6 +599,11 @@ QByteArray buildWorkbookRelsXml()
 
     xml.writeEmptyElement("Relationship");
     xml.writeAttribute("Id", "rId4");
+    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
+    xml.writeAttribute("Target", "worksheets/sheet4.xml");
+
+    xml.writeEmptyElement("Relationship");
+    xml.writeAttribute("Id", "rId5");
     xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles");
     xml.writeAttribute("Target", "styles.xml");
 
@@ -715,6 +751,10 @@ QByteArray buildContentTypesXml()
 
     xml.writeEmptyElement("Override");
     xml.writeAttribute("PartName", "/xl/worksheets/sheet3.xml");
+    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
+
+    xml.writeEmptyElement("Override");
+    xml.writeAttribute("PartName", "/xl/worksheets/sheet4.xml");
     xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
     xml.writeEndElement();
     xml.writeEndDocument();
@@ -2053,6 +2093,66 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         stringCell("pixels/um")
     });
 
+    QList<WorkbookRow> centerlineRows;
+    WorkbookRow centerlineHeader{
+        stringCell("WormID"),
+        stringCell("SourceItemID"),
+        stringCell("Frame")
+    };
+    for (int pointIndex = 1; pointIndex <= 10; ++pointIndex) {
+        centerlineHeader.append(stringCell(QString("Point%1X").arg(pointIndex)));
+        centerlineHeader.append(stringCell(QString("Point%1Y").arg(pointIndex)));
+    }
+    centerlineRows.append(centerlineHeader);
+
+    if (m_storage) {
+        for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+            const int sourceItemId = it->first;
+            const int exportWormId = sourceToExportId.value(sourceItemId);
+            std::vector<Tracking::WormTrackPoint> sortedTrackPoints = it->second;
+            std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
+                      [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
+                          return lhs.frameNumberOriginal < rhs.frameNumberOriginal;
+                      });
+
+            for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+                QList<QPointF> centerlinePoints;
+                if (point.quality != Tracking::TrackPointQuality::Lost) {
+                    const QMap<int, Tracking::DetectedBlob> blobsForFrame =
+                        m_storage->getDetectedBlobsForFrame(point.frameNumberOriginal);
+                    const auto blobIt = blobsForFrame.constFind(sourceItemId);
+                    if (blobIt != blobsForFrame.constEnd()) {
+                        Tracking::DetectedBlob centerlineBlob = blobIt.value();
+                        if (centerlineBlob.isValid && centerlineBlob.centerlinePoints.empty() &&
+                            !centerlineBlob.contourPoints.empty()) {
+                            Tracking::populateCenterlineFromContour(centerlineBlob);
+                        }
+                        centerlinePoints =
+                            Tracking::resampleCenterlinePoints(centerlineBlob.centerlinePoints, 10);
+                    }
+
+                }
+
+                WorkbookRow centerlineRow{
+                    numberCell(QString::number(exportWormId)),
+                    numberCell(QString::number(sourceItemId)),
+                    numberCell(QString::number(point.frameNumberOriginal))
+                };
+                for (int pointIndex = 0; pointIndex < 10; ++pointIndex) {
+                    if (pointIndex < centerlinePoints.size()) {
+                        const QPointF& centerlinePoint = centerlinePoints.at(pointIndex);
+                        centerlineRow.append(numberCell(QString::number(centerlinePoint.x(), 'f', 4)));
+                        centerlineRow.append(numberCell(QString::number(centerlinePoint.y(), 'f', 4)));
+                    } else {
+                        centerlineRow.append(stringCell(""));
+                        centerlineRow.append(stringCell(""));
+                    }
+                }
+                centerlineRows.append(centerlineRow);
+            }
+        }
+    }
+
     QList<ZipEntry> workbookEntries{
         ZipEntry{"[Content_Types].xml", buildContentTypesXml()},
         ZipEntry{"_rels/.rels", buildRootRelsXml()},
@@ -2061,7 +2161,8 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         ZipEntry{"xl/styles.xml", buildStylesXml()},
         ZipEntry{"xl/worksheets/sheet1.xml", buildWorksheetXml(trackRows)},
         ZipEntry{"xl/worksheets/sheet2.xml", buildWorksheetXml(startEndRows)},
-        ZipEntry{"xl/worksheets/sheet3.xml", buildWorksheetXml(parameterRows)}
+        ZipEntry{"xl/worksheets/sheet3.xml", buildWorksheetXml(parameterRows)},
+        ZipEntry{"xl/worksheets/sheet4.xml", buildWorksheetXml(centerlineRows)}
     };
 
     return writeStoredZip(outputFilePath, workbookEntries);

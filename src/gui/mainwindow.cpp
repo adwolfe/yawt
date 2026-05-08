@@ -84,6 +84,14 @@ MainWindow::MainWindow(QWidget *parent)
     ui->pointButton->setIcon(QIcon());
     ui->pointButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     ui->pointButton->setMinimumWidth(36);
+    ui->skeletonButton->setText("CL");
+    ui->skeletonButton->setToolTip("Show/Hide centerline");
+    ui->skeletonButton->setStatusTip("Show/hide skeletonized centerline overlay");
+    ui->skeletonButton->setCheckable(true);
+    ui->skeletonButton->setAutoRaise(true);
+    ui->skeletonButton->setIcon(QIcon());
+    ui->skeletonButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    ui->skeletonButton->setMinimumWidth(36);
 
     // Initialize AppController which owns storage, manager and models.
     m_appController = new AppController(this);
@@ -417,6 +425,7 @@ void MainWindow::setupConnections() {
     // Add these connections once you have the buttons in your UI:
     connect(ui->viewBlobsButton, &QToolButton::toggled, this, &MainWindow::onViewBlobsToggled);
     connect(ui->viewTracksButton, &QToolButton::toggled, this, &MainWindow::onViewTracksToggled);
+    connect(ui->skeletonButton, &QToolButton::toggled, this, &MainWindow::onViewSkeletonsToggled);
 
 
     // Thresholding UI -> VideoLoader & MainWindow
@@ -1018,6 +1027,9 @@ void MainWindow::onViewTracksToggled(bool checked) {
     // Assuming you have a ui->viewTracksButton that is checkable
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, checked);
 }
+void MainWindow::onViewSkeletonsToggled(bool checked) {
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Skeletons, checked);
+}
 // Optional:
 // void MainWindow::onViewNoneClicked() {
 //     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, false);
@@ -1050,6 +1062,7 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
     // Assuming you have ui->viewBlobsButton and ui->viewTracksButton:
     ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
     ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
+    ui->skeletonButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Skeletons));
     YAWT_DEBUG(lcGuiMainWindow) << "View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
 
     const bool showOverlays = newModes.testFlag(VideoLoader::ViewModeOption::Blobs);

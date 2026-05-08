@@ -350,6 +350,25 @@
              </property>
             </widget>
            </item>
+           <item>
+            <widget class="QToolButton" name="skeletonButton">
+             <property name="toolTip">
+              <string>Show/Hide centerline</string>
+             </property>
+             <property name="statusTip">
+              <string>Show/hide skeletonized centerline overlay</string>
+             </property>
+             <property name="text">
+              <string>CL</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+             <property name="autoRaise">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
           </layout>
          </item>
          <item>

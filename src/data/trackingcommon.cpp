@@ -4,8 +4,358 @@
 #include <QDebug>       // For qWarning/qDebug
 #include "../utils/loggingcategories.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <queue>
+
 
 namespace Tracking {
+
+namespace {
+
+constexpr int kCenterlinePaddingPixels = 2;
+
+cv::Mat skeletonizeBinaryMask(const cv::Mat& binaryMask)
+{
+    cv::Mat img;
+    if (binaryMask.type() != CV_8UC1) {
+        binaryMask.convertTo(img, CV_8UC1);
+    } else {
+        img = binaryMask.clone();
+    }
+
+    cv::threshold(img, img, 0, 255, cv::THRESH_BINARY);
+
+    cv::Mat skel = cv::Mat::zeros(img.size(), CV_8UC1);
+    cv::Mat temp;
+    cv::Mat eroded;
+    const cv::Mat element = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+
+    bool done = false;
+    while (!done) {
+        cv::erode(img, eroded, element);
+        cv::dilate(eroded, temp, element);
+        cv::subtract(img, temp, temp);
+        cv::bitwise_or(skel, temp, skel);
+        eroded.copyTo(img);
+        done = (cv::countNonZero(img) == 0);
+    }
+
+    return skel;
+}
+
+struct GraphSearchResult {
+    std::vector<double> distances;
+    std::vector<int> parents;
+};
+
+GraphSearchResult dijkstraSkeleton(const std::vector<cv::Point>& points,
+                                   const std::vector<std::vector<int>>& adjacency,
+                                   int startIndex)
+{
+    GraphSearchResult result;
+    result.distances.assign(points.size(), std::numeric_limits<double>::infinity());
+    result.parents.assign(points.size(), -1);
+
+    if (startIndex < 0 || startIndex >= static_cast<int>(points.size())) {
+        return result;
+    }
+
+    using QueueEntry = std::pair<double, int>;
+    std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<QueueEntry>> queue;
+    result.distances[startIndex] = 0.0;
+    queue.push({0.0, startIndex});
+
+    while (!queue.empty()) {
+        const auto [dist, current] = queue.top();
+        queue.pop();
+        if (dist > result.distances[current]) {
+            continue;
+        }
+
+        const cv::Point& currentPoint = points[current];
+        for (int neighbor : adjacency[current]) {
+            const cv::Point& neighborPoint = points[neighbor];
+            const int dx = neighborPoint.x - currentPoint.x;
+            const int dy = neighborPoint.y - currentPoint.y;
+            const double weight = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
+            const double candidate = dist + weight;
+            if (candidate + 1e-9 < result.distances[neighbor]) {
+                result.distances[neighbor] = candidate;
+                result.parents[neighbor] = current;
+                queue.push({candidate, neighbor});
+            }
+        }
+    }
+
+    return result;
+}
+
+std::vector<cv::Point2f> reconstructCenterlinePath(const std::vector<cv::Point>& points,
+                                                   const std::vector<int>& parents,
+                                                   int startIndex,
+                                                   int endIndex,
+                                                   const cv::Point2f& offset)
+{
+    std::vector<cv::Point2f> path;
+    if (startIndex < 0 || endIndex < 0 || startIndex >= static_cast<int>(points.size())
+        || endIndex >= static_cast<int>(points.size())) {
+        return path;
+    }
+
+    int current = endIndex;
+    while (current != -1) {
+        const cv::Point& point = points[current];
+        path.emplace_back(offset.x + static_cast<float>(point.x),
+                          offset.y + static_cast<float>(point.y));
+        if (current == startIndex) {
+            break;
+        }
+        current = parents[current];
+    }
+
+    if (path.empty() || current == -1) {
+        path.clear();
+        return path;
+    }
+
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+} // namespace
+
+bool populateCenterlineFromContour(DetectedBlob& blob)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3) {
+        return false;
+    }
+
+    cv::Rect localBounds = cv::boundingRect(blob.contourPoints);
+    localBounds.x -= kCenterlinePaddingPixels;
+    localBounds.y -= kCenterlinePaddingPixels;
+    localBounds.width += 2 * kCenterlinePaddingPixels;
+    localBounds.height += 2 * kCenterlinePaddingPixels;
+
+    if (localBounds.width <= 1 || localBounds.height <= 1) {
+        return false;
+    }
+
+    cv::Mat mask = cv::Mat::zeros(localBounds.height, localBounds.width, CV_8UC1);
+    std::vector<std::vector<cv::Point>> contours(1);
+    contours.front().reserve(blob.contourPoints.size());
+    for (const cv::Point& point : blob.contourPoints) {
+        contours.front().push_back(cv::Point(point.x - localBounds.x, point.y - localBounds.y));
+    }
+    cv::fillPoly(mask, contours, cv::Scalar(255));
+
+    cv::Mat skeleton = skeletonizeBinaryMask(mask);
+    if (cv::countNonZero(skeleton) < 2) {
+        return false;
+    }
+
+    cv::Mat indexImage(skeleton.size(), CV_32SC1, cv::Scalar(-1));
+    std::vector<cv::Point> skeletonPoints;
+    skeletonPoints.reserve(static_cast<size_t>(cv::countNonZero(skeleton)));
+
+    for (int row = 0; row < skeleton.rows; ++row) {
+        const uchar* rowPtr = skeleton.ptr<uchar>(row);
+        int* indexRow = indexImage.ptr<int>(row);
+        for (int col = 0; col < skeleton.cols; ++col) {
+            if (rowPtr[col] == 0) {
+                continue;
+            }
+            indexRow[col] = static_cast<int>(skeletonPoints.size());
+            skeletonPoints.emplace_back(col, row);
+        }
+    }
+
+    if (skeletonPoints.size() < 2) {
+        return false;
+    }
+
+    std::vector<std::vector<int>> adjacency(skeletonPoints.size());
+    std::vector<int> endpoints;
+    endpoints.reserve(skeletonPoints.size());
+
+    for (int idx = 0; idx < static_cast<int>(skeletonPoints.size()); ++idx) {
+        const cv::Point& point = skeletonPoints[idx];
+        int degree = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) {
+                    continue;
+                }
+                const int nx = point.x + dx;
+                const int ny = point.y + dy;
+                if (nx < 0 || ny < 0 || nx >= indexImage.cols || ny >= indexImage.rows) {
+                    continue;
+                }
+                const int neighborIndex = indexImage.at<int>(ny, nx);
+                if (neighborIndex < 0) {
+                    continue;
+                }
+                adjacency[idx].push_back(neighborIndex);
+                ++degree;
+            }
+        }
+        if (degree == 1) {
+            endpoints.push_back(idx);
+        }
+    }
+
+    int bestStart = -1;
+    int bestEnd = -1;
+    double bestDistance = -1.0;
+    std::vector<int> bestParents;
+
+    if (endpoints.size() >= 2) {
+        for (int endpoint : endpoints) {
+            GraphSearchResult search = dijkstraSkeleton(skeletonPoints, adjacency, endpoint);
+            for (int candidate : endpoints) {
+                if (candidate == endpoint) {
+                    continue;
+                }
+                const double distance = search.distances[candidate];
+                if (!std::isfinite(distance) || distance <= bestDistance) {
+                    continue;
+                }
+                bestDistance = distance;
+                bestStart = endpoint;
+                bestEnd = candidate;
+                bestParents = search.parents;
+            }
+        }
+    }
+
+    if (bestStart == -1 || bestEnd == -1) {
+        GraphSearchResult firstSweep = dijkstraSkeleton(skeletonPoints, adjacency, 0);
+        int farthestA = 0;
+        for (int idx = 1; idx < static_cast<int>(skeletonPoints.size()); ++idx) {
+            if (std::isfinite(firstSweep.distances[idx]) && firstSweep.distances[idx] > firstSweep.distances[farthestA]) {
+                farthestA = idx;
+            }
+        }
+
+        GraphSearchResult secondSweep = dijkstraSkeleton(skeletonPoints, adjacency, farthestA);
+        int farthestB = farthestA;
+        for (int idx = 0; idx < static_cast<int>(skeletonPoints.size()); ++idx) {
+            if (std::isfinite(secondSweep.distances[idx]) && secondSweep.distances[idx] > secondSweep.distances[farthestB]) {
+                farthestB = idx;
+            }
+        }
+
+        bestStart = farthestA;
+        bestEnd = farthestB;
+        bestParents = std::move(secondSweep.parents);
+    }
+
+    blob.centerlinePoints = reconstructCenterlinePath(
+        skeletonPoints,
+        bestParents,
+        bestStart,
+        bestEnd,
+        cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
+
+    return blob.centerlinePoints.size() >= 2;
+}
+
+QList<QPointF> extractOrderedCenterlinePoints(const DetectedBlob& blob)
+{
+    QList<QPointF> centerlinePoints;
+    if (!blob.isValid) {
+        return centerlinePoints;
+    }
+
+    DetectedBlob centerlineBlob = blob;
+    if (centerlineBlob.centerlinePoints.empty() && !centerlineBlob.contourPoints.empty()) {
+        populateCenterlineFromContour(centerlineBlob);
+    }
+
+    if (centerlineBlob.centerlinePoints.empty()) {
+        return centerlinePoints;
+    }
+
+    centerlinePoints.reserve(static_cast<qsizetype>(centerlineBlob.centerlinePoints.size()));
+    for (const cv::Point2f& point : centerlineBlob.centerlinePoints) {
+        centerlinePoints.append(QPointF(point.x, point.y));
+    }
+
+    return centerlinePoints;
+}
+
+QList<QPointF> resampleCenterlinePoints(const QList<QPointF>& points, int pointCount)
+{
+    QList<QPointF> sampledPoints;
+    if (points.isEmpty() || pointCount <= 0) {
+        return sampledPoints;
+    }
+
+    sampledPoints.reserve(pointCount);
+    if (points.size() == 1 || pointCount == 1) {
+        for (int i = 0; i < pointCount; ++i) {
+            sampledPoints.append(points.first());
+        }
+        return sampledPoints;
+    }
+
+    std::vector<double> cumulativeDistance(static_cast<size_t>(points.size()), 0.0);
+    for (int i = 1; i < points.size(); ++i) {
+        const QPointF delta = points.at(i) - points.at(i - 1);
+        cumulativeDistance[static_cast<size_t>(i)] =
+            cumulativeDistance[static_cast<size_t>(i - 1)] + std::hypot(delta.x(), delta.y());
+    }
+
+    const double totalLength = cumulativeDistance.back();
+    if (qFuzzyIsNull(totalLength)) {
+        for (int i = 0; i < pointCount; ++i) {
+            sampledPoints.append(points.first());
+        }
+        return sampledPoints;
+    }
+
+    int segmentIndex = 1;
+    for (int sampleIndex = 0; sampleIndex < pointCount; ++sampleIndex) {
+        const double targetDistance =
+            totalLength * static_cast<double>(sampleIndex) / static_cast<double>(pointCount - 1);
+
+        while (segmentIndex < points.size() - 1 &&
+               cumulativeDistance[static_cast<size_t>(segmentIndex)] < targetDistance) {
+            ++segmentIndex;
+        }
+
+        const double previousDistance = cumulativeDistance[static_cast<size_t>(segmentIndex - 1)];
+        const double nextDistance = cumulativeDistance[static_cast<size_t>(segmentIndex)];
+        const double segmentLength = nextDistance - previousDistance;
+        const double t = qFuzzyIsNull(segmentLength)
+                             ? 0.0
+                             : (targetDistance - previousDistance) / segmentLength;
+
+        const QPointF a = points.at(segmentIndex - 1);
+        const QPointF b = points.at(segmentIndex);
+        sampledPoints.append(a + (b - a) * t);
+    }
+
+    return sampledPoints;
+}
+
+QList<QPointF> resampleCenterlinePoints(const std::vector<cv::Point2f>& points, int pointCount)
+{
+    QList<QPointF> convertedPoints;
+    convertedPoints.reserve(static_cast<qsizetype>(points.size()));
+    for (const cv::Point2f& point : points) {
+        convertedPoints.append(QPointF(point.x, point.y));
+    }
+    return resampleCenterlinePoints(convertedPoints, pointCount);
+}
+
+QList<QPointF> extractResampledCenterlinePoints(const DetectedBlob& blob, int pointCount)
+{
+    return resampleCenterlinePoints(extractOrderedCenterlinePoints(blob), pointCount);
+}
 
 // Uses thresholded mat to find the nearest blob to a click and selects it.
 DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
@@ -122,6 +472,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
             result.area = cv::contourArea(bestContour); // Already calculated, but store it
             result.contourPoints = bestContour; // These points are relative to binaryImage origin
             result.isValid = true;
+            populateCenterlineFromContour(result);
             // touchesROIboundary is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
         }
         YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Selected contour idx:"
@@ -251,6 +602,7 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             // For example, if any point in contourInSub has x=0, y=0, x=actualRoiCv.width-1, or y=actualRoiCv.height-1.
             // However, the bounding box check is simpler and often what's implied.
 
+            populateCenterlineFromContour(blob);
             plausibleBlobs.append(blob);
         }
     }

@@ -179,9 +179,9 @@ install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 # Custom deployment target for macOS app bundle
 if(APPLE)
     add_custom_target(deploy
-        COMMAND ${CMAKE_SOURCE_DIR}/scripts/deploy_simple_working.sh
+        COMMAND ${CMAKE_SOURCE_DIR}/scripts/package_mac.sh -n --no-archive --no-macdeployqt
         DEPENDS ${PROJECT_NAME}
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Deploying macOS app bundle with all dependencies"
     )
 

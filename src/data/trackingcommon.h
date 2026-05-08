@@ -166,6 +166,7 @@ struct DetectedBlob {
     double area = 0.0;                    // Area of the blob
     double convexHullArea = 0.0;          // Area of the convex hull (blob area without holes)
     std::vector<cv::Point> contourPoints; // Raw contour points (in video coordinates)
+    std::vector<cv::Point2f> centerlinePoints; // Ordered centerline points from one body end to the other
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
@@ -245,6 +246,44 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                                                double maxArea,
                                                double minAspectRatio,
                                                double maxAspectRatio);
+
+/**
+ * @brief Compute and store an ordered centerline for a detected blob from its contour.
+ * The resulting polyline runs from one skeleton endpoint to the other and is stored in
+ * DetectedBlob::centerlinePoints. Returns true when a usable centerline was found.
+ */
+bool populateCenterlineFromContour(DetectedBlob& blob);
+
+/**
+ * @brief Extract an ordered skeleton centerline from a detected worm blob.
+ * @param blob Detected blob with contour points in video coordinates.
+ * @return Ordered centerline points in video coordinates. Empty if no valid skeleton can be extracted.
+ */
+QList<QPointF> extractOrderedCenterlinePoints(const DetectedBlob& blob);
+
+/**
+ * @brief Resample an ordered centerline to a fixed number of evenly spaced points.
+ * @param points Ordered source centerline points.
+ * @param pointCount Number of points to return.
+ * @return Exactly pointCount points when input is non-empty; empty if input is empty or pointCount <= 0.
+ */
+QList<QPointF> resampleCenterlinePoints(const QList<QPointF>& points, int pointCount);
+
+/**
+ * @brief Resample an ordered centerline to a fixed number of evenly spaced points.
+ * @param points Ordered source centerline points.
+ * @param pointCount Number of points to return.
+ * @return Exactly pointCount points when input is non-empty; empty if input is empty or pointCount <= 0.
+ */
+QList<QPointF> resampleCenterlinePoints(const std::vector<cv::Point2f>& points, int pointCount);
+
+/**
+ * @brief Extract and resample a detected blob centerline.
+ * @param blob Detected blob with contour points in video coordinates.
+ * @param pointCount Number of centerline points to return.
+ * @return Fixed-count centerline points when extraction succeeds; otherwise empty.
+ */
+QList<QPointF> extractResampledCenterlinePoints(const DetectedBlob& blob, int pointCount = 10);
 
 } // namespace TrackingHelper
 
