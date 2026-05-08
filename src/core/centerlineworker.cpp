@@ -144,14 +144,12 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
 
     bool isRing  = !blob.holeContourPoints.empty();
     float curLen = arcLen(pts);
+    bool tooShort = (refLength > 0.f && curLen < minArcFraction * refLength);
 
-    // Contour-walk fallback is only correct for ring blobs.  For a coiled
-    // worm the outer contour traces the body itself, so walking it for
-    // refLength pixels gives a true centerline-like path.  For an uncoiled
-    // worm the outer contour wraps the full perimeter (~2× body length),
-    // so the walk would follow one *edge* rather than the body interior —
-    // worse than the original skeleton.  Trust the skeleton in that case.
-    if (isRing && refLength > 0.f && curLen < minArcFraction * refLength) {
+    // ─── Fallback A: ring blobs ──────────────────────────────────────────
+    // For a coiled worm the outer contour traces the body itself, so walking
+    // it for refLength pixels gives a true centerline-like path.
+    if (isRing && tooShort) {
         cv::Point2f startHint = prev.valid ? prev.nose() : pts.front();
         int startIdx = nearestContourIdx(blob.contourPoints, startHint);
         auto fwd = walkContour(blob.contourPoints, startIdx, +1, refLength);
@@ -167,10 +165,53 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
         }
         if (best && arcLen(*best) > curLen) {
             pts = resample(*best, nPoints);
-            // Re-apply shape correspondence after fallback to keep the
-            // ordering consistent with the previous frame.
             if (prev.valid && prev.points.size() == pts.size())
                 orientByShape(pts, prev.points);
+        }
+    }
+    // ─── Fallback B: non-ring blobs ──────────────────────────────────────
+    // Walking the outer contour wraps the full perimeter (~2× body length),
+    // so it would follow one body *edge* rather than the centerline — worse
+    // than the original skeleton.  Instead, when the skeleton is short and
+    // a previous frame is available, treat the previous centerline as a
+    // shape template: translate it so its centroid aligns with the current
+    // blob's centroid, then snap any point that lands outside the blob to
+    // the nearest outer contour point.  Worms barely move between frames,
+    // so the previous shape is a good estimate of the missing portion.
+    else if (!isRing && tooShort && prev.valid &&
+             prev.points.size() == pts.size() &&
+             !blob.contourPoints.empty()) {
+
+        // Centroid of the previous (resampled, ordered) centerline points.
+        cv::Point2f prevCentroid(0.f, 0.f);
+        for (const cv::Point2f& p : prev.points) prevCentroid += p;
+        prevCentroid *= 1.f / static_cast<float>(prev.points.size());
+
+        // Centroid of the current blob (mean of contour pixels — robust to
+        // skeleton failure modes since it depends only on the boundary).
+        cv::Point2f curCentroid(0.f, 0.f);
+        for (const cv::Point& p : blob.contourPoints)
+            curCentroid += cv::Point2f(p.x, p.y);
+        curCentroid *= 1.f / static_cast<float>(blob.contourPoints.size());
+
+        cv::Point2f offset = curCentroid - prevCentroid;
+
+        std::vector<cv::Point2f> templatePts(prev.points.size());
+        for (size_t i = 0; i < prev.points.size(); ++i)
+            templatePts[i] = prev.points[i] + offset;
+
+        // Snap out-of-blob points back onto the contour.  pointPolygonTest
+        // returns >0 inside, ==0 on edge, <0 outside.
+        for (cv::Point2f& p : templatePts) {
+            if (cv::pointPolygonTest(blob.contourPoints, p, false) < 0) {
+                int idx = nearestContourIdx(blob.contourPoints, p);
+                p = cv::Point2f(blob.contourPoints[idx].x,
+                                blob.contourPoints[idx].y);
+            }
+        }
+
+        if (arcLen(templatePts) > curLen) {
+            pts = templatePts;  // already ordered, already nPoints long
         }
     }
 
