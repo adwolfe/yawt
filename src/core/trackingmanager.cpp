@@ -3066,6 +3066,11 @@ bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath
     return true;
 }
 
+void TrackingManager::setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params)
+{
+    m_centerlineSnakeParams = params;
+}
+
 void TrackingManager::startCenterlineComputation() {
     if (!m_storage) {
         emit centerlineFinished();
@@ -3076,6 +3081,7 @@ void TrackingManager::startCenterlineComputation() {
 
     auto* thread = new QThread(this);
     auto* worker = new CenterlineWorker(m_storage);
+    worker->setSnakeParams(m_centerlineSnakeParams);
     worker->moveToThread(thread);
 
     m_centerlineThread = thread;

@@ -471,6 +471,14 @@ void AppController::onDialogBeginRequested()
         return;
     }
 
+    // Forward the centerline-snake debug parameters from the dialog to the
+    // manager. These are used by CenterlineWorker on ring/coiled frames during
+    // the post-tracking centerline phase. Safe no-op when the dialog hasn't
+    // been used (defaults from the header are passed instead).
+    if (m_trackingDialog) {
+        m_manager->setCenterlineSnakeParams(m_trackingDialog->snakeParams());
+    }
+
     // Start tracking via the manager using stored dialog parameters.
     emit trackingStarted();
     m_manager->startFullTrackingProcess(m_dialogVideoPath, m_dialogDataDirectory, m_dialogKeyFrame,

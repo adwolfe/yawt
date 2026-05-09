@@ -10,6 +10,10 @@
 #include <QCheckBox>
 #include <QPlainTextEdit>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QSpinBox>
 #include <QDebug>
 #include <QMetaEnum>
 #include <QFileInfo>
@@ -61,6 +65,72 @@ TrackingProgressDialog::TrackingProgressDialog(QWidget *parent) :
         }
     }
 
+    // ── Centerline snake debug panel ─────────────────────────────────────
+    // Temporary tuning UI for the active-contour ("snake") refinement that
+    // runs on ring/coiled frames after tracking. Lets us iterate on alpha,
+    // beta, and lambda without rebuilding. Once stable defaults are found
+    // this whole block can be removed and the parameters baked in.
+    {
+        QGroupBox* snakeBox = new QGroupBox(QStringLiteral("Centerline snake (rings/coils)"), this);
+        snakeBox->setObjectName(QStringLiteral("snakeParamsGroup"));
+        snakeBox->setCheckable(true);
+        snakeBox->setChecked(true);  // snake enabled by default
+
+        auto* form = new QFormLayout(snakeBox);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        auto makeDouble = [&](const QString& name, double minVal, double maxVal,
+                              double step, int decimals, double def) {
+            auto* sb = new QDoubleSpinBox(snakeBox);
+            sb->setObjectName(name);
+            sb->setRange(minVal, maxVal);
+            sb->setSingleStep(step);
+            sb->setDecimals(decimals);
+            sb->setValue(def);
+            return sb;
+        };
+        auto makeInt = [&](const QString& name, int minVal, int maxVal, int def) {
+            auto* sb = new QSpinBox(snakeBox);
+            sb->setObjectName(name);
+            sb->setRange(minVal, maxVal);
+            sb->setValue(def);
+            return sb;
+        };
+
+        // Defaults match Tracking::CenterlineSnakeParams.
+        QDoubleSpinBox* alphaSpin = makeDouble("snakeAlpha",  0.0,  5.0, 0.05, 3, 0.10);
+        QDoubleSpinBox* betaSpin  = makeDouble("snakeBeta",   0.0,  5.0, 0.05, 3, 0.05);
+        QDoubleSpinBox* lambdaSpin= makeDouble("snakeLambda", 0.0, 10.0, 0.10, 3, 1.00);
+        QSpinBox*       iterSpin  = makeInt   ("snakeIters",  5,  500,            60);
+        QDoubleSpinBox* stepSpin  = makeDouble("snakeStep",   0.01, 2.0, 0.05, 3, 0.50);
+
+        alphaSpin->setToolTip(QStringLiteral("Tension α — resists stretching, smooths spacing."));
+        betaSpin->setToolTip(QStringLiteral("Rigidity β — resists bending/kinking."));
+        lambdaSpin->setToolTip(QStringLiteral("Image attraction λ — pull toward the medial axis (distance-transform ridge)."));
+        iterSpin->setToolTip(QStringLiteral("Number of explicit-Euler update steps per frame."));
+        stepSpin->setToolTip(QStringLiteral("Step size τ. Reduce if the snake oscillates; increase for faster convergence."));
+
+        form->addRow(QStringLiteral("Tension α"),     alphaSpin);
+        form->addRow(QStringLiteral("Rigidity β"),    betaSpin);
+        form->addRow(QStringLiteral("Image λ"),       lambdaSpin);
+        form->addRow(QStringLiteral("Iterations"),    iterSpin);
+        form->addRow(QStringLiteral("Step τ"),        stepSpin);
+
+        // Insert the group box just below the only-missing checkbox if we can
+        // find it; otherwise append to the dialog's vertical layout.
+        if (ui && ui->verticalLayout) {
+            QWidget* anchor = this->findChild<QWidget*>("onlyMissingCheckBox");
+            int idx = anchor ? ui->verticalLayout->indexOf(anchor) : -1;
+            if (idx >= 0) {
+                ui->verticalLayout->insertWidget(idx + 1, snakeBox);
+            } else {
+                ui->verticalLayout->addWidget(snakeBox);
+            }
+        } else {
+            snakeBox->setParent(this);
+        }
+    }
+
     QPushButton *beginButton = ui->buttonBox->button(QDialogButtonBox::Apply);
     if (beginButton) {
         beginButton->setText("Begin Tracking");
@@ -97,6 +167,22 @@ bool TrackingProgressDialog::onlyTrackMissingChecked() const {
     QCheckBox* cb = this->findChild<QCheckBox*>("onlyMissingCheckBox");
     if (!cb) return true;
     return cb->isChecked();
+}
+
+Tracking::CenterlineSnakeParams TrackingProgressDialog::snakeParams() const {
+    Tracking::CenterlineSnakeParams params;  // header defaults
+    if (!ui) return params;
+
+    // Master toggle is the group box's checked state.
+    if (auto* group = this->findChild<QGroupBox*>("snakeParamsGroup")) {
+        params.enabled = group->isChecked();
+    }
+    if (auto* sb = this->findChild<QDoubleSpinBox*>("snakeAlpha"))  params.alpha     = sb->value();
+    if (auto* sb = this->findChild<QDoubleSpinBox*>("snakeBeta"))   params.beta      = sb->value();
+    if (auto* sb = this->findChild<QDoubleSpinBox*>("snakeLambda")) params.lambda    = sb->value();
+    if (auto* sb = this->findChild<QSpinBox*>("snakeIters"))        params.iterations= sb->value();
+    if (auto* sb = this->findChild<QDoubleSpinBox*>("snakeStep"))   params.stepSize  = sb->value();
+    return params;
 }
 
 void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,

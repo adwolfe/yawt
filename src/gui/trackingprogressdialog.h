@@ -39,6 +39,12 @@ public:
     // that do not already have existing track data.
     bool onlyTrackMissingChecked() const;
 
+    // Returns the current active-contour ("snake") parameters as configured in the
+    // dialog's debug panel. Used by AppController to forward to TrackingManager
+    // before launching the centerline phase. The panel is expected to be a
+    // temporary tuning aid; once stable values are found, this can be retired.
+    Tracking::CenterlineSnakeParams snakeParams() const;
+
 public slots:
     void updateStatusMessage(const QString& message);
     void updateOverallProgress(int percentage);

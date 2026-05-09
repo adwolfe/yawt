@@ -257,6 +257,31 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                                                double maxAspectRatio);
 
 /**
+ * @brief Tunable parameters for the active-contour ("snake") centerline refinement
+ *        used on ring/coiled and (eventually) merged frames.
+ *
+ * The snake initializes from the previous-frame centerline translated by
+ * blob-centroid motion, then evolves under three competing forces:
+ *   - tension  (alpha) — first-derivative penalty; resists stretching, smooths spacing.
+ *   - rigidity (beta)  — second-derivative penalty; resists kinking/bending.
+ *   - image    (lambda)— attraction toward the medial axis (ridge of the
+ *                        distance transform of the current blob mask).
+ *
+ * Endpoints are pinned to the nearest outer-contour point of the predicted
+ * nose/tail. Because the curve is a parametric polyline (not a skeleton), it
+ * is allowed to self-intersect — which is exactly what's needed when a worm
+ * physically crosses over itself in 2D.
+ */
+struct CenterlineSnakeParams {
+    bool   enabled    = true;   // Master toggle. When false, fall back to the legacy cut-skeleton path.
+    double alpha      = 0.10;   // Tension (1st-derivative weight).
+    double beta       = 0.05;   // Rigidity (2nd-derivative weight).
+    double lambda     = 1.00;   // Image attraction (toward distance-transform ridge).
+    int    iterations = 60;     // Number of explicit-Euler update steps.
+    double stepSize   = 0.50;   // Per-iteration step size (tau).
+};
+
+/**
  * @brief Compute and store an ordered centerline for a detected blob from its contour.
  * The resulting polyline runs from one skeleton endpoint to the other and is stored in
  * DetectedBlob::centerlinePoints. Returns true when a usable centerline was found.

@@ -215,6 +215,15 @@ public:
 
     void setPixelSizePixelsPerUm(double value);
 
+    /**
+     * @brief Set the active-contour parameters used by CenterlineWorker for ring/coiled
+     *        frames during the post-tracking centerline phase.
+     *
+     * Must be called before startCenterlineComputation() (i.e. before tracking finishes
+     * or just at startup) for the values to be picked up by the worker.
+     */
+    void setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params);
+
 public slots:
     /**
      * @brief Start a full multi-worm tracking run.
@@ -443,6 +452,10 @@ private:
     // Centerline computation members (post-tracking background phase)
     QPointer<QThread> m_centerlineThread;
     QPointer<CenterlineWorker> m_centerlineWorker;
+
+    // Active-contour parameters for ring/coiled-frame refinement. Configured via
+    // setCenterlineSnakeParams(); applied to the worker right before doWork().
+    Tracking::CenterlineSnakeParams m_centerlineSnakeParams;
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures

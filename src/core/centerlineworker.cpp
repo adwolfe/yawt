@@ -1,6 +1,7 @@
 #include "centerlineworker.h"
 #include "../data/trackingcommon.h"
 #include <QDebug>
+#include <opencv2/imgproc.hpp>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -433,6 +434,208 @@ static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
     return true;
 }
 
+// ── Active-contour ("snake") refinement ─────────────────────────────────────
+//
+// For ring/coiled frames, skeletonization can never produce a self-intersecting
+// centerline because the skeleton of a planar mask is a planar tree. When a
+// worm physically crosses over itself, the true 2D centerline IS self-intersecting.
+//
+// This helper evolves a parametric polyline (which has no topological constraint
+// against self-intersection) under three forces:
+//   - tension  (alpha) → discrete Laplacian: V[i-1] - 2V[i] + V[i+1]
+//   - rigidity (beta)  → discrete biharmonic: -(V[i-2] - 4V[i-1] + 6V[i] - 4V[i+1] + V[i+2])
+//   - image    (lambda)→ ∇D where D is the distance transform of the blob mask.
+//                        D's ridge IS the medial axis, so following ∇D pulls the
+//                        snake onto the body axis.
+//
+// Initialization is the previous-frame centerline translated by centroid motion;
+// endpoints are pinned to the nearest outer-contour point of the predicted nose/tail
+// (worm endpoints must lie on the boundary). When the U-shaped prior should curl
+// into a self-crossing curve, gradient descent finds that minimum naturally.
+//
+// Returns false on any structural failure; outPts is populated with nPoints
+// resampled points on success, and outOverlapCenter / outHasOverlap describe
+// any self-intersection detected in the result (used for debug overlay).
+static bool refineCenterlineSnake(const Tracking::DetectedBlob& blob,
+                                  const CenterlineState& prev,
+                                  float refLength,
+                                  int nPoints,
+                                  const Tracking::CenterlineSnakeParams& params,
+                                  std::vector<cv::Point2f>& outPts,
+                                  cv::Point2f& outOverlapCenter,
+                                  bool& outHasOverlap)
+{
+    outHasOverlap = false;
+    if (!params.enabled || !prev.valid || prev.points.size() < 4 ||
+        blob.contourPoints.empty()) {
+        return false;
+    }
+
+    // 1. Initial guess: prev centerline translated by centroid motion. This is
+    //    the same prediction the existing fallback uses; the snake just refines it.
+    const cv::Point2f curCentroid = blobCentroid(blob);
+    const cv::Point2f offset = curCentroid - prev.blobCentroid;
+
+    std::vector<cv::Point2f> v;
+    v.reserve(prev.points.size());
+    for (const cv::Point2f& p : prev.points) {
+        v.push_back(p + offset);
+    }
+    if (static_cast<int>(v.size()) != nPoints) {
+        v = resample(v, nPoints);
+    }
+    if (static_cast<int>(v.size()) < 4) {
+        return false;
+    }
+
+    // 2. Build a local mask of the current blob (outer contour with holes carved out).
+    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
+    constexpr int kPad = 8;
+    bounds.x -= kPad;
+    bounds.y -= kPad;
+    bounds.width += 2 * kPad;
+    bounds.height += 2 * kPad;
+    if (bounds.width <= 1 || bounds.height <= 1) {
+        return false;
+    }
+
+    cv::Mat mask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
+    fillBlobMask(mask, blob, bounds, cv::Point2f(0.f, 0.f));
+    if (cv::countNonZero(mask) < 4) {
+        return false;
+    }
+
+    // 3. Distance transform → its ridges ARE the medial axis. Smooth a little so
+    //    ∇D is well-defined off-ridge. Sobel gives the gradient field that
+    //    attracts the snake toward the ridge (highest-D pixels).
+    cv::Mat dt;
+    cv::distanceTransform(mask, dt, cv::DIST_L2, 3);
+    cv::GaussianBlur(dt, dt, cv::Size(0, 0), 1.0);
+    cv::Mat gx;
+    cv::Mat gy;
+    cv::Sobel(dt, gx, CV_32F, 1, 0, 3);
+    cv::Sobel(dt, gy, CV_32F, 0, 1, 3);
+
+    // Normalize gradient magnitude scale so lambda has roughly mask-size-
+    // independent meaning. Without this, large blobs have larger ∇D and the
+    // user-tuned lambda would behave very differently across frames.
+    double gxMin = 0.0;
+    double gxMax = 0.0;
+    double gyMin = 0.0;
+    double gyMax = 0.0;
+    cv::minMaxLoc(gx, &gxMin, &gxMax);
+    cv::minMaxLoc(gy, &gyMin, &gyMax);
+    const double gradScale = std::max({std::abs(gxMin), std::abs(gxMax),
+                                       std::abs(gyMin), std::abs(gyMax), 1.0});
+    gx /= static_cast<float>(gradScale);
+    gy /= static_cast<float>(gradScale);
+
+    auto sampleGradient = [&](const cv::Point2f& world) -> cv::Point2f {
+        const int lx = std::clamp(static_cast<int>(std::lround(world.x - bounds.x)),
+                                  0, gx.cols - 1);
+        const int ly = std::clamp(static_cast<int>(std::lround(world.y - bounds.y)),
+                                  0, gx.rows - 1);
+        return cv::Point2f(gx.at<float>(ly, lx), gy.at<float>(ly, lx));
+    };
+    auto isInsideMask = [&](const cv::Point2f& world) -> bool {
+        const int lx = static_cast<int>(std::lround(world.x - bounds.x));
+        const int ly = static_cast<int>(std::lround(world.y - bounds.y));
+        if (lx < 0 || ly < 0 || lx >= mask.cols || ly >= mask.rows) {
+            return false;
+        }
+        return mask.at<uchar>(ly, lx) != 0;
+    };
+
+    // 4. Pin endpoints to the nearest outer-contour point of the predicted
+    //    nose/tail. Worm endpoints must lie on the body boundary, not interior.
+    v.front() = nearestContourPoint(blob.contourPoints, v.front());
+    v.back()  = nearestContourPoint(blob.contourPoints, v.back());
+
+    // 5. Explicit-Euler gradient descent on the discretized energy. With only
+    //    nPoints=20 control points this is trivially fast even for many iterations.
+    const float alpha = static_cast<float>(params.alpha);
+    const float beta  = static_cast<float>(params.beta);
+    const float lambda = static_cast<float>(params.lambda);
+    const float tau   = static_cast<float>(std::max(1e-3, params.stepSize));
+    const int n = static_cast<int>(v.size());
+
+    std::vector<cv::Point2f> next(v.size());
+    for (int iter = 0; iter < std::max(1, params.iterations); ++iter) {
+        next.front() = v.front();   // pinned
+        next.back()  = v.back();    // pinned
+
+        for (int i = 1; i < n - 1; ++i) {
+            // Tension: discrete Laplacian (smooths spacing, resists stretching).
+            const cv::Point2f tens = v[i - 1] - 2.f * v[i] + v[i + 1];
+
+            // Rigidity: discrete biharmonic (resists bending). Only well-defined
+            // two points away from each endpoint; degenerates to zero near pins.
+            cv::Point2f rig(0.f, 0.f);
+            if (i >= 2 && i <= n - 3) {
+                rig = v[i - 2] - 4.f * v[i - 1] + 6.f * v[i] - 4.f * v[i + 1] + v[i + 2];
+            }
+
+            // Image: gradient of the (smoothed) distance transform. Pulls the
+            // point toward the closest medial-axis ridge.
+            const cv::Point2f img = sampleGradient(v[i]);
+
+            // Sign convention for biharmonic is negative — the rigidity force
+            // opposes the biharmonic, like the Laplacian opposes itself for tension.
+            const cv::Point2f force = alpha * tens - beta * rig + lambda * img;
+            cv::Point2f candidate = v[i] + tau * force;
+
+            // Hard constraint: stay inside the blob mask. If the step lands
+            // outside, snap back to the closest contour point — better than
+            // letting the snake escape into background where ∇D is degenerate.
+            if (!isInsideMask(candidate)) {
+                candidate = nearestContourPoint(blob.contourPoints, candidate);
+            }
+            next[i] = candidate;
+        }
+
+        v.swap(next);
+    }
+
+    // 6. Final resample to the canonical point count (preserves arc-length spacing).
+    if (static_cast<int>(v.size()) != nPoints) {
+        v = resample(v, nPoints);
+    }
+    if (v.size() < 2) {
+        return false;
+    }
+
+    outPts = std::move(v);
+
+    // 7. Detect any self-intersection (debug overlay aid). Reuses the standard
+    //    parametric segment-intersection test on non-adjacent segment pairs.
+    auto segmentsIntersect = [](const cv::Point2f& a, const cv::Point2f& b,
+                                const cv::Point2f& c, const cv::Point2f& d,
+                                cv::Point2f& crossing) -> bool {
+        const cv::Point2f r = b - a;
+        const cv::Point2f s = d - c;
+        const float denom = r.x * s.y - r.y * s.x;
+        if (std::abs(denom) < 1e-6f) return false;
+        const float t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / denom;
+        const float u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / denom;
+        if (t > 0.f && t < 1.f && u > 0.f && u < 1.f) {
+            crossing = a + t * r;
+            return true;
+        }
+        return false;
+    };
+    for (int i = 0; i < static_cast<int>(outPts.size()) - 1 && !outHasOverlap; ++i) {
+        for (int j = i + 2; j < static_cast<int>(outPts.size()) - 1 && !outHasOverlap; ++j) {
+            cv::Point2f x;
+            if (segmentsIntersect(outPts[i], outPts[i + 1], outPts[j], outPts[j + 1], x)) {
+                outOverlapCenter = x;
+                outHasOverlap = true;
+            }
+        }
+    }
+
+    return true;
+}
+
 // Compute, orient, validate and (if needed) repair the centerline for one frame.
 // Returns the resulting CenterlineState (always valid if the function returns
 // true; invalid if no usable centerline could be produced).
@@ -441,6 +644,7 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
                             float refLength,
                             int nPoints,
                             float minArcFraction,
+                            const Tracking::CenterlineSnakeParams& snakeParams,
                             CenterlineState& out)
 {
     if (!blob.isValid || blob.contourPoints.empty()) return false;
@@ -518,8 +722,40 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
         float bestScore = std::numeric_limits<float>::max();
         std::vector<cv::Point2f> bestPts;
         cv::Point2f bestCutPoint;
+        bool bestIsSnake = false;
         const int cutThickness = 3;
 
+        // Snake candidate first: parametric polyline refined toward the medial axis,
+        // initialized from the prev centerline. Unlike skeleton-with-cut, the snake
+        // is allowed to self-intersect — required when the body crosses over itself.
+        if (snakeParams.enabled) {
+            std::vector<cv::Point2f> snakePts;
+            cv::Point2f snakeOverlapCenter;
+            bool snakeHasOverlap = false;
+            if (refineCenterlineSnake(blob, prev, refLength, nPoints,
+                                      snakeParams, snakePts,
+                                      snakeOverlapCenter, snakeHasOverlap)) {
+                const float snakeScore =
+                    continuityScore(snakePts, prev, expectedOffset, refLength);
+                if (snakeScore < bestScore) {
+                    bestScore = snakeScore;
+                    bestPts = std::move(snakePts);
+                    // For the snake, the "cut point" is repurposed as the
+                    // self-crossing location for the debug overlay (or the
+                    // closure-region centroid as a fallback when no crossing
+                    // was detected this frame).
+                    if (snakeHasOverlap) {
+                        bestCutPoint = snakeOverlapCenter;
+                    } else {
+                        bestCutPoint = (expectedNose + expectedTail) * 0.5f;
+                    }
+                    bestIsSnake = true;
+                }
+            }
+        }
+
+        // Legacy cut-skeleton candidates kept as a fallback / A-B comparison
+        // partner. Use whichever continuity score is lower.
         for (const CutCandidateSeed& seed : cutSeeds) {
             std::vector<cv::Point2f> candidate;
             cv::Point2f cutPoint;
@@ -537,11 +773,17 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
                 bestScore = score;
                 bestPts = std::move(candidate);
                 bestCutPoint = cutPoint;
+                bestIsSnake = false;
             }
         }
 
-        if (!bestPts.empty() &&
-            (needsRepair || bestScore + 2.f < currentScore)) {
+        // The snake doesn't need the "needsRepair" gate the cut-skeleton path
+        // uses, because its initialization IS the prev centerline — it can
+        // only refine, not regress. Always accept a snake winner; for cut
+        // candidates fall back to the original conservative gate.
+        const bool acceptBest = !bestPts.empty() &&
+            (bestIsSnake || needsRepair || bestScore + 2.f < currentScore);
+        if (acceptBest) {
             pts = std::move(bestPts);
             blob.centerlineCutPoint = bestCutPoint;
             blob.hasCenterlineCutPoint = true;
@@ -613,6 +855,11 @@ static constexpr float kMinArcLengthFraction = 0.5f;
 
 CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage, QObject* parent)
     : QObject(parent), m_storage(storage) {}
+
+void CenterlineWorker::setSnakeParams(const Tracking::CenterlineSnakeParams& params)
+{
+    m_snakeParams = params;
+}
 
 void CenterlineWorker::doWork()
 {
@@ -730,7 +977,8 @@ void CenterlineWorker::doWork()
                 CenterlineState out;
                 if (processOneFrame(blob, prev, refLength,
                                     kCenterlinePoints,
-                                    kMinArcLengthFraction, out)) {
+                                    kMinArcLengthFraction,
+                                    m_snakeParams, out)) {
                     m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
                     prev = out;
                 } else {
@@ -752,7 +1000,8 @@ void CenterlineWorker::doWork()
                 CenterlineState empty;
                 if (processOneFrame(blob, empty, refLength,
                                     kCenterlinePoints,
-                                    kMinArcLengthFraction, out)) {
+                                    kMinArcLengthFraction,
+                                    m_snakeParams, out)) {
                     m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
                     seed = out;
                 }
