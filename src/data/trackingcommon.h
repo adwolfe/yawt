@@ -181,7 +181,8 @@ struct TipCandidate {
     float       width     = 0.f;       // Local perpendicular mask thickness (px), ~5px inward from tip
     enum class Source : uint8_t {
         SkeletonEndpoint,
-        CurvaturePeak
+        CurvaturePeak,
+        HypothesizedHidden   // D-3: inferred tip when the other end is occluded
     };
     Source source = Source::SkeletonEndpoint;
 };

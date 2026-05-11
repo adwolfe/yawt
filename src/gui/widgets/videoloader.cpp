@@ -1115,12 +1115,20 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     // Filled green circle — skeleton degree-1 endpoint.
                     painter.setBrush(QColor(60, 220, 80));
                     painter.drawEllipse(pt, dotRadius, dotRadius);
-                } else {
+                } else if (tc.source == Tracking::TipCandidate::Source::CurvaturePeak) {
                     // Hollow magenta square — curvature peak.
                     painter.setBrush(Qt::NoBrush);
                     QPen peakPen(QColor(220, 60, 220), 1.6);
                     peakPen.setCosmetic(true);
                     painter.setPen(peakPen);
+                    painter.drawRect(QRectF(pt.x() - dotRadius, pt.y() - dotRadius,
+                                            dotRadius * 2.0, dotRadius * 2.0));
+                } else {
+                    // Hollow orange square — D-3 hypothesized hidden tip.
+                    painter.setBrush(Qt::NoBrush);
+                    QPen hypPen(QColor(255, 165, 0), 1.6);
+                    hypPen.setCosmetic(true);
+                    painter.setPen(hypPen);
                     painter.drawRect(QRectF(pt.x() - dotRadius, pt.y() - dotRadius,
                                             dotRadius * 2.0, dotRadius * 2.0));
                 }

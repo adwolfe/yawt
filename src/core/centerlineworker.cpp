@@ -807,17 +807,17 @@ static bool refineCenterlineSnakeFromTips(const Tracking::DetectedBlob& blob,
     return true;
 }
 
-// New (Phase C.3 / D-3): only one tip is assigned. Use the per-worm body-
-// length prior to hypothesize where the hidden tip lies — the outer-contour
-// point whose geodesic distance from the known tip is closest to bodyLength
-// — then run the standard tip-based snake on that geodesic.
+// New (Phase C.3 / D-3): only one tip is assigned. Hypothesize where the
+// hidden tip lies by finding the mask pixel that is geodesically farthest
+// from the known tip (double-Dijkstra, same principle as extractCenterline-
+// FromMask's fallback). This is the natural terminus of the body axis through
+// the mask and is far more reliable than projecting to the outer contour at
+// a body-length target distance — the outer contour of a coiled/self-crossing
+// worm traces the outer boundary of the whole mass, not the hidden tip.
 //
-// Returns the hypothesized other tip via outHiddenTip on success, so the
-// caller can update the head/tail assignment + the head/tail predictor for
-// downstream frames.
+// Returns the hypothesized other tip via outHiddenTip on success.
 static bool refineCenterlineSnakeFromOneTip(const Tracking::DetectedBlob& blob,
                                             const cv::Point2f& knownTip,
-                                            float bodyLength,
                                             int nPoints,
                                             const Tracking::CenterlineSnakeParams& params,
                                             std::vector<cv::Point2f>& outPts,
@@ -826,7 +826,7 @@ static bool refineCenterlineSnakeFromOneTip(const Tracking::DetectedBlob& blob,
                                             bool& outHasOverlap)
 {
     outHasOverlap = false;
-    if (!params.enabled || blob.contourPoints.empty() || bodyLength <= 1.f) return false;
+    if (!params.enabled || blob.contourPoints.empty()) return false;
 
     cv::Mat mask;
     cv::Rect bounds;
@@ -838,26 +838,25 @@ static bool refineCenterlineSnakeFromOneTip(const Tracking::DetectedBlob& blob,
     GeodesicResult g;
     if (!runDijkstraInMask(mask, knownLocal, g)) return false;
 
-    // Walk every outer-contour point, find the one whose geodesic distance
-    // from the known tip is closest to bodyLength. That contour point is the
-    // hypothesized hidden tip.
-    int bestIdx = -1;
-    float bestErr = std::numeric_limits<float>::max();
-    cv::Point bestLocal;
-    for (size_t i = 0; i < blob.contourPoints.size(); ++i) {
-        const cv::Point& cp = blob.contourPoints[i];
-        const cv::Point local(cp.x - bounds.x, cp.y - bounds.y);
-        if (local.x < 0 || local.y < 0 || local.x >= mask.cols || local.y >= mask.rows) continue;
-        const float d = g.distMap.at<float>(local);
-        if (!std::isfinite(d)) continue;
-        const float err = std::abs(d - bodyLength);
-        if (err < bestErr) {
-            bestErr = err;
-            bestIdx = static_cast<int>(i);
-            bestLocal = local;
+    // Find the mask pixel that is geodesically farthest from the known tip.
+    // This is the natural far end of the body axis — the same double-Dijkstra
+    // principle used in extractCenterlineFromMask when skeleton endpoints are
+    // absent. Scanning all mask pixels (not just the outer contour) means we
+    // correctly reach interior points on a self-crossing body.
+    cv::Point bestLocal = knownLocal;
+    float bestDist = 0.f;
+    for (int y = 0; y < mask.rows; ++y) {
+        const float* distRow = g.distMap.ptr<float>(y);
+        const uchar* maskRow = mask.ptr<uchar>(y);
+        for (int x = 0; x < mask.cols; ++x) {
+            if (maskRow[x] == 0) continue;
+            if (std::isfinite(distRow[x]) && distRow[x] > bestDist) {
+                bestDist = distRow[x];
+                bestLocal = cv::Point(x, y);
+            }
         }
     }
-    if (bestIdx < 0) return false;
+    if (bestDist < 1.f) return false;  // degenerate: all points at distance 0
 
     std::vector<cv::Point> pathLocal;
     if (!reconstructPath(g, knownLocal, bestLocal, pathLocal)) return false;
@@ -1471,10 +1470,63 @@ void CenterlineWorker::doWork()
                     qUtf8Printable(Tracking::topologyStateToString(blob.topologyState)));
 
                 if (!Tracking::assignHeadTail(blob, predictor, baseline)) continue;
+
+                // ── Inline D-3: one assigned tip on a SelfCrossed frame ────────
+                // assignHeadTail may leave one role unset (-1) when only a single
+                // skeleton endpoint was visible. Run the body-length geodesic HERE
+                // (not in a later pass) so the predictor's lastHeadPos/lastTailPos
+                // is updated before the NEXT frame's assignment runs. Without this
+                // the missing role's predicted position goes stale across runs of
+                // consecutive self-crossed frames.
+                {
+                    const int hIdx = blob.assignedHeadTipIdx;
+                    const int tIdx = blob.assignedTailTipIdx;
+                    const bool oneHead = (hIdx >= 0 && tIdx < 0);
+                    const bool oneTail = (tIdx >= 0 && hIdx < 0);
+                    if ((oneHead || oneTail)
+                        && blob.topologyState == Tracking::TopologyState::SelfCrossed) {
+                        const int knownIdx = oneHead ? hIdx : tIdx;
+                        const cv::Point2f knownTip = blob.tipCandidates[knownIdx].point;
+                        const int nPts = std::max(4, m_snakeParams.nPoints);
+                        std::vector<cv::Point2f> refined;
+                        cv::Point2f hiddenTip, overlapCenter;
+                        bool hasOverlap = false;
+                        if (refineCenterlineSnakeFromOneTip(blob, knownTip,
+                                                            nPts, m_snakeParams,
+                                                            refined, hiddenTip,
+                                                            overlapCenter, hasOverlap)) {
+                            Tracking::TipCandidate hypTip;
+                            hypTip.point  = hiddenTip;
+                            hypTip.source = Tracking::TipCandidate::Source::HypothesizedHidden;
+                            blob.tipCandidates.push_back(hypTip);
+                            const int newIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
+                            if (oneHead) blob.assignedTailTipIdx = newIdx;
+                            else         blob.assignedHeadTipIdx = newIdx;
+                            blob.centerlinePoints.assign(refined.begin(), refined.end());
+                            if (hasOverlap) {
+                                blob.centerlineCutPoint = overlapCenter;
+                                blob.hasCenterlineCutPoint = true;
+                            }
+                            YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                                "Pass4 D-3    worm=%d frame=%d  known=%s @ (%.1f,%.1f) "
+                                "-> hidden=(%.1f,%.1f)  geodDist=%.1f",
+                                wormId, tp.frameNumberOriginal,
+                                oneHead ? "head" : "tail",
+                                static_cast<double>(knownTip.x),
+                                static_cast<double>(knownTip.y),
+                                static_cast<double>(hiddenTip.x),
+                                static_cast<double>(hiddenTip.y),
+                                static_cast<double>(ptDist(knownTip, hiddenTip)));
+                        }
+                    }
+                }
+
                 m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
 
                 // Update predictor for the next frame. Velocity engages after
                 // we have two successful assignments in a row for that role.
+                // The indices here reflect both Pass-4b skeleton assignments and
+                // any D-3 hidden-tip that was just inferred above.
                 const int headIdx = blob.assignedHeadTipIdx;
                 const int tailIdx = blob.assignedTailTipIdx;
                 if (headIdx >= 0) {
@@ -1499,22 +1551,24 @@ void CenterlineWorker::doWork()
         runAssignmentDirection(keyframeIdx + 1, +1, seedPredictor);
         runAssignmentDirection(keyframeIdx - 1, -1, seedPredictor);
 
-        // ── Pass 5: geodesic-from-tips centerline refinement (Phase C.3) ────
-        // For SelfCrossed frames where head/tail were assigned in Pass 4b,
-        // replace the Pass 2 snake init (which inherited the prev centerline
-        // and was vulnerable to stale topology) with a geodesic shortest path
-        // through the current blob mask from the assigned head to the
-        // assigned tail (D-2). When only one tip is assigned, use the per-
-        // worm body-length prior to hypothesize the hidden tip and trace a
-        // geodesic of that length from the known tip (D-3).
+        // ── Pass 5: D-2 geodesic centerline refinement (Phase C.3) ─────────
+        // For SelfCrossed frames where BOTH head and tail are now assigned
+        // (either both from skeleton endpoints in Pass 4b, or head from skel +
+        // tail from the inline D-3 above), replace the Pass 2 centerline with
+        // a geodesic shortest path through the current blob mask from the
+        // assigned head to the assigned tail. This removes the stale-topology
+        // bias of the Pass 2 snake init.
         //
-        // Clean frames are skipped — their skeleton centerline is correct.
-        // Merged / Lost frames are skipped — geodesic isn't meaningful when
-        // multiple worms share a blob or no blob exists.
-        // SelfCrossed with no assigned tips → leave Pass 2's result alone
-        // (effective D-4 fallback).
+        // D-3 (single visible tip → infer hidden tip by body-length geodesic)
+        // is now handled inline in runAssignmentDirection so that the predictor
+        // is updated immediately. Pass 5 only needs to re-run the snake for
+        // frames where both tips were already assigned by Pass 4b (D-2 case).
+        //
+        // Clean frames are skipped — skeleton centerline is correct.
+        // Merged / Lost frames are skipped — geodesic not meaningful.
+        // SelfCrossed with no assigned tips → D-4 fallback (Pass 2 result kept).
         const int nPointsSnake = std::max(4, m_snakeParams.nPoints);
-        int d2Count = 0, d3Count = 0, d3Skipped = 0;
+        int d2Count = 0;
         for (const Tracking::WormTrackPoint& tp : sortedPoints) {
             QMap<int, Tracking::DetectedBlob> frameBlobs =
                 m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
@@ -1527,76 +1581,42 @@ void CenterlineWorker::doWork()
             const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.tipCandidates.size()));
             const bool hasTail = (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size()));
 
+            // D-3 frames (HypothesizedHidden tail) were already refined inline;
+            // skip them here to avoid re-running the snake redundantly.
+            if (hasTail && blob.tipCandidates[tIdx].source ==
+                               Tracking::TipCandidate::Source::HypothesizedHidden) continue;
+            if (hasHead && blob.tipCandidates[hIdx].source ==
+                               Tracking::TipCandidate::Source::HypothesizedHidden) continue;
+
+            if (!hasHead || !hasTail) continue;
+
+            // D-2: geodesic head → tail, both tips are skeleton-confirmed.
+            const cv::Point2f head = blob.tipCandidates[hIdx].point;
+            const cv::Point2f tail = blob.tipCandidates[tIdx].point;
             std::vector<cv::Point2f> refined;
             cv::Point2f overlapCenter;
             bool hasOverlap = false;
-            bool updated = false;
-
-            if (hasHead && hasTail) {
-                // D-2: geodesic head → tail.
-                const cv::Point2f head = blob.tipCandidates[hIdx].point;
-                const cv::Point2f tail = blob.tipCandidates[tIdx].point;
-                if (refineCenterlineSnakeFromTips(blob, head, tail, nPointsSnake,
-                                                  m_snakeParams,
-                                                  refined, overlapCenter, hasOverlap)) {
-                    updated = true;
-                    ++d2Count;
-                    YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                        "Pass5 D-2    worm=%d frame=%d  head=(%.1f,%.1f) tail=(%.1f,%.1f)  overlap=%d",
-                        wormId, tp.frameNumberOriginal,
-                        static_cast<double>(head.x), static_cast<double>(head.y),
-                        static_cast<double>(tail.x), static_cast<double>(tail.y),
-                        hasOverlap ? 1 : 0);
-                }
-            } else if (hasHead != hasTail && baseline.lengthSamples > 0) {
-                // D-3: geodesic of body length from the one known tip. The
-                // hidden tip is inferred and written back as the missing
-                // assignment so downstream rendering shows both rings.
-                const int knownIdx = hasHead ? hIdx : tIdx;
-                const cv::Point2f knownTip = blob.tipCandidates[knownIdx].point;
-                const float bodyLen = baseline.meanBodyLength;
-                cv::Point2f hiddenTip;
-                if (refineCenterlineSnakeFromOneTip(blob, knownTip, bodyLen, nPointsSnake,
-                                                    m_snakeParams,
-                                                    refined, hiddenTip,
-                                                    overlapCenter, hasOverlap)) {
-                    // Append the hypothesized hidden tip as a new candidate
-                    // so the assignment indices remain valid + visualisable.
-                    Tracking::TipCandidate hypTip;
-                    hypTip.point     = hiddenTip;
-                    hypTip.curvature = 0.f;
-                    hypTip.width     = 0.f;
-                    hypTip.source    = Tracking::TipCandidate::Source::CurvaturePeak;
-                    blob.tipCandidates.push_back(hypTip);
-                    const int newIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
-                    if (hasHead) blob.assignedTailTipIdx = newIdx;
-                    else         blob.assignedHeadTipIdx = newIdx;
-                    updated = true;
-                    ++d3Count;
-                    YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                        "Pass5 D-3    worm=%d frame=%d  known=%s @ (%.1f,%.1f) -> hidden=(%.1f,%.1f)  L=%.1f",
-                        wormId, tp.frameNumberOriginal,
-                        hasHead ? "head" : "tail",
-                        static_cast<double>(knownTip.x), static_cast<double>(knownTip.y),
-                        static_cast<double>(hiddenTip.x), static_cast<double>(hiddenTip.y),
-                        static_cast<double>(bodyLen));
-                } else {
-                    ++d3Skipped;
-                }
-            }
-
-            if (updated) {
+            if (refineCenterlineSnakeFromTips(blob, head, tail, nPointsSnake,
+                                              m_snakeParams,
+                                              refined, overlapCenter, hasOverlap)) {
                 blob.centerlinePoints.assign(refined.begin(), refined.end());
                 if (hasOverlap) {
                     blob.centerlineCutPoint = overlapCenter;
                     blob.hasCenterlineCutPoint = true;
                 }
                 m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+                ++d2Count;
+                YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                    "Pass5 D-2    worm=%d frame=%d  head=(%.1f,%.1f) tail=(%.1f,%.1f)  overlap=%d",
+                    wormId, tp.frameNumberOriginal,
+                    static_cast<double>(head.x), static_cast<double>(head.y),
+                    static_cast<double>(tail.x), static_cast<double>(tail.y),
+                    hasOverlap ? 1 : 0);
             }
         }
         YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-            "Pass5 summary worm=%d  D-2=%d  D-3=%d  D-3 skipped (no baseline)=%d",
-            wormId, d2Count, d3Count, d3Skipped);
+            "Pass5 summary worm=%d  D-2=%d",
+            wormId, d2Count);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);
