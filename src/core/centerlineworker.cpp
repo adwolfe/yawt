@@ -937,6 +937,11 @@ void CenterlineWorker::doWork()
         return;
     }
 
+    // Discard any prior baselines: a rerun reads from the same clean frames
+    // and produces the same distributions, so re-accumulating into existing
+    // counts would double the sample count without adding information.
+    m_storage->clearAllTipBaselines();
+
     int processedWorms = 0;
 
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
@@ -1072,6 +1077,62 @@ void CenterlineWorker::doWork()
         // Propagate forward and backward from the keyframe.
         runDirection(keyframeIdx + 1, +1, seed);
         runDirection(keyframeIdx - 1, -1, seed);
+
+        // ── Pass 3: per-worm tip-feature baseline (Phase A) ─────────────────
+        // For every clean-topology frame this worm has, sample both tips'
+        // (|curvature|, width) features and the refined centerline arc-length
+        // into the worm's running baseline. Downstream head/tail assignment
+        // scores ambiguous tip candidates against this distribution.
+        //
+        // "Clean" here means: blob is valid, has no holes (no ring topology),
+        // the worm is not part of a merge group at this frame, and the
+        // tip-candidate detector surfaced exactly two SkeletonEndpoint tips
+        // (the strongest available operational signal that the topology is
+        // unambiguous and head/tail are both visible).
+        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+            if (tp.quality != Tracking::TrackPointQuality::Single &&
+                tp.quality != Tracking::TrackPointQuality::Split)
+                continue;
+
+            // Exclude frames where this worm shares its blob with another.
+            const QList<QList<int>> mergeGroups =
+                m_storage->getMergeGroupsForFrame(tp.frameNumberOriginal);
+            bool inMerge = false;
+            for (const QList<int>& group : mergeGroups) {
+                if (group.size() > 1 && group.contains(wormId)) { inMerge = true; break; }
+            }
+            if (inMerge) continue;
+
+            const QMap<int, Tracking::DetectedBlob> frameBlobs =
+                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            if (!frameBlobs.contains(wormId)) continue;
+            const Tracking::DetectedBlob& blob = frameBlobs[wormId];
+            if (!blob.isValid || !blob.holeContourPoints.empty()) continue;
+
+            // Require exactly two skeleton-derived candidates — our operational
+            // definition of "clean topology with both tips visible."
+            int firstSkel = -1, secondSkel = -1;
+            int extraSkel = 0;
+            for (size_t i = 0; i < blob.tipCandidates.size(); ++i) {
+                if (blob.tipCandidates[i].source !=
+                    Tracking::TipCandidate::Source::SkeletonEndpoint) continue;
+                if (firstSkel < 0) firstSkel = static_cast<int>(i);
+                else if (secondSkel < 0) secondSkel = static_cast<int>(i);
+                else ++extraSkel;
+            }
+            if (firstSkel < 0 || secondSkel < 0 || extraSkel > 0) continue;
+
+            const Tracking::TipCandidate& t1 = blob.tipCandidates[firstSkel];
+            const Tracking::TipCandidate& t2 = blob.tipCandidates[secondSkel];
+            m_storage->recordTipFeatureSample(wormId, std::abs(t1.curvature), t1.width);
+            m_storage->recordTipFeatureSample(wormId, std::abs(t2.curvature), t2.width);
+
+            if (blob.centerlinePoints.size() >= 2) {
+                std::vector<cv::Point2f> p(blob.centerlinePoints.begin(),
+                                           blob.centerlinePoints.end());
+                m_storage->recordBodyLengthSample(wormId, arcLen(p));
+            }
+        }
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);

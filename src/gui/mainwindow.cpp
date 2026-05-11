@@ -2316,6 +2316,38 @@ void MainWindow::onDebugCenterlineFinished()
     if (ui->videoLoader) {
         ui->videoLoader->update();
     }
+
+    // Refresh the per-worm tip-baseline readout. Each row reports the worm's
+    // running curvature, width, and body-length distributions accumulated from
+    // clean-topology frames during this centerline pass. A ✓ marks worms
+    // whose sample count is high enough for the discriminator to be useful.
+    if (auto* edit = ui->tipBaselineTextEdit) {
+        if (m_trackingDataStorage) {
+            const QMap<int, Tracking::TipFeatureBaseline> baselines =
+                m_trackingDataStorage->getAllTipBaselines();
+            if (baselines.isEmpty()) {
+                edit->setPlainText("No clean-topology frames found in this pass.");
+            } else {
+                QString report;
+                report += QStringLiteral(
+                    "ID  |κ| mean ± sd  (n)   width mean ± sd  (n)   length mean ± sd  (n)   ok\n");
+                report += QStringLiteral(
+                    "─── ──────────────────── ──────────────────── ──────────────────── ──\n");
+                for (auto it = baselines.constBegin(); it != baselines.constEnd(); ++it) {
+                    const int wormId = it.key();
+                    const Tracking::TipFeatureBaseline& b = it.value();
+                    report += QString::asprintf(
+                        "%-3d %5.3f ± %5.3f (%4d) %5.2f ± %4.2f (%4d) %6.1f ± %5.1f (%4d) %s\n",
+                        wormId,
+                        b.meanAbsCurvature, b.curvatureStdDev(), b.curvatureSamples,
+                        b.meanWidth,        b.widthStdDev(),     b.widthSamples,
+                        b.meanBodyLength,   b.bodyLengthStdDev(), b.lengthSamples,
+                        b.isReliable() ? "✓" : "·");
+                }
+                edit->setPlainText(report);
+            }
+        }
+    }
 }
 
 // Retracking UI and logic removed

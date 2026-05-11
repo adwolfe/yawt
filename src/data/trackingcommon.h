@@ -8,6 +8,7 @@
 #include <QMetaEnum>
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
+#include <cmath>  // For std::sqrt (TipFeatureBaseline accessors)
 #include <QColor> // Added for TrackedItem color
 #include <QString> // For typeToString and stringToType
 #include <map>     // For AllWormTracks
@@ -183,6 +184,82 @@ struct TipCandidate {
         CurvaturePeak
     };
     Source source = Source::SkeletonEndpoint;
+};
+
+/**
+ * @brief Running per-worm distribution of tip features, accumulated online.
+ *
+ * Fed only from frames where the worm's blob has clean topology — defined as:
+ *   • no ring (blob.holeContourPoints empty),
+ *   • the worm is not part of a multi-worm merge group at this frame,
+ *   • findTipCandidates() returned exactly two SkeletonEndpoint candidates.
+ *
+ * Under those conditions both candidates are bona-fide tips of this individual,
+ * so their (|curvature|, width) features sample the "what does a tip look like
+ * on this worm" distribution. The centerline arc length on the same frame
+ * samples a body-length distribution that downstream code (Phase D-3) uses as
+ * a geodesic-length prior when only one tip is visible.
+ *
+ * Statistics use Welford's online algorithm: numerically stable across many
+ * samples, single-pass, no need to retain individual sample values.
+ *
+ * Curvature is stored as |signed curvature| since outer-contour traversal
+ * direction can vary between blobs; tip-vs-kink discrimination depends on
+ * magnitude, not sign.
+ */
+struct TipFeatureBaseline {
+    // Welford running stats: mean + sum-of-squared-deviations-from-mean (M2).
+    float meanAbsCurvature = 0.f;
+    float m2AbsCurvature   = 0.f;
+    int   curvatureSamples = 0;
+
+    float meanWidth   = 0.f;
+    float m2Width     = 0.f;
+    int   widthSamples = 0;
+
+    float meanBodyLength = 0.f;
+    float m2BodyLength   = 0.f;
+    int   lengthSamples  = 0;
+
+    void addCurvatureSample(float curvatureMagnitude) {
+        ++curvatureSamples;
+        const float delta  = curvatureMagnitude - meanAbsCurvature;
+        meanAbsCurvature  += delta / static_cast<float>(curvatureSamples);
+        const float delta2 = curvatureMagnitude - meanAbsCurvature;
+        m2AbsCurvature    += delta * delta2;
+    }
+    void addWidthSample(float width) {
+        ++widthSamples;
+        const float delta  = width - meanWidth;
+        meanWidth         += delta / static_cast<float>(widthSamples);
+        const float delta2 = width - meanWidth;
+        m2Width           += delta * delta2;
+    }
+    void addLengthSample(float length) {
+        ++lengthSamples;
+        const float delta  = length - meanBodyLength;
+        meanBodyLength    += delta / static_cast<float>(lengthSamples);
+        const float delta2 = length - meanBodyLength;
+        m2BodyLength      += delta * delta2;
+    }
+
+    float curvatureStdDev() const {
+        return (curvatureSamples > 1)
+            ? std::sqrt(m2AbsCurvature / static_cast<float>(curvatureSamples - 1)) : 0.f;
+    }
+    float widthStdDev() const {
+        return (widthSamples > 1)
+            ? std::sqrt(m2Width / static_cast<float>(widthSamples - 1)) : 0.f;
+    }
+    float bodyLengthStdDev() const {
+        return (lengthSamples > 1)
+            ? std::sqrt(m2BodyLength / static_cast<float>(lengthSamples - 1)) : 0.f;
+    }
+
+    /** Considered usable as a discriminator when both feature dists have ≥30 samples. */
+    bool isReliable(int minSamples = 30) const {
+        return curvatureSamples >= minSamples && widthSamples >= minSamples;
+    }
 };
 
 /**

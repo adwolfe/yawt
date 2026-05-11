@@ -1327,6 +1327,28 @@ QToolButton#lastFrameButton {
               </widget>
              </item>
              <item>
+              <widget class="QGroupBox" name="tipBaselineGroup">
+               <property name="title"><string>Tip baselines (clean frames)</string></property>
+               <property name="toolTip"><string>Per-worm running distributions of tip features, accumulated only from clean-topology frames (no ring, not merged, both tips skeleton-confirmed). Feeds the head/tail discriminator in disrupted frames. Refreshed at the end of each centerline pass.</string></property>
+               <property name="flat"><bool>false</bool></property>
+               <layout class="QVBoxLayout" name="tipBaselineLayout">
+                <item>
+                 <widget class="QPlainTextEdit" name="tipBaselineTextEdit">
+                  <property name="readOnly"><bool>true</bool></property>
+                  <property name="maximumHeight"><number>180</number></property>
+                  <property name="placeholderText"><string>Run Rerun Centerline to populate baselines.</string></property>
+                  <property name="font">
+                   <font>
+                    <family>Menlo</family>
+                    <pointsize>10</pointsize>
+                   </font>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
               <spacer name="debugTabSpacer">
                <property name="orientation">
                 <enum>Qt::Orientation::Vertical</enum>
