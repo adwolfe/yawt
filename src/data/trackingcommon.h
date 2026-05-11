@@ -187,6 +187,36 @@ struct TipCandidate {
 };
 
 /**
+ * @brief Per-frame topology classification for a worm's blob.
+ *
+ * Independent of (but adjacent to) TrackPointQuality, which captures the
+ * tracker's *confidence*. TopologyState captures the *geometric* state of
+ * the worm's blob: clean topology with both tips visible, self-crossed
+ * (ring or hidden tip), shared with another worm (merged), or unavailable.
+ *
+ * Set by classifyTopology() once per blob per pass; consumed by the
+ * centerline-refinement dispatch (Phase D) to pick D-1/D-2/D-3/D-4 branches.
+ */
+enum class TopologyState : uint8_t {
+    Unknown,        // Default, before classification.
+    Clean,          // No ring, sole occupant of its blob, both tips skeleton-confirmed.
+    SelfCrossed,    // Ring topology OR fewer than two skeleton tips visible.
+    Merged,         // Shares its blob with one or more other worms.
+    Lost            // No valid blob this frame.
+};
+
+inline QString topologyStateToString(TopologyState s) {
+    switch (s) {
+    case TopologyState::Clean:       return QStringLiteral("Clean");
+    case TopologyState::SelfCrossed: return QStringLiteral("SelfCrossed");
+    case TopologyState::Merged:      return QStringLiteral("Merged");
+    case TopologyState::Lost:        return QStringLiteral("Lost");
+    case TopologyState::Unknown:
+    default:                         return QStringLiteral("Unknown");
+    }
+}
+
+/**
  * @brief Running per-worm distribution of tip features, accumulated online.
  *
  * Fed only from frames where the worm's blob has clean topology — defined as:
@@ -277,6 +307,9 @@ struct DetectedBlob {
     cv::Point2f centerlineCutPoint;                         // Debug/overlay point where a ring mask was cut open
     bool hasCenterlineCutPoint = false;                     // True when centerlineCutPoint is meaningful
     std::vector<TipCandidate> tipCandidates;                // Per-frame nose/tail candidates (Phase B preprocessing)
+    int assignedHeadTipIdx = -1;                            // Index into tipCandidates of the assigned head, or -1
+    int assignedTailTipIdx = -1;                            // Index into tipCandidates of the assigned tail, or -1
+    TopologyState topologyState = TopologyState::Unknown;   // Per-frame geometric classification (Phase C.2)
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
@@ -286,6 +319,9 @@ struct DetectedBlob {
           convexHullArea(0.0),
           centerlineCutPoint(0.f, 0.f),
           hasCenterlineCutPoint(false),
+          assignedHeadTipIdx(-1),
+          assignedTailTipIdx(-1),
+          topologyState(TopologyState::Unknown),
           isValid(false),
           touchesROIboundary(false) {}
 };
@@ -405,6 +441,73 @@ struct CenterlineSnakeParams {
     // worm bends noticeably but stays quiet on straight-body frames.
     double orientationAngleThreshold = 0.50;  // radians
 };
+
+/**
+ * @brief Carrier for the per-worm temporal state assignHeadTail() needs.
+ *
+ * Maintained by the caller across frames; updated after each successful
+ * assignment. Encodes "where was the head last frame, how fast is it
+ * moving, what's the spatial scale of this body" — none of which lives
+ * on DetectedBlob (per-frame) or on TipFeatureBaseline (no spatial info).
+ */
+struct HeadTailPredictor {
+    bool        hasPrev      = false;     // Set once a successful assignment has been made.
+    cv::Point2f lastHeadPos  = {0.f, 0.f};
+    cv::Point2f lastTailPos  = {0.f, 0.f};
+    bool        hasVelocity  = false;     // True after two consecutive successful assignments.
+    cv::Point2f velHead      = {0.f, 0.f};
+    cv::Point2f velTail      = {0.f, 0.f};
+    float       refDistance  = 30.f;      // Normalising scale for the distance term (~½ body length).
+};
+
+/**
+ * @brief Classify a blob's geometric topology for downstream dispatch.
+ *
+ * Pure function; depends only on the blob's contents and the caller-supplied
+ * merge-group flag. The classification rules are:
+ *   • !blob.isValid              → Lost
+ *   • inMergeGroup                → Merged
+ *   • blob.holeContourPoints non-empty
+ *     OR  <2 skeleton-source tip candidates → SelfCrossed
+ *   • otherwise                   → Clean
+ *
+ * `inMergeGroup` is the worm-vs-other multi-occupant flag the caller derives
+ * by querying TrackingDataStorage::getMergeGroupsForFrame(). This function
+ * doesn't depend on TrackingDataStorage so it stays usable from anywhere.
+ *
+ * The result is written into `blob.topologyState` and returned.
+ */
+TopologyState classifyTopology(DetectedBlob& blob, bool inMergeGroup);
+
+/**
+ * @brief Assign head and tail roles to tip candidates on a blob.
+ *
+ * Pure function: depends only on `blob.tipCandidates`, the temporal predictor
+ * supplied by the caller, and the worm's accumulated tip-feature baseline.
+ * Writes its result into `blob.assignedHeadTipIdx` and `blob.assignedTailTipIdx`
+ * (indices into `blob.tipCandidates`, or -1 if no candidate was assigned to
+ * that role).
+ *
+ * The cost minimised per candidate × role is a weighted sum of four terms:
+ *   • distance from this candidate to the role's predicted position;
+ *   • angular disagreement with the role's predicted velocity (skipped on
+ *     the first call when no velocity is yet available);
+ *   • Mahalanobis-style |curvature| distance from the baseline;
+ *   • Mahalanobis-style width distance from the baseline.
+ * The feature terms are disabled when the baseline isn't yet reliable
+ * (n < 30 samples in either dist), so on the very first frames of a worm
+ * the assignment falls through to distance + velocity alone — exactly the
+ * behaviour we want before per-individual stats have built up.
+ *
+ * The keyframe (no `prev`) is bootstrapped separately by the caller —
+ * `assignHeadTail` requires `predictor.hasPrev == true`.
+ *
+ * @return True when at least one role was assigned. False on degenerate input
+ *         (no candidates, or no prev state available).
+ */
+bool assignHeadTail(DetectedBlob& blob,
+                    const HeadTailPredictor& predictor,
+                    const TipFeatureBaseline& baseline);
 
 /**
  * @brief Detect candidate nose/tail (tip) points on a blob.

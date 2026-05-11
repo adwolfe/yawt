@@ -462,19 +462,58 @@ const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
         if (isLocalMax) curvaturePeakIdx.push_back(i);
     }
 
-    // ── Helper: width = 2 × DT sampled a few pixels inward from a tip ──────
-    auto widthAt = [&](const cv::Point2f& tipLocal) -> float {
-        cv::Point2f inward = contourCentroidLocal - tipLocal;
-        const float norm = std::hypot(inward.x, inward.y);
-        if (norm < 1e-3f) return 0.f;
-        inward *= 1.f / norm;
-        // Walk 5 px inward and clamp inside the DT image.
-        const float sampleDepth = 5.f;
-        const int sx = std::clamp(static_cast<int>(std::round(tipLocal.x + inward.x * sampleDepth)),
+    // ── Helper: width = 2 × DT sampled perpendicular-inward from a tip ──────
+    // The "inward" direction is taken from the local contour tangent rotated
+    // 90°, with the side that probes higher DT chosen as the mask interior.
+    //
+    // Previous implementation walked toward the contour centroid, which works
+    // on straight bodies but fails on coiled/curved bodies whose centroid
+    // lies in the empty hole of the curl — there the probe walks AWAY from
+    // body material and returns near-zero. This version derives "into the
+    // mask" purely from local geometry, so curvature of the overall body
+    // doesn't affect it.
+    auto probeDT = [&](const cv::Point2f& origin, const cv::Point2f& dir, float depth) -> float {
+        const int px = std::clamp(static_cast<int>(std::round(origin.x + dir.x * depth)),
                                   0, dt.cols - 1);
-        const int sy = std::clamp(static_cast<int>(std::round(tipLocal.y + inward.y * sampleDepth)),
+        const int py = std::clamp(static_cast<int>(std::round(origin.y + dir.y * depth)),
                                   0, dt.rows - 1);
-        return 2.f * dt.at<float>(sy, sx);
+        return dt.at<float>(py, px);
+    };
+
+    auto widthAt = [&](const cv::Point2f& tipLocal, int contourIdx) -> float {
+        const int nC = static_cast<int>(contourLocal.size());
+        if (nC < 4) return 0.f;
+
+        // Local tangent from ±tangentK contour neighbours. tangentK = 3 gives
+        // a smooth tangent that ignores per-pixel sampling noise from
+        // cv::findContours without overshooting on tightly curved bodies.
+        const int tangentK = 3;
+        const cv::Point2f& a = contourLocal[(contourIdx - tangentK + nC) % nC];
+        const cv::Point2f& c = contourLocal[(contourIdx + tangentK) % nC];
+        cv::Point2f tangent = c - a;
+        const float tNorm = std::hypot(tangent.x, tangent.y);
+        if (tNorm < 1e-3f) return 0.f;
+        tangent *= 1.f / tNorm;
+
+        // Two candidate inward normals: rotate the tangent ±90°. Pick the
+        // one whose 1.5 px probe lands at higher DT (deeper into the mask).
+        const cv::Point2f perpA(-tangent.y,  tangent.x);
+        const cv::Point2f perpB( tangent.y, -tangent.x);
+        const float dtA = probeDT(tipLocal, perpA, 1.5f);
+        const float dtB = probeDT(tipLocal, perpB, 1.5f);
+        if (dtA < 0.5f && dtB < 0.5f) {
+            // Tip sits at a very sharp taper where both perpendicular probes
+            // exit the mask. Degenerate; return 0 so the feature is treated
+            // as missing rather than misleading.
+            return 0.f;
+        }
+        const cv::Point2f inward = (dtA >= dtB) ? perpA : perpB;
+
+        // Final sample at 3 px depth. At a real tapered tip this lands near
+        // the body axis with DT ≈ local half-width (modest). At a body kink
+        // it lands well past the axis, often near the opposite contour, so
+        // DT is small. The 2× factor converts half-width to full thickness.
+        return 2.f * probeDT(tipLocal, inward, 3.f);
     };
 
     // ── Helper: nearest contour index to a local-coords point ──────────────
@@ -491,9 +530,8 @@ const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
 
     // ── Merge: skeleton endpoints first (priority), then curvature peaks ───
     const float mergeSq = mergePlanarDistancePx * mergePlanarDistancePx;
-    auto pushIfNew = [&](const cv::Point2f& contourPtLocal,
-                         float curvatureAtPt,
-                         TipCandidate::Source source) {
+    auto pushIfNew = [&](int contourIdx, TipCandidate::Source source) {
+        const cv::Point2f& contourPtLocal = contourLocal[contourIdx];
         for (const TipCandidate& existing : blob.tipCandidates) {
             const cv::Point2f existingLocal(existing.point.x - localBounds.x,
                                             existing.point.y - localBounds.y);
@@ -503,8 +541,8 @@ const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
         TipCandidate tc;
         tc.point     = cv::Point2f(contourPtLocal.x + originOffset.x,
                                    contourPtLocal.y + originOffset.y);
-        tc.curvature = curvatureAtPt;
-        tc.width     = widthAt(contourPtLocal);
+        tc.curvature = curvature[contourIdx];
+        tc.width     = widthAt(contourPtLocal, contourIdx);
         tc.source    = source;
         blob.tipCandidates.push_back(tc);
     };
@@ -512,13 +550,310 @@ const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
     for (const cv::Point2f& skelPt : skeletonEndpoints) {
         const int idx = nearestContourIdx(skelPt);
         if (idx < 0) continue;
-        pushIfNew(contourLocal[idx], curvature[idx], TipCandidate::Source::SkeletonEndpoint);
+        pushIfNew(idx, TipCandidate::Source::SkeletonEndpoint);
     }
     for (int idx : curvaturePeakIdx) {
-        pushIfNew(contourLocal[idx], curvature[idx], TipCandidate::Source::CurvaturePeak);
+        pushIfNew(idx, TipCandidate::Source::CurvaturePeak);
+    }
+
+    // Debug log — fires at verbosity ≥2 (Normal) via QT_LOGGING_RULES.
+    // Caller (e.g. centerlineworker Pass 4) emits frame/worm context just
+    // beforehand so log lines stay correlatable across hundreds of frames.
+    if (lcDataCommon().isDebugEnabled()) {
+        int skel = 0, curv = 0;
+        for (const TipCandidate& tc : blob.tipCandidates) {
+            (tc.source == TipCandidate::Source::SkeletonEndpoint ? skel : curv) += 1;
+        }
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "findTipCandidates: %d skel + %d curv  (centroid=(%.1f, %.1f))",
+            skel, curv,
+            static_cast<double>(contourCentroidLocal.x + originOffset.x),
+            static_cast<double>(contourCentroidLocal.y + originOffset.y));
+        for (size_t i = 0; i < blob.tipCandidates.size(); ++i) {
+            const TipCandidate& tc = blob.tipCandidates[i];
+            YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+                "  [%zu] %s  at (%.1f, %.1f)  k=%+.4f  w=%.2f",
+                i,
+                tc.source == TipCandidate::Source::SkeletonEndpoint ? "skel" : "curv",
+                static_cast<double>(tc.point.x),
+                static_cast<double>(tc.point.y),
+                static_cast<double>(tc.curvature),
+                static_cast<double>(tc.width));
+        }
     }
 
     return blob.tipCandidates;
+}
+
+// ── Topology classification (Phase C.2) ─────────────────────────────────────
+//
+// Per-frame geometric classification of a worm's blob. Independent of the
+// tracker's confidence (TrackPointQuality); these flags describe the *shape*
+// the centerline algorithm has to deal with on this frame:
+//
+//   Clean       — standard, both tips visible: D-1 skeleton path is fine.
+//   SelfCrossed — ring topology, or only one skeleton tip surfaced.
+//                 Centerline dispatch will use D-2 (geodesic head→tail) when
+//                 both tips are assigned, else D-3 (geodesic-of-length).
+//   Merged      — blob is shared with another worm. Centerline isn't useful
+//                 on a merged blob; D-4 (legacy cut-skeleton) is the fallback.
+//   Lost        — no valid blob this frame.
+TopologyState classifyTopology(DetectedBlob& blob, bool inMergeGroup)
+{
+    TopologyState s;
+    if (!blob.isValid) {
+        s = TopologyState::Lost;
+    } else if (inMergeGroup) {
+        s = TopologyState::Merged;
+    } else {
+        int skeletonTips = 0;
+        for (const TipCandidate& tc : blob.tipCandidates) {
+            if (tc.source == TipCandidate::Source::SkeletonEndpoint) ++skeletonTips;
+        }
+        const bool hasRing = !blob.holeContourPoints.empty();
+        s = (hasRing || skeletonTips < 2)
+            ? TopologyState::SelfCrossed
+            : TopologyState::Clean;
+    }
+    blob.topologyState = s;
+    return s;
+}
+
+// ── Head/tail assignment (Phase C.1) ────────────────────────────────────────
+//
+// Given a per-frame set of tip candidates plus the per-worm baseline + a
+// short temporal prediction, decide which candidate is the head and which is
+// the tail.
+//
+// The optimal assignment over only two roles is trivial: enumerate all ordered
+// pairs (i, j) of candidate indices with i ≠ j, pick the pair minimising
+// cost(head=i) + cost(tail=j). With N tip candidates that's N*(N-1) pairs —
+// always tiny in practice (clean worm = 2 candidates → 2 pairs).
+//
+// Single-candidate fallback: when only one tip is detected, assign it to
+// whichever role has lower individual cost. The opposite role stays
+// unassigned (-1) and the caller's predictor keeps the stale position prior
+// for the missing tip — Phase D-3 (geodesic-of-body-length from the known
+// tip) is what will eventually fill in the hidden tip's spatial estimate.
+//
+// Cost weights are hard-coded here for v1; expose to the Debug tab if tuning
+// against real footage turns up an obvious bias.
+bool assignHeadTail(DetectedBlob& blob,
+                    const HeadTailPredictor& predictor,
+                    const TipFeatureBaseline& baseline)
+{
+    blob.assignedHeadTipIdx = -1;
+    blob.assignedTailTipIdx = -1;
+
+    if (!predictor.hasPrev || blob.tipCandidates.empty()) {
+        return false;
+    }
+
+    // ── Cost weights ────────────────────────────────────────────────────────
+    constexpr float kWeightDistance   = 1.0f;
+    constexpr float kWeightVelocity   = 0.5f;
+    constexpr float kWeightCurvature  = 0.4f;
+    constexpr float kWeightWidth      = 0.4f;
+
+    // Coefficient-of-variation gate. A baseline feature whose standard
+    // deviation rivals or exceeds its mean has no discriminative signal — it
+    // would inject noise into the cost. We require σ/μ < kMaxFeatureCV
+    // before that feature contributes to the cost. The gate is re-evaluated
+    // every call, so a feature that starts as noise (early-baseline, very
+    // few samples) silently becomes usable later as the baseline stabilises.
+    constexpr float kMaxFeatureCV = 0.5f;
+
+    auto featureCV = [](float mean, float stddev) -> float {
+        return (mean > 1e-3f) ? (stddev / mean) : std::numeric_limits<float>::max();
+    };
+
+    const bool baselineReliable = baseline.isReliable();
+    const float curvatureCV = featureCV(baseline.meanAbsCurvature, baseline.curvatureStdDev());
+    const float widthCV     = featureCV(baseline.meanWidth,        baseline.widthStdDev());
+    const bool useCurvatureFeature = baselineReliable && curvatureCV < kMaxFeatureCV;
+    const bool useWidthFeature     = baselineReliable && widthCV     < kMaxFeatureCV;
+    const float refDist = std::max(1.0f, predictor.refDistance);
+
+    // ── Predicted positions: prev + velocity (if available) ────────────────
+    const cv::Point2f predictedHead = predictor.hasVelocity
+        ? predictor.lastHeadPos + predictor.velHead
+        : predictor.lastHeadPos;
+    const cv::Point2f predictedTail = predictor.hasVelocity
+        ? predictor.lastTailPos + predictor.velTail
+        : predictor.lastTailPos;
+
+    // ── Per-candidate cost breakdown ────────────────────────────────────────
+    // Returns the four cost components separately so the debug logger can
+    // attribute the chosen pair to a specific term. Curvature/width terms
+    // use the unlabelled-baseline distribution (Phase A), so they don't
+    // discriminate head from tail — both terms are the same for a given
+    // candidate regardless of which role we're evaluating it for.
+    struct CostBreakdown {
+        float distance = 0.f;
+        float velocity = 0.f;
+        float curvature = 0.f;
+        float width = 0.f;
+        float total() const { return distance + velocity + curvature + width; }
+    };
+
+    auto roleCostBreakdown = [&](const TipCandidate& tc,
+                                 const cv::Point2f& predictedPos,
+                                 const cv::Point2f& lastPos,
+                                 const cv::Point2f& predictedVel) -> CostBreakdown {
+        CostBreakdown b;
+        const cv::Point2f delta = tc.point - predictedPos;
+        const float dist = std::hypot(delta.x, delta.y);
+        b.distance = kWeightDistance * (dist / refDist);
+
+        if (predictor.hasVelocity) {
+            const cv::Point2f move = tc.point - lastPos;
+            const float moveMag = std::hypot(move.x, move.y);
+            const float velMag  = std::hypot(predictedVel.x, predictedVel.y);
+            // Skip the velocity term when either vector is degenerate — a
+            // stationary worm has no meaningful direction.
+            if (moveMag > 0.5f && velMag > 0.5f) {
+                const float cosTheta = (move.x * predictedVel.x + move.y * predictedVel.y)
+                                       / (moveMag * velMag);
+                b.velocity = kWeightVelocity * (1.f - cosTheta);
+            }
+        }
+
+        if (useCurvatureFeature) {
+            const float cSd = std::max(1e-3f, baseline.curvatureStdDev());
+            const float cZ  = std::abs(std::abs(tc.curvature) - baseline.meanAbsCurvature) / cSd;
+            b.curvature = kWeightCurvature * cZ;
+        }
+        if (useWidthFeature) {
+            const float wSd = std::max(1e-3f, baseline.widthStdDev());
+            const float wZ  = std::abs(tc.width - baseline.meanWidth) / wSd;
+            b.width = kWeightWidth * wZ;
+        }
+        return b;
+    };
+
+    auto roleCost = [&](const TipCandidate& tc,
+                        const cv::Point2f& predictedPos,
+                        const cv::Point2f& lastPos,
+                        const cv::Point2f& predictedVel) -> float {
+        return roleCostBreakdown(tc, predictedPos, lastPos, predictedVel).total();
+    };
+
+    // ── Debug log: predictor state going INTO this frame ───────────────────
+    const bool logEnabled = lcDataCommon().isDebugEnabled();
+    if (logEnabled) {
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "assignHeadTail: nCands=%d  refDist=%.1f  useCurv=%d  useWidth=%d  hasVel=%d",
+            static_cast<int>(blob.tipCandidates.size()),
+            static_cast<double>(refDist),
+            useCurvatureFeature ? 1 : 0,
+            useWidthFeature     ? 1 : 0,
+            predictor.hasVelocity ? 1 : 0);
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "  lastHead=(%.1f, %.1f)  velHead=(%+.2f, %+.2f)  -> predHead=(%.1f, %.1f)",
+            static_cast<double>(predictor.lastHeadPos.x),
+            static_cast<double>(predictor.lastHeadPos.y),
+            static_cast<double>(predictor.velHead.x),
+            static_cast<double>(predictor.velHead.y),
+            static_cast<double>(predictedHead.x),
+            static_cast<double>(predictedHead.y));
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "  lastTail=(%.1f, %.1f)  velTail=(%+.2f, %+.2f)  -> predTail=(%.1f, %.1f)",
+            static_cast<double>(predictor.lastTailPos.x),
+            static_cast<double>(predictor.lastTailPos.y),
+            static_cast<double>(predictor.velTail.x),
+            static_cast<double>(predictor.velTail.y),
+            static_cast<double>(predictedTail.x),
+            static_cast<double>(predictedTail.y));
+        if (baselineReliable) {
+            YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+                "  baseline: |k|=%.4f±%.4f (n=%d cv=%.2f%s)  w=%.2f±%.2f (n=%d cv=%.2f%s)",
+                static_cast<double>(baseline.meanAbsCurvature),
+                static_cast<double>(baseline.curvatureStdDev()),
+                baseline.curvatureSamples,
+                static_cast<double>(curvatureCV),
+                useCurvatureFeature ? "" : " GATED",
+                static_cast<double>(baseline.meanWidth),
+                static_cast<double>(baseline.widthStdDev()),
+                baseline.widthSamples,
+                static_cast<double>(widthCV),
+                useWidthFeature ? "" : " GATED");
+        }
+    }
+
+    const int nCands = static_cast<int>(blob.tipCandidates.size());
+
+    // ── Per-candidate cost dump (for both roles) ────────────────────────────
+    // Computed once per candidate (head + tail breakdowns) so the logger and
+    // the assignment loop share the same numbers and don't double-compute.
+    std::vector<CostBreakdown> headCosts(nCands);
+    std::vector<CostBreakdown> tailCosts(nCands);
+    for (int i = 0; i < nCands; ++i) {
+        headCosts[i] = roleCostBreakdown(blob.tipCandidates[i], predictedHead,
+                                         predictor.lastHeadPos, predictor.velHead);
+        tailCosts[i] = roleCostBreakdown(blob.tipCandidates[i], predictedTail,
+                                         predictor.lastTailPos, predictor.velTail);
+        if (logEnabled) {
+            const TipCandidate& tc = blob.tipCandidates[i];
+            YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+                "  cand[%d] %s (%.1f,%.1f)  H=%.2f [d=%.2f v=%.2f k=%.2f w=%.2f]  "
+                "T=%.2f [d=%.2f v=%.2f k=%.2f w=%.2f]",
+                i,
+                tc.source == TipCandidate::Source::SkeletonEndpoint ? "skel" : "curv",
+                static_cast<double>(tc.point.x),
+                static_cast<double>(tc.point.y),
+                static_cast<double>(headCosts[i].total()),
+                static_cast<double>(headCosts[i].distance),
+                static_cast<double>(headCosts[i].velocity),
+                static_cast<double>(headCosts[i].curvature),
+                static_cast<double>(headCosts[i].width),
+                static_cast<double>(tailCosts[i].total()),
+                static_cast<double>(tailCosts[i].distance),
+                static_cast<double>(tailCosts[i].velocity),
+                static_cast<double>(tailCosts[i].curvature),
+                static_cast<double>(tailCosts[i].width));
+        }
+    }
+
+    // ── Single-candidate branch: assign to lower-cost role ─────────────────
+    if (nCands == 1) {
+        const float costH = headCosts[0].total();
+        const float costT = tailCosts[0].total();
+        if (costH <= costT) blob.assignedHeadTipIdx = 0;
+        else                blob.assignedTailTipIdx = 0;
+        if (logEnabled) {
+            YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+                "  -> single candidate; assigned to %s (H=%.2f T=%.2f)",
+                (costH <= costT) ? "head" : "tail",
+                static_cast<double>(costH), static_cast<double>(costT));
+        }
+        return true;
+    }
+
+    // ── ≥2 candidates: enumerate ordered pairs, pick min total cost ────────
+    float bestTotal = std::numeric_limits<float>::max();
+    int bestHead = -1, bestTail = -1;
+    for (int i = 0; i < nCands; ++i) {
+        for (int j = 0; j < nCands; ++j) {
+            if (i == j) continue;
+            const float total = headCosts[i].total() + tailCosts[j].total();
+            if (total < bestTotal) {
+                bestTotal = total;
+                bestHead = i;
+                bestTail = j;
+            }
+        }
+    }
+
+    blob.assignedHeadTipIdx = bestHead;
+    blob.assignedTailTipIdx = bestTail;
+
+    if (logEnabled) {
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "  -> chosen pair head=cand[%d] tail=cand[%d]  total=%.2f",
+            bestHead, bestTail, static_cast<double>(bestTotal));
+    }
+
+    return bestHead >= 0;
 }
 
 bool populateCenterlineFromContour(DetectedBlob& blob)

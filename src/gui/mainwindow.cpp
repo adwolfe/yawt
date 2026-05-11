@@ -2319,8 +2319,10 @@ void MainWindow::onDebugCenterlineFinished()
 
     // Refresh the per-worm tip-baseline readout. Each row reports the worm's
     // running curvature, width, and body-length distributions accumulated from
-    // clean-topology frames during this centerline pass. A ✓ marks worms
-    // whose sample count is high enough for the discriminator to be useful.
+    // clean-topology frames during this centerline pass, plus per-state frame
+    // counts (Phase C.2) showing how often each worm is in each topological
+    // state. A ✓ marks worms whose sample count is high enough for the
+    // discriminator to be useful.
     if (auto* edit = ui->tipBaselineTextEdit) {
         if (m_trackingDataStorage) {
             const QMap<int, Tracking::TipFeatureBaseline> baselines =
@@ -2328,20 +2330,45 @@ void MainWindow::onDebugCenterlineFinished()
             if (baselines.isEmpty()) {
                 edit->setPlainText("No clean-topology frames found in this pass.");
             } else {
+                // Tally per-worm topology-state counts by sweeping all stored
+                // blobs once. Cheaper than threading state counts through the
+                // worker's pass loop, and keeps the worker's job purely about
+                // computation.
+                QMap<int, std::array<int, 5>> stateCounts; // [Unknown, Clean, SelfCrossed, Merged, Lost]
+                const Tracking::AllWormTracks& tracks =
+                    m_trackingDataStorage->getAllTracks();
+                for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+                    const int wormId = it->first;
+                    auto& counts = stateCounts[wormId];
+                    counts.fill(0);
+                    for (const auto& tp : it->second) {
+                        const auto blobs =
+                            m_trackingDataStorage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                        if (!blobs.contains(wormId)) continue;
+                        const int idx = static_cast<int>(blobs[wormId].topologyState);
+                        if (idx >= 0 && idx < 5) ++counts[idx];
+                    }
+                }
+
                 QString report;
                 report += QStringLiteral(
-                    "ID  |κ| mean ± sd  (n)   width mean ± sd  (n)   length mean ± sd  (n)   ok\n");
+                    "ID  |κ| mean ± sd  (n)   width mean ± sd  (n)   length mean ± sd  (n)   Clean SCross Merg Lost  ok\n");
                 report += QStringLiteral(
-                    "─── ──────────────────── ──────────────────── ──────────────────── ──\n");
+                    "─── ──────────────────── ──────────────────── ──────────────────── ───── ────── ──── ────  ──\n");
                 for (auto it = baselines.constBegin(); it != baselines.constEnd(); ++it) {
                     const int wormId = it.key();
                     const Tracking::TipFeatureBaseline& b = it.value();
+                    const auto& c = stateCounts.value(wormId, {0, 0, 0, 0, 0});
                     report += QString::asprintf(
-                        "%-3d %5.3f ± %5.3f (%4d) %5.2f ± %4.2f (%4d) %6.1f ± %5.1f (%4d) %s\n",
+                        "%-3d %5.3f ± %5.3f (%4d) %5.2f ± %4.2f (%4d) %6.1f ± %5.1f (%4d) %5d %6d %4d %4d  %s\n",
                         wormId,
                         b.meanAbsCurvature, b.curvatureStdDev(), b.curvatureSamples,
                         b.meanWidth,        b.widthStdDev(),     b.widthSamples,
                         b.meanBodyLength,   b.bodyLengthStdDev(), b.lengthSamples,
+                        c[static_cast<int>(Tracking::TopologyState::Clean)],
+                        c[static_cast<int>(Tracking::TopologyState::SelfCrossed)],
+                        c[static_cast<int>(Tracking::TopologyState::Merged)],
+                        c[static_cast<int>(Tracking::TopologyState::Lost)],
                         b.isReliable() ? "✓" : "·");
                 }
                 edit->setPlainText(report);

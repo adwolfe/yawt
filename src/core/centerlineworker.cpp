@@ -1,5 +1,6 @@
 #include "centerlineworker.h"
 #include "../data/trackingcommon.h"
+#include "../utils/loggingcategories.h"
 #include <QDebug>
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
@@ -1133,6 +1134,149 @@ void CenterlineWorker::doWork()
                 m_storage->recordBodyLengthSample(wormId, arcLen(p));
             }
         }
+
+        // ── Pass 4a: topology classification (Phase C.2) ────────────────────
+        // Classify every blob this worm has into Clean / SelfCrossed / Merged
+        // / Lost before head/tail assignment runs. The classification feeds
+        // both the per-frame log line and the downstream Phase D dispatch
+        // (Pass 5: geodesic-from-tips centerline init on SelfCrossed frames).
+        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+            const QList<QList<int>> mergeGroups =
+                m_storage->getMergeGroupsForFrame(tp.frameNumberOriginal);
+            bool inMerge = false;
+            for (const QList<int>& group : mergeGroups) {
+                if (group.size() > 1 && group.contains(wormId)) { inMerge = true; break; }
+            }
+
+            QMap<int, Tracking::DetectedBlob> frameBlobs =
+                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            if (!frameBlobs.contains(wormId)) continue;
+            Tracking::DetectedBlob blob = frameBlobs[wormId];
+            Tracking::classifyTopology(blob, inMerge);
+            m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+        }
+
+        // ── Pass 4b: head/tail assignment (Phase C.1) ───────────────────────
+        // Walks frames temporally from keyframe outward, mirroring Pass 2's
+        // direction structure. For each frame:
+        //   • At the keyframe, bootstrap the assignment from the centerline's
+        //     own endpoint convention (front-of-polyline → head, back → tail,
+        //     mapped to the nearest tip candidates). The centerline was
+        //     finalised in Pass 2, so its orientation is already consistent
+        //     with the worm's per-individual convention.
+        //   • At every other frame, call assignHeadTail() with a predictor
+        //     state seeded from the previous frame. Predictor velocity engages
+        //     after two successful assignments.
+        // Each frame's assignment indices are written back to storage.
+        const Tracking::TipFeatureBaseline baseline = m_storage->getTipBaseline(wormId);
+
+        // Map a target point to the nearest tip-candidate index. Used by both
+        // the keyframe seed and any sanity-check overrides on disrupted frames.
+        auto nearestCandidateIdx = [](const Tracking::DetectedBlob& b,
+                                      const cv::Point2f& target) -> int {
+            int bestIdx = -1;
+            float bestDistSq = std::numeric_limits<float>::max();
+            for (size_t i = 0; i < b.tipCandidates.size(); ++i) {
+                const cv::Point2f d = b.tipCandidates[i].point - target;
+                const float dsq = d.x * d.x + d.y * d.y;
+                if (dsq < bestDistSq) { bestDistSq = dsq; bestIdx = static_cast<int>(i); }
+            }
+            return bestIdx;
+        };
+
+        // Seed predictor state from the keyframe's centerline.
+        Tracking::HeadTailPredictor seedPredictor;
+        {
+            const Tracking::WormTrackPoint& tp = sortedPoints[keyframeIdx];
+            QMap<int, Tracking::DetectedBlob> frameBlobs =
+                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            if (frameBlobs.contains(wormId)) {
+                Tracking::DetectedBlob blob = frameBlobs[wormId];
+                if (blob.isValid && !blob.tipCandidates.empty()
+                    && blob.centerlinePoints.size() >= 2) {
+                    const int headIdx = nearestCandidateIdx(blob, blob.centerlinePoints.front());
+                    int       tailIdx = nearestCandidateIdx(blob, blob.centerlinePoints.back());
+                    if (tailIdx == headIdx) tailIdx = -1;  // degenerate: single candidate
+                    blob.assignedHeadTipIdx = headIdx;
+                    blob.assignedTailTipIdx = tailIdx;
+                    m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+
+                    if (headIdx >= 0) {
+                        seedPredictor.hasPrev = true;
+                        seedPredictor.lastHeadPos = blob.tipCandidates[headIdx].point;
+                        if (tailIdx >= 0)
+                            seedPredictor.lastTailPos = blob.tipCandidates[tailIdx].point;
+                        else
+                            seedPredictor.lastTailPos = blob.tipCandidates[headIdx].point;
+                        if (baseline.lengthSamples > 0)
+                            seedPredictor.refDistance = std::max(8.f, 0.5f * baseline.meanBodyLength);
+                        else if (refLength > 0.f)
+                            seedPredictor.refDistance = std::max(8.f, 0.5f * refLength);
+
+                        YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                            "Pass4 seed   worm=%d frame=%d  head=cand[%d] tail=cand[%d]  refDist=%.1f",
+                            wormId, tp.frameNumberOriginal, headIdx, tailIdx,
+                            static_cast<double>(seedPredictor.refDistance));
+                    }
+                }
+            }
+        }
+
+        auto runAssignmentDirection = [&](int startIdx, int step,
+                                          Tracking::HeadTailPredictor predictor) {
+            const int n = static_cast<int>(sortedPoints.size());
+            for (int i = startIdx; i >= 0 && i < n; i += step) {
+                const Tracking::WormTrackPoint& tp = sortedPoints[i];
+                if (tp.quality == Tracking::TrackPointQuality::Lost) {
+                    // Don't propagate priors across a lost segment — when we
+                    // resume tracking the worm is in an unknown position.
+                    predictor = Tracking::HeadTailPredictor{};
+                    YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                        "Pass4 lost   worm=%d frame=%d  -> predictor reset",
+                        wormId, tp.frameNumberOriginal);
+                    continue;
+                }
+
+                QMap<int, Tracking::DetectedBlob> frameBlobs =
+                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                if (!frameBlobs.contains(wormId)) continue;
+                Tracking::DetectedBlob blob = frameBlobs[wormId];
+
+                // Context header — the assignHeadTail debug lines that follow
+                // will be attributable to this (worm, frame) pair.
+                YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                    "Pass4        worm=%d frame=%d  step=%+d  topo=%s",
+                    wormId, tp.frameNumberOriginal, step,
+                    qUtf8Printable(Tracking::topologyStateToString(blob.topologyState)));
+
+                if (!Tracking::assignHeadTail(blob, predictor, baseline)) continue;
+                m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+
+                // Update predictor for the next frame. Velocity engages after
+                // we have two successful assignments in a row for that role.
+                const int headIdx = blob.assignedHeadTipIdx;
+                const int tailIdx = blob.assignedTailTipIdx;
+                if (headIdx >= 0) {
+                    const cv::Point2f newHead = blob.tipCandidates[headIdx].point;
+                    predictor.velHead = newHead - predictor.lastHeadPos;
+                    predictor.lastHeadPos = newHead;
+                }
+                if (tailIdx >= 0) {
+                    const cv::Point2f newTail = blob.tipCandidates[tailIdx].point;
+                    predictor.velTail = newTail - predictor.lastTailPos;
+                    predictor.lastTailPos = newTail;
+                }
+                // hasVelocity becomes true after the first per-direction step
+                // that found at least one assignment (we just updated velHead
+                // and/or velTail with a meaningful delta).
+                predictor.hasVelocity = predictor.hasPrev &&
+                                        (headIdx >= 0 || tailIdx >= 0);
+                predictor.hasPrev = true;
+            }
+        };
+
+        runAssignmentDirection(keyframeIdx + 1, +1, seedPredictor);
+        runAssignmentDirection(keyframeIdx - 1, -1, seedPredictor);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);

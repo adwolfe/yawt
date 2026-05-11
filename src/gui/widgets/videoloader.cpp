@@ -1100,10 +1100,12 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             const Tracking::DetectedBlob blob = tipBlobs.value(wormId);
             if (!blob.isValid || blob.tipCandidates.empty()) continue;
 
-            const qreal dotRadius = CENTERLINE_LINE_WIDTH * 1.05;
+            const qreal dotRadius  = CENTERLINE_LINE_WIDTH * 1.05;
+            const qreal ringRadius = CENTERLINE_LINE_WIDTH * 1.95;
             QPen edgePen(Qt::black, 1.2);
             edgePen.setCosmetic(true);
 
+            // Phase B: candidate dots (one per tipCandidate).
             for (const Tracking::TipCandidate& tc : blob.tipCandidates) {
                 const QPointF pt = mapPointFromVideo(QPointF(tc.point.x, tc.point.y));
                 if (pt.x() < 0) continue;
@@ -1123,6 +1125,23 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                                             dotRadius * 2.0, dotRadius * 2.0));
                 }
             }
+
+            // Phase C.1: head/tail assignment overlay. Drawn over the
+            // candidate dots so the assignment is visually obvious without
+            // hiding which detector surfaced each tip.
+            auto drawRoleRing = [&](int idx, const QColor& color) {
+                if (idx < 0 || idx >= static_cast<int>(blob.tipCandidates.size())) return;
+                const cv::Point2f& cv = blob.tipCandidates[idx].point;
+                const QPointF pt = mapPointFromVideo(QPointF(cv.x, cv.y));
+                if (pt.x() < 0) return;
+                QPen ringPen(color, 2.0);
+                ringPen.setCosmetic(true);
+                painter.setPen(ringPen);
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(pt, ringRadius, ringRadius);
+            };
+            drawRoleRing(blob.assignedHeadTipIdx, QColor(0, 200, 255));  // cyan = head
+            drawRoleRing(blob.assignedTailTipIdx, QColor(255, 80, 80));  // red  = tail
         }
     }
 
