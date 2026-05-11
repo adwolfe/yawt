@@ -794,6 +794,16 @@ void MainWindow::setupConnections() {
         connect(m_appController, &AppController::trackingFinished, this, &MainWindow::updateWormTimeline);
     }
 
+    // Debug tab — Rerun Centerline button
+    connect(ui->rerunCenterlineButton, &QPushButton::clicked,
+            this, &MainWindow::onRerunCenterlineClicked);
+    if (m_appController) {
+        connect(m_appController, &AppController::centerlineProgress,
+                this, &MainWindow::onDebugCenterlineProgress);
+        connect(m_appController, &AppController::centerlineFinished,
+                this, &MainWindow::onDebugCenterlineFinished);
+    }
+
     // Annotation table selection
     // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
@@ -2243,6 +2253,55 @@ void MainWindow::toggleTrackingDebug() {
     QString msg = "Logging verbosity is controlled via --verbosity=1..3 or --firehose at launch.";
     qDebug().noquote() << "MainWindow:" << msg;
     statusBar()->showMessage(msg, 4000);
+}
+
+// ── Debug tab: Rerun Centerline ───────────────────────────────────────────────
+
+void MainWindow::onRerunCenterlineClicked()
+{
+    if (!m_appController) return;
+
+    // Read current spinbox values from the Debug tab into a params struct.
+    Tracking::CenterlineSnakeParams params;
+    if (auto* g = ui->snakeDebugGroup) {
+        params.enabled = g->isChecked();
+    }
+    if (auto* sb = ui->snakeAlphaSpin)  params.alpha      = sb->value();
+    if (auto* sb = ui->snakeBetaSpin)   params.beta       = sb->value();
+    if (auto* sb = ui->snakeLambdaSpin) params.lambda     = sb->value();
+    if (auto* sb = ui->snakeItersSpin)  params.iterations = sb->value();
+    if (auto* sb = ui->snakeStepSpin)   params.stepSize   = sb->value();
+
+    // Disable the button while running to prevent double-triggers.
+    ui->rerunCenterlineButton->setEnabled(false);
+    ui->centerlineDebugProgressBar->setValue(0);
+    ui->centerlineDebugProgressBar->setVisible(true);
+    ui->centerlineDebugStatusLabel->setText("Running centerline pass...");
+
+    // This stores the params on the controller and immediately starts a
+    // background CenterlineWorker pass. Results are written back to storage;
+    // the videoloader re-draws on its next paint event (triggered by the
+    // finished slot below).
+    m_appController->rerunCenterline(params);
+}
+
+void MainWindow::onDebugCenterlineProgress(int percentage)
+{
+    if (ui->centerlineDebugProgressBar->isVisible())
+        ui->centerlineDebugProgressBar->setValue(percentage);
+}
+
+void MainWindow::onDebugCenterlineFinished()
+{
+    ui->rerunCenterlineButton->setEnabled(true);
+    ui->centerlineDebugProgressBar->setVisible(false);
+    ui->centerlineDebugStatusLabel->setText("Done — viewer updated.");
+
+    // Force the videoloader to repaint so the new centerlines appear immediately
+    // on the current frame without requiring a frame seek.
+    if (ui->videoLoader) {
+        ui->videoLoader->update();
+    }
 }
 
 // Retracking UI and logic removed

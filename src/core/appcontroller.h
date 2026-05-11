@@ -141,6 +141,29 @@ public:
                                         const QString& dataDirectory,
                                         QWidget* parent = nullptr);
 
+    /**
+     * @brief Update the active-contour parameters used for ring/coiled centerline refinement.
+     *
+     * These params are stored persistently on the controller and used both:
+     *   (a) when a new tracking run is started via the dialog, and
+     *   (b) when an on-demand rerun is triggered from the Debug tab.
+     *
+     * Safe to call at any time (not just before tracking).
+     */
+    void setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params);
+
+    /**
+     * @brief Re-run the post-tracking centerline computation with the given params.
+     *
+     * Stores the params (equivalent to calling setCenterlineSnakeParams first) and
+     * immediately launches a background CenterlineWorker pass over whatever blobs are
+     * currently in storage. Progress and completion are emitted via centerlineProgress /
+     * centerlineFinished — connect those signals in the caller to update the UI.
+     *
+     * No-op when no tracking data is in storage or when a centerline pass is already running.
+     */
+    Q_INVOKABLE void rerunCenterline(const Tracking::CenterlineSnakeParams& params);
+
 signals:
     /**
      * @brief Emitted after tracks are persisted in TrackingDataStorage.
@@ -227,6 +250,10 @@ private:
     bool m_dialogOnlyTrackMissing = true;
     int m_dialogTotalFrames = 0;
     QString m_dialogDataDirectory;
+
+    // Active-contour params stored persistently. Updated by the Debug tab via
+    // setCenterlineSnakeParams(); used for both new tracking runs and on-demand reruns.
+    Tracking::CenterlineSnakeParams m_snakeParams;
 
     // Controller-owned tracking progress dialog (created on demand, parented to provided 'parent' widget)
     TrackingProgressDialog* m_trackingDialog = nullptr;

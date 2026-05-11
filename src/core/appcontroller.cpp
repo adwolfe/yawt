@@ -471,13 +471,10 @@ void AppController::onDialogBeginRequested()
         return;
     }
 
-    // Forward the centerline-snake debug parameters from the dialog to the
-    // manager. These are used by CenterlineWorker on ring/coiled frames during
-    // the post-tracking centerline phase. Safe no-op when the dialog hasn't
-    // been used (defaults from the header are passed instead).
-    if (m_trackingDialog) {
-        m_manager->setCenterlineSnakeParams(m_trackingDialog->snakeParams());
-    }
+    // Forward the stored snake params (edited via the Debug tab) to the manager.
+    // m_snakeParams holds whatever was last set via setCenterlineSnakeParams();
+    // defaults from the struct are used on a fresh controller before any user edit.
+    m_manager->setCenterlineSnakeParams(m_snakeParams);
 
     // Start tracking via the manager using stored dialog parameters.
     emit trackingStarted();
@@ -485,6 +482,25 @@ void AppController::onDialogBeginRequested()
                                         initialWorms, m_dialogSettings, m_dialogTotalFrames);
 
     // Leave the dialog open — progress/status signals from the manager will be forwarded to it.
+}
+
+void AppController::setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params)
+{
+    m_snakeParams = params;
+    if (m_manager) {
+        m_manager->setCenterlineSnakeParams(params);
+    }
+}
+
+void AppController::rerunCenterline(const Tracking::CenterlineSnakeParams& params)
+{
+    if (!m_manager) {
+        YAWT_WARN(lcCoreAppController) << "rerunCenterline: no TrackingManager available";
+        return;
+    }
+    m_snakeParams = params;
+    m_manager->setCenterlineSnakeParams(params);
+    m_manager->startCenterlineComputation();
 }
 
 void AppController::onDialogCancelRequested()

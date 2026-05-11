@@ -106,6 +106,13 @@ public slots:
     // Debug control slots
     void toggleTrackingDebug();
 
+    // Debug tab: reruns centerline computation with current snake spinbox values.
+    void onRerunCenterlineClicked();
+    // Debug tab: called when a rerun centerline pass makes progress.
+    void onDebugCenterlineProgress(int percentage);
+    // Debug tab: called when a rerun centerline pass finishes.
+    void onDebugCenterlineFinished();
+
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();
     void roiModeButtonClicked();
