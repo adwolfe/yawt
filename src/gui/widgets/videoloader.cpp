@@ -1078,6 +1078,54 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
     }
 
+    // ── Tip-candidate overlay ────────────────────────────────────────────────
+    // Phase-B preprocessing dots: nose/tail candidates produced per-frame from
+    // the blob's geometry alone (no temporal state). Skeleton-derived
+    // candidates render as filled circles; curvature-peak candidates as
+    // hollow squares — so it's visually obvious which detector surfaced each
+    // tip during debugging.
+    if (m_activeViewModes.testFlag(ViewModeOption::TipCandidates) && m_storage && currentFrameIdx >= 0) {
+        const QMap<int, Tracking::DetectedBlob> tipBlobs = m_storage->getDetectedBlobsForFrame(currentFrameIdx);
+        QSet<int> tipIds = m_visibleTrackIDs;
+        if (tipIds.isEmpty()) {
+            for (auto it = tipBlobs.constBegin(); it != tipBlobs.constEnd(); ++it) {
+                tipIds.insert(it.key());
+            }
+        }
+
+        for (int wormId : std::as_const(tipIds)) {
+            const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+            if (!item || !item->visible) continue;
+
+            const Tracking::DetectedBlob blob = tipBlobs.value(wormId);
+            if (!blob.isValid || blob.tipCandidates.empty()) continue;
+
+            const qreal dotRadius = CENTERLINE_LINE_WIDTH * 1.05;
+            QPen edgePen(Qt::black, 1.2);
+            edgePen.setCosmetic(true);
+
+            for (const Tracking::TipCandidate& tc : blob.tipCandidates) {
+                const QPointF pt = mapPointFromVideo(QPointF(tc.point.x, tc.point.y));
+                if (pt.x() < 0) continue;
+
+                painter.setPen(edgePen);
+                if (tc.source == Tracking::TipCandidate::Source::SkeletonEndpoint) {
+                    // Filled green circle — skeleton degree-1 endpoint.
+                    painter.setBrush(QColor(60, 220, 80));
+                    painter.drawEllipse(pt, dotRadius, dotRadius);
+                } else {
+                    // Hollow magenta square — curvature peak.
+                    painter.setBrush(Qt::NoBrush);
+                    QPen peakPen(QColor(220, 60, 220), 1.6);
+                    peakPen.setCosmetic(true);
+                    painter.setPen(peakPen);
+                    painter.drawRect(QRectF(pt.x() - dotRadius, pt.y() - dotRadius,
+                                            dotRadius * 2.0, dotRadius * 2.0));
+                }
+            }
+        }
+    }
+
     // Draw Tracks if ViewMode is Tracks
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
         // Paint tracks for all worms

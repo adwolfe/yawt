@@ -330,6 +330,197 @@ std::vector<cv::Point2f> extractCenterlineFromMask(const cv::Mat& mask,
 
 } // namespace
 
+// ── Tip-candidate detection ─────────────────────────────────────────────────
+//
+// Pure preprocessing pass: from a blob's outer contour + holes, surface the
+// points on the outer contour that are most likely to be physical tips
+// (nose or tail) of the worm. Two complementary detectors are merged:
+//
+//   (a) Zhang-Suen skeleton degree-1 endpoints, mapped to nearest outer
+//       contour point. Clean unobstructed worm → always 2. Coiled worm with
+//       a protruding free end → typically 1 (the free end; the closure loop
+//       contributes no degree-1 nodes). Closed-ring blob → 0.
+//
+//   (b) Local maxima of |signed curvature| along the outer contour. Surfaces
+//       real tips even when the skeleton is degenerate (rings, merges), at
+//       the cost of false positives on tight body kinks; downstream scoring
+//       against the worm's curvature baseline filters those.
+//
+// For each surviving candidate we compute the local contour curvature and a
+// local mask thickness (≈ body width at the tip). These two features are the
+// inputs the head/tail-assignment step uses to score against per-worm
+// baselines built up on clean frames.
+const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
+                                                   int   curvatureWindow,
+                                                   float minCurvatureMagnitude,
+                                                   float mergePlanarDistancePx)
+{
+    blob.tipCandidates.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 8) {
+        return blob.tipCandidates;
+    }
+
+    // ── Build local mask + bounds (reuses existing helper) ──────────────────
+    cv::Mat mask;
+    cv::Rect localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) return blob.tipCandidates;
+
+    const cv::Point2f originOffset(static_cast<float>(localBounds.x),
+                                   static_cast<float>(localBounds.y));
+
+    // ── Distance transform of the mask (for width estimation) ───────────────
+    // The DT value at any interior pixel = distance to nearest boundary, so
+    // twice the DT value sampled a few pixels inward from a contour point is
+    // a robust local body-thickness estimate.
+    cv::Mat dt;
+    cv::distanceTransform(mask, dt, cv::DIST_L2, 3);
+
+    // ── Outer contour in local coordinates (for curvature + neighbour ops) ──
+    const std::vector<cv::Point>& contour = blob.contourPoints;
+    const int nContour = static_cast<int>(contour.size());
+    std::vector<cv::Point2f> contourLocal;
+    contourLocal.reserve(nContour);
+    for (const cv::Point& p : contour) {
+        contourLocal.emplace_back(static_cast<float>(p.x - localBounds.x),
+                                  static_cast<float>(p.y - localBounds.y));
+    }
+
+    // Contour centroid (for inward-direction sampling of DT).
+    cv::Point2f contourCentroidLocal(0.f, 0.f);
+    for (const cv::Point2f& p : contourLocal) contourCentroidLocal += p;
+    contourCentroidLocal *= 1.f / static_cast<float>(nContour);
+
+    // ── (a) Skeleton degree-1 endpoints ─────────────────────────────────────
+    std::vector<cv::Point2f> skeletonEndpoints;       // in local coords
+    {
+        cv::Mat skeleton = skeletonizeBinaryMask(mask);
+        const int skeletonPixelCount = cv::countNonZero(skeleton);
+        if (skeletonPixelCount >= 2) {
+            // Mark each skeleton pixel; degree-1 = exactly one foreground 8-neighbour.
+            for (int row = 1; row < skeleton.rows - 1; ++row) {
+                const uchar* up   = skeleton.ptr<uchar>(row - 1);
+                const uchar* mid  = skeleton.ptr<uchar>(row);
+                const uchar* down = skeleton.ptr<uchar>(row + 1);
+                for (int col = 1; col < skeleton.cols - 1; ++col) {
+                    if (mid[col] == 0) continue;
+                    int neighbours = 0;
+                    neighbours += (up[col - 1]   > 0) ? 1 : 0;
+                    neighbours += (up[col]       > 0) ? 1 : 0;
+                    neighbours += (up[col + 1]   > 0) ? 1 : 0;
+                    neighbours += (mid[col - 1]  > 0) ? 1 : 0;
+                    neighbours += (mid[col + 1]  > 0) ? 1 : 0;
+                    neighbours += (down[col - 1] > 0) ? 1 : 0;
+                    neighbours += (down[col]     > 0) ? 1 : 0;
+                    neighbours += (down[col + 1] > 0) ? 1 : 0;
+                    if (neighbours == 1) {
+                        skeletonEndpoints.emplace_back(static_cast<float>(col),
+                                                      static_cast<float>(row));
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Per-contour-point signed curvature (window = curvatureWindow) ───────
+    // Signed turning-angle / arc-length, computed in a ±k window that skips
+    // over local sampling noise from cv::findContours.
+    const int k = std::max(2, curvatureWindow);
+    std::vector<float> curvature(nContour, 0.f);
+    for (int i = 0; i < nContour; ++i) {
+        const cv::Point2f& a = contourLocal[(i - k + nContour) % nContour];
+        const cv::Point2f& b = contourLocal[i];
+        const cv::Point2f& c = contourLocal[(i + k) % nContour];
+        const cv::Point2f v1 = b - a;
+        const cv::Point2f v2 = c - b;
+        const float cross = v1.x * v2.y - v1.y * v2.x;
+        const float dot   = v1.x * v2.x + v1.y * v2.y;
+        const float angle = std::atan2(cross, dot);
+        const float arc   = 0.5f * (std::hypot(v1.x, v1.y) + std::hypot(v2.x, v2.y));
+        curvature[i] = (arc > 1e-3f) ? (angle / arc) : 0.f;
+    }
+
+    // OpenCV's outer contours are traversed clockwise on image coordinates
+    // (y-down), which flips the curvature sign relative to the textbook
+    // mathematical convention. We don't care about absolute sign here —
+    // downstream scoring uses |curvature| or per-worm-baseline sign.
+
+    // ── (b) Local maxima of |curvature| ─────────────────────────────────────
+    // Use a sliding window of size 2k+1; a point qualifies if its |curvature|
+    // is the strict maximum in the window AND exceeds the threshold.
+    std::vector<int> curvaturePeakIdx;
+    curvaturePeakIdx.reserve(8);
+    for (int i = 0; i < nContour; ++i) {
+        const float mag = std::abs(curvature[i]);
+        if (mag < minCurvatureMagnitude) continue;
+        bool isLocalMax = true;
+        for (int d = -k; d <= k; ++d) {
+            if (d == 0) continue;
+            const int j = (i + d + nContour) % nContour;
+            if (std::abs(curvature[j]) > mag) { isLocalMax = false; break; }
+        }
+        if (isLocalMax) curvaturePeakIdx.push_back(i);
+    }
+
+    // ── Helper: width = 2 × DT sampled a few pixels inward from a tip ──────
+    auto widthAt = [&](const cv::Point2f& tipLocal) -> float {
+        cv::Point2f inward = contourCentroidLocal - tipLocal;
+        const float norm = std::hypot(inward.x, inward.y);
+        if (norm < 1e-3f) return 0.f;
+        inward *= 1.f / norm;
+        // Walk 5 px inward and clamp inside the DT image.
+        const float sampleDepth = 5.f;
+        const int sx = std::clamp(static_cast<int>(std::round(tipLocal.x + inward.x * sampleDepth)),
+                                  0, dt.cols - 1);
+        const int sy = std::clamp(static_cast<int>(std::round(tipLocal.y + inward.y * sampleDepth)),
+                                  0, dt.rows - 1);
+        return 2.f * dt.at<float>(sy, sx);
+    };
+
+    // ── Helper: nearest contour index to a local-coords point ──────────────
+    auto nearestContourIdx = [&](const cv::Point2f& q) -> int {
+        int bestIdx = -1;
+        float bestDistSq = std::numeric_limits<float>::max();
+        for (int i = 0; i < nContour; ++i) {
+            const cv::Point2f d = contourLocal[i] - q;
+            const float dsq = d.x * d.x + d.y * d.y;
+            if (dsq < bestDistSq) { bestDistSq = dsq; bestIdx = i; }
+        }
+        return bestIdx;
+    };
+
+    // ── Merge: skeleton endpoints first (priority), then curvature peaks ───
+    const float mergeSq = mergePlanarDistancePx * mergePlanarDistancePx;
+    auto pushIfNew = [&](const cv::Point2f& contourPtLocal,
+                         float curvatureAtPt,
+                         TipCandidate::Source source) {
+        for (const TipCandidate& existing : blob.tipCandidates) {
+            const cv::Point2f existingLocal(existing.point.x - localBounds.x,
+                                            existing.point.y - localBounds.y);
+            const cv::Point2f d = existingLocal - contourPtLocal;
+            if (d.x * d.x + d.y * d.y <= mergeSq) return;  // duplicate
+        }
+        TipCandidate tc;
+        tc.point     = cv::Point2f(contourPtLocal.x + originOffset.x,
+                                   contourPtLocal.y + originOffset.y);
+        tc.curvature = curvatureAtPt;
+        tc.width     = widthAt(contourPtLocal);
+        tc.source    = source;
+        blob.tipCandidates.push_back(tc);
+    };
+
+    for (const cv::Point2f& skelPt : skeletonEndpoints) {
+        const int idx = nearestContourIdx(skelPt);
+        if (idx < 0) continue;
+        pushIfNew(contourLocal[idx], curvature[idx], TipCandidate::Source::SkeletonEndpoint);
+    }
+    for (int idx : curvaturePeakIdx) {
+        pushIfNew(contourLocal[idx], curvature[idx], TipCandidate::Source::CurvaturePeak);
+    }
+
+    return blob.tipCandidates;
+}
+
 bool populateCenterlineFromContour(DetectedBlob& blob)
 {
     blob.centerlinePoints.clear();

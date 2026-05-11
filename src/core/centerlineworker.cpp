@@ -98,11 +98,35 @@ struct CenterlineState {
     cv::Point2f blobCentroid;
     Tracking::DetectedBlob blob;
     bool valid = false;
+    // Total signed turning angle of the centerline (∑ signed inter-segment
+    // angles, nose→tail). Negated when traversal direction is reversed.
+    // Used as a right-hand-rule orientation consistency check between frames.
+    float turningAngle = 0.f;
 
     cv::Point2f nose()     const { return points.front(); }
     cv::Point2f tail()     const { return points.back();  }
     cv::Point2f midpoint() const { return points[points.size() / 2]; }
 };
+
+// Total signed turning angle of a discrete polyline: the sum of signed
+// angles between consecutive segment pairs (atan2 of cross/dot products).
+// For a nose→tail traversal this equals the net tangent rotation from the
+// first segment to the last. It is negated when the traversal direction is
+// reversed — making it a reliable orientation invariant when the worm is
+// non-trivially bent.  Returns 0 for point sets with fewer than 3 points.
+static float totalSignedTurningAngle(const std::vector<cv::Point2f>& pts)
+{
+    float total = 0.f;
+    const int n = static_cast<int>(pts.size());
+    for (int i = 1; i < n - 1; ++i) {
+        const cv::Point2f v1 = pts[i]     - pts[i - 1];
+        const cv::Point2f v2 = pts[i + 1] - pts[i];
+        // signed angle: positive = CCW turn (right-hand rule: +z out of screen)
+        total += std::atan2(v1.x * v2.y - v1.y * v2.x,
+                            v1.x * v2.x + v1.y * v2.y);
+    }
+    return total;
+}
 
 // Orient pts by shape correspondence with prev: pick whichever orientation
 // (forward or reversed) minimises the sum of pointwise distances to prev.
@@ -650,6 +674,14 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
     if (!blob.isValid || blob.contourPoints.empty()) return false;
     blob.hasCenterlineCutPoint = false;
 
+    // Phase-B preprocessing: surface candidate nose/tail points on this blob
+    // independently of any temporal state. Cheap (skeleton + curvature scan +
+    // distance transform), and the results travel with the blob into storage
+    // for the debug overlay to consume. Downstream head/tail assignment will
+    // read these candidates instead of inheriting endpoints from the previous
+    // frame's centerline.
+    Tracking::findTipCandidates(blob);
+
     if (blob.centerlinePoints.empty())
         Tracking::populateCenterlineFromContour(blob);
     if (blob.centerlinePoints.empty()) return false;
@@ -837,21 +869,50 @@ static bool processOneFrame(Tracking::DetectedBlob& blob,
 
     if (pts.size() < 2) return false;
 
+    // ─── Right-hand-rule orientation veto ───────────────────────────────
+    // orientByShape and continuityScore both choose the orientation that
+    // minimises pointwise distance to prev.  That works well for small
+    // inter-frame motion but can be fooled when the worm is coiled and the
+    // score difference between forward and reversed is small.
+    //
+    // The total signed turning angle (∫κ ds) of the polyline is a stronger
+    // global signal: it equals the net tangent rotation nose→tail, and it
+    // changes sign when the traversal direction is reversed.  Worms don't
+    // instantaneously flip their coiling direction, so the sign of this
+    // angle should be consistent between adjacent frames once it becomes
+    // large enough to be reliable (> threshold).
+    //
+    // Near-straight frames have |angle| ≈ 0 and are genuinely ambiguous in
+    // orientation; the check is skipped there and orientByShape's decision
+    // stands.
+    const float curTurningAngle = totalSignedTurningAngle(pts);
+    const float angleThreshold  = static_cast<float>(
+        std::max(0.0, snakeParams.orientationAngleThreshold));
+    bool vetoFlipped = false;
+    if (prev.valid
+        && std::abs(prev.turningAngle) > angleThreshold
+        && std::abs(curTurningAngle)   > angleThreshold
+        && curTurningAngle * prev.turningAngle < 0.f) {
+        std::reverse(pts.begin(), pts.end());
+        vetoFlipped = true;
+    }
+
     blob.centerlinePoints.assign(pts.begin(), pts.end());
-    out.points = pts;
+    out.points       = pts;
     out.blobCentroid = curBlobCentroid;
-    out.blob = blob;
-    out.valid  = true;
+    out.blob         = blob;
+    out.valid        = true;
+    // Store the angle after any veto flip (flip negates it).
+    out.turningAngle = vetoFlipped ? -curTurningAngle : curTurningAngle;
     return true;
 }
 
 // ── CenterlineWorker ────────────────────────────────────────────────────────
 
-// 20 points gives ~5 % body-length spacing for a typical worm, so adjacent
-// points are close enough that shape-correspondence orientation is reliable
-// even when nose and tail collapse spatially during a tight coil.
-static constexpr int   kCenterlinePoints     = 20;
-static constexpr float kMinArcLengthFraction = 0.5f;
+// Default point count — overridden at runtime by CenterlineSnakeParams::nPoints.
+// More points reduce kinking artefacts on highly curved bodies; fewer are faster.
+static constexpr int   kCenterlinePointsDefault = 20;
+static constexpr float kMinArcLengthFraction    = 0.5f;
 
 CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage, QObject* parent)
     : QObject(parent), m_storage(storage) {}
@@ -976,7 +1037,7 @@ void CenterlineWorker::doWork()
 
                 CenterlineState out;
                 if (processOneFrame(blob, prev, refLength,
-                                    kCenterlinePoints,
+                                    std::max(4, m_snakeParams.nPoints),
                                     kMinArcLengthFraction,
                                     m_snakeParams, out)) {
                     m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
@@ -999,7 +1060,7 @@ void CenterlineWorker::doWork()
                 CenterlineState out;
                 CenterlineState empty;
                 if (processOneFrame(blob, empty, refLength,
-                                    kCenterlinePoints,
+                                    std::max(4, m_snakeParams.nPoints),
                                     kMinArcLengthFraction,
                                     m_snakeParams, out)) {
                     m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);

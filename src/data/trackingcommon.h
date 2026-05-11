@@ -157,6 +157,35 @@ Q_ENUM_NS(TrackerState)
 
 
 /**
+ * @brief A candidate "tip" point (probable nose or tail) on a blob's geometry.
+ *
+ * Produced as a pure preprocessing pass over each blob (no temporal state, no
+ * scoring against previous frames). The downstream head/tail assignment step
+ * consumes these candidates plus per-worm baselines + motion history.
+ *
+ * Two complementary sources:
+ *   - SkeletonEndpoint: a degree-1 node of the Zhang-Suen skeleton, mapped to
+ *     the nearest outer-contour point. Reliable on clean topology (typically
+ *     yields exactly 2 endpoints); often yields 1 on coiled-with-protrusion
+ *     blobs and 0 on closed-ring blobs.
+ *   - CurvaturePeak: a local maximum of |signed curvature| along the outer
+ *     contour. Surfaces real tips even when the skeleton is degenerate (rings,
+ *     merged blobs), at the cost of more false positives (tight body kinks).
+ *
+ * Candidates from both sources are merged and deduplicated by planar distance.
+ */
+struct TipCandidate {
+    cv::Point2f point;                 // Position on outer contour, in video coordinates
+    float       curvature = 0.f;       // Signed local curvature (1/px); +ve = bulging outward
+    float       width     = 0.f;       // Local perpendicular mask thickness (px), ~5px inward from tip
+    enum class Source : uint8_t {
+        SkeletonEndpoint,
+        CurvaturePeak
+    };
+    Source source = Source::SkeletonEndpoint;
+};
+
+/**
      * @brief Structure to hold information about a detected blob during tracking.
      */
 
@@ -170,6 +199,7 @@ struct DetectedBlob {
     std::vector<cv::Point2f> centerlinePoints;              // Ordered centerline points from one body end to the other
     cv::Point2f centerlineCutPoint;                         // Debug/overlay point where a ring mask was cut open
     bool hasCenterlineCutPoint = false;                     // True when centerlineCutPoint is meaningful
+    std::vector<TipCandidate> tipCandidates;                // Per-frame nose/tail candidates (Phase B preprocessing)
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
@@ -279,7 +309,58 @@ struct CenterlineSnakeParams {
     double lambda     = 1.00;   // Image attraction (toward distance-transform ridge).
     int    iterations = 60;     // Number of explicit-Euler update steps.
     double stepSize   = 0.50;   // Per-iteration step size (tau).
+    int    nPoints    = 20;     // Number of resampled points along the centerline.
+                                // More points reduce kinking on highly curved bodies
+                                // at the cost of slightly more computation.
+
+    // ── Orientation consistency (right-hand rule) ─────────────────────────
+    // The total signed turning angle of a polyline (∫κ ds, discrete sum of
+    // signed inter-segment angles) is negated when traversal direction is
+    // reversed. We track this quantity from frame to frame and veto any
+    // candidate whose sign disagrees with the previous frame's sign — i.e.
+    // we enforce that the centerline is always traversed nose→tail in the
+    // same rotational sense (CCW or CW).
+    //
+    // When the worm is nearly straight the turning angle is close to zero
+    // and the orientation is geometrically ambiguous; the veto is skipped
+    // for frames whose |angle| < orientationAngleThreshold (radians).
+    // 0.5 rad ≈ 29° is a reasonable starting point: it activates once the
+    // worm bends noticeably but stays quiet on straight-body frames.
+    double orientationAngleThreshold = 0.50;  // radians
 };
+
+/**
+ * @brief Detect candidate nose/tail (tip) points on a blob.
+ *
+ * Pure function: depends only on `blob.contourPoints` and `blob.holeContourPoints`.
+ * Populates `blob.tipCandidates` (replacing any prior contents) and returns the
+ * same vector for convenience.
+ *
+ * The two sources (skeleton degree-1 endpoints, outer-contour curvature peaks)
+ * are merged; candidates within `mergePlanarDistancePx` of each other in the
+ * image plane are deduplicated, with SkeletonEndpoint taking precedence over
+ * CurvaturePeak when both surface the same physical tip.
+ *
+ * Per-candidate features:
+ *   - `curvature`: signed local curvature along the outer contour, in a window
+ *     of ±`curvatureWindow` contour points. Sign convention matches the
+ *     contour's traversal direction; magnitude is the meaningful quantity for
+ *     scoring against a per-worm baseline.
+ *   - `width`: 2× the distance-transform value sampled ~5px inward from the
+ *     candidate along the inward direction (toward the blob centroid). Gives
+ *     a robust local body-thickness estimate without needing an explicit
+ *     normal direction.
+ *
+ * @param blob                     Blob to analyse; `tipCandidates` is overwritten.
+ * @param curvatureWindow          Half-window (in contour points) for curvature.
+ * @param minCurvatureMagnitude    Threshold on |curvature| for a peak to qualify.
+ * @param mergePlanarDistancePx    Two candidates within this distance are merged.
+ * @return Const reference to `blob.tipCandidates`.
+ */
+const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
+                                                   int   curvatureWindow      = 5,
+                                                   float minCurvatureMagnitude = 0.08f,
+                                                   float mergePlanarDistancePx = 4.0f);
 
 /**
  * @brief Compute and store an ordered centerline for a detected blob from its contour.

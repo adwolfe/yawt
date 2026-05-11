@@ -804,6 +804,18 @@ void MainWindow::setupConnections() {
                 this, &MainWindow::onDebugCenterlineFinished);
     }
 
+    // Debug tab — Show-tip-candidates overlay toggle. Pure render-time switch;
+    // the underlying tip data is computed unconditionally on every centerline
+    // pass and stashed on each DetectedBlob, so toggling this only changes
+    // what's drawn, not what's computed.
+    if (auto* tipChk = ui->showTipCandidatesCheck) {
+        connect(tipChk, &QCheckBox::toggled, this, [this](bool checked) {
+            ui->videoLoader->setViewModeOption(
+                VideoLoader::ViewModeOption::TipCandidates, checked);
+            ui->videoLoader->update();
+        });
+    }
+
     // Annotation table selection
     // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
@@ -2266,11 +2278,13 @@ void MainWindow::onRerunCenterlineClicked()
     if (auto* g = ui->snakeDebugGroup) {
         params.enabled = g->isChecked();
     }
-    if (auto* sb = ui->snakeAlphaSpin)  params.alpha      = sb->value();
-    if (auto* sb = ui->snakeBetaSpin)   params.beta       = sb->value();
-    if (auto* sb = ui->snakeLambdaSpin) params.lambda     = sb->value();
-    if (auto* sb = ui->snakeItersSpin)  params.iterations = sb->value();
-    if (auto* sb = ui->snakeStepSpin)   params.stepSize   = sb->value();
+    if (auto* sb = ui->snakeAlphaSpin)        params.alpha                    = sb->value();
+    if (auto* sb = ui->snakeBetaSpin)         params.beta                     = sb->value();
+    if (auto* sb = ui->snakeLambdaSpin)       params.lambda                   = sb->value();
+    if (auto* sb = ui->snakeItersSpin)        params.iterations               = sb->value();
+    if (auto* sb = ui->snakeStepSpin)         params.stepSize                 = sb->value();
+    if (auto* sb = ui->snakeOrientThreshSpin) params.orientationAngleThreshold= sb->value();
+    if (auto* sb = ui->snakeNPointsSpin)      params.nPoints                   = sb->value();
 
     // Disable the button while running to prevent double-triggers.
     ui->rerunCenterlineButton->setEnabled(false);

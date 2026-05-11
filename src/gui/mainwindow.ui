@@ -1264,6 +1264,37 @@ QToolButton#lastFrameButton {
                   <property name="value"><double>0.500000</double></property>
                  </widget>
                 </item>
+                <item row="5" column="0">
+                 <widget class="QLabel" name="labelOrientThresh">
+                  <property name="text"><string>Orient. threshold (rad)</string></property>
+                  <property name="toolTip"><string>Right-hand-rule veto: if the total signed turning angle of both the current and previous centerline exceed this magnitude, and their signs disagree, the orientation is flipped. Set lower to enforce orientation earlier (even on gentle bends); set higher to only apply on tight coils. 0 = always enforce; &gt;π = effectively disabled.</string></property>
+                 </widget>
+                </item>
+                <item row="5" column="1">
+                 <widget class="QDoubleSpinBox" name="snakeOrientThreshSpin">
+                  <property name="toolTip"><string>Right-hand-rule veto threshold in radians. 0.5 rad ≈ 29°. When both the current and previous frame's total signed turning angle exceed this value in magnitude but disagree in sign, the orientation is corrected. Near-zero values mean near-straight bodies (genuinely ambiguous).</string></property>
+                  <property name="minimum"><double>0.000000</double></property>
+                  <property name="maximum"><double>3.141593</double></property>
+                  <property name="singleStep"><double>0.050000</double></property>
+                  <property name="decimals"><number>3</number></property>
+                  <property name="value"><double>0.500000</double></property>
+                 </widget>
+                </item>
+                <item row="6" column="0">
+                 <widget class="QLabel" name="labelNPoints">
+                  <property name="text"><string>Points along line</string></property>
+                  <property name="toolTip"><string>Number of evenly-spaced points resampled along the centerline. More points reduce kinking on highly curved bodies at the cost of slightly more computation. Minimum 5.</string></property>
+                 </widget>
+                </item>
+                <item row="6" column="1">
+                 <widget class="QSpinBox" name="snakeNPointsSpin">
+                  <property name="toolTip"><string>Number of resampled centerline points (5–200). Higher values reduce kinking artefacts on coiled or tightly curved worms.</string></property>
+                  <property name="minimum"><number>5</number></property>
+                  <property name="maximum"><number>200</number></property>
+                  <property name="singleStep"><number>5</number></property>
+                  <property name="value"><number>20</number></property>
+                 </widget>
+                </item>
                </layout>
               </widget>
              </item>
@@ -1287,6 +1318,12 @@ QToolButton#lastFrameButton {
               <widget class="QLabel" name="centerlineDebugStatusLabel">
                <property name="text"><string></string></property>
                <property name="wordWrap"><bool>true</bool></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QCheckBox" name="showTipCandidatesCheck">
+               <property name="text"><string>Show tip candidates (debug overlay)</string></property>
+               <property name="toolTip"><string>Overlay per-frame candidate nose/tail points on each visible blob. Filled green circles = Zhang-Suen skeleton degree-1 endpoints. Hollow magenta squares = local maxima of outer-contour curvature. The downstream head/tail assignment step will consume these candidates instead of inheriting endpoints from the previous frame.</string></property>
               </widget>
              </item>
              <item>
