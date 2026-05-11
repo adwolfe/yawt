@@ -488,16 +488,21 @@ TopologyState classifyTopology(DetectedBlob& blob, bool inMergeGroup);
  * (indices into `blob.tipCandidates`, or -1 if no candidate was assigned to
  * that role).
  *
- * The cost minimised per candidate × role is a weighted sum of four terms:
+ * Only skeleton-endpoint candidates are eligible for visible head/tail
+ * assignment. Curvature peaks remain available for diagnostics and geometry
+ * cues, but they are not treated as free endpoints.
+ *
+ * The cost minimised per candidate × role is a weighted sum of three terms:
  *   • distance from this candidate to the role's predicted position;
- *   • angular disagreement with the role's predicted velocity (skipped on
- *     the first call when no velocity is yet available);
  *   • Mahalanobis-style |curvature| distance from the baseline;
  *   • Mahalanobis-style width distance from the baseline.
+ * On self-crossed frames with exactly one skeleton endpoint, velocity is used
+ * as a visibility gate instead of an angular score: if a role's predicted
+ * position has moved into the current blob and is no longer close to a free
+ * endpoint, that role is left unassigned for the D-3 hidden-tip pass.
  * The feature terms are disabled when the baseline isn't yet reliable
  * (n < 30 samples in either dist), so on the very first frames of a worm
- * the assignment falls through to distance + velocity alone — exactly the
- * behaviour we want before per-individual stats have built up.
+ * the assignment falls through to distance alone.
  *
  * The keyframe (no `prev`) is bootstrapped separately by the caller —
  * `assignHeadTail` requires `predictor.hasPrev == true`.

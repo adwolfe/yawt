@@ -625,16 +625,15 @@ TopologyState classifyTopology(DetectedBlob& blob, bool inMergeGroup)
 // short temporal prediction, decide which candidate is the head and which is
 // the tail.
 //
-// The optimal assignment over only two roles is trivial: enumerate all ordered
-// pairs (i, j) of candidate indices with i ≠ j, pick the pair minimising
-// cost(head=i) + cost(tail=j). With N tip candidates that's N*(N-1) pairs —
-// always tiny in practice (clean worm = 2 candidates → 2 pairs).
+// Only skeleton endpoints are assignable as visible head/tail tips. Curvature
+// peaks stay in tipCandidates as debug/geometry cues, but they are not free
+// endpoints.
 //
-// Single-candidate fallback: when only one tip is detected, assign it to
-// whichever role has lower individual cost. The opposite role stays
-// unassigned (-1) and the caller's predictor keeps the stale position prior
-// for the missing tip — Phase D-3 (geodesic-of-body-length from the known
-// tip) is what will eventually fill in the hidden tip's spatial estimate.
+// With two or more skeleton endpoints, enumerate ordered pairs (i, j) with
+// i != j and pick the minimum cost. With one skeleton endpoint on a self-
+// crossed frame, use velocity only to decide whether the predicted head or
+// tail has moved into the current blob and away from any free endpoint; that
+// role stays unassigned so Pass D-3 can fill the hidden tip.
 //
 // Cost weights are hard-coded here for v1; expose to the Debug tab if tuning
 // against real footage turns up an obvious bias.
@@ -651,7 +650,6 @@ bool assignHeadTail(DetectedBlob& blob,
 
     // ── Cost weights ────────────────────────────────────────────────────────
     constexpr float kWeightDistance   = 1.0f;
-    constexpr float kWeightVelocity   = 0.5f;
     constexpr float kWeightCurvature  = 0.4f;
     constexpr float kWeightWidth      = 0.4f;
 
@@ -682,18 +680,72 @@ bool assignHeadTail(DetectedBlob& blob,
         ? predictor.lastTailPos + predictor.velTail
         : predictor.lastTailPos;
 
+    // ── Visible-tip eligibility ─────────────────────────────────────────────
+    //
+    // Skeleton endpoints are evidence for a free body tip. Curvature peaks are
+    // only geometric cues; during self-contact they often mark the contact kink
+    // or an outer bend, so using them as visible head/tail endpoints creates
+    // false D-2 assignments. They remain in blob.tipCandidates for debug
+    // overlays and for downstream hypothesised hidden tips, but Pass 4 only
+    // assigns roles to skeleton-derived candidates.
+    std::vector<int> assignableIdx;
+    assignableIdx.reserve(blob.tipCandidates.size());
+    for (int i = 0; i < static_cast<int>(blob.tipCandidates.size()); ++i) {
+        if (blob.tipCandidates[i].source == TipCandidate::Source::SkeletonEndpoint) {
+            assignableIdx.push_back(i);
+        }
+    }
+
+    if (assignableIdx.empty()) {
+        if (lcDataCommon().isDebugEnabled()) {
+            YAWT_DEBUG(lcDataCommon) << "  -> no skeleton endpoint candidates; no visible tip assigned";
+        }
+        return false;
+    }
+
+    cv::Mat visibilityMask;
+    const cv::Rect visibilityBounds = buildCenterlineMask(blob, visibilityMask);
+    auto maskContains = [&](const cv::Point2f& p) -> bool {
+        if (visibilityMask.empty()) return false;
+        const int x = static_cast<int>(std::round(p.x)) - visibilityBounds.x;
+        const int y = static_cast<int>(std::round(p.y)) - visibilityBounds.y;
+        if (x < 0 || y < 0 || x >= visibilityMask.cols || y >= visibilityMask.rows) return false;
+        return visibilityMask.at<uchar>(y, x) > 0;
+    };
+
+    auto nearestAssignableDistance = [&](const cv::Point2f& p) -> float {
+        float best = std::numeric_limits<float>::max();
+        for (int idx : assignableIdx) {
+            const cv::Point2f d = blob.tipCandidates[idx].point - p;
+            best = std::min(best, std::hypot(d.x, d.y));
+        }
+        return best;
+    };
+
+    const bool selfCrossed = (blob.topologyState == TopologyState::SelfCrossed);
+    const float hiddenTipDistance = std::max(3.0f, 0.35f * refDist);
+    const float headNearestAssignable = nearestAssignableDistance(predictedHead);
+    const float tailNearestAssignable = nearestAssignableDistance(predictedTail);
+    const bool predictedHeadHidden = selfCrossed
+        && assignableIdx.size() == 1
+        && maskContains(predictedHead)
+        && headNearestAssignable > hiddenTipDistance;
+    const bool predictedTailHidden = selfCrossed
+        && assignableIdx.size() == 1
+        && maskContains(predictedTail)
+        && tailNearestAssignable > hiddenTipDistance;
+
     // ── Per-candidate cost breakdown ────────────────────────────────────────
-    // Returns the four cost components separately so the debug logger can
+    // Returns the cost components separately so the debug logger can
     // attribute the chosen pair to a specific term. Curvature/width terms
     // use the unlabelled-baseline distribution (Phase A), so they don't
     // discriminate head from tail — both terms are the same for a given
     // candidate regardless of which role we're evaluating it for.
     struct CostBreakdown {
         float distance = 0.f;
-        float velocity = 0.f;
         float curvature = 0.f;
         float width = 0.f;
-        float total() const { return distance + velocity + curvature + width; }
+        float total() const { return distance + curvature + width; }
     };
 
     auto roleCostBreakdown = [&](const TipCandidate& tc,
@@ -705,18 +757,8 @@ bool assignHeadTail(DetectedBlob& blob,
         const float dist = std::hypot(delta.x, delta.y);
         b.distance = kWeightDistance * (dist / refDist);
 
-        if (predictor.hasVelocity) {
-            const cv::Point2f move = tc.point - lastPos;
-            const float moveMag = std::hypot(move.x, move.y);
-            const float velMag  = std::hypot(predictedVel.x, predictedVel.y);
-            // Skip the velocity term when either vector is degenerate — a
-            // stationary worm has no meaningful direction.
-            if (moveMag > 0.5f && velMag > 0.5f) {
-                const float cosTheta = (move.x * predictedVel.x + move.y * predictedVel.y)
-                                       / (moveMag * velMag);
-                b.velocity = kWeightVelocity * (1.f - cosTheta);
-            }
-        }
+        Q_UNUSED(lastPos);
+        Q_UNUSED(predictedVel);
 
         if (useCurvatureFeature) {
             const float cSd = std::max(1e-3f, baseline.curvatureStdDev());
@@ -729,13 +771,6 @@ bool assignHeadTail(DetectedBlob& blob,
             b.width = kWeightWidth * wZ;
         }
         return b;
-    };
-
-    auto roleCost = [&](const TipCandidate& tc,
-                        const cv::Point2f& predictedPos,
-                        const cv::Point2f& lastPos,
-                        const cv::Point2f& predictedVel) -> float {
-        return roleCostBreakdown(tc, predictedPos, lastPos, predictedVel).total();
     };
 
     // ── Debug log: predictor state going INTO this frame ───────────────────
@@ -778,6 +813,17 @@ bool assignHeadTail(DetectedBlob& blob,
                 static_cast<double>(widthCV),
                 useWidthFeature ? "" : " GATED");
         }
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "  assignableSkel=%d  hiddenGate=%.1f  predHidden: H=%d [nearest=%.1f inMask=%d]  "
+            "T=%d [nearest=%.1f inMask=%d]",
+            static_cast<int>(assignableIdx.size()),
+            static_cast<double>(hiddenTipDistance),
+            predictedHeadHidden ? 1 : 0,
+            static_cast<double>(headNearestAssignable),
+            maskContains(predictedHead) ? 1 : 0,
+            predictedTailHidden ? 1 : 0,
+            static_cast<double>(tailNearestAssignable),
+            maskContains(predictedTail) ? 1 : 0);
     }
 
     const int nCands = static_cast<int>(blob.tipCandidates.size());
@@ -795,45 +841,60 @@ bool assignHeadTail(DetectedBlob& blob,
         if (logEnabled) {
             const TipCandidate& tc = blob.tipCandidates[i];
             YAWT_DEBUG(lcDataCommon) << QString::asprintf(
-                "  cand[%d] %s (%.1f,%.1f)  H=%.2f [d=%.2f v=%.2f k=%.2f w=%.2f]  "
-                "T=%.2f [d=%.2f v=%.2f k=%.2f w=%.2f]",
+                "  cand[%d] %s (%.1f,%.1f)  H=%.2f [d=%.2f k=%.2f w=%.2f]  "
+                "T=%.2f [d=%.2f k=%.2f w=%.2f]",
                 i,
                 tc.source == TipCandidate::Source::SkeletonEndpoint ? "skel" : "curv",
                 static_cast<double>(tc.point.x),
                 static_cast<double>(tc.point.y),
                 static_cast<double>(headCosts[i].total()),
                 static_cast<double>(headCosts[i].distance),
-                static_cast<double>(headCosts[i].velocity),
                 static_cast<double>(headCosts[i].curvature),
                 static_cast<double>(headCosts[i].width),
                 static_cast<double>(tailCosts[i].total()),
                 static_cast<double>(tailCosts[i].distance),
-                static_cast<double>(tailCosts[i].velocity),
                 static_cast<double>(tailCosts[i].curvature),
                 static_cast<double>(tailCosts[i].width));
         }
     }
 
-    // ── Single-candidate branch: assign to lower-cost role ─────────────────
-    if (nCands == 1) {
-        const float costH = headCosts[0].total();
-        const float costT = tailCosts[0].total();
-        if (costH <= costT) blob.assignedHeadTipIdx = 0;
-        else                blob.assignedTailTipIdx = 0;
+    // ── Single-visible-tip branch ──────────────────────────────────────────
+    //
+    // On a self-crossed frame, the missing role is the one whose velocity-
+    // predicted point has moved into the blob but is no longer close to a
+    // skeleton endpoint. Leave that role unassigned so Pass 5 can run D-3
+    // from the remaining visible tip.
+    if (assignableIdx.size() == 1) {
+        const int idx = assignableIdx.front();
+        const float costH = predictedHeadHidden
+            ? std::numeric_limits<float>::infinity()
+            : headCosts[idx].total();
+        const float costT = predictedTailHidden
+            ? std::numeric_limits<float>::infinity()
+            : tailCosts[idx].total();
+        if (std::isinf(costH) && std::isinf(costT)) {
+            if (logEnabled) {
+                YAWT_DEBUG(lcDataCommon) << "  -> single skeleton endpoint; both roles predicted hidden";
+            }
+            return false;
+        }
+        if (costH <= costT) blob.assignedHeadTipIdx = idx;
+        else                blob.assignedTailTipIdx = idx;
         if (logEnabled) {
             YAWT_DEBUG(lcDataCommon) << QString::asprintf(
-                "  -> single candidate; assigned to %s (H=%.2f T=%.2f)",
+                "  -> single skeleton endpoint cand[%d]; assigned to %s (H=%.2f T=%.2f)",
+                idx,
                 (costH <= costT) ? "head" : "tail",
                 static_cast<double>(costH), static_cast<double>(costT));
         }
         return true;
     }
 
-    // ── ≥2 candidates: enumerate ordered pairs, pick min total cost ────────
+    // ── ≥2 visible tips: enumerate ordered skeleton pairs ──────────────────
     float bestTotal = std::numeric_limits<float>::max();
     int bestHead = -1, bestTail = -1;
-    for (int i = 0; i < nCands; ++i) {
-        for (int j = 0; j < nCands; ++j) {
+    for (int i : assignableIdx) {
+        for (int j : assignableIdx) {
             if (i == j) continue;
             const float total = headCosts[i].total() + tailCosts[j].total();
             if (total < bestTotal) {
