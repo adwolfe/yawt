@@ -4,8 +4,10 @@
 #include <QDebug>
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <queue>
 
 // ── geometry helpers ────────────────────────────────────────────────────────
 
@@ -459,6 +461,99 @@ static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
     return true;
 }
 
+// ── Geodesic shortest path through a mask (Phase C.3) ──────────────────────
+//
+// Dijkstra on the 8-connected pixel graph of a CV_8UC1 mask: orthogonal edges
+// cost 1, diagonal edges cost √2, edges leaving the mask are forbidden. Used
+// to thread a polyline through a curved/coiled body shape from one tip to
+// another, replacing the prev-centerline-as-snake-init that was poisoned by
+// stale topology in self-crossed frames.
+
+struct GeodesicResult {
+    cv::Mat distMap;      // CV_32F, per-pixel geodesic distance from start; ∞ outside mask
+    cv::Mat parentMap;    // CV_32SC1, parent flat index for path back-trace (-1 if unreached)
+};
+
+static bool runDijkstraInMask(const cv::Mat& mask,
+                              const cv::Point& start,
+                              GeodesicResult& result)
+{
+    if (mask.empty() || mask.type() != CV_8UC1) return false;
+    const int rows = mask.rows, cols = mask.cols;
+    if (start.x < 0 || start.y < 0 || start.x >= cols || start.y >= rows) return false;
+    if (mask.at<uchar>(start) == 0) return false;
+
+    result.distMap = cv::Mat(rows, cols, CV_32F,
+                             cv::Scalar(std::numeric_limits<float>::infinity()));
+    result.parentMap = cv::Mat(rows, cols, CV_32SC1, cv::Scalar(-1));
+    result.distMap.at<float>(start) = 0.f;
+
+    using Entry = std::pair<float, int>;  // (dist, flat idx)
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+    pq.push({0.f, start.y * cols + start.x});
+
+    static const float sqrt2 = std::sqrt(2.f);
+    static const std::array<int, 8> dx = {-1,  0,  1, -1,  1, -1,  0,  1};
+    static const std::array<int, 8> dy = {-1, -1, -1,  0,  0,  1,  1,  1};
+    static const std::array<float, 8> ew = {sqrt2, 1.f, sqrt2, 1.f, 1.f, sqrt2, 1.f, sqrt2};
+
+    while (!pq.empty()) {
+        const auto [d, idx] = pq.top();
+        pq.pop();
+        const int cy = idx / cols, cx = idx % cols;
+        if (d > result.distMap.at<float>(cy, cx)) continue;
+        for (int k = 0; k < 8; ++k) {
+            const int nx = cx + dx[k], ny = cy + dy[k];
+            if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+            if (mask.at<uchar>(ny, nx) == 0) continue;
+            const float nd = d + ew[k];
+            if (nd < result.distMap.at<float>(ny, nx)) {
+                result.distMap.at<float>(ny, nx) = nd;
+                result.parentMap.at<int>(ny, nx) = idx;
+                pq.push({nd, ny * cols + nx});
+            }
+        }
+    }
+    return true;
+}
+
+// Reconstruct an ordered start→goal path from a populated parent map.
+// Returns false if goal is unreachable from start.
+static bool reconstructPath(const GeodesicResult& g,
+                            const cv::Point& start,
+                            const cv::Point& goal,
+                            std::vector<cv::Point>& outPath)
+{
+    outPath.clear();
+    if (g.parentMap.empty()) return false;
+    const int cols = g.parentMap.cols;
+    if (!std::isfinite(g.distMap.at<float>(goal))) return false;
+
+    std::vector<cv::Point> reverse;
+    reverse.push_back(goal);
+    int curIdx = goal.y * cols + goal.x;
+    const int startIdx = start.y * cols + start.x;
+    while (curIdx != startIdx) {
+        const int parent = g.parentMap.at<int>(curIdx / cols, curIdx % cols);
+        if (parent < 0) return false;  // disconnected
+        curIdx = parent;
+        reverse.emplace_back(curIdx % cols, curIdx / cols);
+    }
+    outPath.assign(reverse.rbegin(), reverse.rend());
+    return outPath.size() >= 2;
+}
+
+// Convenience: one-shot start→goal geodesic.
+static bool geodesicPathInMask(const cv::Mat& mask,
+                               const cv::Point& start,
+                               const cv::Point& goal,
+                               std::vector<cv::Point>& outPath)
+{
+    GeodesicResult g;
+    if (!runDijkstraInMask(mask, start, g)) return false;
+    return reconstructPath(g, start, goal, outPath);
+}
+
 // ── Active-contour ("snake") refinement ─────────────────────────────────────
 //
 // For ring/coiled frames, skeletonization can never produce a self-intersecting
@@ -481,73 +576,45 @@ static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
 // Returns false on any structural failure; outPts is populated with nPoints
 // resampled points on success, and outOverlapCenter / outHasOverlap describe
 // any self-intersection detected in the result (used for debug overlay).
-static bool refineCenterlineSnake(const Tracking::DetectedBlob& blob,
-                                  const CenterlineState& prev,
-                                  float refLength,
-                                  int nPoints,
-                                  const Tracking::CenterlineSnakeParams& params,
-                                  std::vector<cv::Point2f>& outPts,
-                                  cv::Point2f& outOverlapCenter,
-                                  bool& outHasOverlap)
+// Snake core: takes a pre-built mask + an explicit init polyline + explicit
+// pinned head/tail positions. Both the legacy prev-centerline path and the
+// new geodesic-from-tips path (Phase C.3 / D-2, D-3) wrap this function so
+// the snake math (DT, gradient, Euler loop, overlap detection) is single-
+// sourced.
+//
+// `v` is mutated in place: caller passes the init polyline; on success it
+// contains the refined, nPoint-resampled centerline.
+static bool refineSnakeCore(const Tracking::DetectedBlob& blob,
+                            const cv::Mat& mask,
+                            const cv::Rect& bounds,
+                            std::vector<cv::Point2f>& v,
+                            const cv::Point2f& pinHead,
+                            const cv::Point2f& pinTail,
+                            int nPoints,
+                            const Tracking::CenterlineSnakeParams& params,
+                            cv::Point2f& outOverlapCenter,
+                            bool& outHasOverlap)
 {
     outHasOverlap = false;
-    if (!params.enabled || !prev.valid || prev.points.size() < 4 ||
-        blob.contourPoints.empty()) {
-        return false;
-    }
+    if (mask.empty() || v.empty() || blob.contourPoints.empty()) return false;
 
-    // 1. Initial guess: prev centerline translated by centroid motion. This is
-    //    the same prediction the existing fallback uses; the snake just refines it.
-    const cv::Point2f curCentroid = blobCentroid(blob);
-    const cv::Point2f offset = curCentroid - prev.blobCentroid;
+    // Resample to canonical nPoint count.
+    if (static_cast<int>(v.size()) != nPoints) v = resample(v, nPoints);
+    if (static_cast<int>(v.size()) < 4) return false;
 
-    std::vector<cv::Point2f> v;
-    v.reserve(prev.points.size());
-    for (const cv::Point2f& p : prev.points) {
-        v.push_back(p + offset);
-    }
-    if (static_cast<int>(v.size()) != nPoints) {
-        v = resample(v, nPoints);
-    }
-    if (static_cast<int>(v.size()) < 4) {
-        return false;
-    }
-
-    // 2. Build a local mask of the current blob (outer contour with holes carved out).
-    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
-    constexpr int kPad = 8;
-    bounds.x -= kPad;
-    bounds.y -= kPad;
-    bounds.width += 2 * kPad;
-    bounds.height += 2 * kPad;
-    if (bounds.width <= 1 || bounds.height <= 1) {
-        return false;
-    }
-
-    cv::Mat mask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
-    fillBlobMask(mask, blob, bounds, cv::Point2f(0.f, 0.f));
-    if (cv::countNonZero(mask) < 4) {
-        return false;
-    }
-
-    // 3. Distance transform → its ridges ARE the medial axis. Smooth a little so
-    //    ∇D is well-defined off-ridge. Sobel gives the gradient field that
-    //    attracts the snake toward the ridge (highest-D pixels).
+    // Distance transform → its ridges ARE the medial axis. Smooth a little so
+    // ∇D is well-defined off-ridge. Sobel gives the gradient field that
+    // attracts the snake toward the ridge (highest-D pixels).
     cv::Mat dt;
     cv::distanceTransform(mask, dt, cv::DIST_L2, 3);
     cv::GaussianBlur(dt, dt, cv::Size(0, 0), 1.0);
-    cv::Mat gx;
-    cv::Mat gy;
+    cv::Mat gx, gy;
     cv::Sobel(dt, gx, CV_32F, 1, 0, 3);
     cv::Sobel(dt, gy, CV_32F, 0, 1, 3);
 
     // Normalize gradient magnitude scale so lambda has roughly mask-size-
-    // independent meaning. Without this, large blobs have larger ∇D and the
-    // user-tuned lambda would behave very differently across frames.
-    double gxMin = 0.0;
-    double gxMax = 0.0;
-    double gyMin = 0.0;
-    double gyMax = 0.0;
+    // independent meaning.
+    double gxMin = 0.0, gxMax = 0.0, gyMin = 0.0, gyMax = 0.0;
     cv::minMaxLoc(gx, &gxMin, &gxMax);
     cv::minMaxLoc(gy, &gyMin, &gyMax);
     const double gradScale = std::max({std::abs(gxMin), std::abs(gxMax),
@@ -565,74 +632,48 @@ static bool refineCenterlineSnake(const Tracking::DetectedBlob& blob,
     auto isInsideMask = [&](const cv::Point2f& world) -> bool {
         const int lx = static_cast<int>(std::lround(world.x - bounds.x));
         const int ly = static_cast<int>(std::lround(world.y - bounds.y));
-        if (lx < 0 || ly < 0 || lx >= mask.cols || ly >= mask.rows) {
-            return false;
-        }
+        if (lx < 0 || ly < 0 || lx >= mask.cols || ly >= mask.rows) return false;
         return mask.at<uchar>(ly, lx) != 0;
     };
 
-    // 4. Pin endpoints to the nearest outer-contour point of the predicted
-    //    nose/tail. Worm endpoints must lie on the body boundary, not interior.
-    v.front() = nearestContourPoint(blob.contourPoints, v.front());
-    v.back()  = nearestContourPoint(blob.contourPoints, v.back());
+    // Pin endpoints. Caller supplies the positions (e.g. assigned head/tail
+    // tip points, or prev-frame endpoints snapped to current contour).
+    v.front() = pinHead;
+    v.back()  = pinTail;
 
-    // 5. Explicit-Euler gradient descent on the discretized energy. With only
-    //    nPoints=20 control points this is trivially fast even for many iterations.
-    const float alpha = static_cast<float>(params.alpha);
-    const float beta  = static_cast<float>(params.beta);
+    // Explicit-Euler gradient descent on the discretized energy.
+    const float alpha  = static_cast<float>(params.alpha);
+    const float beta   = static_cast<float>(params.beta);
     const float lambda = static_cast<float>(params.lambda);
-    const float tau   = static_cast<float>(std::max(1e-3, params.stepSize));
+    const float tau    = static_cast<float>(std::max(1e-3, params.stepSize));
     const int n = static_cast<int>(v.size());
 
     std::vector<cv::Point2f> next(v.size());
     for (int iter = 0; iter < std::max(1, params.iterations); ++iter) {
-        next.front() = v.front();   // pinned
-        next.back()  = v.back();    // pinned
+        next.front() = v.front();
+        next.back()  = v.back();
 
         for (int i = 1; i < n - 1; ++i) {
-            // Tension: discrete Laplacian (smooths spacing, resists stretching).
             const cv::Point2f tens = v[i - 1] - 2.f * v[i] + v[i + 1];
-
-            // Rigidity: discrete biharmonic (resists bending). Only well-defined
-            // two points away from each endpoint; degenerates to zero near pins.
             cv::Point2f rig(0.f, 0.f);
             if (i >= 2 && i <= n - 3) {
                 rig = v[i - 2] - 4.f * v[i - 1] + 6.f * v[i] - 4.f * v[i + 1] + v[i + 2];
             }
-
-            // Image: gradient of the (smoothed) distance transform. Pulls the
-            // point toward the closest medial-axis ridge.
             const cv::Point2f img = sampleGradient(v[i]);
-
-            // Sign convention for biharmonic is negative — the rigidity force
-            // opposes the biharmonic, like the Laplacian opposes itself for tension.
             const cv::Point2f force = alpha * tens - beta * rig + lambda * img;
             cv::Point2f candidate = v[i] + tau * force;
-
-            // Hard constraint: stay inside the blob mask. If the step lands
-            // outside, snap back to the closest contour point — better than
-            // letting the snake escape into background where ∇D is degenerate.
             if (!isInsideMask(candidate)) {
                 candidate = nearestContourPoint(blob.contourPoints, candidate);
             }
             next[i] = candidate;
         }
-
         v.swap(next);
     }
 
-    // 6. Final resample to the canonical point count (preserves arc-length spacing).
-    if (static_cast<int>(v.size()) != nPoints) {
-        v = resample(v, nPoints);
-    }
-    if (v.size() < 2) {
-        return false;
-    }
+    if (static_cast<int>(v.size()) != nPoints) v = resample(v, nPoints);
+    if (v.size() < 2) return false;
 
-    outPts = std::move(v);
-
-    // 7. Detect any self-intersection (debug overlay aid). Reuses the standard
-    //    parametric segment-intersection test on non-adjacent segment pairs.
+    // Self-intersection detection for debug overlay.
     auto segmentsIntersect = [](const cv::Point2f& a, const cv::Point2f& b,
                                 const cv::Point2f& c, const cv::Point2f& d,
                                 cv::Point2f& crossing) -> bool {
@@ -648,16 +689,196 @@ static bool refineCenterlineSnake(const Tracking::DetectedBlob& blob,
         }
         return false;
     };
-    for (int i = 0; i < static_cast<int>(outPts.size()) - 1 && !outHasOverlap; ++i) {
-        for (int j = i + 2; j < static_cast<int>(outPts.size()) - 1 && !outHasOverlap; ++j) {
+    for (int i = 0; i < static_cast<int>(v.size()) - 1 && !outHasOverlap; ++i) {
+        for (int j = i + 2; j < static_cast<int>(v.size()) - 1 && !outHasOverlap; ++j) {
             cv::Point2f x;
-            if (segmentsIntersect(outPts[i], outPts[i + 1], outPts[j], outPts[j + 1], x)) {
+            if (segmentsIntersect(v[i], v[i + 1], v[j], v[j + 1], x)) {
                 outOverlapCenter = x;
                 outHasOverlap = true;
             }
         }
     }
+    return true;
+}
 
+// Helper: build the local mask + padded bounds for a blob.
+static bool buildSnakeMask(const Tracking::DetectedBlob& blob,
+                           cv::Mat& outMask, cv::Rect& outBounds)
+{
+    if (blob.contourPoints.empty()) return false;
+    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
+    constexpr int kPad = 8;
+    bounds.x -= kPad;
+    bounds.y -= kPad;
+    bounds.width += 2 * kPad;
+    bounds.height += 2 * kPad;
+    if (bounds.width <= 1 || bounds.height <= 1) return false;
+    cv::Mat mask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
+    fillBlobMask(mask, blob, bounds, cv::Point2f(0.f, 0.f));
+    if (cv::countNonZero(mask) < 4) return false;
+    outMask = mask;
+    outBounds = bounds;
+    return true;
+}
+
+// Legacy wrapper: prev-centerline-based init, used by Pass 2's ring branch.
+static bool refineCenterlineSnake(const Tracking::DetectedBlob& blob,
+                                  const CenterlineState& prev,
+                                  float /*refLength*/,
+                                  int nPoints,
+                                  const Tracking::CenterlineSnakeParams& params,
+                                  std::vector<cv::Point2f>& outPts,
+                                  cv::Point2f& outOverlapCenter,
+                                  bool& outHasOverlap)
+{
+    outHasOverlap = false;
+    if (!params.enabled || !prev.valid || prev.points.size() < 4 ||
+        blob.contourPoints.empty()) return false;
+
+    // Init: prev centerline translated by centroid motion.
+    const cv::Point2f curCentroid = blobCentroid(blob);
+    const cv::Point2f offset = curCentroid - prev.blobCentroid;
+    std::vector<cv::Point2f> v;
+    v.reserve(prev.points.size());
+    for (const cv::Point2f& p : prev.points) v.push_back(p + offset);
+
+    cv::Mat mask;
+    cv::Rect bounds;
+    if (!buildSnakeMask(blob, mask, bounds)) return false;
+
+    // Pin endpoints to nearest contour of inherited endpoints.
+    const cv::Point2f pinHead = nearestContourPoint(blob.contourPoints, v.front());
+    const cv::Point2f pinTail = nearestContourPoint(blob.contourPoints, v.back());
+
+    if (!refineSnakeCore(blob, mask, bounds, v, pinHead, pinTail,
+                         nPoints, params, outOverlapCenter, outHasOverlap)) {
+        return false;
+    }
+    outPts = std::move(v);
+    return true;
+}
+
+// New (Phase C.3 / D-2): snake with init derived from a mask-constrained
+// geodesic between the assigned head and tail. Endpoints are pinned exactly
+// to the supplied head/tail positions (no nearest-contour snap — they're
+// already on the outer contour by definition of how tipCandidates were
+// produced). Used when the worm is in SelfCrossed topology and both tips
+// have been successfully assigned in Pass 4.
+static bool refineCenterlineSnakeFromTips(const Tracking::DetectedBlob& blob,
+                                          const cv::Point2f& head,
+                                          const cv::Point2f& tail,
+                                          int nPoints,
+                                          const Tracking::CenterlineSnakeParams& params,
+                                          std::vector<cv::Point2f>& outPts,
+                                          cv::Point2f& outOverlapCenter,
+                                          bool& outHasOverlap)
+{
+    outHasOverlap = false;
+    if (!params.enabled || blob.contourPoints.empty()) return false;
+
+    cv::Mat mask;
+    cv::Rect bounds;
+    if (!buildSnakeMask(blob, mask, bounds)) return false;
+
+    // Convert head/tail to mask coords.
+    const cv::Point headLocal(std::clamp(static_cast<int>(std::lround(head.x - bounds.x)), 0, mask.cols - 1),
+                              std::clamp(static_cast<int>(std::lround(head.y - bounds.y)), 0, mask.rows - 1));
+    const cv::Point tailLocal(std::clamp(static_cast<int>(std::lround(tail.x - bounds.x)), 0, mask.cols - 1),
+                              std::clamp(static_cast<int>(std::lround(tail.y - bounds.y)), 0, mask.rows - 1));
+
+    // Geodesic from head to tail through the mask.
+    std::vector<cv::Point> pathLocal;
+    if (!geodesicPathInMask(mask, headLocal, tailLocal, pathLocal)) return false;
+    if (pathLocal.size() < 2) return false;
+
+    // Convert to video coords for the snake.
+    std::vector<cv::Point2f> v;
+    v.reserve(pathLocal.size());
+    for (const cv::Point& p : pathLocal) {
+        v.emplace_back(static_cast<float>(p.x + bounds.x),
+                       static_cast<float>(p.y + bounds.y));
+    }
+
+    if (!refineSnakeCore(blob, mask, bounds, v, head, tail,
+                         nPoints, params, outOverlapCenter, outHasOverlap)) {
+        return false;
+    }
+    outPts = std::move(v);
+    return true;
+}
+
+// New (Phase C.3 / D-3): only one tip is assigned. Use the per-worm body-
+// length prior to hypothesize where the hidden tip lies — the outer-contour
+// point whose geodesic distance from the known tip is closest to bodyLength
+// — then run the standard tip-based snake on that geodesic.
+//
+// Returns the hypothesized other tip via outHiddenTip on success, so the
+// caller can update the head/tail assignment + the head/tail predictor for
+// downstream frames.
+static bool refineCenterlineSnakeFromOneTip(const Tracking::DetectedBlob& blob,
+                                            const cv::Point2f& knownTip,
+                                            float bodyLength,
+                                            int nPoints,
+                                            const Tracking::CenterlineSnakeParams& params,
+                                            std::vector<cv::Point2f>& outPts,
+                                            cv::Point2f& outHiddenTip,
+                                            cv::Point2f& outOverlapCenter,
+                                            bool& outHasOverlap)
+{
+    outHasOverlap = false;
+    if (!params.enabled || blob.contourPoints.empty() || bodyLength <= 1.f) return false;
+
+    cv::Mat mask;
+    cv::Rect bounds;
+    if (!buildSnakeMask(blob, mask, bounds)) return false;
+
+    const cv::Point knownLocal(std::clamp(static_cast<int>(std::lround(knownTip.x - bounds.x)), 0, mask.cols - 1),
+                               std::clamp(static_cast<int>(std::lround(knownTip.y - bounds.y)), 0, mask.rows - 1));
+
+    GeodesicResult g;
+    if (!runDijkstraInMask(mask, knownLocal, g)) return false;
+
+    // Walk every outer-contour point, find the one whose geodesic distance
+    // from the known tip is closest to bodyLength. That contour point is the
+    // hypothesized hidden tip.
+    int bestIdx = -1;
+    float bestErr = std::numeric_limits<float>::max();
+    cv::Point bestLocal;
+    for (size_t i = 0; i < blob.contourPoints.size(); ++i) {
+        const cv::Point& cp = blob.contourPoints[i];
+        const cv::Point local(cp.x - bounds.x, cp.y - bounds.y);
+        if (local.x < 0 || local.y < 0 || local.x >= mask.cols || local.y >= mask.rows) continue;
+        const float d = g.distMap.at<float>(local);
+        if (!std::isfinite(d)) continue;
+        const float err = std::abs(d - bodyLength);
+        if (err < bestErr) {
+            bestErr = err;
+            bestIdx = static_cast<int>(i);
+            bestLocal = local;
+        }
+    }
+    if (bestIdx < 0) return false;
+
+    std::vector<cv::Point> pathLocal;
+    if (!reconstructPath(g, knownLocal, bestLocal, pathLocal)) return false;
+    if (pathLocal.size() < 2) return false;
+
+    const cv::Point2f hiddenTip(static_cast<float>(bestLocal.x + bounds.x),
+                                static_cast<float>(bestLocal.y + bounds.y));
+
+    std::vector<cv::Point2f> v;
+    v.reserve(pathLocal.size());
+    for (const cv::Point& p : pathLocal) {
+        v.emplace_back(static_cast<float>(p.x + bounds.x),
+                       static_cast<float>(p.y + bounds.y));
+    }
+
+    if (!refineSnakeCore(blob, mask, bounds, v, knownTip, hiddenTip,
+                         nPoints, params, outOverlapCenter, outHasOverlap)) {
+        return false;
+    }
+    outPts = std::move(v);
+    outHiddenTip = hiddenTip;
     return true;
 }
 
@@ -1277,6 +1498,105 @@ void CenterlineWorker::doWork()
 
         runAssignmentDirection(keyframeIdx + 1, +1, seedPredictor);
         runAssignmentDirection(keyframeIdx - 1, -1, seedPredictor);
+
+        // ── Pass 5: geodesic-from-tips centerline refinement (Phase C.3) ────
+        // For SelfCrossed frames where head/tail were assigned in Pass 4b,
+        // replace the Pass 2 snake init (which inherited the prev centerline
+        // and was vulnerable to stale topology) with a geodesic shortest path
+        // through the current blob mask from the assigned head to the
+        // assigned tail (D-2). When only one tip is assigned, use the per-
+        // worm body-length prior to hypothesize the hidden tip and trace a
+        // geodesic of that length from the known tip (D-3).
+        //
+        // Clean frames are skipped — their skeleton centerline is correct.
+        // Merged / Lost frames are skipped — geodesic isn't meaningful when
+        // multiple worms share a blob or no blob exists.
+        // SelfCrossed with no assigned tips → leave Pass 2's result alone
+        // (effective D-4 fallback).
+        const int nPointsSnake = std::max(4, m_snakeParams.nPoints);
+        int d2Count = 0, d3Count = 0, d3Skipped = 0;
+        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+            QMap<int, Tracking::DetectedBlob> frameBlobs =
+                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            if (!frameBlobs.contains(wormId)) continue;
+            Tracking::DetectedBlob blob = frameBlobs[wormId];
+            if (blob.topologyState != Tracking::TopologyState::SelfCrossed) continue;
+
+            const int hIdx = blob.assignedHeadTipIdx;
+            const int tIdx = blob.assignedTailTipIdx;
+            const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.tipCandidates.size()));
+            const bool hasTail = (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size()));
+
+            std::vector<cv::Point2f> refined;
+            cv::Point2f overlapCenter;
+            bool hasOverlap = false;
+            bool updated = false;
+
+            if (hasHead && hasTail) {
+                // D-2: geodesic head → tail.
+                const cv::Point2f head = blob.tipCandidates[hIdx].point;
+                const cv::Point2f tail = blob.tipCandidates[tIdx].point;
+                if (refineCenterlineSnakeFromTips(blob, head, tail, nPointsSnake,
+                                                  m_snakeParams,
+                                                  refined, overlapCenter, hasOverlap)) {
+                    updated = true;
+                    ++d2Count;
+                    YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                        "Pass5 D-2    worm=%d frame=%d  head=(%.1f,%.1f) tail=(%.1f,%.1f)  overlap=%d",
+                        wormId, tp.frameNumberOriginal,
+                        static_cast<double>(head.x), static_cast<double>(head.y),
+                        static_cast<double>(tail.x), static_cast<double>(tail.y),
+                        hasOverlap ? 1 : 0);
+                }
+            } else if (hasHead != hasTail && baseline.lengthSamples > 0) {
+                // D-3: geodesic of body length from the one known tip. The
+                // hidden tip is inferred and written back as the missing
+                // assignment so downstream rendering shows both rings.
+                const int knownIdx = hasHead ? hIdx : tIdx;
+                const cv::Point2f knownTip = blob.tipCandidates[knownIdx].point;
+                const float bodyLen = baseline.meanBodyLength;
+                cv::Point2f hiddenTip;
+                if (refineCenterlineSnakeFromOneTip(blob, knownTip, bodyLen, nPointsSnake,
+                                                    m_snakeParams,
+                                                    refined, hiddenTip,
+                                                    overlapCenter, hasOverlap)) {
+                    // Append the hypothesized hidden tip as a new candidate
+                    // so the assignment indices remain valid + visualisable.
+                    Tracking::TipCandidate hypTip;
+                    hypTip.point     = hiddenTip;
+                    hypTip.curvature = 0.f;
+                    hypTip.width     = 0.f;
+                    hypTip.source    = Tracking::TipCandidate::Source::CurvaturePeak;
+                    blob.tipCandidates.push_back(hypTip);
+                    const int newIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
+                    if (hasHead) blob.assignedTailTipIdx = newIdx;
+                    else         blob.assignedHeadTipIdx = newIdx;
+                    updated = true;
+                    ++d3Count;
+                    YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+                        "Pass5 D-3    worm=%d frame=%d  known=%s @ (%.1f,%.1f) -> hidden=(%.1f,%.1f)  L=%.1f",
+                        wormId, tp.frameNumberOriginal,
+                        hasHead ? "head" : "tail",
+                        static_cast<double>(knownTip.x), static_cast<double>(knownTip.y),
+                        static_cast<double>(hiddenTip.x), static_cast<double>(hiddenTip.y),
+                        static_cast<double>(bodyLen));
+                } else {
+                    ++d3Skipped;
+                }
+            }
+
+            if (updated) {
+                blob.centerlinePoints.assign(refined.begin(), refined.end());
+                if (hasOverlap) {
+                    blob.centerlineCutPoint = overlapCenter;
+                    blob.hasCenterlineCutPoint = true;
+                }
+                m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
+            }
+        }
+        YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
+            "Pass5 summary worm=%d  D-2=%d  D-3=%d  D-3 skipped (no baseline)=%d",
+            wormId, d2Count, d3Count, d3Skipped);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);
