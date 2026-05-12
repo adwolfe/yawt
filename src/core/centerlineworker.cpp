@@ -304,6 +304,53 @@ static void fillBlobMask(cv::Mat& mask,
     }
 }
 
+static bool nearestMaskPoint(const Tracking::DetectedBlob& blob,
+                             const cv::Point2f& target,
+                             cv::Point2f& outPoint)
+{
+    if (blob.contourPoints.empty()) return false;
+
+    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
+    constexpr int kPad = 8;
+    bounds.x -= kPad;
+    bounds.y -= kPad;
+    bounds.width += 2 * kPad;
+    bounds.height += 2 * kPad;
+    if (bounds.width <= 1 || bounds.height <= 1) return false;
+
+    cv::Mat mask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
+    fillBlobMask(mask, blob, bounds, cv::Point2f(0.f, 0.f));
+
+    const int tx = static_cast<int>(std::lround(target.x - bounds.x));
+    const int ty = static_cast<int>(std::lround(target.y - bounds.y));
+    if (tx >= 0 && ty >= 0 && tx < mask.cols && ty < mask.rows &&
+        mask.at<uchar>(ty, tx) != 0) {
+        outPoint = cv::Point2f(static_cast<float>(tx + bounds.x),
+                               static_cast<float>(ty + bounds.y));
+        return true;
+    }
+
+    float bestD2 = std::numeric_limits<float>::max();
+    bool found = false;
+    for (int y = 0; y < mask.rows; ++y) {
+        const uchar* row = mask.ptr<uchar>(y);
+        for (int x = 0; x < mask.cols; ++x) {
+            if (row[x] == 0) continue;
+            const float wx = static_cast<float>(x + bounds.x);
+            const float wy = static_cast<float>(y + bounds.y);
+            const float dx = wx - target.x;
+            const float dy = wy - target.y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                outPoint = cv::Point2f(wx, wy);
+                found = true;
+            }
+        }
+    }
+    return found;
+}
+
 static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
                              const CenterlineState& prev,
                              const cv::Point2f& expectedOffset,
@@ -1033,6 +1080,8 @@ static std::vector<int> traceSkeletonBranch(const Tracking::SkeletonGraph& graph
 static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& graph,
                                               int srcIdx,
                                               const cv::Point2f& predictedHidden,
+                                              const cv::Point2f& predictedCenter,
+                                              bool hasPredictedCenter,
                                               const cv::Point2f& originOffset,
                                               float prevTurningAngle,
                                               float angleThreshold,
@@ -1113,6 +1162,30 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         std::vector<int> full = trunk;
         full.insert(full.end(), c.nodes.begin() + 1, c.nodes.begin() + c.bestIndex + 1);
         c.pathLen = nodePathLength(graph, full);
+        if (hasPredictedCenter && full.size() >= 2) {
+            const float halfLen = 0.5f * c.pathLen;
+            float walked = 0.f;
+            cv::Point2f midpoint(
+                static_cast<float>(graph.points[full.back()].x) + originOffset.x,
+                static_cast<float>(graph.points[full.back()].y) + originOffset.y);
+            for (int i = 1; i < static_cast<int>(full.size()); ++i) {
+                const cv::Point& a = graph.points[full[i - 1]];
+                const cv::Point& b = graph.points[full[i]];
+                const int sx = b.x - a.x;
+                const int sy = b.y - a.y;
+                const float segLen = (sx != 0 && sy != 0) ? std::sqrt(2.f) : 1.f;
+                if (walked + segLen >= halfLen) {
+                    const float t = (halfLen - walked) / std::max(segLen, 1e-6f);
+                    midpoint = cv::Point2f(
+                        (static_cast<float>(a.x) + t * static_cast<float>(sx)) + originOffset.x,
+                        (static_cast<float>(a.y) + t * static_cast<float>(sy)) + originOffset.y);
+                    break;
+                }
+                walked += segLen;
+            }
+            const cv::Point2f d = midpoint - predictedCenter;
+            c.minDistSq += 0.75f * (d.x * d.x + d.y * d.y);
+        }
         candidates.push_back(std::move(c));
     }
     if (candidates.empty()) return false;
@@ -1130,6 +1203,7 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         }
         if (refLength > 0.f) {
             score += std::abs(c.pathLen - refLength);
+            score += 0.10f * std::sqrt(c.minDistSq);
         } else {
             score += c.minDistSq * 0.01f;
         }
@@ -1913,6 +1987,90 @@ void CenterlineWorker::doWorkNew()
             return bestIdx;
         };
 
+        auto loadPreviousFrameContext =
+            [&](int frameNumber,
+                Tracking::HeadTailPredictor& outPredictor,
+                CenterlineState& outPrevState,
+                float& outLocalRefLength) -> bool {
+            auto blobAt = [&](int f, Tracking::DetectedBlob& out) -> bool {
+                const QMap<int, Tracking::DetectedBlob> blobs =
+                    m_storage->getDetectedBlobsForFrame(f);
+                if (!blobs.contains(wormId)) return false;
+                out = blobs[wormId];
+                return out.isValid && !out.contourPoints.empty();
+            };
+
+            Tracking::DetectedBlob prevBlob;
+            if (!blobAt(frameNumber - 1, prevBlob)) {
+                return false;
+            }
+
+            outPredictor = Tracking::HeadTailPredictor{};
+            const auto prevHead =
+                (prevBlob.assignedHeadTipIdx >= 0 &&
+                 prevBlob.assignedHeadTipIdx < static_cast<int>(prevBlob.tipCandidates.size()))
+                    ? prevBlob.tipCandidates[prevBlob.assignedHeadTipIdx].point
+                    : cv::Point2f(-1.f, -1.f);
+            const auto prevTail =
+                (prevBlob.assignedTailTipIdx >= 0 &&
+                 prevBlob.assignedTailTipIdx < static_cast<int>(prevBlob.tipCandidates.size()))
+                    ? prevBlob.tipCandidates[prevBlob.assignedTailTipIdx].point
+                    : cv::Point2f(-1.f, -1.f);
+            outPredictor.lastHeadPos = prevHead;
+            outPredictor.lastTailPos = prevTail;
+            outPredictor.hasPrev = (prevHead.x >= 0.f || prevTail.x >= 0.f);
+
+            Tracking::DetectedBlob prevPrevBlob;
+            if (blobAt(frameNumber - 2, prevPrevBlob)) {
+                const auto prevPrevHead =
+                    (prevPrevBlob.assignedHeadTipIdx >= 0 &&
+                     prevPrevBlob.assignedHeadTipIdx < static_cast<int>(prevPrevBlob.tipCandidates.size()))
+                        ? prevPrevBlob.tipCandidates[prevPrevBlob.assignedHeadTipIdx].point
+                        : cv::Point2f(-1.f, -1.f);
+                const auto prevPrevTail =
+                    (prevPrevBlob.assignedTailTipIdx >= 0 &&
+                     prevPrevBlob.assignedTailTipIdx < static_cast<int>(prevPrevBlob.tipCandidates.size()))
+                        ? prevPrevBlob.tipCandidates[prevPrevBlob.assignedTailTipIdx].point
+                        : cv::Point2f(-1.f, -1.f);
+                if (prevPrevHead.x >= 0.f && prevHead.x >= 0.f)
+                    outPredictor.velHead = prevHead - prevPrevHead;
+                if (prevPrevTail.x >= 0.f && prevTail.x >= 0.f)
+                    outPredictor.velTail = prevTail - prevPrevTail;
+                const bool havePrevPrevCenter =
+                    prevPrevBlob.centerlinePoints.size() >= 2 &&
+                    prevBlob.centerlinePoints.size() >= 2;
+                if (havePrevPrevCenter) {
+                    const cv::Point2f prevPrevCenter =
+                        prevPrevBlob.centerlinePoints[prevPrevBlob.centerlinePoints.size() / 2];
+                    const cv::Point2f prevCenter =
+                        prevBlob.centerlinePoints[prevBlob.centerlinePoints.size() / 2];
+                    outPredictor.velCenter = prevCenter - prevPrevCenter;
+                }
+                outPredictor.hasVelocity =
+                    (prevPrevHead.x >= 0.f && prevHead.x >= 0.f) ||
+                    (prevPrevTail.x >= 0.f && prevTail.x >= 0.f) ||
+                    havePrevPrevCenter;
+            }
+
+            outPrevState = CenterlineState{};
+            if (prevBlob.centerlinePoints.size() >= 2) {
+                outPrevState.points.assign(prevBlob.centerlinePoints.begin(),
+                                           prevBlob.centerlinePoints.end());
+                outPrevState.blobCentroid = blobCentroid(prevBlob);
+                outPrevState.blob = prevBlob;
+                outPrevState.valid = true;
+                outPrevState.turningAngle = totalSignedTurningAngle(outPrevState.points);
+                outLocalRefLength = arcLen(outPrevState.points);
+                outPredictor.lastCenterPos =
+                    outPrevState.points[outPrevState.points.size() / 2];
+            }
+
+            if (outLocalRefLength > 0.f) {
+                outPredictor.refDistance = std::max(8.f, 0.5f * outLocalRefLength);
+            }
+            return outPredictor.hasPrev || outPrevState.valid;
+        };
+
         // ── per-frame body of Sweep 1 ────────────────────────────────────
         // `predictor` and `prevState` are CARRIED across frames within one
         // direction; they reset on Lost frames and at the keyframe boundary
@@ -1938,12 +2096,26 @@ void CenterlineWorker::doWorkNew()
             blob.hasCenterlineCutPoint = false;
 
             const bool inMerge = inMergeGroupAtFrame(tp.frameNumberOriginal);
+            Tracking::HeadTailPredictor framePredictor = predictor;
+            CenterlineState framePrevState = prevState;
+            float frameRefLength = refLength;
+            if (!isKeyframeBootstrap) {
+                float localRefLength = frameRefLength;
+                if (loadPreviousFrameContext(tp.frameNumberOriginal,
+                                             framePredictor,
+                                             framePrevState,
+                                             localRefLength)) {
+                    if (localRefLength > 0.f) {
+                        frameRefLength = localRefLength;
+                    }
+                }
+            }
 
             // ── STEP 1: detect endpoints, write back tip data ───────────
             const Tracking::TipFeatureBaseline baseline =
                 m_storage->getTipBaseline(wormId);
             Tracking::EndpointResult er = Tracking::detectEndpoints(
-                blob, predictor, baseline, inMerge);
+                blob, framePredictor, baseline, inMerge);
 
             // Convert TrueTips → TipCandidates. Source = SkeletonEndpoint
             // for ALL tips so the renderer's filled-green-dot styling
@@ -2025,16 +2197,33 @@ void CenterlineWorker::doWorkNew()
                 // Target: actual other tip (D-2) or predicted position (D-3).
                 const bool hasActualTarget = hasHead && hasTail;
                 cv::Point2f targetPos(-1.f, -1.f);
+                const bool hasPredictedCenter =
+                    framePredictor.lastCenterPos.x != 0.f ||
+                    framePredictor.lastCenterPos.y != 0.f;
+                cv::Point2f predictedCenter = framePredictor.hasVelocity
+                    ? framePredictor.lastCenterPos + framePredictor.velCenter
+                    : framePredictor.lastCenterPos;
+                if (hasPredictedCenter) {
+                    cv::Point2f snappedCenter;
+                    if (nearestMaskPoint(dispBlob, predictedCenter, snappedCenter)) {
+                        predictedCenter = snappedCenter;
+                    }
+                }
                 if (hasActualTarget) {
                     targetPos = dispBlob.tipCandidates[hasHead ? tIdx : hIdx].point;
-                } else if (predictor.hasPrev) {
+                } else if (framePredictor.hasPrev) {
                     const bool hiddenIsHead = !hasHead;
                     const cv::Point2f& last = hiddenIsHead
-                        ? predictor.lastHeadPos : predictor.lastTailPos;
+                        ? framePredictor.lastHeadPos : framePredictor.lastTailPos;
                     const cv::Point2f& vel  = hiddenIsHead
-                        ? predictor.velHead    : predictor.velTail;
-                    if (last.x != 0.f || last.y != 0.f)
-                        targetPos = predictor.hasVelocity ? (last + vel) : last;
+                        ? framePredictor.velHead    : framePredictor.velTail;
+                    if (last.x != 0.f || last.y != 0.f) {
+                        targetPos = framePredictor.hasVelocity ? (last + vel) : last;
+                        cv::Point2f snappedTarget;
+                        if (nearestMaskPoint(dispBlob, targetPos, snappedTarget)) {
+                            targetPos = snappedTarget;
+                        }
+                    }
                 }
 
                 int goalNode = -1;
@@ -2056,17 +2245,19 @@ void CenterlineWorker::doWorkNew()
                     skeletonPathTowardPredictedHidden(dispEr.skeleton,
                                                       srcNode,
                                                       targetPos,
+                                                      predictedCenter,
+                                                      hasPredictedCenter,
                                                       dispOrigin,
-                                                      prevState.turningAngle,
+                                                      framePrevState.turningAngle,
                                                       angleThreshold,
-                                                      refLength,
+                                                      frameRefLength,
                                                       chosen)) {
                     // chosen populated by junction-guided dispatch
                 } else if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
                                             dispOrigin, arcA, arcB)) {
                     chosen = pickArcByRHR(arcA, arcB,
-                                          prevState.turningAngle,
-                                          angleThreshold, refLength);
+                                          framePrevState.turningAngle,
+                                          angleThreshold, frameRefLength);
                 } else if (!arcA.empty()) {
                     chosen = arcA; // open-curve skeleton: only one arc
                 } else {
@@ -2079,12 +2270,32 @@ void CenterlineWorker::doWorkNew()
                     chosen.front() = dispEr.tips[hIdx].point;
                 if (hasTail && dispEr.tips[tIdx].extended)
                     chosen.back()  = dispEr.tips[tIdx].point;
+                if (!hasActualTarget && framePredictor.hasPrev) {
+                    const cv::Point2f& knownLast = hasHead
+                        ? framePredictor.lastHeadPos : framePredictor.lastTailPos;
+                    const cv::Point2f& knownVel = hasHead
+                        ? framePredictor.velHead : framePredictor.velTail;
+                    if (knownLast.x != 0.f || knownLast.y != 0.f) {
+                        cv::Point2f knownPred = framePredictor.hasVelocity
+                            ? (knownLast + knownVel)
+                            : knownLast;
+                        cv::Point2f snappedKnown;
+                        if (nearestMaskPoint(dispBlob, knownPred, snappedKnown)) {
+                            knownPred = snappedKnown;
+                        }
+                        chosen.front() = knownPred;
+                    }
+                }
 
                 centerline = std::move(chosen);
 
                 // D-3: register the arc terminus as the hypothesised hidden tip.
                 if (!hasActualTarget) {
-                    const cv::Point2f hiddenPoint = centerline.back();
+                    const bool havePredictedHidden =
+                        targetPos.x != -1.f || targetPos.y != -1.f;
+                    const cv::Point2f hiddenPoint =
+                        havePredictedHidden ? targetPos : centerline.back();
+                    centerline.back() = hiddenPoint;
                     Tracking::TipCandidate hyp;
                     hyp.point  = hiddenPoint;
                     hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
@@ -2125,14 +2336,14 @@ void CenterlineWorker::doWorkNew()
                     // tightly self-coiled but had no visible hole in the
                     // mask. Punch a synthetic hole at the DT maximum and
                     // re-run the SelfCrossed skeleton-arc dispatch.
-                    if (refLength > 0.f &&
-                        arcLen(centerline) < 0.5f * refLength) {
+                    if (frameRefLength > 0.f &&
+                        arcLen(centerline) < 0.5f * frameRefLength) {
                         Tracking::DetectedBlob holeBlob;
                         if (addSyntheticHoleAtDTMax(blob, er.distTransform,
                                                      er.localBounds, holeBlob)) {
                             const Tracking::EndpointResult er2 =
                                 Tracking::detectEndpoints(
-                                    holeBlob, predictor, baseline, inMerge);
+                                    holeBlob, framePredictor, baseline, inMerge);
                             const cv::Point2f origin2(
                                 static_cast<float>(er2.localBounds.x),
                                 static_cast<float>(er2.localBounds.y));
@@ -2260,10 +2471,10 @@ void CenterlineWorker::doWorkNew()
             // a wrong orientation pick.
             const float curTurning = totalSignedTurningAngle(centerline);
             bool flipped = false;
-            if (prevState.valid &&
-                std::abs(prevState.turningAngle) > angleThreshold &&
+            if (framePrevState.valid &&
+                std::abs(framePrevState.turningAngle) > angleThreshold &&
                 std::abs(curTurning) > angleThreshold &&
-                curTurning * prevState.turningAngle < 0.f) {
+                curTurning * framePrevState.turningAngle < 0.f) {
                 std::reverse(centerline.begin(), centerline.end());
                 flipped = true;
                 std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
@@ -2301,17 +2512,23 @@ void CenterlineWorker::doWorkNew()
                     predictor.velHead = newH - predictor.lastHeadPos;
                 predictor.lastHeadPos = newH;
             }
-            if (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size())) {
-                const cv::Point2f newT = blob.tipCandidates[tIdx].point;
-                if (predictor.hasPrev)
-                    predictor.velTail = newT - predictor.lastTailPos;
-                predictor.lastTailPos = newT;
-            }
-            predictor.hasVelocity = predictor.hasPrev &&
-                                    (hIdx >= 0 || tIdx >= 0);
+	            if (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size())) {
+	                const cv::Point2f newT = blob.tipCandidates[tIdx].point;
+	                if (predictor.hasPrev)
+	                    predictor.velTail = newT - predictor.lastTailPos;
+	                predictor.lastTailPos = newT;
+	            }
+	            if (centerline.size() >= 2) {
+	                const cv::Point2f newC = centerline[centerline.size() / 2];
+	                if (predictor.hasPrev)
+	                    predictor.velCenter = newC - predictor.lastCenterPos;
+	                predictor.lastCenterPos = newC;
+	            }
+	            predictor.hasVelocity = predictor.hasPrev &&
+	                                    (hIdx >= 0 || tIdx >= 0 || centerline.size() >= 2);
             predictor.hasPrev = true;
-            if (refLength > 0.f)
-                predictor.refDistance = std::max(8.f, 0.5f * refLength);
+            if (frameRefLength > 0.f)
+                predictor.refDistance = std::max(8.f, 0.5f * frameRefLength);
 
             // CenterlineState carry for next frame's RHR check.
             prevState.points       = centerline;
@@ -2961,9 +3178,12 @@ static Tracking::HeadTailPredictor reconstructPredictor(
                    ? adj.tipCandidates[adj.assignedTailTipIdx].point
                    : cv::Point2f(-1.f, -1.f);
 
-    predictor.lastHeadPos = adjHead;
-    predictor.lastTailPos = adjTail;
-    predictor.hasPrev = (adjHead.x >= 0 || adjTail.x >= 0);
+	    predictor.lastHeadPos = adjHead;
+	    predictor.lastTailPos = adjTail;
+	    if (adj.centerlinePoints.size() >= 2) {
+	        predictor.lastCenterPos = adj.centerlinePoints[adj.centerlinePoints.size() / 2];
+	    }
+	    predictor.hasPrev = (adjHead.x >= 0 || adjTail.x >= 0);
 
     Tracking::DetectedBlob adj2;
     const int adj2Frame = adjFrame + (adjFrame < frameNumber ? -1 : 1);
@@ -2976,11 +3196,19 @@ static Tracking::HeadTailPredictor reconstructPredictor(
                          adj2.assignedTailTipIdx < (int)adj2.tipCandidates.size())
                         ? adj2.tipCandidates[adj2.assignedTailTipIdx].point
                         : cv::Point2f(-1.f, -1.f);
-        if (h2.x >= 0 && adjHead.x >= 0) predictor.velHead = adjHead - h2;
-        if (t2.x >= 0 && adjTail.x >= 0) predictor.velTail = adjTail - t2;
-        predictor.hasVelocity = (h2.x >= 0 && adjHead.x >= 0) ||
-                                (t2.x >= 0 && adjTail.x >= 0);
-    }
+	        if (h2.x >= 0 && adjHead.x >= 0) predictor.velHead = adjHead - h2;
+	        if (t2.x >= 0 && adjTail.x >= 0) predictor.velTail = adjTail - t2;
+	        const bool haveCenterVelocity =
+	            adj2.centerlinePoints.size() >= 2 && adj.centerlinePoints.size() >= 2;
+	        if (haveCenterVelocity) {
+	            const cv::Point2f c2 = adj2.centerlinePoints[adj2.centerlinePoints.size() / 2];
+	            const cv::Point2f c1 = adj.centerlinePoints[adj.centerlinePoints.size() / 2];
+	            predictor.velCenter = c1 - c2;
+	        }
+	        predictor.hasVelocity = (h2.x >= 0 && adjHead.x >= 0) ||
+	                                (t2.x >= 0 && adjTail.x >= 0) ||
+	                                haveCenterVelocity;
+	    }
 
     outNote = QString("predictor reconstructed from frame %1%2")
         .arg(adjFrame).arg(predictor.hasVelocity ? " (with velocity)" : "");
@@ -3032,6 +3260,20 @@ bool CenterlineWorker::exportProcessForFrame(
     const cv::Point2f predictedTail = predictor.hasVelocity
         ? predictor.lastTailPos + predictor.velTail
         : predictor.lastTailPos;
+    const bool hasPredictedCenter =
+        predictor.lastCenterPos.x != 0.f || predictor.lastCenterPos.y != 0.f;
+    cv::Point2f predictedCenter = predictor.hasVelocity
+        ? predictor.lastCenterPos + predictor.velCenter
+        : predictor.lastCenterPos;
+    cv::Point2f snappedHead = predictedHead;
+    cv::Point2f snappedTail = predictedTail;
+    cv::Point2f snappedCenter = predictedCenter;
+    nearestMaskPoint(blob, predictedHead, snappedHead);
+    nearestMaskPoint(blob, predictedTail, snappedTail);
+    if (hasPredictedCenter) {
+        nearestMaskPoint(blob, predictedCenter, snappedCenter);
+        predictedCenter = snappedCenter;
+    }
 
     const int nPts = std::max(4, snakeParams.nPoints);
     const float angleThreshold = static_cast<float>(
@@ -3040,6 +3282,7 @@ bool CenterlineWorker::exportProcessForFrame(
     // Recover the previous frame's turning angle from its stored centerline
     // so the RHR arc-picker in Stage 05 behaves like the live sweep.
     float prevTurningAngle = 0.f;
+    float prevFrameArcLength = 0.f;
     {
         const int adjFrame = frameNumber - 1;
         const auto adjBlobs = storage->getDetectedBlobsForFrame(adjFrame);
@@ -3048,6 +3291,7 @@ bool CenterlineWorker::exportProcessForFrame(
             if (pts.size() >= 3) {
                 std::vector<cv::Point2f> v(pts.begin(), pts.end());
                 prevTurningAngle = totalSignedTurningAngle(v);
+                prevFrameArcLength = arcLen(v);
             }
         }
     }
@@ -3070,10 +3314,16 @@ bool CenterlineWorker::exportProcessForFrame(
         << " hasVel=" << (predictor.hasVelocity ? "Y" : "N")
         << " lastHead=(" << predictor.lastHeadPos.x << "," << predictor.lastHeadPos.y << ")"
         << " lastTail=(" << predictor.lastTailPos.x << "," << predictor.lastTailPos.y << ")"
+        << " lastCenter=(" << predictor.lastCenterPos.x << "," << predictor.lastCenterPos.y << ")"
         << " velHead=(" << predictor.velHead.x << "," << predictor.velHead.y << ")"
-        << " velTail=(" << predictor.velTail.x << "," << predictor.velTail.y << ")\n";
+        << " velTail=(" << predictor.velTail.x << "," << predictor.velTail.y << ")"
+        << " velCenter=(" << predictor.velCenter.x << "," << predictor.velCenter.y << ")\n";
     log << "predicted: Hpred=(" << predictedHead.x << "," << predictedHead.y << ")"
-        << " Tpred=(" << predictedTail.x << "," << predictedTail.y << ")\n";
+        << " Tpred=(" << predictedTail.x << "," << predictedTail.y << ")"
+        << " Cpred=(" << predictedCenter.x << "," << predictedCenter.y << ")\n";
+    log << "snapped: Hmask=(" << snappedHead.x << "," << snappedHead.y << ")"
+        << " Tmask=(" << snappedTail.x << "," << snappedTail.y << ")"
+        << " Cmask=(" << snappedCenter.x << "," << snappedCenter.y << ")\n";
     log << "predictorSource: " << predictorNote << "\n";
     log << "baseline: kappaSamples=" << baseline.curvatureSamples
         << " (|kappa|=" << baseline.meanAbsCurvature << "+/-" << baseline.curvatureStdDev() << ")"
@@ -3230,19 +3480,28 @@ bool CenterlineWorker::exportProcessForFrame(
                               : ((int)i == er.tailIdx) ? "T" : "?";
             drawText(canvas, label, cv::Point(cp.x - 4, cp.y + 5));
         }
-        if (predictor.hasPrev) {
-            auto drawPred = [&](const cv::Point2f& last, const cv::Point2f& vel,
-                                const cv::Scalar& col, const char* label) {
-                if (last.x < 0) return;
-                cv::Point2f pred = predictor.hasVelocity ? (last + vel) : last;
-                cv::circle(canvas, worldToCanvas(pred, bounds), 5, col, 1, cv::LINE_AA);
-                drawText(canvas, label,
-                         worldToCanvas(pred, bounds) + cv::Point(7, -4), col);
-            };
+            if (predictor.hasPrev) {
+                auto drawPred = [&](const cv::Point2f& last, const cv::Point2f& vel,
+                                    const cv::Scalar& col, const char* label) {
+                    if (last.x < 0) return;
+                    cv::Point2f pred = predictor.hasVelocity ? (last + vel) : last;
+                    cv::Point2f snapped = pred;
+                    nearestMaskPoint(blob, pred, snapped);
+                    cv::circle(canvas, worldToCanvas(pred, bounds), 5, col, 1, cv::LINE_AA);
+                    cv::circle(canvas, worldToCanvas(snapped, bounds), 3, col, cv::FILLED);
+                    cv::line(canvas, worldToCanvas(pred, bounds),
+                             worldToCanvas(snapped, bounds), col, 1, cv::LINE_AA);
+                    drawText(canvas, label,
+                             worldToCanvas(snapped, bounds) + cv::Point(7, -4), col);
+                };
             drawPred(predictor.lastHeadPos, predictor.velHead,
                      cv::Scalar(0, 0, 200), "Hpred");
             drawPred(predictor.lastTailPos, predictor.velTail,
                      cv::Scalar(200, 80, 0), "Tpred");
+            if (hasPredictedCenter) {
+                drawPred(predictor.lastCenterPos, predictor.velCenter,
+                         cv::Scalar(0, 220, 220), "Cpred");
+            }
         }
         drawTitle(canvas, QString("04 head/tail  topo=%1")
                   .arg(Tracking::topologyStateToString(er.topology)));
@@ -3281,7 +3540,7 @@ bool CenterlineWorker::exportProcessForFrame(
     float refLength = 0.f;
     {
         const Tracking::TipFeatureBaseline bl = storage->getTipBaseline(wormId);
-        refLength = bl.meanBodyLength;
+        refLength = prevFrameArcLength > 0.f ? prevFrameArcLength : bl.meanBodyLength;
     }
 
     // Skeleton-arc helper: finds both arcs from known tip to target, picks
@@ -3304,6 +3563,10 @@ bool CenterlineWorker::exportProcessForFrame(
 
         const bool hasActualTarget = hasHead && hasTail;
         cv::Point2f targetPos(-1.f, -1.f);
+        cv::Point2f centerForRoute = predictedCenter;
+        if (hasPredictedCenter) {
+            nearestMaskPoint(dispBlob, centerForRoute, centerForRoute);
+        }
         if (hasActualTarget) {
             targetPos = dispBlob.tipCandidates[hasHead ? tIdx : hIdx].point;
             branchOut = "SelfCrossed / skeleton-arc RHR (D-2 two tips)";
@@ -3316,8 +3579,10 @@ bool CenterlineWorker::exportProcessForFrame(
                     ? predictor.lastHeadPos : predictor.lastTailPos;
                 const cv::Point2f& vel  = hiddenIsHead
                     ? predictor.velHead    : predictor.velTail;
-                if (last.x != 0.f || last.y != 0.f)
+                if (last.x != 0.f || last.y != 0.f) {
                     targetPos = predictor.hasVelocity ? (last + vel) : last;
+                    nearestMaskPoint(dispBlob, targetPos, targetPos);
+                }
             }
         }
 
@@ -3326,6 +3591,11 @@ bool CenterlineWorker::exportProcessForFrame(
             goalNode = nearestSkeletonNode(dispEr.skeleton, targetPos, dispOrigin);
             if (!detailOut.isEmpty()) detailOut += "  ";
             detailOut += QString("target=(%1,%2)").arg(targetPos.x,'f',1).arg(targetPos.y,'f',1);
+            if (hasPredictedCenter) {
+                detailOut += QString("  center=(%1,%2)")
+                             .arg(centerForRoute.x,'f',1)
+                             .arg(centerForRoute.y,'f',1);
+            }
         } else {
             goalNode = farthestSkeletonNode(dispEr.skeleton, srcNode);
             if (!detailOut.isEmpty()) detailOut += "  ";
@@ -3339,6 +3609,8 @@ bool CenterlineWorker::exportProcessForFrame(
             skeletonPathTowardPredictedHidden(dispEr.skeleton,
                                               srcNode,
                                               targetPos,
+                                              centerForRoute,
+                                              hasPredictedCenter,
                                               dispOrigin,
                                               prevTurningAngle,
                                               angleThreshold,
@@ -3363,11 +3635,28 @@ bool CenterlineWorker::exportProcessForFrame(
 
         if (hasHead && dispEr.tips[hIdx].extended) chosen.front() = dispEr.tips[hIdx].point;
         if (hasTail && dispEr.tips[tIdx].extended) chosen.back()  = dispEr.tips[tIdx].point;
+        if (!hasActualTarget && predictor.hasPrev) {
+            const cv::Point2f& knownLast = hasHead
+                ? predictor.lastHeadPos : predictor.lastTailPos;
+            const cv::Point2f& knownVel = hasHead
+                ? predictor.velHead : predictor.velTail;
+            if (knownLast.x != 0.f || knownLast.y != 0.f) {
+                cv::Point2f knownPred = predictor.hasVelocity
+                    ? (knownLast + knownVel)
+                    : knownLast;
+                nearestMaskPoint(dispBlob, knownPred, knownPred);
+                chosen.front() = knownPred;
+            }
+        }
 
         centerline = std::move(chosen);
 
         if (!hasActualTarget) {
-            const cv::Point2f hiddenPoint = centerline.back();
+            const bool havePredictedHidden =
+                targetPos.x != -1.f || targetPos.y != -1.f;
+            const cv::Point2f hiddenPoint =
+                havePredictedHidden ? targetPos : centerline.back();
+            centerline.back() = hiddenPoint;
             Tracking::TipCandidate hyp;
             hyp.point  = hiddenPoint;
             hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
@@ -3503,7 +3792,9 @@ bool CenterlineWorker::exportProcessForFrame(
     log << "  detail = " << step2Detail << "\n";
     log << "  prevTurningAngle = " << prevTurningAngle
         << " rad (thresh=" << angleThreshold << ")\n";
-    log << "  refLength (baseline mean) = " << refLength << " px\n";
+    log << "  refLength = " << refLength << " px ("
+        << (prevFrameArcLength > 0.f ? "previous frame arc length" : "baseline mean")
+        << ")\n";
     log << "  initial centerline points = " << centerline.size() << "\n\n";
 
     {

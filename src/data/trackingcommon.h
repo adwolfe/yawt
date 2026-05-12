@@ -522,9 +522,11 @@ struct HeadTailPredictor {
     bool        hasPrev      = false;     // Set once a successful assignment has been made.
     cv::Point2f lastHeadPos  = {0.f, 0.f};
     cv::Point2f lastTailPos  = {0.f, 0.f};
+    cv::Point2f lastCenterPos = {0.f, 0.f};
     bool        hasVelocity  = false;     // True after two consecutive successful assignments.
     cv::Point2f velHead      = {0.f, 0.f};
     cv::Point2f velTail      = {0.f, 0.f};
+    cv::Point2f velCenter    = {0.f, 0.f};
     float       refDistance  = 30.f;      // Normalising scale for the distance term (~½ body length).
 };
 
