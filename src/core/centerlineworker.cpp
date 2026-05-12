@@ -847,6 +847,308 @@ static std::vector<cv::Point2f> pickArcByRHR(
     return arcA;
 }
 
+static std::vector<cv::Point2f> nodesToWorldPath(const Tracking::SkeletonGraph& graph,
+                                                 const std::vector<int>& nodePath,
+                                                 const cv::Point2f& originOffset)
+{
+    std::vector<cv::Point2f> path;
+    path.reserve(nodePath.size());
+    for (int idx : nodePath) {
+        const cv::Point& p = graph.points[idx];
+        path.emplace_back(static_cast<float>(p.x) + originOffset.x,
+                          static_cast<float>(p.y) + originOffset.y);
+    }
+    return path;
+}
+
+static float nodePathLength(const Tracking::SkeletonGraph& graph,
+                            const std::vector<int>& nodePath,
+                            int endExclusive = -1)
+{
+    if (nodePath.size() < 2) return 0.f;
+    const int limit = endExclusive < 0
+        ? static_cast<int>(nodePath.size())
+        : std::min(endExclusive, static_cast<int>(nodePath.size()));
+    float len = 0.f;
+    for (int i = 1; i < limit; ++i) {
+        const cv::Point& a = graph.points[nodePath[i - 1]];
+        const cv::Point& b = graph.points[nodePath[i]];
+        const int dx = b.x - a.x;
+        const int dy = b.y - a.y;
+        len += (dx != 0 && dy != 0) ? std::sqrt(2.f) : 1.f;
+    }
+    return len;
+}
+
+static bool shortestNodePath(const Tracking::SkeletonGraph& graph,
+                             int startIdx,
+                             int goalIdx,
+                             std::vector<int>& outPath)
+{
+    outPath.clear();
+    const int n = static_cast<int>(graph.points.size());
+    if (startIdx < 0 || goalIdx < 0 || startIdx >= n || goalIdx >= n) return false;
+
+    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
+    std::vector<int> parent(n, -1);
+    dist[startIdx] = 0.0;
+
+    using Entry = std::pair<double, int>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+    pq.push({0.0, startIdx});
+
+    while (!pq.empty()) {
+        const auto [d, cur] = pq.top();
+        pq.pop();
+        if (d > dist[cur]) continue;
+        if (cur == goalIdx) break;
+        const cv::Point& cp = graph.points[cur];
+        for (int nb : graph.adjacency[cur]) {
+            const cv::Point& np = graph.points[nb];
+            const int dx = np.x - cp.x;
+            const int dy = np.y - cp.y;
+            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
+            const double nd = d + w;
+            if (nd < dist[nb]) {
+                dist[nb] = nd;
+                parent[nb] = cur;
+                pq.push({nd, nb});
+            }
+        }
+    }
+
+    if (!std::isfinite(dist[goalIdx])) return false;
+    for (int cur = goalIdx; cur != -1; cur = parent[cur]) {
+        outPath.push_back(cur);
+        if (cur == startIdx) break;
+    }
+    if (outPath.empty() || outPath.back() != startIdx) {
+        outPath.clear();
+        return false;
+    }
+    std::reverse(outPath.begin(), outPath.end());
+    return true;
+}
+
+static int nearestReachableJunction(const Tracking::SkeletonGraph& graph,
+                                    int srcIdx)
+{
+    const int n = static_cast<int>(graph.points.size());
+    if (srcIdx < 0 || srcIdx >= n) return -1;
+
+    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
+    dist[srcIdx] = 0.0;
+    using Entry = std::pair<double, int>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+    pq.push({0.0, srcIdx});
+
+    while (!pq.empty()) {
+        const auto [d, cur] = pq.top();
+        pq.pop();
+        if (d > dist[cur]) continue;
+        if (cur != srcIdx && static_cast<int>(graph.adjacency[cur].size()) >= 3) {
+            return cur;
+        }
+        const cv::Point& cp = graph.points[cur];
+        for (int nb : graph.adjacency[cur]) {
+            const cv::Point& np = graph.points[nb];
+            const int dx = np.x - cp.x;
+            const int dy = np.y - cp.y;
+            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
+            const double nd = d + w;
+            if (nd < dist[nb]) {
+                dist[nb] = nd;
+                pq.push({nd, nb});
+            }
+        }
+    }
+    return -1;
+}
+
+static std::vector<int> traceSkeletonBranch(const Tracking::SkeletonGraph& graph,
+                                            int junctionIdx,
+                                            int incomingIdx,
+                                            int firstBranchIdx)
+{
+    std::vector<int> path;
+    const int n = static_cast<int>(graph.points.size());
+    if (junctionIdx < 0 || incomingIdx < 0 || firstBranchIdx < 0 ||
+        junctionIdx >= n || incomingIdx >= n || firstBranchIdx >= n) {
+        return path;
+    }
+
+    std::vector<char> visited(static_cast<size_t>(n), 0);
+    path.push_back(junctionIdx);
+    path.push_back(firstBranchIdx);
+    visited[static_cast<size_t>(junctionIdx)] = 1;
+    visited[static_cast<size_t>(firstBranchIdx)] = 1;
+
+    int prev = junctionIdx;
+    int cur = firstBranchIdx;
+    while (true) {
+        std::vector<int> candidates;
+        for (int nb : graph.adjacency[cur]) {
+            if (nb == prev) continue;
+            if (nb == junctionIdx) {
+                path.push_back(nb);
+                return path;
+            }
+            if (!visited[static_cast<size_t>(nb)]) candidates.push_back(nb);
+        }
+        if (candidates.empty()) break;
+
+        const cv::Point& pp = graph.points[prev];
+        const cv::Point& cp = graph.points[cur];
+        const cv::Point2f inVec(static_cast<float>(cp.x - pp.x),
+                                static_cast<float>(cp.y - pp.y));
+        int best = candidates.front();
+        float bestDot = -std::numeric_limits<float>::max();
+        const float inNorm = std::max(1e-6f, std::hypot(inVec.x, inVec.y));
+        for (int nb : candidates) {
+            const cv::Point& np = graph.points[nb];
+            const cv::Point2f outVec(static_cast<float>(np.x - cp.x),
+                                     static_cast<float>(np.y - cp.y));
+            const float outNorm = std::max(1e-6f, std::hypot(outVec.x, outVec.y));
+            const float dot = (inVec.x * outVec.x + inVec.y * outVec.y) / (inNorm * outNorm);
+            if (dot > bestDot) {
+                bestDot = dot;
+                best = nb;
+            }
+        }
+
+        prev = cur;
+        cur = best;
+        path.push_back(cur);
+        visited[static_cast<size_t>(cur)] = 1;
+    }
+
+    return path;
+}
+
+// D-3 hidden-tip routing: walk from the known visible tip to the first
+// skeleton junction, choose the branch by the right-hand-rule sign inherited
+// from the previous frame, then continue along that branch until its distance
+// to the predicted hidden position is minimized. This avoids the failure mode
+// where Dijkstra terminates by the shortest route to the node nearest Tpred.
+static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& graph,
+                                              int srcIdx,
+                                              const cv::Point2f& predictedHidden,
+                                              const cv::Point2f& originOffset,
+                                              float prevTurningAngle,
+                                              float angleThreshold,
+                                              float refLength,
+                                              std::vector<cv::Point2f>& outPath)
+{
+    outPath.clear();
+    const int junctionIdx = nearestReachableJunction(graph, srcIdx);
+    if (junctionIdx < 0) return false;
+
+    std::vector<int> trunk;
+    if (!shortestNodePath(graph, srcIdx, junctionIdx, trunk) || trunk.size() < 2) {
+        return false;
+    }
+    const int incomingIdx = trunk[trunk.size() - 2];
+
+    struct BranchCandidate {
+        std::vector<int> nodes; // junction -> ...
+        int bestIndex = -1;
+        float minDistSq = std::numeric_limits<float>::max();
+        float signedTurn = 0.f;
+        float pathLen = 0.f;
+    };
+
+    std::vector<BranchCandidate> candidates;
+    const cv::Point& jp = graph.points[junctionIdx];
+    const cv::Point& ip = graph.points[incomingIdx];
+    const cv::Point2f incomingVec(static_cast<float>(jp.x - ip.x),
+                                  static_cast<float>(jp.y - ip.y));
+    for (int nb : graph.adjacency[junctionIdx]) {
+        if (nb == incomingIdx) continue;
+        BranchCandidate c;
+        c.nodes = traceSkeletonBranch(graph, junctionIdx, incomingIdx, nb);
+        if (c.nodes.size() < 2) continue;
+
+        const cv::Point& bp = graph.points[nb];
+        const cv::Point2f outgoingVec(static_cast<float>(bp.x - jp.x),
+                                      static_cast<float>(bp.y - jp.y));
+        c.signedTurn = incomingVec.x * outgoingVec.y - incomingVec.y * outgoingVec.x;
+
+        std::vector<float> cumulative(c.nodes.size(), 0.f);
+        for (int i = 1; i < static_cast<int>(c.nodes.size()); ++i) {
+            const cv::Point& a = graph.points[c.nodes[i - 1]];
+            const cv::Point& b = graph.points[c.nodes[i]];
+            const int sx = b.x - a.x;
+            const int sy = b.y - a.y;
+            cumulative[i] = cumulative[i - 1] +
+                ((sx != 0 && sy != 0) ? std::sqrt(2.f) : 1.f);
+        }
+
+        const float trunkLen = nodePathLength(graph, trunk);
+        const float minUsableLen = refLength > 0.f ? 0.75f * refLength : 0.f;
+        int bestLongEnoughIndex = -1;
+        float bestLongEnoughDistSq = std::numeric_limits<float>::max();
+        for (int i = 1; i < static_cast<int>(c.nodes.size()); ++i) {
+            const cv::Point& p = graph.points[c.nodes[i]];
+            const float wx = static_cast<float>(p.x) + originOffset.x;
+            const float wy = static_cast<float>(p.y) + originOffset.y;
+            const float dx = wx - predictedHidden.x;
+            const float dy = wy - predictedHidden.y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < c.minDistSq) {
+                c.minDistSq = d2;
+                c.bestIndex = i;
+            }
+            if (trunkLen + cumulative[i] >= minUsableLen &&
+                d2 < bestLongEnoughDistSq) {
+                bestLongEnoughDistSq = d2;
+                bestLongEnoughIndex = i;
+            }
+        }
+        if (bestLongEnoughIndex >= 1) {
+            c.bestIndex = bestLongEnoughIndex;
+            c.minDistSq = bestLongEnoughDistSq;
+        }
+        if (c.bestIndex < 1) continue;
+
+        std::vector<int> full = trunk;
+        full.insert(full.end(), c.nodes.begin() + 1, c.nodes.begin() + c.bestIndex + 1);
+        c.pathLen = nodePathLength(graph, full);
+        candidates.push_back(std::move(c));
+    }
+    if (candidates.empty()) return false;
+
+    const bool haveRhr =
+        std::abs(prevTurningAngle) > std::max(0.f, angleThreshold);
+    int bestCandidate = -1;
+    float bestScore = std::numeric_limits<float>::max();
+    for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+        const BranchCandidate& c = candidates[i];
+        float score = 0.f;
+        if (haveRhr) {
+            const bool signMatches = c.signedTurn * prevTurningAngle > 0.f;
+            score += signMatches ? 0.f : 1e6f;
+        }
+        if (refLength > 0.f) {
+            score += std::abs(c.pathLen - refLength);
+        } else {
+            score += c.minDistSq * 0.01f;
+        }
+        if (score < bestScore) {
+            bestScore = score;
+            bestCandidate = i;
+        }
+    }
+    if (bestCandidate < 0) return false;
+
+    const BranchCandidate& picked = candidates[bestCandidate];
+    std::vector<int> nodePath = trunk;
+    nodePath.insert(nodePath.end(),
+                    picked.nodes.begin() + 1,
+                    picked.nodes.begin() + picked.bestIndex + 1);
+    outPath = nodesToWorldPath(graph, nodePath, originOffset);
+    return outPath.size() >= 2;
+}
+
 // Build a copy of a blob with a synthetic circular hole punched at the
 // distance-transform maximum.  Used as a fallback when a Clean-topology
 // D-1 path is suspiciously short (worm tightly self-coiled but no hole
@@ -1743,11 +2045,25 @@ void CenterlineWorker::doWorkNew()
                 }
                 if (goalNode < 0 || goalNode == srcNode) return false;
 
-                // Enumerate both arcs; pick via RHR then length.
+                // D-3 with a predicted hidden target: do not shortest-path
+                // directly to the nearest Tpred/Hpred node. Walk to the
+                // junction, choose a branch by RHR, then stop where that
+                // branch comes closest to the prediction.
                 std::vector<cv::Point2f> arcA, arcB;
                 std::vector<cv::Point2f> chosen;
-                if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
-                                     dispOrigin, arcA, arcB)) {
+                if (!hasActualTarget &&
+                    (targetPos.x != -1.f || targetPos.y != -1.f) &&
+                    skeletonPathTowardPredictedHidden(dispEr.skeleton,
+                                                      srcNode,
+                                                      targetPos,
+                                                      dispOrigin,
+                                                      prevState.turningAngle,
+                                                      angleThreshold,
+                                                      refLength,
+                                                      chosen)) {
+                    // chosen populated by junction-guided dispatch
+                } else if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
+                                            dispOrigin, arcA, arcB)) {
                     chosen = pickArcByRHR(arcA, arcB,
                                           prevState.turningAngle,
                                           angleThreshold, refLength);
@@ -1768,13 +2084,17 @@ void CenterlineWorker::doWorkNew()
 
                 // D-3: register the arc terminus as the hypothesised hidden tip.
                 if (!hasActualTarget) {
+                    const cv::Point2f hiddenPoint = centerline.back();
                     Tracking::TipCandidate hyp;
-                    hyp.point  = centerline.back();
+                    hyp.point  = hiddenPoint;
                     hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
                     blob.tipCandidates.push_back(hyp);
                     const int newIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
                     if (hasHead) blob.assignedTailTipIdx = newIdx;
-                    else         blob.assignedHeadTipIdx = newIdx;
+                    else {
+                        blob.assignedHeadTipIdx = newIdx;
+                        std::reverse(centerline.begin(), centerline.end());
+                    }
                 }
                 return true;
             };
@@ -2706,6 +3026,12 @@ bool CenterlineWorker::exportProcessForFrame(
     Tracking::HeadTailPredictor predictor =
         reconstructPredictor(storage, wormId, frameNumber, predictorNote);
     const Tracking::TipFeatureBaseline baseline = storage->getTipBaseline(wormId);
+    const cv::Point2f predictedHead = predictor.hasVelocity
+        ? predictor.lastHeadPos + predictor.velHead
+        : predictor.lastHeadPos;
+    const cv::Point2f predictedTail = predictor.hasVelocity
+        ? predictor.lastTailPos + predictor.velTail
+        : predictor.lastTailPos;
 
     const int nPts = std::max(4, snakeParams.nPoints);
     const float angleThreshold = static_cast<float>(
@@ -2746,6 +3072,8 @@ bool CenterlineWorker::exportProcessForFrame(
         << " lastTail=(" << predictor.lastTailPos.x << "," << predictor.lastTailPos.y << ")"
         << " velHead=(" << predictor.velHead.x << "," << predictor.velHead.y << ")"
         << " velTail=(" << predictor.velTail.x << "," << predictor.velTail.y << ")\n";
+    log << "predicted: Hpred=(" << predictedHead.x << "," << predictedHead.y << ")"
+        << " Tpred=(" << predictedTail.x << "," << predictedTail.y << ")\n";
     log << "predictorSource: " << predictorNote << "\n";
     log << "baseline: kappaSamples=" << baseline.curvatureSamples
         << " (|kappa|=" << baseline.meanAbsCurvature << "+/-" << baseline.curvatureStdDev() << ")"
@@ -2982,6 +3310,7 @@ bool CenterlineWorker::exportProcessForFrame(
         } else {
             branchOut = "SelfCrossed / skeleton-arc RHR (D-3 one tip)";
             const bool hiddenIsHead = !hasHead;
+            detailOut = hiddenIsHead ? "hiddenRole=head" : "hiddenRole=tail";
             if (predictor.hasPrev) {
                 const cv::Point2f& last = hiddenIsHead
                     ? predictor.lastHeadPos : predictor.lastTailPos;
@@ -2995,16 +3324,29 @@ bool CenterlineWorker::exportProcessForFrame(
         int goalNode = -1;
         if (targetPos.x != -1.f || targetPos.y != -1.f) {
             goalNode = nearestSkeletonNode(dispEr.skeleton, targetPos, dispOrigin);
-            detailOut = QString("target=(%1,%2)").arg(targetPos.x,'f',1).arg(targetPos.y,'f',1);
+            if (!detailOut.isEmpty()) detailOut += "  ";
+            detailOut += QString("target=(%1,%2)").arg(targetPos.x,'f',1).arg(targetPos.y,'f',1);
         } else {
             goalNode = farthestSkeletonNode(dispEr.skeleton, srcNode);
-            detailOut = "target=farthest skeleton node (no predictor)";
+            if (!detailOut.isEmpty()) detailOut += "  ";
+            detailOut += "target=farthest skeleton node (no predictor)";
         }
         if (goalNode < 0 || goalNode == srcNode) return false;
 
         std::vector<cv::Point2f> arcA, arcB, chosen;
-        if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
-                             dispOrigin, arcA, arcB)) {
+        if (!hasActualTarget &&
+            (targetPos.x != -1.f || targetPos.y != -1.f) &&
+            skeletonPathTowardPredictedHidden(dispEr.skeleton,
+                                              srcNode,
+                                              targetPos,
+                                              dispOrigin,
+                                              prevTurningAngle,
+                                              angleThreshold,
+                                              refLength,
+                                              chosen)) {
+            detailOut += "  junction-guided D-3";
+        } else if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
+                                    dispOrigin, arcA, arcB)) {
             chosen = pickArcByRHR(arcA, arcB, prevTurningAngle,
                                    angleThreshold, refLength);
             detailOut += QString("  arcA_len=%1  arcB_len=%2  prevTurning=%3")
@@ -3025,16 +3367,25 @@ bool CenterlineWorker::exportProcessForFrame(
         centerline = std::move(chosen);
 
         if (!hasActualTarget) {
+            const cv::Point2f hiddenPoint = centerline.back();
             Tracking::TipCandidate hyp;
-            hyp.point  = centerline.back();
+            hyp.point  = hiddenPoint;
             hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
             blob.tipCandidates.push_back(hyp);
             const int newIdx = (int)blob.tipCandidates.size() - 1;
             if (hasHead) blob.assignedTailTipIdx = newIdx;
-            else         blob.assignedHeadTipIdx = newIdx;
+            else {
+                blob.assignedHeadTipIdx = newIdx;
+                std::reverse(centerline.begin(), centerline.end());
+            }
             detailOut += QString("  hiddenTip=(%1,%2)")
-                         .arg(centerline.back().x,'f',1)
-                         .arg(centerline.back().y,'f',1);
+                         .arg(hiddenPoint.x,'f',1)
+                         .arg(hiddenPoint.y,'f',1);
+            if (targetPos.x != -1.f || targetPos.y != -1.f) {
+                detailOut += QString("  hiddenToPred=%1  pathLen=%2")
+                             .arg(ptDist(hiddenPoint, targetPos),'f',1)
+                             .arg(arcLen(centerline),'f',1);
+            }
         }
         return true;
     };
