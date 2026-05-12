@@ -1321,6 +1321,12 @@ QToolButton#lastFrameButton {
               </widget>
              </item>
              <item>
+              <widget class="QPushButton" name="exportProcessButton">
+               <property name="text"><string>Export Process</string></property>
+               <property name="toolTip"><string>Export per-stage diagnostic images and a decision log for the currently selected worm on the current frame. Writes to &lt;dataDir&gt;/Debug/worm{id}_frame{n}/.</string></property>
+              </widget>
+             </item>
+             <item>
               <widget class="QCheckBox" name="showTipCandidatesCheck">
                <property name="text"><string>Show tip candidates (debug overlay)</string></property>
                <property name="toolTip"><string>Overlay per-frame candidate nose/tail points on each visible blob. Filled green circles = Zhang-Suen skeleton degree-1 endpoints. Hollow magenta squares = local maxima of outer-contour curvature. The downstream head/tail assignment step will consume these candidates instead of inheriting endpoints from the previous frame.</string></property>

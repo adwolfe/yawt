@@ -188,6 +188,47 @@ struct TipCandidate {
 };
 
 /**
+ * @brief Skeleton graph extracted from a binary worm mask.
+ *
+ * The skeleton is the Zhang-Suen 1-pixel-wide medial-axis representation;
+ * each foreground pixel is a graph node, connected to its 8-neighbour
+ * skeleton pixels (orthogonal weight 1, diagonal sqrt(2)). Endpoint indices
+ * are the degree-1 nodes — body tips when the topology is unobstructed.
+ *
+ * `indexImage` maps mask coords to graph index (-1 outside skeleton).
+ * Coordinates inside `points` and `indexImage` are LOCAL to the bounding
+ * box used to build the source mask; the caller adds the box origin when
+ * converting back to video coordinates.
+ */
+struct SkeletonGraph {
+    std::vector<cv::Point>        points;          // mask-local coords
+    std::vector<std::vector<int>> adjacency;
+    std::vector<int>              endpointIndices; // degree-1 nodes (post-prune)
+    cv::Mat                       indexImage;      // CV_32SC1: pixel -> index
+    cv::Mat                       skeleton;        // CV_8UC1, 0 or 255
+};
+
+/**
+ * @brief A high-confidence body tip — skeleton endpoint optionally extended
+ *        to the matching outer-contour curvature peak.
+ *
+ * `point` is the best-estimate world position used for downstream geodesic
+ * paths, snake pinning, and head/tail assignment. `skelPoint` is the raw
+ * skeleton degree-1 node mapped to the nearest outer contour point, in
+ * world coordinates (handy when the extension is disputed).
+ *
+ * `extended == true` iff `point` came from a curvature peak rather than the
+ * skeleton-endpoint contour snap.
+ */
+struct TrueTip {
+    cv::Point2f point;       // world coords; either curvature peak or skel pt
+    cv::Point2f skelPoint;   // world coords; raw skeleton degree-1 node
+    float       curvature = 0.f;
+    float       width     = 0.f;
+    bool        extended  = false;
+};
+
+/**
  * @brief Per-frame topology classification for a worm's blob.
  *
  * Independent of (but adjacent to) TrackPointQuality, which captures the
@@ -216,6 +257,32 @@ inline QString topologyStateToString(TopologyState s) {
     default:                         return QStringLiteral("Unknown");
     }
 }
+
+/**
+ * @brief Combined output of `detectEndpoints()`.
+ *
+ * Bundles the skeleton graph, distance transform, true tips, topology
+ * classification, and head/tail role assignment. Designed to be computed
+ * once per frame in the new centerline pipeline and reused for every
+ * downstream step (centerline build, snake refinement, predictor update).
+ *
+ * Coordinates: `tips`, `headIdx`, `tailIdx` index into `tips`; the `point`
+ * and `skelPoint` fields inside each TrueTip are in WORLD (video) coords.
+ * `skeleton` and `distTransform` are LOCAL to `localBounds`.
+ */
+struct EndpointResult {
+    SkeletonGraph        skeleton;
+    cv::Mat              distTransform;        // CV_32F, local coords
+    cv::Rect             localBounds;          // origin offset (LOCAL->WORLD)
+    std::vector<TrueTip> tips;                 // 0-2 entries (post-prune)
+    TopologyState        topology = TopologyState::Unknown;
+    int                  headIdx = -1;         // index into `tips`
+    int                  tailIdx = -1;         // index into `tips`
+
+    bool valid() const {
+        return !skeleton.points.empty() && !skeleton.skeleton.empty();
+    }
+};
 
 /**
  * @brief Running per-worm distribution of tip features, accumulated online.
@@ -547,6 +614,38 @@ const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
                                                    int   curvatureWindow      = 5,
                                                    float minCurvatureMagnitude = 0.08f,
                                                    float mergePlanarDistancePx = 4.0f);
+
+/**
+ * @brief Single-pass endpoint detector that supersedes findTipCandidates +
+ *        classifyTopology + assignHeadTail for the new centerline pipeline.
+ *
+ * Pure function: depends only on `blob.contourPoints`, `blob.holeContourPoints`,
+ * the per-worm `predictor` (head/tail tie-breaking), the per-worm `baseline`
+ * (curvature-peak threshold), and the caller-supplied `inMergeGroup` flag.
+ *
+ * Steps performed (see implementation in trackingcommon.cpp for detail):
+ *   (a) Build padded local mask + distance transform.
+ *   (b) Skeletonize -> assemble SkeletonGraph (points, adjacency, indexImage).
+ *   (c) Find degree-1 nodes; if more than 2, prune to the longest-path pair.
+ *   (d) Compute outer-contour signed curvature; find local maxima.
+ *   (e) For each surviving skeleton endpoint, search for a curvature peak
+ *       within DT(endpoint) * 1.5 pixels. If found, set `point` to the
+ *       strongest peak in range and mark `extended = true`. Otherwise
+ *       `point = skelPoint` (nearest contour point).
+ *   (f) Classify topology: holes present OR fewer than 2 tips -> SelfCrossed;
+ *       otherwise Clean. `inMergeGroup=true` overrides to Merged.
+ *   (g) Assign head/tail by minimum total predicted-distance, with velocity
+ *       extrapolation as tiebreak when the cost spread is < 10%.
+ *
+ * The renderer at videoloader.cpp keys on `tc.source`. The caller is
+ * expected to write each TrueTip back into `blob.tipCandidates` with
+ * `tc.source = SkeletonEndpoint`, regardless of `extended`, so the dots
+ * keep their familiar green-filled appearance.
+ */
+EndpointResult detectEndpoints(const DetectedBlob& blob,
+                               const HeadTailPredictor& predictor,
+                               const TipFeatureBaseline& baseline,
+                               bool inMergeGroup);
 
 /**
  * @brief Compute and store an ordered centerline for a detected blob from its contour.

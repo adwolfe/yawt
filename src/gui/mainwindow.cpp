@@ -32,6 +32,7 @@
 #include "analysisdialog.h"
 #include "trackingprogressdialog.h"
 #include "../core/appcontroller.h"
+#include "../core/centerlineworker.h"
 #include "trackingmanager.h"
 #include "trackingdatastorage.h"
 #include "version.h"
@@ -49,6 +50,7 @@
 #include <QIcon>
 #include <QMessageBox>
 #include <QDebug>
+#include <QApplication>
 #include <QDoubleSpinBox>
 #include <QButtonGroup> // For m_interactionModeButtonGroup
 #include <QSet>
@@ -797,6 +799,8 @@ void MainWindow::setupConnections() {
     // Debug tab — Rerun Centerline button
     connect(ui->rerunCenterlineButton, &QPushButton::clicked,
             this, &MainWindow::onRerunCenterlineClicked);
+    connect(ui->exportProcessButton, &QPushButton::clicked,
+            this, &MainWindow::onExportProcessClicked);
     if (m_appController) {
         connect(m_appController, &AppController::centerlineProgress,
                 this, &MainWindow::onDebugCenterlineProgress);
@@ -2374,6 +2378,78 @@ void MainWindow::onDebugCenterlineFinished()
                 edit->setPlainText(report);
             }
         }
+    }
+}
+
+void MainWindow::onExportProcessClicked()
+{
+    // Resolve the currently selected worm in the worm table.
+    int wormId = -1;
+    if (ui->wormTableView->selectionModel() && m_wormProxyModel && m_blobTableModel) {
+        const QModelIndexList sel =
+            ui->wormTableView->selectionModel()->selectedIndexes();
+        if (!sel.isEmpty()) {
+            const QModelIndex proxyIdx = m_wormProxyModel->index(sel.first().row(), 0);
+            const QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
+            if (srcIdx.isValid())
+                wormId = m_blobTableModel->getItem(srcIdx.row()).id;
+        }
+    }
+    if (wormId < 0) {
+        QMessageBox::information(this, "Export Process",
+            "Select a worm in the worm table first.");
+        return;
+    }
+
+    const int frame = ui->videoLoader ? ui->videoLoader->getCurrentFrameNumber() : -1;
+    if (frame < 0) {
+        QMessageBox::warning(this, "Export Process", "No current frame available.");
+        return;
+    }
+
+    const QString dataDir = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
+    if (dataDir.isEmpty()) {
+        QMessageBox::warning(this, "Export Process",
+            "No yawt data directory available. Load a video first.");
+        return;
+    }
+
+    // Same snake params the Rerun Centerline button uses.
+    Tracking::CenterlineSnakeParams params;
+    if (auto* g = ui->snakeDebugGroup)        params.enabled                   = g->isChecked();
+    if (auto* sb = ui->snakeAlphaSpin)        params.alpha                     = sb->value();
+    if (auto* sb = ui->snakeBetaSpin)         params.beta                      = sb->value();
+    if (auto* sb = ui->snakeLambdaSpin)       params.lambda                    = sb->value();
+    if (auto* sb = ui->snakeItersSpin)        params.iterations                = sb->value();
+    if (auto* sb = ui->snakeStepSpin)         params.stepSize                  = sb->value();
+    if (auto* sb = ui->snakeOrientThreshSpin) params.orientationAngleThreshold = sb->value();
+    if (auto* sb = ui->snakeNPointsSpin)      params.nPoints                   = sb->value();
+
+    const QString outDir = QDir(dataDir).absoluteFilePath(
+        QString("Debug/worm%1_frame%2").arg(wormId).arg(frame));
+    if (!QDir().mkpath(outDir)) {
+        QMessageBox::warning(this, "Export Process",
+            QString("Could not create output directory:\n%1").arg(outDir));
+        return;
+    }
+
+    ui->exportProcessButton->setEnabled(false);
+    ui->centerlineDebugStatusLabel->setText(
+        QString("Exporting worm %1 frame %2...").arg(wormId).arg(frame));
+    QApplication::processEvents();
+
+    QString err;
+    const bool ok = CenterlineWorker::exportProcessForFrame(
+        m_trackingDataStorage, wormId, frame, params, outDir, &err);
+
+    ui->exportProcessButton->setEnabled(true);
+    if (ok) {
+        ui->centerlineDebugStatusLabel->setText(
+            QString("Exported to %1").arg(outDir));
+    } else {
+        ui->centerlineDebugStatusLabel->setText(QString("Export failed: %1").arg(err));
+        QMessageBox::warning(this, "Export Process",
+            QString("Export failed: %1").arg(err));
     }
 }
 

@@ -2,6 +2,7 @@
 #define CENTERLINEWORKER_H
 
 #include <QObject>
+#include <QString>
 #include "../data/trackingdatastorage.h"
 #include "../data/trackingcommon.h"
 
@@ -32,6 +33,25 @@ public:
      */
     void setSnakeParams(const Tracking::CenterlineSnakeParams& params);
 
+    /**
+     * @brief Diagnostic: re-runs the per-frame centerline pipeline for one
+     *        (wormId, frameNumber) using the supplied snake params, and writes
+     *        per-stage visualisation images plus a decision log to outputDir.
+     *
+     * Reads from `storage` only; never writes back. Predictor state is
+     *  reconstructed from the worm's blob in the immediately adjacent frame
+     * (frameNumber-1 if available, otherwise frameNumber+1) so head/tail
+     * assignment behaves like the live sweep on that frame.
+     *
+     * @return true on success. On false, *outErrorMsg (if non-null) is filled.
+     */
+    static bool exportProcessForFrame(TrackingDataStorage* storage,
+                                      int wormId,
+                                      int frameNumber,
+                                      const Tracking::CenterlineSnakeParams& snakeParams,
+                                      const QString& outputDir,
+                                      QString* outErrorMsg = nullptr);
+
 public slots:
     void doWork();
 
@@ -41,6 +61,14 @@ signals:
     void failed(const QString& reason);
 
 private:
+    // The legacy 5-pass pipeline. Kept reachable behind a compile-time
+    // toggle in doWork() so the new 2-sweep pipeline (doWorkNew) can be
+    // A/B-tested against it during the rewrite.
+    void doWorkLegacy();
+
+    // The new 2-sweep / 5-step pipeline. See CENTERLINE_REWRITE_PLAN.md.
+    void doWorkNew();
+
     TrackingDataStorage* m_storage;
     Tracking::CenterlineSnakeParams m_snakeParams;
 };

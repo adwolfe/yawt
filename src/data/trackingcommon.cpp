@@ -585,6 +585,379 @@ const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
     return blob.tipCandidates;
 }
 
+// ── Single-pass endpoint detector (replaces find+classify+assign) ───────────
+//
+// One-pass replacement for findTipCandidates + classifyTopology + assignHeadTail
+// used by the new centerline pipeline (centerlineworker doWorkNew). Builds the
+// skeleton ONCE, derives every other downstream quantity from it.
+//
+// Design notes:
+//
+// * Curvature math + width probe are LIFTED FROM findTipCandidates so baseline
+//   samples accumulated by the new pipeline are commensurable with samples
+//   from any code path that still uses findTipCandidates.
+//
+// * Mask construction reuses buildCenterlineMask, which applies the same
+//   MORPH_CLOSE on ring blobs that findTipCandidates uses. Skeletons therefore
+//   match what users have been seeing in the green-dot overlay.
+//
+// * Endpoint pruning preserves the longest-path pair when more than two
+//   degree-1 nodes are present (skeleton noise spurs). Never drops below two
+//   if two existed; never drops the only one if only one exists.
+//
+// * Each surviving skeleton endpoint is "extended" to the strongest curvature
+//   peak within DT(endpoint) * 1.5 pixels (search radius scales with local
+//   body thickness). Strongest, not nearest — picking the nearest peak snaps
+//   onto body kinks for tightly-coiled worms.
+EndpointResult detectEndpoints(const DetectedBlob& blob,
+                               const HeadTailPredictor& predictor,
+                               const TipFeatureBaseline& baseline,
+                               bool inMergeGroup)
+{
+    EndpointResult r;
+
+    if (!blob.isValid) {
+        r.topology = TopologyState::Lost;
+        return r;
+    }
+    // Merged blobs still get their skeleton + tips harvested when possible —
+    // the topology label is set to Merged at the end. centerlineworker treats
+    // Merged as a no-op for centerline computation but the tip data is still
+    // useful for the renderer.
+    if (blob.contourPoints.size() < 8) {
+        r.topology = inMergeGroup ? TopologyState::Merged
+                                  : TopologyState::SelfCrossed;
+        return r;
+    }
+
+    // (a) ── Mask + DT ──────────────────────────────────────────────────────
+    cv::Mat mask;
+    r.localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) {
+        r.topology = inMergeGroup ? TopologyState::Merged
+                                  : TopologyState::SelfCrossed;
+        return r;
+    }
+    cv::distanceTransform(mask, r.distTransform, cv::DIST_L2, 3);
+
+    const cv::Point2f originOffset(static_cast<float>(r.localBounds.x),
+                                   static_cast<float>(r.localBounds.y));
+
+    // (b) ── Skeleton + adjacency + indexImage ──────────────────────────────
+    // Identical procedure to extractCenterlineFromMask so the resulting graph
+    // matches what the legacy centerline path produces.
+    cv::Mat skel = skeletonizeBinaryMask(mask);
+    if (cv::countNonZero(skel) < 2) {
+        r.topology = inMergeGroup ? TopologyState::Merged
+                                  : TopologyState::SelfCrossed;
+        return r;
+    }
+    r.skeleton.skeleton   = skel;
+    r.skeleton.indexImage = cv::Mat(skel.size(), CV_32SC1, cv::Scalar(-1));
+
+    for (int row = 0; row < skel.rows; ++row) {
+        const uchar* rowPtr = skel.ptr<uchar>(row);
+        int* indexRow = r.skeleton.indexImage.ptr<int>(row);
+        for (int col = 0; col < skel.cols; ++col) {
+            if (rowPtr[col] == 0) continue;
+            indexRow[col] = static_cast<int>(r.skeleton.points.size());
+            r.skeleton.points.emplace_back(col, row);
+        }
+    }
+    if (r.skeleton.points.size() < 2) {
+        r.topology = inMergeGroup ? TopologyState::Merged
+                                  : TopologyState::SelfCrossed;
+        return r;
+    }
+
+    r.skeleton.adjacency.assign(r.skeleton.points.size(), {});
+    std::vector<int> rawEndpoints;
+    rawEndpoints.reserve(r.skeleton.points.size());
+    for (int idx = 0; idx < static_cast<int>(r.skeleton.points.size()); ++idx) {
+        const cv::Point& p = r.skeleton.points[idx];
+        int degree = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                const int nx = p.x + dx, ny = p.y + dy;
+                if (nx < 0 || ny < 0 ||
+                    nx >= r.skeleton.indexImage.cols ||
+                    ny >= r.skeleton.indexImage.rows) continue;
+                const int neigh = r.skeleton.indexImage.at<int>(ny, nx);
+                if (neigh < 0) continue;
+                r.skeleton.adjacency[idx].push_back(neigh);
+                ++degree;
+            }
+        }
+        if (degree == 1) rawEndpoints.push_back(idx);
+    }
+
+    // (c) ── Prune to ≤ 2 endpoints (longest-path pair) ─────────────────────
+    int rawEndpointCount = static_cast<int>(rawEndpoints.size());
+    if (rawEndpoints.size() <= 2) {
+        r.skeleton.endpointIndices = rawEndpoints;
+    } else {
+        int bestA = rawEndpoints[0];
+        int bestB = rawEndpoints[1];
+        double bestDist = -1.0;
+        for (int ep : rawEndpoints) {
+            GraphSearchResult sr = dijkstraSkeleton(
+                r.skeleton.points, r.skeleton.adjacency, ep);
+            for (int other : rawEndpoints) {
+                if (other == ep) continue;
+                const double d = sr.distances[other];
+                if (std::isfinite(d) && d > bestDist) {
+                    bestDist = d;
+                    bestA = ep;
+                    bestB = other;
+                }
+            }
+        }
+        r.skeleton.endpointIndices = {bestA, bestB};
+    }
+
+    // (d) ── Outer-contour signed curvature + local maxima ─────────────────
+    // Lifted verbatim from findTipCandidates so peak positions and magnitudes
+    // are commensurable across the two code paths.
+    const std::vector<cv::Point>& contour = blob.contourPoints;
+    const int nContour = static_cast<int>(contour.size());
+    std::vector<cv::Point2f> contourLocal;
+    contourLocal.reserve(nContour);
+    for (const cv::Point& p : contour) {
+        contourLocal.emplace_back(static_cast<float>(p.x - r.localBounds.x),
+                                  static_cast<float>(p.y - r.localBounds.y));
+    }
+
+    constexpr int kCurvatureWindow = 5;
+    const int k = std::max(2, kCurvatureWindow);
+    std::vector<float> curvature(nContour, 0.f);
+    for (int i = 0; i < nContour; ++i) {
+        const cv::Point2f& a = contourLocal[(i - k + nContour) % nContour];
+        const cv::Point2f& b = contourLocal[i];
+        const cv::Point2f& c = contourLocal[(i + k) % nContour];
+        const cv::Point2f v1 = b - a;
+        const cv::Point2f v2 = c - b;
+        const float cross = v1.x * v2.y - v1.y * v2.x;
+        const float dot   = v1.x * v2.x + v1.y * v2.y;
+        const float angle = std::atan2(cross, dot);
+        const float arc   = 0.5f * (std::hypot(v1.x, v1.y) + std::hypot(v2.x, v2.y));
+        curvature[i] = (arc > 1e-3f) ? (angle / arc) : 0.f;
+    }
+
+    // Curvature peak threshold: scaled by baseline if reliable, else default.
+    const float curvFloor = baseline.isReliable()
+        ? std::max(0.5f * baseline.meanAbsCurvature, 0.04f)
+        : 0.08f;
+
+    std::vector<int> curvaturePeakIdx;
+    curvaturePeakIdx.reserve(8);
+    for (int i = 0; i < nContour; ++i) {
+        const float mag = std::abs(curvature[i]);
+        if (mag < curvFloor) continue;
+        bool isLocalMax = true;
+        for (int d = -k; d <= k; ++d) {
+            if (d == 0) continue;
+            const int j = (i + d + nContour) % nContour;
+            if (std::abs(curvature[j]) > mag) { isLocalMax = false; break; }
+        }
+        if (isLocalMax) curvaturePeakIdx.push_back(i);
+    }
+
+    // ── Width probe (lifted from findTipCandidates) ────────────────────────
+    auto probeDT = [&](const cv::Point2f& origin, const cv::Point2f& dir, float depth) -> float {
+        const int px = std::clamp(static_cast<int>(std::round(origin.x + dir.x * depth)),
+                                  0, r.distTransform.cols - 1);
+        const int py = std::clamp(static_cast<int>(std::round(origin.y + dir.y * depth)),
+                                  0, r.distTransform.rows - 1);
+        return r.distTransform.at<float>(py, px);
+    };
+
+    auto widthAt = [&](const cv::Point2f& tipLocal, int contourIdx) -> float {
+        const int nC = static_cast<int>(contourLocal.size());
+        if (nC < 4) return 0.f;
+        const int tangentK = 3;
+        const cv::Point2f& a = contourLocal[(contourIdx - tangentK + nC) % nC];
+        const cv::Point2f& c = contourLocal[(contourIdx + tangentK) % nC];
+        cv::Point2f tangent = c - a;
+        const float tNorm = std::hypot(tangent.x, tangent.y);
+        if (tNorm < 1e-3f) return 0.f;
+        tangent *= 1.f / tNorm;
+        const cv::Point2f perpA(-tangent.y,  tangent.x);
+        const cv::Point2f perpB( tangent.y, -tangent.x);
+        const float dtA = probeDT(tipLocal, perpA, 1.5f);
+        const float dtB = probeDT(tipLocal, perpB, 1.5f);
+        if (dtA < 0.5f && dtB < 0.5f) return 0.f;
+        const cv::Point2f inward = (dtA >= dtB) ? perpA : perpB;
+        return 2.f * probeDT(tipLocal, inward, 3.f);
+    };
+
+    // ── nearest contour idx to a local-coords point ────────────────────────
+    auto nearestContourIdx = [&](const cv::Point2f& q) -> int {
+        int bestIdx = -1;
+        float bestDistSq = std::numeric_limits<float>::max();
+        for (int i = 0; i < nContour; ++i) {
+            const cv::Point2f d = contourLocal[i] - q;
+            const float dsq = d.x * d.x + d.y * d.y;
+            if (dsq < bestDistSq) { bestDistSq = dsq; bestIdx = i; }
+        }
+        return bestIdx;
+    };
+
+    // (e) ── Extend each skeleton endpoint to the strongest reachable peak ──
+    for (int epIdx : r.skeleton.endpointIndices) {
+        const cv::Point& epLocal = r.skeleton.points[epIdx];
+        const cv::Point2f epLocalF(static_cast<float>(epLocal.x),
+                                   static_cast<float>(epLocal.y));
+        const cv::Point2f epWorld(epLocalF.x + originOffset.x,
+                                  epLocalF.y + originOffset.y);
+
+        // Skeleton endpoint snapped to nearest outer-contour point.
+        const int snapIdx = nearestContourIdx(epLocalF);
+        cv::Point2f snapLocal(0.f, 0.f);
+        cv::Point2f snapWorld = epWorld;
+        if (snapIdx >= 0) {
+            snapLocal = contourLocal[snapIdx];
+            snapWorld = cv::Point2f(snapLocal.x + originOffset.x,
+                                    snapLocal.y + originOffset.y);
+        }
+
+        // Search radius scales with local body half-width at the endpoint.
+        const float dtAtEp = r.distTransform.at<float>(epLocal.y, epLocal.x);
+        const float searchR = std::max(dtAtEp * 1.5f, 4.0f);
+        const float searchRSq = searchR * searchR;
+
+        // Find the strongest curvature peak within `searchR` of the
+        // skeleton-endpoint contour-snap point. "Strongest" = max |curvature|.
+        int bestPeak = -1;
+        float bestMag = -1.f;
+        for (int peakIdx : curvaturePeakIdx) {
+            const cv::Point2f& peakLocal = contourLocal[peakIdx];
+            const cv::Point2f d = peakLocal - snapLocal;
+            const float dsq = d.x * d.x + d.y * d.y;
+            if (dsq > searchRSq) continue;
+            const float mag = std::abs(curvature[peakIdx]);
+            if (mag > bestMag) {
+                bestMag = mag;
+                bestPeak = peakIdx;
+            }
+        }
+
+        TrueTip t;
+        t.skelPoint = snapWorld;
+        if (bestPeak >= 0) {
+            const cv::Point2f peakLocal = contourLocal[bestPeak];
+            t.point     = cv::Point2f(peakLocal.x + originOffset.x,
+                                      peakLocal.y + originOffset.y);
+            t.curvature = curvature[bestPeak];
+            t.width     = widthAt(peakLocal, bestPeak);
+            t.extended  = true;
+        } else {
+            t.point     = snapWorld;
+            t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
+            t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
+            t.extended  = false;
+        }
+        r.tips.push_back(t);
+    }
+
+    // (f) ── Topology classification ───────────────────────────────────────
+    if (inMergeGroup) {
+        r.topology = TopologyState::Merged;
+    } else {
+        const bool hasRing = !blob.holeContourPoints.empty();
+        r.topology = (hasRing || r.tips.size() < 2)
+                         ? TopologyState::SelfCrossed
+                         : TopologyState::Clean;
+    }
+
+    // (g) ── Head/tail assignment ──────────────────────────────────────────
+    // Distance-only assignment, with velocity-extrapolated tiebreak when the
+    // 2-tip cost spread is < 10%. Predictor-less (keyframe) calls return
+    // (-1, -1); the caller bootstraps from the centerline orientation.
+    auto distSq = [](const cv::Point2f& a, const cv::Point2f& b) -> float {
+        const cv::Point2f d = a - b;
+        return d.x * d.x + d.y * d.y;
+    };
+
+    if (r.tips.empty() || !predictor.hasPrev) {
+        // Nothing to do — caller handles bootstrap.
+    } else {
+        const cv::Point2f predHead = predictor.hasVelocity
+            ? predictor.lastHeadPos + predictor.velHead
+            : predictor.lastHeadPos;
+        const cv::Point2f predTail = predictor.hasVelocity
+            ? predictor.lastTailPos + predictor.velTail
+            : predictor.lastTailPos;
+
+        if (r.tips.size() == 1) {
+            // One visible tip — assign to whichever role's predicted point
+            // is closer. The other role stays -1 so D-3 can fill it.
+            const float dH = distSq(r.tips[0].point, predHead);
+            const float dT = distSq(r.tips[0].point, predTail);
+            if (dH <= dT) r.headIdx = 0;
+            else          r.tailIdx = 0;
+        } else {
+            // Two tips — minimum-cost ordered assignment.
+            const float c00 = distSq(r.tips[0].point, predHead) +
+                              distSq(r.tips[1].point, predTail);
+            const float c01 = distSq(r.tips[1].point, predHead) +
+                              distSq(r.tips[0].point, predTail);
+            const float winner = std::min(c00, c01);
+            const float loser  = std::max(c00, c01);
+            const bool spreadIsTight = (winner > 0.f) &&
+                                       ((loser - winner) / winner < 0.10f);
+
+            int headPick = (c00 <= c01) ? 0 : 1;
+            int tailPick = (c00 <= c01) ? 1 : 0;
+
+            // Velocity-extrapolated tiebreak for tight spreads.
+            if (spreadIsTight && predictor.hasVelocity) {
+                const cv::Point2f extrapHead = predictor.lastHeadPos +
+                                               2.f * predictor.velHead;
+                const cv::Point2f extrapTail = predictor.lastTailPos +
+                                               2.f * predictor.velTail;
+                const float c00x = distSq(r.tips[0].point, extrapHead) +
+                                   distSq(r.tips[1].point, extrapTail);
+                const float c01x = distSq(r.tips[1].point, extrapHead) +
+                                   distSq(r.tips[0].point, extrapTail);
+                if (c00x <= c01x) { headPick = 0; tailPick = 1; }
+                else              { headPick = 1; tailPick = 0; }
+            }
+
+            r.headIdx = headPick;
+            r.tailIdx = tailPick;
+        }
+    }
+
+    // ── Debug log ───────────────────────────────────────────────────────────
+    if (lcDataCommon().isDebugEnabled()) {
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "detectEndpoints: rawEnds=%d  prunedEnds=%d  tips=%d  peaks=%d  "
+            "topo=%s  head=%d  tail=%d",
+            rawEndpointCount,
+            static_cast<int>(r.skeleton.endpointIndices.size()),
+            static_cast<int>(r.tips.size()),
+            static_cast<int>(curvaturePeakIdx.size()),
+            qUtf8Printable(topologyStateToString(r.topology)),
+            r.headIdx, r.tailIdx);
+        for (size_t i = 0; i < r.tips.size(); ++i) {
+            const TrueTip& t = r.tips[i];
+            YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+                "  tip[%zu] %s  point=(%.1f,%.1f)  skel=(%.1f,%.1f)  "
+                "k=%+.4f  w=%.2f",
+                i, t.extended ? "ext " : "skel",
+                static_cast<double>(t.point.x),
+                static_cast<double>(t.point.y),
+                static_cast<double>(t.skelPoint.x),
+                static_cast<double>(t.skelPoint.y),
+                static_cast<double>(t.curvature),
+                static_cast<double>(t.width));
+        }
+    }
+
+    return r;
+}
+
 // ── Topology classification (Phase C.2) ─────────────────────────────────────
 //
 // Per-frame geometric classification of a worm's blob. Independent of the

@@ -112,6 +112,9 @@ public slots:
     void onDebugCenterlineProgress(int percentage);
     // Debug tab: called when a rerun centerline pass finishes.
     void onDebugCenterlineFinished();
+    // Debug tab: export per-stage diagnostic images + log for the currently
+    // selected worm at the current frame.
+    void onExportProcessClicked();
 
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();
