@@ -116,6 +116,41 @@ static float totalSignedTurningAngle(const std::vector<cv::Point2f>& pts)
     return total;
 }
 
+static float tangentCorrespondenceScore(const std::vector<cv::Point2f>& previous,
+                                        const std::vector<cv::Point2f>& candidate,
+                                        int nPoints)
+{
+    if (previous.size() < 2 || candidate.size() < 2 || nPoints < 2) {
+        return 0.f;
+    }
+
+    std::vector<cv::Point2f> prev = previous;
+    std::vector<cv::Point2f> cand = candidate;
+    if (static_cast<int>(prev.size()) != nPoints) prev = resample(prev, nPoints);
+    if (static_cast<int>(cand.size()) != nPoints) cand = resample(cand, nPoints);
+    if (prev.size() < 2 || cand.size() < 2) {
+        return 0.f;
+    }
+
+    const int n = std::min(static_cast<int>(prev.size()),
+                           static_cast<int>(cand.size()));
+    float score = 0.f;
+    int samples = 0;
+    for (int i = 1; i < n; ++i) {
+        const cv::Point2f p = prev[i] - prev[i - 1];
+        const cv::Point2f c = cand[i] - cand[i - 1];
+        const float pLen = std::hypot(p.x, p.y);
+        const float cLen = std::hypot(c.x, c.y);
+        if (pLen < 1e-6f || cLen < 1e-6f) {
+            continue;
+        }
+        const float dot = (p.x * c.x + p.y * c.y) / (pLen * cLen);
+        score += 1.f - std::clamp(dot, -1.f, 1.f);
+        ++samples;
+    }
+    return samples > 0 ? score / static_cast<float>(samples) : 0.f;
+}
+
 static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
 {
     return cv::Point2f(static_cast<float>(blob.centroid.x()),
@@ -199,8 +234,12 @@ static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
                                        const Tracking::DetectedBlob& previous,
                                        const cv::Point2f& hiddenLast,
                                        const cv::Point2f& velocityPrediction,
-                                       cv::Point2f& outCue)
+                                       cv::Point2f& outCue,
+                                       int* outTotalArea = nullptr,
+                                       int* outSelectedArea = nullptr)
 {
+    if (outTotalArea) *outTotalArea = 0;
+    if (outSelectedArea) *outSelectedArea = 0;
     if (current.contourPoints.empty() || previous.contourPoints.empty() ||
         hiddenLast.x < 0.f) {
         return false;
@@ -226,6 +265,9 @@ static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
     cv::bitwise_not(currentMask, inverseCurrent);
     cv::Mat vacatedMask;
     cv::bitwise_and(previousMask, inverseCurrent, vacatedMask);
+    if (outTotalArea) {
+        *outTotalArea = cv::countNonZero(vacatedMask);
+    }
 
     cv::Mat labels;
     cv::Mat stats;
@@ -260,6 +302,9 @@ static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
     if (bestLabel < 0) {
         return false;
     }
+    if (outSelectedArea) {
+        *outSelectedArea = stats.at<int>(bestLabel, cv::CC_STAT_AREA);
+    }
 
     cv::Point2f weightedCenter(0.f, 0.f);
     float totalWeight = 0.f;
@@ -289,6 +334,8 @@ struct HiddenTipTarget {
     cv::Point2f target = {-1.f, -1.f};
     cv::Point2f velocityTarget = {-1.f, -1.f};
     cv::Point2f maskCue = {-1.f, -1.f};
+    int maskDiffArea = 0;
+    int selectedMaskDiffArea = 0;
     bool hasTarget = false;
     bool hasMaskCue = false;
 };
@@ -313,7 +360,9 @@ static HiddenTipTarget predictHiddenTipTarget(const Tracking::DetectedBlob& curr
                                    *previous,
                                    last,
                                    result.velocityTarget,
-                                   result.maskCue)) {
+                                   result.maskCue,
+                                   &result.maskDiffArea,
+                                   &result.selectedMaskDiffArea)) {
         constexpr float kMaskCueWeight = 0.75f;
         result.target = kMaskCueWeight * result.maskCue +
                         (1.f - kMaskCueWeight) * result.velocityTarget;
@@ -734,6 +783,411 @@ static int nearestReachableJunction(const Tracking::SkeletonGraph& graph,
     return -1;
 }
 
+static bool isJunctionNode(const Tracking::SkeletonGraph& graph, int idx)
+{
+    return idx >= 0 && idx < static_cast<int>(graph.adjacency.size()) &&
+           static_cast<int>(graph.adjacency[idx].size()) >= 3;
+}
+
+struct JunctionPort {
+    int clusterNode = -1;
+    int outsideNode = -1;
+};
+
+struct JunctionCluster {
+    int id = -1;
+    std::vector<int> nodes;
+    std::vector<char> contains;
+};
+
+struct LoopReturnPath {
+    std::vector<int> nodes; // cluster port node -> outside path -> return cluster node
+    float length = 0.f;
+};
+
+struct JunctionSelection {
+    bool valid = false;
+    bool fallbackUsed = false;
+    int clusterCount = 0;
+    int selectedCluster = -1;
+    int junctionIdx = -1;
+    int incomingIdx = -1;
+    std::vector<int> trunk;
+    JunctionCluster cluster;
+    QStringList diagnostics;
+};
+
+static std::vector<JunctionCluster> findJunctionClusters(const Tracking::SkeletonGraph& graph)
+{
+    const int n = static_cast<int>(graph.points.size());
+    std::vector<JunctionCluster> clusters;
+    std::vector<char> visited(static_cast<size_t>(n), 0);
+
+    for (int i = 0; i < n; ++i) {
+        if (visited[static_cast<size_t>(i)] || !isJunctionNode(graph, i)) {
+            continue;
+        }
+
+        JunctionCluster cluster;
+        cluster.id = static_cast<int>(clusters.size());
+        cluster.contains.assign(static_cast<size_t>(n), 0);
+
+        std::queue<int> q;
+        q.push(i);
+        visited[static_cast<size_t>(i)] = 1;
+        while (!q.empty()) {
+            const int cur = q.front();
+            q.pop();
+            cluster.nodes.push_back(cur);
+            cluster.contains[static_cast<size_t>(cur)] = 1;
+
+            for (int nb : graph.adjacency[cur]) {
+                if (visited[static_cast<size_t>(nb)] || !isJunctionNode(graph, nb)) {
+                    continue;
+                }
+                visited[static_cast<size_t>(nb)] = 1;
+                q.push(nb);
+            }
+        }
+        clusters.push_back(std::move(cluster));
+    }
+
+    return clusters;
+}
+
+static std::vector<JunctionPort> clusterPorts(const Tracking::SkeletonGraph& graph,
+                                              const JunctionCluster& cluster)
+{
+    std::vector<JunctionPort> ports;
+    for (int node : cluster.nodes) {
+        for (int nb : graph.adjacency[node]) {
+            if (cluster.contains[static_cast<size_t>(nb)]) {
+                continue;
+            }
+            const auto duplicate = std::find_if(
+                ports.begin(), ports.end(),
+                [&](const JunctionPort& p) {
+                    return p.clusterNode == node && p.outsideNode == nb;
+                });
+            if (duplicate == ports.end()) {
+                ports.push_back({node, nb});
+            }
+        }
+    }
+    return ports;
+}
+
+static bool shortestPathToCluster(const Tracking::SkeletonGraph& graph,
+                                  int srcIdx,
+                                  const JunctionCluster& cluster,
+                                  std::vector<int>& outPath)
+{
+    outPath.clear();
+    const int n = static_cast<int>(graph.points.size());
+    if (srcIdx < 0 || srcIdx >= n || cluster.nodes.empty()) {
+        return false;
+    }
+
+    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
+    std::vector<int> parent(n, -1);
+    dist[srcIdx] = 0.0;
+    using Entry = std::pair<double, int>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+    pq.push({0.0, srcIdx});
+
+    int goal = -1;
+    while (!pq.empty()) {
+        const auto [d, cur] = pq.top();
+        pq.pop();
+        if (d > dist[cur]) continue;
+        if (cur != srcIdx && cluster.contains[static_cast<size_t>(cur)]) {
+            goal = cur;
+            break;
+        }
+        const cv::Point& cp = graph.points[cur];
+        for (int nb : graph.adjacency[cur]) {
+            const cv::Point& np = graph.points[nb];
+            const int dx = np.x - cp.x;
+            const int dy = np.y - cp.y;
+            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
+            const double nd = d + w;
+            if (nd < dist[nb]) {
+                dist[nb] = nd;
+                parent[nb] = cur;
+                pq.push({nd, nb});
+            }
+        }
+    }
+    if (goal < 0) {
+        return false;
+    }
+
+    for (int cur = goal; cur != -1; cur = parent[cur]) {
+        outPath.push_back(cur);
+        if (cur == srcIdx) break;
+    }
+    if (outPath.empty() || outPath.back() != srcIdx) {
+        outPath.clear();
+        return false;
+    }
+    std::reverse(outPath.begin(), outPath.end());
+    return outPath.size() >= 2;
+}
+
+static std::vector<int> clusterInternalPath(const Tracking::SkeletonGraph& graph,
+                                            const JunctionCluster& cluster,
+                                            int startNode,
+                                            int goalNode)
+{
+    if (startNode == goalNode) {
+        return {startNode};
+    }
+    const int n = static_cast<int>(graph.points.size());
+    if (startNode < 0 || goalNode < 0 || startNode >= n || goalNode >= n ||
+        !cluster.contains[static_cast<size_t>(startNode)] ||
+        !cluster.contains[static_cast<size_t>(goalNode)]) {
+        return {};
+    }
+
+    std::vector<int> parent(static_cast<size_t>(n), -1);
+    std::queue<int> q;
+    q.push(startNode);
+    parent[static_cast<size_t>(startNode)] = startNode;
+    while (!q.empty()) {
+        const int cur = q.front();
+        q.pop();
+        if (cur == goalNode) break;
+        for (int nb : graph.adjacency[cur]) {
+            if (!cluster.contains[static_cast<size_t>(nb)] ||
+                parent[static_cast<size_t>(nb)] >= 0) {
+                continue;
+            }
+            parent[static_cast<size_t>(nb)] = cur;
+            q.push(nb);
+        }
+    }
+    if (parent[static_cast<size_t>(goalNode)] < 0) {
+        return {};
+    }
+
+    std::vector<int> path;
+    for (int cur = goalNode; cur != startNode; cur = parent[static_cast<size_t>(cur)]) {
+        path.push_back(cur);
+    }
+    path.push_back(startNode);
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+static bool findLoopReturnPath(const Tracking::SkeletonGraph& graph,
+                               const JunctionCluster& cluster,
+                               const JunctionPort& startPort,
+                               LoopReturnPath& out)
+{
+    out = LoopReturnPath{};
+    const int n = static_cast<int>(graph.points.size());
+    if (startPort.clusterNode < 0 || startPort.outsideNode < 0 ||
+        startPort.clusterNode >= n || startPort.outsideNode >= n) {
+        return false;
+    }
+
+    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
+    std::vector<int> parent(n, -1);
+    dist[startPort.outsideNode] = 0.0;
+    using Entry = std::pair<double, int>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
+    pq.push({0.0, startPort.outsideNode});
+
+    int returnNode = -1;
+    while (!pq.empty()) {
+        const auto [d, cur] = pq.top();
+        pq.pop();
+        if (d > dist[cur]) continue;
+
+        const cv::Point& cp = graph.points[cur];
+        for (int nb : graph.adjacency[cur]) {
+            const bool immediateBacktrack =
+                cur == startPort.outsideNode && nb == startPort.clusterNode;
+            if (immediateBacktrack) {
+                continue;
+            }
+            if (cluster.contains[static_cast<size_t>(nb)]) {
+                returnNode = nb;
+                parent[static_cast<size_t>(nb)] = cur;
+                dist[static_cast<size_t>(nb)] = d + ptDist(
+                    cv::Point2f(static_cast<float>(cp.x), static_cast<float>(cp.y)),
+                    cv::Point2f(static_cast<float>(graph.points[nb].x),
+                                static_cast<float>(graph.points[nb].y)));
+                pq = {};
+                break;
+            }
+            if (cluster.contains[static_cast<size_t>(cur)]) {
+                continue;
+            }
+            const cv::Point& np = graph.points[nb];
+            const int dx = np.x - cp.x;
+            const int dy = np.y - cp.y;
+            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
+            const double nd = d + w;
+            if (nd < dist[nb]) {
+                dist[nb] = nd;
+                parent[nb] = cur;
+                pq.push({nd, nb});
+            }
+        }
+    }
+    if (returnNode < 0) {
+        return false;
+    }
+
+    std::vector<int> rev;
+    for (int cur = returnNode; cur != -1; cur = parent[static_cast<size_t>(cur)]) {
+        rev.push_back(cur);
+        if (cur == startPort.outsideNode) break;
+    }
+    if (rev.empty() || rev.back() != startPort.outsideNode) {
+        return false;
+    }
+    std::reverse(rev.begin(), rev.end());
+
+    out.nodes.clear();
+    out.nodes.push_back(startPort.clusterNode);
+    out.nodes.insert(out.nodes.end(), rev.begin(), rev.end());
+    out.length = nodePathLength(graph, out.nodes);
+    return out.nodes.size() >= 3;
+}
+
+static float minPathDistanceToPoint(const Tracking::SkeletonGraph& graph,
+                                    const std::vector<int>& nodes,
+                                    const cv::Point2f& target,
+                                    const cv::Point2f& originOffset)
+{
+    float best = std::numeric_limits<float>::max();
+    for (int idx : nodes) {
+        const cv::Point& p = graph.points[idx];
+        const cv::Point2f world(static_cast<float>(p.x) + originOffset.x,
+                                static_cast<float>(p.y) + originOffset.y);
+        best = std::min(best, ptDist(world, target));
+    }
+    return best;
+}
+
+static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& graph,
+                                                 int srcIdx,
+                                                 const cv::Point2f& predictedHidden,
+                                                 const cv::Point2f& originOffset,
+                                                 float refLength)
+{
+    JunctionSelection selection;
+    const std::vector<JunctionCluster> clusters = findJunctionClusters(graph);
+    selection.clusterCount = static_cast<int>(clusters.size());
+
+    float bestScore = std::numeric_limits<float>::max();
+    int bestLoopCount = 0;
+    float bestLoopLength = 0.f;
+
+    for (const JunctionCluster& cluster : clusters) {
+        std::vector<int> trunk;
+        if (!shortestPathToCluster(graph, srcIdx, cluster, trunk) || trunk.size() < 2) {
+            selection.diagnostics << QStringLiteral("cluster %1 unreachable")
+                                         .arg(cluster.id);
+            continue;
+        }
+        const int incomingIdx = trunk[trunk.size() - 2];
+        const std::vector<JunctionPort> ports = clusterPorts(graph, cluster);
+
+        int loopCount = 0;
+        float clusterBestLoopLength = std::numeric_limits<float>::max();
+        float clusterBestHiddenDist = std::numeric_limits<float>::max();
+        const float minLoopLength = refLength > 0.f ? std::max(6.f, 0.20f * refLength) : 6.f;
+        for (const JunctionPort& port : ports) {
+            if (port.outsideNode == incomingIdx) {
+                continue;
+            }
+            LoopReturnPath loop;
+            if (!findLoopReturnPath(graph, cluster, port, loop)) {
+                continue;
+            }
+            if (loop.length < minLoopLength) {
+                continue;
+            }
+            ++loopCount;
+            clusterBestLoopLength = std::min(clusterBestLoopLength, loop.length);
+            clusterBestHiddenDist = std::min(
+                clusterBestHiddenDist,
+                minPathDistanceToPoint(graph, loop.nodes, predictedHidden, originOffset));
+        }
+
+        const float trunkLen = nodePathLength(graph, trunk);
+        const bool hasLoop = loopCount > 0;
+        const float loopLenForLog = hasLoop ? clusterBestLoopLength : 0.f;
+        selection.diagnostics << QStringLiteral("cluster %1 rep=(%2,%3) trunk=%4 ports=%5 returningLoops=%6 bestLoop=%7")
+                                     .arg(cluster.id)
+                                     .arg(graph.points[trunk.back()].x)
+                                     .arg(graph.points[trunk.back()].y)
+                                     .arg(trunkLen, 0, 'f', 2)
+                                     .arg(static_cast<int>(ports.size()))
+                                     .arg(loopCount)
+                                     .arg(loopLenForLog, 0, 'f', 2);
+        if (!hasLoop) {
+            continue;
+        }
+
+        float score = trunkLen;
+        if (refLength > 0.f) {
+            score += 0.25f * std::abs(clusterBestLoopLength - refLength);
+        }
+        if (std::isfinite(clusterBestHiddenDist)) {
+            score += 0.5f * clusterBestHiddenDist;
+        }
+        if (score < bestScore) {
+            bestScore = score;
+            selection.valid = true;
+            selection.fallbackUsed = false;
+            selection.selectedCluster = cluster.id;
+            selection.junctionIdx = trunk.back();
+            selection.incomingIdx = incomingIdx;
+            selection.trunk = std::move(trunk);
+            selection.cluster = cluster;
+            bestLoopCount = loopCount;
+            bestLoopLength = clusterBestLoopLength;
+        }
+    }
+
+    if (selection.valid) {
+        selection.diagnostics << QStringLiteral("selected loop-valid cluster %1 returningLoops=%2 bestLoop=%3")
+                                     .arg(selection.selectedCluster)
+                                     .arg(bestLoopCount)
+                                     .arg(bestLoopLength, 0, 'f', 2);
+        return selection;
+    }
+
+    const int fallback = nearestReachableJunction(graph, srcIdx);
+    if (fallback >= 0) {
+        std::vector<int> trunk;
+        if (shortestNodePath(graph, srcIdx, fallback, trunk) && trunk.size() >= 2) {
+            JunctionCluster cluster;
+            const int n = static_cast<int>(graph.points.size());
+            cluster.id = -1;
+            cluster.nodes = {fallback};
+            cluster.contains.assign(static_cast<size_t>(n), 0);
+            cluster.contains[static_cast<size_t>(fallback)] = 1;
+
+            selection.valid = true;
+            selection.fallbackUsed = true;
+            selection.selectedCluster = -1;
+            selection.junctionIdx = fallback;
+            selection.incomingIdx = trunk[trunk.size() - 2];
+            selection.trunk = std::move(trunk);
+            selection.cluster = std::move(cluster);
+            selection.diagnostics << QStringLiteral("no loop-valid junction found; fallback nearest degree-3 node=(%1,%2)")
+                                         .arg(graph.points[fallback].x)
+                                         .arg(graph.points[fallback].y);
+        }
+    }
+    return selection;
+}
+
 static std::vector<int> traceSkeletonBranch(const Tracking::SkeletonGraph& graph,
                                             int junctionIdx,
                                             int incomingIdx,
@@ -794,55 +1248,170 @@ static std::vector<int> traceSkeletonBranch(const Tracking::SkeletonGraph& graph
     return path;
 }
 
+static std::vector<int> traceSkeletonBranchFromCluster(const Tracking::SkeletonGraph& graph,
+                                                       const JunctionCluster& cluster,
+                                                       int clusterNode,
+                                                       int firstBranchIdx)
+{
+    std::vector<int> path;
+    const int n = static_cast<int>(graph.points.size());
+    if (clusterNode < 0 || firstBranchIdx < 0 ||
+        clusterNode >= n || firstBranchIdx >= n ||
+        !cluster.contains[static_cast<size_t>(clusterNode)] ||
+        cluster.contains[static_cast<size_t>(firstBranchIdx)]) {
+        return path;
+    }
+
+    std::vector<char> visited(static_cast<size_t>(n), 0);
+    path.push_back(clusterNode);
+    path.push_back(firstBranchIdx);
+    for (int node : cluster.nodes) {
+        visited[static_cast<size_t>(node)] = 1;
+    }
+    visited[static_cast<size_t>(firstBranchIdx)] = 1;
+
+    int prev = clusterNode;
+    int cur = firstBranchIdx;
+    while (true) {
+        std::vector<int> candidates;
+        for (int nb : graph.adjacency[cur]) {
+            if (nb == prev) continue;
+            if (cluster.contains[static_cast<size_t>(nb)]) {
+                path.push_back(nb);
+                return path;
+            }
+            if (!visited[static_cast<size_t>(nb)]) candidates.push_back(nb);
+        }
+        if (candidates.empty()) break;
+
+        const cv::Point& pp = graph.points[prev];
+        const cv::Point& cp = graph.points[cur];
+        const cv::Point2f inVec(static_cast<float>(cp.x - pp.x),
+                                static_cast<float>(cp.y - pp.y));
+        int best = candidates.front();
+        float bestDot = -std::numeric_limits<float>::max();
+        const float inNorm = std::max(1e-6f, std::hypot(inVec.x, inVec.y));
+        for (int nb : candidates) {
+            const cv::Point& np = graph.points[nb];
+            const cv::Point2f outVec(static_cast<float>(np.x - cp.x),
+                                     static_cast<float>(np.y - cp.y));
+            const float outNorm = std::max(1e-6f, std::hypot(outVec.x, outVec.y));
+            const float dot = (inVec.x * outVec.x + inVec.y * outVec.y) / (inNorm * outNorm);
+            if (dot > bestDot) {
+                bestDot = dot;
+                best = nb;
+            }
+        }
+
+        prev = cur;
+        cur = best;
+        path.push_back(cur);
+        visited[static_cast<size_t>(cur)] = 1;
+    }
+
+    return path;
+}
+
+struct D3RouteDebug {
+    bool available = false;
+    bool startIsHead = false;
+    int selectedCandidate = -1;
+    int junctionClusterCount = 0;
+    int selectedJunctionCluster = -1;
+    bool junctionFallbackUsed = false;
+    cv::Point2f start = {-1.f, -1.f};
+    cv::Point2f junction = {-1.f, -1.f};
+    cv::Point2f center = {-1.f, -1.f};
+    cv::Point2f end = {-1.f, -1.f};
+    std::vector<std::vector<cv::Point2f>> candidatePaths;
+    QStringList junctionDiagnostics;
+};
+
 // D-3 hidden-tip routing: walk from the known visible tip to the first
-// skeleton junction, choose the branch by the right-hand-rule sign inherited
-// from the previous frame, then continue along that branch until its distance
-// to the predicted hidden position is minimized. This avoids the failure mode
-// where Dijkstra terminates by the shortest route to the node nearest Tpred.
+// skeleton junction, score every outgoing branch as a whole candidate path,
+// then continue along the best branch until its distance to the predicted
+// hidden position is minimized. This avoids the failure mode where Dijkstra
+// terminates by the shortest route to the node nearest Tpred and the failure
+// mode where one noisy junction pixel decides the branch orientation.
 static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& graph,
                                               int srcIdx,
                                               const cv::Point2f& predictedHidden,
                                               const cv::Point2f& predictedCenter,
                                               bool hasPredictedCenter,
                                               const cv::Point2f& originOffset,
+                                              const std::vector<cv::Point2f>& previousCenterline,
                                               float prevTurningAngle,
                                               float angleThreshold,
+                                              int nPoints,
                                               float refLength,
+                                              QStringList* diagnostics,
+                                              D3RouteDebug* routeDebug,
                                               std::vector<cv::Point2f>& outPath)
 {
     outPath.clear();
-    const int junctionIdx = nearestReachableJunction(graph, srcIdx);
-    if (junctionIdx < 0) return false;
-
-    std::vector<int> trunk;
-    if (!shortestNodePath(graph, srcIdx, junctionIdx, trunk) || trunk.size() < 2) {
+    JunctionSelection junction = selectLoopAwareJunction(graph, srcIdx, predictedHidden,
+                                                         originOffset, refLength);
+    if (!junction.valid || junction.trunk.size() < 2) {
         return false;
     }
-    const int incomingIdx = trunk[trunk.size() - 2];
+    const int junctionIdx = junction.junctionIdx;
+    const int incomingIdx = junction.incomingIdx;
+    const std::vector<int>& trunk = junction.trunk;
+    const std::vector<JunctionPort> ports = clusterPorts(graph, junction.cluster);
+
+    if (diagnostics) {
+        diagnostics->append(QStringLiteral("D-3 junction clusters=%1 selected=%2 fallback=%3")
+                                .arg(junction.clusterCount)
+                                .arg(junction.selectedCluster)
+                                .arg(junction.fallbackUsed ? "Y" : "N"));
+        for (const QString& detail : junction.diagnostics) {
+            diagnostics->append(QStringLiteral("D-3 junction %1").arg(detail));
+        }
+    }
+    if (routeDebug) {
+        routeDebug->available = true;
+        routeDebug->selectedCandidate = -1;
+        routeDebug->junctionClusterCount = junction.clusterCount;
+        routeDebug->selectedJunctionCluster = junction.selectedCluster;
+        routeDebug->junctionFallbackUsed = junction.fallbackUsed;
+        routeDebug->start = cv::Point2f(
+            static_cast<float>(graph.points[srcIdx].x) + originOffset.x,
+            static_cast<float>(graph.points[srcIdx].y) + originOffset.y);
+        routeDebug->junction = cv::Point2f(
+            static_cast<float>(graph.points[junctionIdx].x) + originOffset.x,
+            static_cast<float>(graph.points[junctionIdx].y) + originOffset.y);
+        routeDebug->center = predictedCenter;
+        routeDebug->end = predictedHidden;
+        routeDebug->candidatePaths.clear();
+        routeDebug->junctionDiagnostics = junction.diagnostics;
+    }
 
     struct BranchCandidate {
         std::vector<int> nodes; // junction -> ...
+        std::vector<int> fullNodes;
         int bestIndex = -1;
-        float minDistSq = std::numeric_limits<float>::max();
-        float signedTurn = 0.f;
+        float hiddenDist = std::numeric_limits<float>::max();
+        float centerDist = 0.f;
+        float tangentScore = 0.f;
+        float turningAngle = 0.f;
+        float turnPenalty = 0.f;
         float pathLen = 0.f;
+        float totalScore = std::numeric_limits<float>::max();
     };
 
     std::vector<BranchCandidate> candidates;
-    const cv::Point& jp = graph.points[junctionIdx];
-    const cv::Point& ip = graph.points[incomingIdx];
-    const cv::Point2f incomingVec(static_cast<float>(jp.x - ip.x),
-                                  static_cast<float>(jp.y - ip.y));
-    for (int nb : graph.adjacency[junctionIdx]) {
-        if (nb == incomingIdx) continue;
+    for (const JunctionPort& port : ports) {
+        if (port.outsideNode == incomingIdx) continue;
         BranchCandidate c;
-        c.nodes = traceSkeletonBranch(graph, junctionIdx, incomingIdx, nb);
+        std::vector<int> internalPath =
+            clusterInternalPath(graph, junction.cluster, junctionIdx, port.clusterNode);
+        std::vector<int> branchPath =
+            traceSkeletonBranchFromCluster(graph, junction.cluster,
+                                           port.clusterNode, port.outsideNode);
+        if (internalPath.empty() || branchPath.size() < 2) continue;
+        c.nodes = internalPath;
+        c.nodes.insert(c.nodes.end(), branchPath.begin() + 1, branchPath.end());
         if (c.nodes.size() < 2) continue;
-
-        const cv::Point& bp = graph.points[nb];
-        const cv::Point2f outgoingVec(static_cast<float>(bp.x - jp.x),
-                                      static_cast<float>(bp.y - jp.y));
-        c.signedTurn = incomingVec.x * outgoingVec.y - incomingVec.y * outgoingVec.x;
 
         std::vector<float> cumulative(c.nodes.size(), 0.f);
         for (int i = 1; i < static_cast<int>(c.nodes.size()); ++i) {
@@ -857,42 +1426,47 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         const float trunkLen = nodePathLength(graph, trunk);
         const float minUsableLen = refLength > 0.f ? 0.75f * refLength : 0.f;
         int bestLongEnoughIndex = -1;
-        float bestLongEnoughDistSq = std::numeric_limits<float>::max();
+        float bestLongEnoughDist = std::numeric_limits<float>::max();
+        float bestDist = std::numeric_limits<float>::max();
         for (int i = 1; i < static_cast<int>(c.nodes.size()); ++i) {
             const cv::Point& p = graph.points[c.nodes[i]];
             const float wx = static_cast<float>(p.x) + originOffset.x;
             const float wy = static_cast<float>(p.y) + originOffset.y;
             const float dx = wx - predictedHidden.x;
             const float dy = wy - predictedHidden.y;
-            const float d2 = dx * dx + dy * dy;
-            if (d2 < c.minDistSq) {
-                c.minDistSq = d2;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < bestDist) {
+                bestDist = dist;
                 c.bestIndex = i;
             }
             if (trunkLen + cumulative[i] >= minUsableLen &&
-                d2 < bestLongEnoughDistSq) {
-                bestLongEnoughDistSq = d2;
+                dist < bestLongEnoughDist) {
+                bestLongEnoughDist = dist;
                 bestLongEnoughIndex = i;
             }
         }
         if (bestLongEnoughIndex >= 1) {
             c.bestIndex = bestLongEnoughIndex;
-            c.minDistSq = bestLongEnoughDistSq;
+            c.hiddenDist = bestLongEnoughDist;
+        } else {
+            c.hiddenDist = bestDist;
         }
         if (c.bestIndex < 1) continue;
 
-        std::vector<int> full = trunk;
-        full.insert(full.end(), c.nodes.begin() + 1, c.nodes.begin() + c.bestIndex + 1);
-        c.pathLen = nodePathLength(graph, full);
-        if (hasPredictedCenter && full.size() >= 2) {
+        c.fullNodes = trunk;
+        c.fullNodes.insert(c.fullNodes.end(),
+                           c.nodes.begin() + 1,
+                           c.nodes.begin() + c.bestIndex + 1);
+        c.pathLen = nodePathLength(graph, c.fullNodes);
+        if (hasPredictedCenter && c.fullNodes.size() >= 2) {
             const float halfLen = 0.5f * c.pathLen;
             float walked = 0.f;
             cv::Point2f midpoint(
-                static_cast<float>(graph.points[full.back()].x) + originOffset.x,
-                static_cast<float>(graph.points[full.back()].y) + originOffset.y);
-            for (int i = 1; i < static_cast<int>(full.size()); ++i) {
-                const cv::Point& a = graph.points[full[i - 1]];
-                const cv::Point& b = graph.points[full[i]];
+                static_cast<float>(graph.points[c.fullNodes.back()].x) + originOffset.x,
+                static_cast<float>(graph.points[c.fullNodes.back()].y) + originOffset.y);
+            for (int i = 1; i < static_cast<int>(c.fullNodes.size()); ++i) {
+                const cv::Point& a = graph.points[c.fullNodes[i - 1]];
+                const cv::Point& b = graph.points[c.fullNodes[i]];
                 const int sx = b.x - a.x;
                 const int sy = b.y - a.y;
                 const float segLen = (sx != 0 && sy != 0) ? std::sqrt(2.f) : 1.f;
@@ -905,43 +1479,75 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
                 }
                 walked += segLen;
             }
-            const cv::Point2f d = midpoint - predictedCenter;
-            c.minDistSq += 0.75f * (d.x * d.x + d.y * d.y);
+            c.centerDist = ptDist(midpoint, predictedCenter);
+        }
+        const std::vector<cv::Point2f> candidatePath =
+            nodesToWorldPath(graph, c.fullNodes, originOffset);
+        if (routeDebug) {
+            routeDebug->candidatePaths.push_back(candidatePath);
+        }
+        c.tangentScore = tangentCorrespondenceScore(previousCenterline,
+                                                    candidatePath,
+                                                    nPoints);
+        c.turningAngle = totalSignedTurningAngle(candidatePath);
+        if (std::abs(prevTurningAngle) > std::max(0.f, angleThreshold) &&
+            std::abs(c.turningAngle) > std::max(0.f, angleThreshold)) {
+            c.turnPenalty = (c.turningAngle * prevTurningAngle > 0.f) ? 0.f : 1.f;
+        }
+
+        constexpr float kHiddenWeight = 3.0f;
+        constexpr float kCenterWeight = 2.0f;
+        constexpr float kTangentWeight = 15.0f;
+        constexpr float kTurnMismatchWeight = 100.0f;
+        constexpr float kLengthWeight = 1.0f;
+        c.totalScore =
+            kHiddenWeight * c.hiddenDist +
+            kCenterWeight * c.centerDist +
+            kTangentWeight * c.tangentScore +
+            kTurnMismatchWeight * c.turnPenalty;
+        if (refLength > 0.f) {
+            c.totalScore += kLengthWeight * std::abs(c.pathLen - refLength);
         }
         candidates.push_back(std::move(c));
     }
     if (candidates.empty()) return false;
 
-    const bool haveRhr =
-        std::abs(prevTurningAngle) > std::max(0.f, angleThreshold);
     int bestCandidate = -1;
     float bestScore = std::numeric_limits<float>::max();
     for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
         const BranchCandidate& c = candidates[i];
-        float score = 0.f;
-        if (haveRhr) {
-            const bool signMatches = c.signedTurn * prevTurningAngle > 0.f;
-            score += signMatches ? 0.f : 1e6f;
-        }
-        if (refLength > 0.f) {
-            score += std::abs(c.pathLen - refLength);
-            score += 0.10f * std::sqrt(c.minDistSq);
-        } else {
-            score += c.minDistSq * 0.01f;
-        }
-        if (score < bestScore) {
-            bestScore = score;
+        if (c.totalScore < bestScore) {
+            bestScore = c.totalScore;
             bestCandidate = i;
         }
     }
     if (bestCandidate < 0) return false;
 
+    if (diagnostics) {
+        diagnostics->append(QStringLiteral("D-3 whole-path candidates=%1 selected=%2")
+                                .arg(static_cast<int>(candidates.size()))
+                                .arg(bestCandidate));
+        for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+            const BranchCandidate& c = candidates[i];
+            diagnostics->append(
+                QStringLiteral("D-3 candidate %1: len=%2 hiddenDist=%3 centerDist=%4 tangent=%5 turn=%6 turnPenalty=%7 score=%8%9")
+                    .arg(i)
+                    .arg(c.pathLen, 0, 'f', 2)
+                    .arg(c.hiddenDist, 0, 'f', 2)
+                    .arg(c.centerDist, 0, 'f', 2)
+                    .arg(c.tangentScore, 0, 'f', 4)
+                    .arg(c.turningAngle, 0, 'f', 4)
+                    .arg(c.turnPenalty, 0, 'f', 1)
+                    .arg(c.totalScore, 0, 'f', 2)
+                    .arg(i == bestCandidate ? QStringLiteral(" SELECTED") : QString()));
+        }
+    }
+
     const BranchCandidate& picked = candidates[bestCandidate];
-    std::vector<int> nodePath = trunk;
-    nodePath.insert(nodePath.end(),
-                    picked.nodes.begin() + 1,
-                    picked.nodes.begin() + picked.bestIndex + 1);
-    outPath = nodesToWorldPath(graph, nodePath, originOffset);
+    if (routeDebug) {
+        routeDebug->selectedCandidate = bestCandidate;
+    }
+    outPath = nodesToWorldPath(graph, picked.fullNodes, originOffset);
     return outPath.size() >= 2;
 }
 
@@ -1544,12 +2150,67 @@ void CenterlineWorker::doWork()
                             framePrevState.valid ? &framePrevState.blob : nullptr;
                         const HiddenTipTarget predicted = predictHiddenTipTarget(
                             dispBlob, previousBlob, last, vel, framePredictor.hasVelocity);
+                        debugRecord.hiddenTipMaskDiffArea = predicted.maskDiffArea;
+                        debugRecord.hiddenTipMaskDiffSelectedArea = predicted.selectedMaskDiffArea;
                         if (predicted.hasTarget) {
                             targetPos = predicted.target;
                             debugRecord.hiddenTipTarget = targetPos;
                             debugRecord.decisions << QStringLiteral("D-3 predicted hidden target at (%1,%2)")
                                                          .arg(targetPos.x, 0, 'f', 2)
                                                          .arg(targetPos.y, 0, 'f', 2);
+                            debugRecord.decisions << QStringLiteral("D-3 mask-diff area total=%1 selected=%2")
+                                                         .arg(predicted.maskDiffArea)
+                                                         .arg(predicted.selectedMaskDiffArea);
+                        }
+                    }
+                }
+
+                if (!hasActualTarget && (targetPos.x != -1.f || targetPos.y != -1.f) &&
+                    framePrevState.valid &&
+                    framePrevState.blob.topologyState == Tracking::TopologyState::SelfCrossed &&
+                    dispEr.topology == Tracking::TopologyState::SelfCrossed) {
+                    const QMap<int, Tracking::DetectedBlob> prevPrevBlobs =
+                        m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal - (2 * step));
+                    const bool prevPrevSelfCrossed =
+                        prevPrevBlobs.contains(wormId) &&
+                        prevPrevBlobs[wormId].topologyState == Tracking::TopologyState::SelfCrossed;
+                    const bool secondSelfCrossedFrame = !prevPrevSelfCrossed;
+                    if (secondSelfCrossedFrame) {
+                        const JunctionSelection junction = selectLoopAwareJunction(
+                            dispEr.skeleton, srcNode, targetPos, dispOrigin, frameRefLength);
+                        if (junction.valid && !junction.fallbackUsed) {
+                            const cv::Point& jp = dispEr.skeleton.points[junction.junctionIdx];
+                            const cv::Point2f junctionPoint(
+                                static_cast<float>(jp.x) + dispOrigin.x,
+                                static_cast<float>(jp.y) + dispOrigin.y);
+                            const float bumpRadius = frameRefLength > 0.f
+                                ? std::max(8.f, 0.35f * frameRefLength)
+                                : 12.f;
+                            const float curvatureThreshold =
+                                baseline.curvatureSamples >= 4
+                                    ? std::max(0.12f, 0.75f * baseline.meanAbsCurvature)
+                                    : 0.12f;
+                            bool hasSecondBumpNearJunction = false;
+                            for (int tipIdx = 0; tipIdx < static_cast<int>(dispEr.tips.size()); ++tipIdx) {
+                                if (tipIdx == knownIdx) {
+                                    continue;
+                                }
+                                const Tracking::TrueTip& tip = dispEr.tips[tipIdx];
+                                if (ptDist(tip.point, junctionPoint) <= bumpRadius &&
+                                    std::abs(tip.curvature) >= curvatureThreshold) {
+                                    hasSecondBumpNearJunction = true;
+                                    break;
+                                }
+                            }
+                            debugRecord.decisions << QStringLiteral("D-3 second SelfCrossed frame: junction target candidate=(%1,%2) secondBump=%3")
+                                                         .arg(junctionPoint.x, 0, 'f', 2)
+                                                         .arg(junctionPoint.y, 0, 'f', 2)
+                                                         .arg(hasSecondBumpNearJunction ? "Y" : "N");
+                            if (!hasSecondBumpNearJunction) {
+                                targetPos = junctionPoint;
+                                debugRecord.hiddenTipTarget = targetPos;
+                                debugRecord.decisions << QStringLiteral("D-3 second SelfCrossed frame: hidden target overridden to loop junction");
+                            }
                         }
                     }
                 }
@@ -1562,25 +2223,55 @@ void CenterlineWorker::doWork()
                 }
                 if (goalNode < 0 || goalNode == srcNode) return false;
 
-                // D-3 with a predicted hidden target: do not shortest-path
-                // directly to the nearest Tpred/Hpred node. Walk to the
-                // junction, choose a branch by RHR, then stop where that
-                // branch comes closest to the prediction.
+                // SelfCrossed routing is loop-aware for both D-2 and D-3.
+                // D-2 has an actual second tip target; D-3 has a predicted
+                // hidden target. In both cases, avoid the crossing shortcut by
+                // routing through the loop-valid junction candidates first.
                 std::vector<cv::Point2f> arcA, arcB;
                 std::vector<cv::Point2f> chosen;
-                if (!hasActualTarget &&
-                    (targetPos.x != -1.f || targetPos.y != -1.f) &&
-                    skeletonPathTowardPredictedHidden(dispEr.skeleton,
-                                                      srcNode,
-                                                      targetPos,
-                                                      predictedCenter,
-                                                      hasPredictedCenter,
-                                                      dispOrigin,
-                                                      framePrevState.turningAngle,
-                                                      angleThreshold,
-                                                      frameRefLength,
-                                                      chosen)) {
-                    // chosen populated by junction-guided dispatch
+                if ((targetPos.x != -1.f || targetPos.y != -1.f) &&
+                    [&]() {
+                        std::vector<cv::Point2f> previousForRoute;
+                        if (framePrevState.valid) {
+                            previousForRoute = framePrevState.points;
+                            if (!hasHead) {
+                                std::reverse(previousForRoute.begin(), previousForRoute.end());
+                            }
+                        }
+                        D3RouteDebug routeDebug;
+                        routeDebug.startIsHead = hasHead;
+                        const bool ok = skeletonPathTowardPredictedHidden(dispEr.skeleton,
+                                                                           srcNode,
+                                                                           targetPos,
+                                                                           predictedCenter,
+                                                                           hasPredictedCenter,
+                                                                           dispOrigin,
+                                                                           previousForRoute,
+                                                                           framePrevState.turningAngle,
+                                                                           angleThreshold,
+                                                                           nPts,
+                                                                           frameRefLength,
+                                                                           &debugRecord.decisions,
+                                                                           &routeDebug,
+                                                                           chosen);
+                        if (routeDebug.available) {
+                            debugRecord.d3RouteDebugAvailable = true;
+                            debugRecord.d3RouteStartIsHead = routeDebug.startIsHead;
+                            debugRecord.d3SelectedCandidate = routeDebug.selectedCandidate;
+                            debugRecord.d3JunctionClusterCount = routeDebug.junctionClusterCount;
+                            debugRecord.d3SelectedJunctionCluster = routeDebug.selectedJunctionCluster;
+                            debugRecord.d3JunctionFallbackUsed = routeDebug.junctionFallbackUsed;
+                            debugRecord.d3RouteStart = routeDebug.start;
+                            debugRecord.d3RouteJunction = routeDebug.junction;
+                            debugRecord.d3RouteCenter = routeDebug.center;
+                            debugRecord.d3RouteEnd = routeDebug.end;
+                            debugRecord.d3CandidatePaths = routeDebug.candidatePaths;
+                            debugRecord.d3JunctionDiagnostics = routeDebug.junctionDiagnostics;
+                        }
+                        return ok;
+                    }()) {
+                    debugRecord.decisions << QStringLiteral("%1 loop-aware whole-path dispatch selected centerline")
+                                                 .arg(hasActualTarget ? "D-2" : "D-3");
                 } else if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
                                             dispOrigin, arcA, arcB)) {
                     chosen = pickArcByRHR(arcA, arcB,
@@ -2162,6 +2853,7 @@ bool CenterlineWorker::exportProcessForFrame(
         reconstructPredictor(storage, wormId, frameNumber, predictorNote);
     const Tracking::TipFeatureBaseline baseline = storage->getTipBaseline(wormId);
     Tracking::DetectedBlob previousBlobForExport;
+    Tracking::DetectedBlob previousPreviousBlobForExport;
     const auto previousBlobsForExport =
         storage->getDetectedBlobsForFrame(frameNumber - 1);
     const bool hasPreviousBlobForExport =
@@ -2170,6 +2862,15 @@ bool CenterlineWorker::exportProcessForFrame(
         !previousBlobsForExport[wormId].contourPoints.empty();
     if (hasPreviousBlobForExport) {
         previousBlobForExport = previousBlobsForExport[wormId];
+    }
+    const auto previousPreviousBlobsForExport =
+        storage->getDetectedBlobsForFrame(frameNumber - 2);
+    const bool hasPreviousPreviousBlobForExport =
+        previousPreviousBlobsForExport.contains(wormId) &&
+        previousPreviousBlobsForExport[wormId].isValid &&
+        !previousPreviousBlobsForExport[wormId].contourPoints.empty();
+    if (hasPreviousPreviousBlobForExport) {
+        previousPreviousBlobForExport = previousPreviousBlobsForExport[wormId];
     }
     const cv::Point2f predictedHead = predictor.hasVelocity
         ? predictor.lastHeadPos + predictor.velHead
@@ -2213,15 +2914,17 @@ bool CenterlineWorker::exportProcessForFrame(
     // so the RHR arc-picker in Stage 05 behaves like the live sweep.
     float prevTurningAngle = 0.f;
     float prevFrameArcLength = 0.f;
+    std::vector<cv::Point2f> previousCenterlineForExport;
     {
         const int adjFrame = frameNumber - 1;
         const auto adjBlobs = storage->getDetectedBlobsForFrame(adjFrame);
         if (adjBlobs.contains(wormId)) {
             const auto& pts = adjBlobs[wormId].centerlinePoints;
-            if (pts.size() >= 3) {
+            if (pts.size() >= 2) {
                 std::vector<cv::Point2f> v(pts.begin(), pts.end());
                 prevTurningAngle = totalSignedTurningAngle(v);
                 prevFrameArcLength = arcLen(v);
+                previousCenterlineForExport = v;
             }
         }
     }
@@ -2551,12 +3254,61 @@ bool CenterlineWorker::exportProcessForFrame(
                     if (predicted.hasTarget) {
                         targetPos = predicted.target;
                     }
+                    detailOut += QString("  maskDiffArea=%1 selected=%2")
+                                 .arg(predicted.maskDiffArea)
+                                 .arg(predicted.selectedMaskDiffArea);
                     if (predicted.hasMaskCue) {
                         detailOut += QString("  maskCue=(%1,%2) velTarget=(%3,%4)")
                                      .arg(predicted.maskCue.x,'f',1)
                                      .arg(predicted.maskCue.y,'f',1)
                                      .arg(predicted.velocityTarget.x,'f',1)
                                      .arg(predicted.velocityTarget.y,'f',1);
+                    }
+                }
+            }
+        }
+
+        if (!hasActualTarget && (targetPos.x != -1.f || targetPos.y != -1.f) &&
+            hasPreviousBlobForExport &&
+            previousBlobForExport.topologyState == Tracking::TopologyState::SelfCrossed &&
+            dispEr.topology == Tracking::TopologyState::SelfCrossed) {
+            const bool prevPrevSelfCrossed =
+                hasPreviousPreviousBlobForExport &&
+                previousPreviousBlobForExport.topologyState == Tracking::TopologyState::SelfCrossed;
+            if (!prevPrevSelfCrossed) {
+                const JunctionSelection junction = selectLoopAwareJunction(
+                    dispEr.skeleton, srcNode, targetPos, dispOrigin, refLength);
+                if (junction.valid && !junction.fallbackUsed) {
+                    const cv::Point& jp = dispEr.skeleton.points[junction.junctionIdx];
+                    const cv::Point2f junctionPoint(
+                        static_cast<float>(jp.x) + dispOrigin.x,
+                        static_cast<float>(jp.y) + dispOrigin.y);
+                    const float bumpRadius = refLength > 0.f
+                        ? std::max(8.f, 0.35f * refLength)
+                        : 12.f;
+                    const float curvatureThreshold =
+                        baseline.curvatureSamples >= 4
+                            ? std::max(0.12f, 0.75f * baseline.meanAbsCurvature)
+                            : 0.12f;
+                    bool hasSecondBumpNearJunction = false;
+                    for (int tipIdx = 0; tipIdx < static_cast<int>(dispEr.tips.size()); ++tipIdx) {
+                        if (tipIdx == knownIdx) {
+                            continue;
+                        }
+                        const Tracking::TrueTip& tip = dispEr.tips[tipIdx];
+                        if (ptDist(tip.point, junctionPoint) <= bumpRadius &&
+                            std::abs(tip.curvature) >= curvatureThreshold) {
+                            hasSecondBumpNearJunction = true;
+                            break;
+                        }
+                    }
+                    detailOut += QString("  secondSelfCrossedJunction=(%1,%2) secondBump=%3")
+                                 .arg(junctionPoint.x, 0, 'f', 1)
+                                 .arg(junctionPoint.y, 0, 'f', 1)
+                                 .arg(hasSecondBumpNearJunction ? "Y" : "N");
+                    if (!hasSecondBumpNearJunction) {
+                        targetPos = junctionPoint;
+                        detailOut += "  hidden target overridden to junction";
                     }
                 }
             }
@@ -2580,19 +3332,34 @@ bool CenterlineWorker::exportProcessForFrame(
         if (goalNode < 0 || goalNode == srcNode) return false;
 
         std::vector<cv::Point2f> arcA, arcB, chosen;
-        if (!hasActualTarget &&
-            (targetPos.x != -1.f || targetPos.y != -1.f) &&
-            skeletonPathTowardPredictedHidden(dispEr.skeleton,
-                                              srcNode,
-                                              targetPos,
-                                              centerForRoute,
-                                              hasPredictedCenter,
-                                              dispOrigin,
-                                              prevTurningAngle,
-                                              angleThreshold,
-                                              refLength,
-                                              chosen)) {
-            detailOut += "  junction-guided D-3";
+        if ((targetPos.x != -1.f || targetPos.y != -1.f) &&
+            [&]() {
+                std::vector<cv::Point2f> previousForRoute = previousCenterlineForExport;
+                if (!hasHead) {
+                    std::reverse(previousForRoute.begin(), previousForRoute.end());
+                }
+                QStringList routeDiagnostics;
+                const bool ok = skeletonPathTowardPredictedHidden(dispEr.skeleton,
+                                                                   srcNode,
+                                                                   targetPos,
+                                                                   centerForRoute,
+                                                                   hasPredictedCenter,
+                                                                   dispOrigin,
+                                                                   previousForRoute,
+                                                                   prevTurningAngle,
+                                                                   angleThreshold,
+                                                                   nPts,
+                                                                   refLength,
+                                                                   &routeDiagnostics,
+                                                                   nullptr,
+                                                                   chosen);
+                if (!routeDiagnostics.isEmpty()) {
+                    if (!detailOut.isEmpty()) detailOut += "  ";
+                    detailOut += routeDiagnostics.join(QStringLiteral(" | "));
+                }
+                return ok;
+            }()) {
+            detailOut += hasActualTarget ? "  whole-path D-2" : "  whole-path D-3";
         } else if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
                                     dispOrigin, arcA, arcB)) {
             chosen = pickArcByRHR(arcA, arcB, prevTurningAngle,

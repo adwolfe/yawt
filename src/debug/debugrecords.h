@@ -75,6 +75,8 @@ struct CenterlineFrameDebug {
     cv::Point2f predictedCenter = {0.f, 0.f};
     cv::Point2f hiddenTipTarget = {-1.f, -1.f};
     cv::Point2f hiddenTipFinal = {-1.f, -1.f};
+    int hiddenTipMaskDiffArea = 0;
+    int hiddenTipMaskDiffSelectedArea = 0;
 
     std::vector<Tracking::TipCandidate> tipCandidates;
     int assignedHeadTipIdx = -1;
@@ -83,6 +85,19 @@ struct CenterlineFrameDebug {
     std::vector<cv::Point2f> initialCenterline;
     std::vector<cv::Point2f> resampledCenterline;
     std::vector<cv::Point2f> finalCenterline;
+
+    bool d3RouteDebugAvailable = false;
+    bool d3RouteStartIsHead = false;
+    int d3SelectedCandidate = -1;
+    int d3JunctionClusterCount = 0;
+    int d3SelectedJunctionCluster = -1;
+    bool d3JunctionFallbackUsed = false;
+    cv::Point2f d3RouteStart = {-1.f, -1.f};
+    cv::Point2f d3RouteJunction = {-1.f, -1.f};
+    cv::Point2f d3RouteCenter = {-1.f, -1.f};
+    cv::Point2f d3RouteEnd = {-1.f, -1.f};
+    std::vector<std::vector<cv::Point2f>> d3CandidatePaths;
+    QStringList d3JunctionDiagnostics;
 
     QStringList decisions;
 };

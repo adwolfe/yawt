@@ -10,7 +10,9 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -40,6 +42,15 @@ static cv::Rect computeExportBounds(const Tracking::DetectedBlob& blob)
     bounds.width += 2 * kExportPad;
     bounds.height += 2 * kExportPad;
     return bounds;
+}
+
+static cv::Rect unionBounds(const cv::Rect& a, const cv::Rect& b)
+{
+    const int x1 = std::min(a.x, b.x);
+    const int y1 = std::min(a.y, b.y);
+    const int x2 = std::max(a.x + a.width, b.x + b.width);
+    const int y2 = std::max(a.y + a.height, b.y + b.height);
+    return cv::Rect(x1, y1, std::max(1, x2 - x1), std::max(1, y2 - y1));
 }
 
 static cv::Point worldToCanvas(const cv::Point2f& world, const cv::Rect& bounds)
@@ -73,6 +84,48 @@ static cv::Mat makeMask(const Tracking::DetectedBlob& blob, const cv::Rect& boun
         }
     }
     return mask;
+}
+
+static bool nearestMaskPointForDebug(const Tracking::DetectedBlob& blob,
+                                     const cv::Point2f& target,
+                                     cv::Point2f& out)
+{
+    if (blob.contourPoints.empty()) {
+        return false;
+    }
+
+    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
+    constexpr int kPad = 4;
+    bounds.x -= kPad;
+    bounds.y -= kPad;
+    bounds.width += 2 * kPad;
+    bounds.height += 2 * kPad;
+    if (bounds.width <= 1 || bounds.height <= 1) {
+        return false;
+    }
+
+    cv::Mat mask = makeMask(blob, bounds);
+    cv::Mat nonZero;
+    cv::findNonZero(mask, nonZero);
+    if (nonZero.empty()) {
+        return false;
+    }
+
+    float bestD = std::numeric_limits<float>::max();
+    cv::Point bestPoint(0, 0);
+    for (int i = 0; i < nonZero.rows; ++i) {
+        const cv::Point p = nonZero.at<cv::Point>(i);
+        const cv::Point2f world(static_cast<float>(p.x + bounds.x),
+                                static_cast<float>(p.y + bounds.y));
+        const float d = pointDistance(world, target);
+        if (d < bestD) {
+            bestD = d;
+            bestPoint = p;
+        }
+    }
+    out = cv::Point2f(static_cast<float>(bestPoint.x + bounds.x),
+                      static_cast<float>(bestPoint.y + bounds.y));
+    return true;
 }
 
 static cv::Mat makeBaseCanvas(const Tracking::DetectedBlob& blob, const cv::Rect& bounds)
@@ -236,6 +289,139 @@ static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
     writeStageImage(canvas, outputDir, QStringLiteral("01_skeleton.png"));
 }
 
+static void drawSkeletonPixels(cv::Mat& canvas,
+                               const Tracking::EndpointResult& endpoints,
+                               const cv::Rect& bounds,
+                               cv::Scalar color = cv::Scalar(255, 255, 0))
+{
+    const cv::Point2f origin(static_cast<float>(endpoints.localBounds.x),
+                             static_cast<float>(endpoints.localBounds.y));
+    if (endpoints.skeleton.skeleton.empty()) {
+        return;
+    }
+
+    for (int y = 0; y < endpoints.skeleton.skeleton.rows; ++y) {
+        const uchar* row = endpoints.skeleton.skeleton.ptr<uchar>(y);
+        for (int x = 0; x < endpoints.skeleton.skeleton.cols; ++x) {
+            if (!row[x]) {
+                continue;
+            }
+            const cv::Point2f world(static_cast<float>(x) + origin.x,
+                                    static_cast<float>(y) + origin.y);
+            cv::circle(canvas, worldToCanvas(world, bounds), 1, color, cv::FILLED);
+        }
+    }
+}
+
+static void writeD3RouteKeypointsStage(const Tracking::DetectedBlob& blob,
+                                       const Tracking::EndpointResult& endpoints,
+                                       const Debug::CenterlineFrameDebug& record,
+                                       const cv::Rect& bounds,
+                                       const QString& outputDir)
+{
+    if (!record.d3RouteDebugAvailable) {
+        return;
+    }
+
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+    drawSkeletonPixels(canvas, endpoints, bounds);
+
+    auto drawPoint = [&](const cv::Point2f& point,
+                         const QString& label,
+                         cv::Scalar color,
+                         int radius) {
+        if (!validPoint(point)) {
+            return;
+        }
+        const cv::Point cp = worldToCanvas(point, bounds);
+        cv::circle(canvas, cp, radius, color, 2, cv::LINE_AA);
+        cv::circle(canvas, cp, 2, color, cv::FILLED, cv::LINE_AA);
+        drawText(canvas, label, cp + cv::Point(7, -5), color);
+    };
+
+    drawPoint(record.d3RouteStart,
+              QStringLiteral("START(%1)").arg(record.d3RouteStartIsHead ? "H" : "T"),
+              cv::Scalar(0, 255, 255), 8);
+    drawPoint(record.d3RouteJunction, QStringLiteral("JUNCTION"),
+              cv::Scalar(255, 0, 255), 8);
+    drawPoint(record.d3RouteCenter, QStringLiteral("CENTER"),
+              cv::Scalar(0, 220, 220), 7);
+    drawPoint(record.d3RouteEnd, QStringLiteral("END hidden"),
+              cv::Scalar(0, 180, 255), 8);
+
+    drawTitle(canvas, QStringLiteral("04b D-3 route keypoints  cluster=%1 selected=%2%3")
+              .arg(record.d3SelectedJunctionCluster)
+              .arg(record.d3SelectedCandidate)
+              .arg(record.d3JunctionFallbackUsed ? " fallback" : ""));
+    writeStageImage(canvas, outputDir, QStringLiteral("04b_d3_route_keypoints.png"));
+}
+
+static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
+                                       const Tracking::EndpointResult& endpoints,
+                                       const Debug::CenterlineFrameDebug& record,
+                                       const cv::Rect& bounds,
+                                       const QString& outputDir)
+{
+    if (!record.d3RouteDebugAvailable || record.d3CandidatePaths.empty()) {
+        return;
+    }
+
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+    drawSkeletonPixels(canvas, endpoints, bounds, cv::Scalar(120, 120, 0));
+
+    const std::vector<cv::Scalar> colors = {
+        cv::Scalar(255, 120, 0),
+        cv::Scalar(0, 180, 255),
+        cv::Scalar(180, 80, 255),
+        cv::Scalar(255, 255, 80)
+    };
+    for (int i = 0; i < static_cast<int>(record.d3CandidatePaths.size()); ++i) {
+        const bool selected = i == record.d3SelectedCandidate;
+        const cv::Scalar color = selected
+            ? cv::Scalar(0, 255, 0)
+            : colors[static_cast<size_t>(i) % colors.size()];
+        const std::vector<cv::Point2f>& path = record.d3CandidatePaths[i];
+        if (path.size() < 2) {
+            continue;
+        }
+        std::vector<cv::Point> points;
+        points.reserve(path.size());
+        for (const cv::Point2f& p : path) {
+            points.push_back(worldToCanvas(p, bounds));
+        }
+        cv::polylines(canvas, std::vector<std::vector<cv::Point>>{points},
+                      false, color, selected ? 3 : 2, cv::LINE_AA);
+        for (const cv::Point& p : points) {
+            cv::circle(canvas, p, selected ? 2 : 1, color, cv::FILLED);
+        }
+        drawText(canvas,
+                 QStringLiteral("P%1%2").arg(i).arg(selected ? " SELECTED" : ""),
+                 points.back() + cv::Point(7, 5),
+                 color);
+    }
+
+    if (validPoint(record.d3RouteStart)) {
+        cv::circle(canvas, worldToCanvas(record.d3RouteStart, bounds),
+                   8, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+    }
+    if (validPoint(record.d3RouteEnd)) {
+        cv::circle(canvas, worldToCanvas(record.d3RouteEnd, bounds),
+                   8, cv::Scalar(0, 180, 255), 2, cv::LINE_AA);
+    }
+    if (validPoint(record.d3RouteJunction)) {
+        cv::circle(canvas, worldToCanvas(record.d3RouteJunction, bounds),
+                   8, cv::Scalar(255, 0, 255), 2, cv::LINE_AA);
+    }
+
+    drawTitle(canvas, QStringLiteral("04c D-3 possible paths  cluster=%1 selected=%2%3")
+              .arg(record.d3SelectedJunctionCluster)
+              .arg(record.d3SelectedCandidate)
+              .arg(record.d3JunctionFallbackUsed ? " fallback" : ""));
+    writeStageImage(canvas, outputDir, QStringLiteral("04c_d3_possible_paths.png"));
+}
+
 static void writeDistanceTransformStage(const Tracking::EndpointResult& endpoints,
                                         const cv::Rect& bounds,
                                         const QString& outputDir)
@@ -358,10 +544,166 @@ static void writeHeadTailStage(const Tracking::DetectedBlob& blob,
     drawAssignedTip(record.assignedHeadTipIdx, QStringLiteral("H"), cv::Scalar(0, 0, 255));
     drawAssignedTip(record.assignedTailTipIdx, QStringLiteral("T"), cv::Scalar(255, 80, 0));
 
-    drawTitle(canvas, QStringLiteral("04 head/tail  topo=%1  branch=%2")
+    drawTitle(canvas, QStringLiteral("04 head/tail final labels  topo=%1  branch=%2")
               .arg(Tracking::topologyStateToString(record.topology))
               .arg(Debug::centerlineBranchToString(record.branch)));
     writeStageImage(canvas, outputDir, QStringLiteral("04_head_tail.png"));
+}
+
+static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& currentBlob,
+                                               const Tracking::DetectedBlob* previousBlob,
+                                               const Debug::CenterlineFrameDebug& record,
+                                               const cv::Rect& currentBounds,
+                                               const QString& outputDir)
+{
+    if (!previousBlob || !previousBlob->isValid || previousBlob->contourPoints.empty() ||
+        !record.hiddenTipHypothesized || !validPoint(record.hiddenTipTarget)) {
+        return;
+    }
+
+    const cv::Rect previousBounds = computeExportBounds(*previousBlob);
+    const cv::Rect bounds = unionBounds(currentBounds, previousBounds);
+    cv::Mat currentMask = makeMask(currentBlob, bounds);
+    cv::Mat previousMask = makeMask(*previousBlob, bounds);
+
+    cv::Mat inverseCurrent;
+    cv::bitwise_not(currentMask, inverseCurrent);
+    cv::Mat vacatedMask;
+    cv::bitwise_and(previousMask, inverseCurrent, vacatedMask);
+
+    cv::Mat upCurrent;
+    cv::Mat upPrevious;
+    cv::Mat upVacated;
+    cv::resize(currentMask, upCurrent, cv::Size(), kExportScale, kExportScale,
+               cv::INTER_NEAREST);
+    cv::resize(previousMask, upPrevious, cv::Size(), kExportScale, kExportScale,
+               cv::INTER_NEAREST);
+    cv::resize(vacatedMask, upVacated, cv::Size(), kExportScale, kExportScale,
+               cv::INTER_NEAREST);
+
+    cv::Mat canvas = cv::Mat::zeros(upCurrent.size(), CV_8UC3);
+    canvas.setTo(cv::Scalar(35, 35, 35), upPrevious == 255);
+    canvas.setTo(cv::Scalar(75, 75, 75), upCurrent == 255);
+    canvas.setTo(cv::Scalar(0, 210, 255), upVacated == 255);
+
+    drawContoursOverlay(canvas, *previousBlob, bounds);
+    drawContoursOverlay(canvas, currentBlob, bounds);
+
+    auto drawPoint = [&](const cv::Point2f& point,
+                         const QString& label,
+                         cv::Scalar color,
+                         int radius,
+                         int marker = cv::MARKER_CROSS) {
+        if (!validPoint(point)) {
+            return;
+        }
+        const cv::Point cp = worldToCanvas(point, bounds);
+        cv::drawMarker(canvas, cp, color, marker, radius * 2, 1, cv::LINE_AA);
+        cv::circle(canvas, cp, radius, color, 1, cv::LINE_AA);
+        drawText(canvas, label, cp + cv::Point(7, -5), color);
+    };
+
+    const bool hiddenIsHead =
+        record.assignedHeadTipIdx >= 0 &&
+        record.assignedHeadTipIdx < static_cast<int>(record.tipCandidates.size()) &&
+        record.tipCandidates[record.assignedHeadTipIdx].source ==
+            Tracking::TipCandidate::Source::HypothesizedHidden;
+    const cv::Point2f last = hiddenIsHead
+        ? record.predictorBefore.lastHeadPos
+        : record.predictorBefore.lastTailPos;
+    const cv::Point2f velocity = hiddenIsHead
+        ? record.predictorBefore.velHead
+        : record.predictorBefore.velTail;
+    const cv::Point2f velocityTarget = record.predictorBefore.hasVelocity
+        ? last + velocity
+        : last;
+
+    drawPoint(last, hiddenIsHead ? QStringLiteral("last head") : QStringLiteral("last tail"),
+              cv::Scalar(255, 255, 255), 5, cv::MARKER_TILTED_CROSS);
+    drawPoint(velocityTarget, QStringLiteral("velocity target"),
+              cv::Scalar(200, 80, 0), 5);
+
+    cv::Point2f maskCue(-1.f, -1.f);
+    cv::Point2f weightedCenter(-1.f, -1.f);
+    bool cueAvailable = false;
+    const int totalVacatedArea = cv::countNonZero(vacatedMask);
+    int selectedArea = 0;
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int componentCount =
+        cv::connectedComponentsWithStats(vacatedMask, labels, stats, centroids, 8, CV_32S);
+    int bestLabel = -1;
+    float bestScore = std::numeric_limits<float>::max();
+    for (int label = 1; label < componentCount; ++label) {
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if (area < 2) {
+            continue;
+        }
+        const cv::Point2f centroid(
+            static_cast<float>(centroids.at<double>(label, 0) + bounds.x),
+            static_cast<float>(centroids.at<double>(label, 1) + bounds.y));
+        const float dLast = pointDistance(centroid, last);
+        const float dVel = validPoint(velocityTarget)
+            ? pointDistance(centroid, velocityTarget)
+            : dLast;
+        const float score = dLast + 0.35f * dVel - 0.20f * std::sqrt(static_cast<float>(area));
+        if (score < bestScore) {
+            bestScore = score;
+            bestLabel = label;
+        }
+    }
+    if (bestLabel >= 1) {
+        selectedArea = stats.at<int>(bestLabel, cv::CC_STAT_AREA);
+        cv::Mat selectedVacated = cv::Mat::zeros(vacatedMask.size(), CV_8UC1);
+        cv::Point2f sum(0.f, 0.f);
+        float totalWeight = 0.f;
+        for (int y = 0; y < labels.rows; ++y) {
+            const int* labelRow = labels.ptr<int>(y);
+            uchar* selectedRow = selectedVacated.ptr<uchar>(y);
+            for (int x = 0; x < labels.cols; ++x) {
+                if (labelRow[x] != bestLabel) {
+                    continue;
+                }
+                selectedRow[x] = 255;
+                const cv::Point2f p(static_cast<float>(x + bounds.x),
+                                    static_cast<float>(y + bounds.y));
+                const float d = pointDistance(p, last);
+                const float w = 1.f / std::max(1.f, d);
+                sum += w * p;
+                totalWeight += w;
+            }
+        }
+        if (totalWeight > 0.f) {
+            weightedCenter = sum * (1.f / totalWeight);
+            cueAvailable = nearestMaskPointForDebug(currentBlob, weightedCenter, maskCue);
+        }
+
+        cv::Mat upSelected;
+        cv::resize(selectedVacated, upSelected, cv::Size(), kExportScale, kExportScale,
+                   cv::INTER_NEAREST);
+        canvas.setTo(cv::Scalar(0, 255, 255), upSelected == 255);
+    }
+
+    drawPoint(weightedCenter, QStringLiteral("weighted vacated"),
+              cv::Scalar(0, 255, 255), 4, cv::MARKER_CROSS);
+    if (cueAvailable) {
+        drawPoint(maskCue, QStringLiteral("mask cue"),
+                  cv::Scalar(0, 255, 255), 5, cv::MARKER_DIAMOND);
+        cv::line(canvas, worldToCanvas(maskCue, bounds),
+                 worldToCanvas(record.hiddenTipTarget, bounds),
+                 cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+    }
+    drawPoint(record.hiddenTipTarget, QStringLiteral("hidden target"),
+              cv::Scalar(0, 180, 255), 7);
+
+    drawTitle(canvas, QStringLiteral("04a hidden prediction mask diff  yellow=prev & ~current"));
+    drawText(canvas,
+             QStringLiteral("current=gray previous=dark yellow=vacated area=%1 selected=%2")
+                 .arg(totalVacatedArea)
+                 .arg(selectedArea),
+             cv::Point(8, canvas.rows - 10));
+    writeStageImage(canvas, outputDir, QStringLiteral("04a_hidden_prediction_maskdiff.png"));
 }
 
 } // namespace
@@ -411,6 +753,17 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     if (!blob.isValid || blob.contourPoints.empty()) {
         return fail(QStringLiteral("stored blob is invalid or has no contour"));
     }
+    Tracking::DetectedBlob previousBlob;
+    const int previousFrame = frameNumber - (record.directionStep == 0 ? 1 : record.directionStep);
+    const QMap<int, Tracking::DetectedBlob> previousFrameBlobs =
+        storage->getDetectedBlobsForFrame(previousFrame);
+    const bool hasPreviousBlob =
+        previousFrameBlobs.contains(wormId) &&
+        previousFrameBlobs[wormId].isValid &&
+        !previousFrameBlobs[wormId].contourPoints.empty();
+    if (hasPreviousBlob) {
+        previousBlob = previousFrameBlobs[wormId];
+    }
 
     const cv::Rect bounds = computeExportBounds(blob);
 
@@ -437,6 +790,13 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     writeDistanceTransformStage(endpoints, bounds, outputDir);
     writeTipStage(blob, record, bounds, outputDir);
     writeHeadTailStage(blob, record, bounds, outputDir);
+    writeHiddenPredictionMaskDiffStage(blob,
+                                       hasPreviousBlob ? &previousBlob : nullptr,
+                                       record,
+                                       bounds,
+                                       outputDir);
+    writeD3RouteKeypointsStage(blob, endpoints, record, bounds, outputDir);
+    writeD3CandidatePathsStage(blob, endpoints, record, bounds, outputDir);
 
     writeCenterlineStage(blob, bounds, record.initialCenterline, outputDir,
                          QStringLiteral("05_initial_centerline.png"),
@@ -512,6 +872,33 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         log << "hiddenTipTarget=" << pointString(record.hiddenTipTarget)
             << " hiddenTipFinal=" << pointString(record.hiddenTipFinal)
             << " hiddenToPred=" << pointDistance(record.hiddenTipFinal, record.hiddenTipTarget) << "\n";
+        log << "hiddenTipMaskDiffArea=" << record.hiddenTipMaskDiffArea
+            << " selected=" << record.hiddenTipMaskDiffSelectedArea << "\n";
+    }
+    if (record.d3RouteDebugAvailable) {
+        log << "d3RouteStart=" << pointString(record.d3RouteStart)
+            << " role=" << (record.d3RouteStartIsHead ? "head" : "tail")
+            << " junction=" << pointString(record.d3RouteJunction)
+            << " center=" << pointString(record.d3RouteCenter)
+            << " end=" << pointString(record.d3RouteEnd)
+            << " selectedCandidate=" << record.d3SelectedCandidate << "\n";
+        log << "d3JunctionClusters=" << record.d3JunctionClusterCount
+            << " selectedCluster=" << record.d3SelectedJunctionCluster
+            << " fallback=" << (record.d3JunctionFallbackUsed ? "Y" : "N") << "\n";
+        for (const QString& detail : record.d3JunctionDiagnostics) {
+            log << "  " << detail << "\n";
+        }
+        log << "d3CandidatePaths=" << record.d3CandidatePaths.size() << "\n";
+        for (int i = 0; i < static_cast<int>(record.d3CandidatePaths.size()); ++i) {
+            const auto& path = record.d3CandidatePaths[i];
+            log << "  path" << i << " points=" << path.size()
+                << " length=" << polylineLength(path);
+            if (!path.empty()) {
+                log << " start=" << pointString(path.front())
+                    << " end=" << pointString(path.back());
+            }
+            log << (i == record.d3SelectedCandidate ? " SELECTED" : "") << "\n";
+        }
     }
     log << "tipCandidates=" << record.tipCandidates.size() << "\n";
     for (int i = 0; i < static_cast<int>(record.tipCandidates.size()); ++i) {
