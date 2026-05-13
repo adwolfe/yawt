@@ -112,6 +112,7 @@ struct FrameSpecificPhysicalBlob {
 
 // Forward declarations
 class TrackingDataStorage;
+namespace Debug { class DebugDataStore; }
 
 /**
  * @class VideoSaverWorker
@@ -183,6 +184,9 @@ public:
      * @param parent Optional QObject parent.
      */
     explicit TrackingManager(TrackingDataStorage* storage, QObject* parent = nullptr);
+    explicit TrackingManager(TrackingDataStorage* storage,
+                             Debug::DebugDataStore* debugStore,
+                             QObject* parent = nullptr);
     /**
      * @brief Destructor. Ensures cleanup of worker threads and transient state.
      */
@@ -424,6 +428,7 @@ private:
     QMap<WormTracker*, int> m_individualTrackerProgress; // WormTracker instance -> progress %
     Tracking::AllWormTracks m_finalTracks; // Final consolidated tracks
     TrackingDataStorage* m_storage;        // Pointer to central data storage
+    Debug::DebugDataStore* m_debugStore = nullptr; // Pointer to process diagnostic storage
 
     // --- Data structures for frame-atomic merge/split logic ---
     // m_frameMergeRecords:

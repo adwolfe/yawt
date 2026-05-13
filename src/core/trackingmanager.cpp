@@ -46,6 +46,7 @@
 #include "trackingmanager.h"
 #include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
+#include "../debug/debugdatastore.h"
 
 #ifdef TRACKING_DEBUG
 #undef TRACKING_DEBUG
@@ -1017,12 +1018,20 @@ TrackingManager::TrackingManager(QObject* parent)
       m_finishedTrackersCount(0),
       m_videoProcessingOverallProgress(0),
       m_nextPhysicalBlobId(1), // Start IDs from 1
-      m_storage(nullptr)
+      m_storage(nullptr),
+      m_debugStore(nullptr)
 {
     registerMetaTypes();
 }
 
 TrackingManager::TrackingManager(TrackingDataStorage* storage, QObject* parent)
+    : TrackingManager(storage, nullptr, parent)
+{
+}
+
+TrackingManager::TrackingManager(TrackingDataStorage* storage,
+                                 Debug::DebugDataStore* debugStore,
+                                 QObject* parent)
     : QObject(parent),
     m_keyFrameNum(-1),
     m_totalFramesInVideoHint(0),
@@ -1036,7 +1045,8 @@ TrackingManager::TrackingManager(TrackingDataStorage* storage, QObject* parent)
     m_finishedTrackersCount(0),
     m_videoProcessingOverallProgress(0),
     m_nextPhysicalBlobId(1), // Start IDs from 1
-    m_storage(storage)
+    m_storage(storage),
+    m_debugStore(debugStore)
 {
     registerMetaTypes();
 }
@@ -3080,7 +3090,11 @@ void TrackingManager::startCenterlineComputation() {
     emit trackingStatusUpdate("Computing centerlines...");
 
     auto* thread = new QThread(this);
-    auto* worker = new CenterlineWorker(m_storage);
+    if (m_debugStore) {
+        m_debugStore->clearCenterline();
+    }
+
+    auto* worker = new CenterlineWorker(m_storage, m_debugStore);
     worker->setSnakeParams(m_centerlineSnakeParams);
     worker->moveToThread(thread);
 

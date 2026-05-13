@@ -1,4 +1,6 @@
 #include "centerlineworker.h"
+#include "../debug/debugdatastore.h"
+#include "../debug/debugrecords.h"
 #include "../data/trackingcommon.h"
 #include "../utils/loggingcategories.h"
 #include <QDebug>
@@ -9,7 +11,6 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -50,27 +51,6 @@ static cv::Point2f nearestContourPoint(const std::vector<cv::Point>& contour,
     const int idx = nearestContourIdx(contour, target);
     return cv::Point2f(static_cast<float>(contour[idx].x),
                        static_cast<float>(contour[idx].y));
-}
-
-static bool nearestHolePoint(const Tracking::DetectedBlob& blob,
-                             const cv::Point2f& target,
-                             cv::Point2f& outPoint)
-{
-    bool found = false;
-    float bestD = std::numeric_limits<float>::max();
-    for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
-        for (const cv::Point& p : hole) {
-            const float dx = static_cast<float>(p.x) - target.x;
-            const float dy = static_cast<float>(p.y) - target.y;
-            const float d = dx * dx + dy * dy;
-            if (d < bestD) {
-                bestD = d;
-                outPoint = cv::Point2f(static_cast<float>(p.x), static_cast<float>(p.y));
-                found = true;
-            }
-        }
-    }
-    return found;
 }
 
 static std::vector<cv::Point2f> resample(const std::vector<cv::Point2f>& pts, int nPoints)
@@ -136,146 +116,10 @@ static float totalSignedTurningAngle(const std::vector<cv::Point2f>& pts)
     return total;
 }
 
-// Orient pts by shape correspondence with prev: pick whichever orientation
-// (forward or reversed) minimises the sum of pointwise distances to prev.
-// Both vectors must have the same length.
-static void orientByShape(std::vector<cv::Point2f>& pts,
-                          const std::vector<cv::Point2f>& prev)
-{
-    if (pts.size() < 2 || pts.size() != prev.size()) return;
-    float fwdSum = 0.f, revSum = 0.f;
-    int n = static_cast<int>(pts.size());
-    for (int i = 0; i < n; ++i) {
-        fwdSum += ptDist(pts[i], prev[i]);
-        revSum += ptDist(pts[i], prev[n - 1 - i]);
-    }
-    if (revSum < fwdSum)
-        std::reverse(pts.begin(), pts.end());
-}
-
 static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
 {
     return cv::Point2f(static_cast<float>(blob.centroid.x()),
                        static_cast<float>(blob.centroid.y()));
-}
-
-static bool inconsistentWithPreviousFrame(const std::vector<cv::Point2f>& pts,
-                                          float curLen,
-                                          const CenterlineState& prev,
-                                          const cv::Point2f& curBlobCentroid,
-                                          float refLength)
-{
-    if (!prev.valid || pts.size() != prev.points.size() || pts.empty() ||
-        refLength <= 0.f || curLen <= 0.f) {
-        return false;
-    }
-
-    const cv::Point2f expectedOffset = curBlobCentroid - prev.blobCentroid;
-    const float midpointShift =
-        ptDist(pts[pts.size() / 2], prev.midpoint() + expectedOffset);
-
-    float pointwiseShift = 0.f;
-    for (size_t i = 0; i < pts.size(); ++i) {
-        pointwiseShift += ptDist(pts[i], prev.points[i] + expectedOffset);
-    }
-    pointwiseShift /= static_cast<float>(pts.size());
-
-    const float prevLen = arcLen(prev.points);
-    const bool lengthShrank = prevLen > 0.f && curLen < 0.85f * prevLen;
-    const float allowedShift = std::max(8.f, 0.25f * refLength);
-
-    return lengthShrank &&
-           (midpointShift > allowedShift || pointwiseShift > allowedShift);
-}
-
-static float continuityScore(std::vector<cv::Point2f>& pts,
-                             const CenterlineState& prev,
-                             const cv::Point2f& expectedOffset,
-                             float refLength)
-{
-    if (!prev.valid || pts.size() != prev.points.size() || pts.empty()) {
-        return std::numeric_limits<float>::max();
-    }
-
-    auto scoreFor = [&](const std::vector<cv::Point2f>& candidate) {
-        float pointwise = 0.f;
-        for (size_t i = 0; i < candidate.size(); ++i) {
-            pointwise += ptDist(candidate[i], prev.points[i] + expectedOffset);
-        }
-        pointwise /= static_cast<float>(candidate.size());
-
-        const float midpoint =
-            ptDist(candidate[candidate.size() / 2], prev.midpoint() + expectedOffset);
-        const float endpoints =
-            ptDist(candidate.front(), prev.nose() + expectedOffset) +
-            ptDist(candidate.back(), prev.tail() + expectedOffset);
-        const float lengthPenalty = refLength > 0.f
-            ? std::abs(arcLen(candidate) - refLength) * 0.25f
-            : 0.f;
-
-        return pointwise + 0.75f * midpoint + 0.35f * endpoints + lengthPenalty;
-    };
-
-    const float forwardScore = scoreFor(pts);
-    std::vector<cv::Point2f> reversed = pts;
-    std::reverse(reversed.begin(), reversed.end());
-    const float reverseScore = scoreFor(reversed);
-    if (reverseScore < forwardScore) {
-        pts = std::move(reversed);
-        return reverseScore;
-    }
-    return forwardScore;
-}
-
-static bool buildSplitRingCandidate(const Tracking::DetectedBlob& blob,
-                                    const cv::Point2f& cutHint,
-                                    int cutThickness,
-                                    int nPoints,
-                                    std::vector<cv::Point2f>& outPts,
-                                    cv::Point2f& outCutPoint)
-{
-    if (blob.contourPoints.empty() || blob.holeContourPoints.empty()) {
-        return false;
-    }
-
-    cv::Point2f holePoint;
-    if (!nearestHolePoint(blob, cutHint, holePoint)) {
-        return false;
-    }
-
-    const cv::Point2f outerPoint = nearestContourPoint(blob.contourPoints, cutHint);
-    outCutPoint = outerPoint;
-    Tracking::DetectedBlob splitBlob = blob;
-    if (!Tracking::populateCenterlineFromContourWithCut(splitBlob, outerPoint, holePoint, cutThickness)) {
-        return false;
-    }
-
-    outPts.assign(splitBlob.centerlinePoints.begin(), splitBlob.centerlinePoints.end());
-    if (static_cast<int>(outPts.size()) != nPoints) {
-        outPts = resample(outPts, nPoints);
-    }
-    return outPts.size() >= 2;
-}
-
-static bool buildSplitRingCandidateWithCut(const Tracking::DetectedBlob& blob,
-                                           const cv::Point2f& cutStart,
-                                           const cv::Point2f& cutEnd,
-                                           int cutThickness,
-                                           int nPoints,
-                                           std::vector<cv::Point2f>& outPts,
-                                           cv::Point2f& outCutPoint)
-{
-    Tracking::DetectedBlob splitBlob = blob;
-    if (!Tracking::populateCenterlineFromContourWithCut(splitBlob, cutStart, cutEnd, cutThickness)) {
-        return false;
-    }
-
-    outPts.assign(splitBlob.centerlinePoints.begin(), splitBlob.centerlinePoints.end());
-    if (static_cast<int>(outPts.size()) != nPoints) {
-        outPts = resample(outPts, nPoints);
-    }
-    outCutPoint = (cutStart + cutEnd) * 0.5f;
-    return outPts.size() >= 2;
 }
 
 static void fillBlobMask(cv::Mat& mask,
@@ -351,33 +195,24 @@ static bool nearestMaskPoint(const Tracking::DetectedBlob& blob,
     return found;
 }
 
-static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
-                             const CenterlineState& prev,
-                             const cv::Point2f& expectedOffset,
-                             const cv::Point2f& expectedNose,
-                             const cv::Point2f& expectedTail,
-                             cv::Point2f& outCutStart,
-                             cv::Point2f& outCutEnd,
-                             cv::Point2f& outCutCenter)
+static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
+                                       const Tracking::DetectedBlob& previous,
+                                       const cv::Point2f& hiddenLast,
+                                       const cv::Point2f& velocityPrediction,
+                                       cv::Point2f& outCue)
 {
-    if (!prev.valid || prev.blob.contourPoints.empty() || current.contourPoints.empty()) {
+    if (current.contourPoints.empty() || previous.contourPoints.empty() ||
+        hiddenLast.x < 0.f) {
         return false;
     }
 
-    cv::Rect currentBounds = cv::boundingRect(current.contourPoints);
-    std::vector<cv::Point> shiftedPrevContour;
-    shiftedPrevContour.reserve(prev.blob.contourPoints.size());
-    for (const cv::Point& pt : prev.blob.contourPoints) {
-        shiftedPrevContour.push_back(cv::Point(
-            static_cast<int>(std::lround(static_cast<float>(pt.x) + expectedOffset.x)),
-            static_cast<int>(std::lround(static_cast<float>(pt.y) + expectedOffset.y))));
-    }
-    cv::Rect prevBounds = cv::boundingRect(shiftedPrevContour);
-    cv::Rect bounds = currentBounds | prevBounds;
-    bounds.x -= 2;
-    bounds.y -= 2;
-    bounds.width += 4;
-    bounds.height += 4;
+    cv::Rect bounds = cv::boundingRect(current.contourPoints) |
+                      cv::boundingRect(previous.contourPoints);
+    constexpr int kPad = 8;
+    bounds.x -= kPad;
+    bounds.y -= kPad;
+    bounds.width += 2 * kPad;
+    bounds.height += 2 * kPad;
     if (bounds.width <= 1 || bounds.height <= 1) {
         return false;
     }
@@ -385,23 +220,22 @@ static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
     cv::Mat currentMask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
     cv::Mat previousMask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
     fillBlobMask(currentMask, current, bounds, cv::Point2f(0.f, 0.f));
-    fillBlobMask(previousMask, prev.blob, bounds, expectedOffset);
+    fillBlobMask(previousMask, previous, bounds, cv::Point2f(0.f, 0.f));
 
-    cv::Mat inversePrevious;
-    cv::bitwise_not(previousMask, inversePrevious);
-    cv::Mat delta;
-    cv::bitwise_and(currentMask, inversePrevious, delta);
+    cv::Mat inverseCurrent;
+    cv::bitwise_not(currentMask, inverseCurrent);
+    cv::Mat vacatedMask;
+    cv::bitwise_and(previousMask, inverseCurrent, vacatedMask);
 
     cv::Mat labels;
     cv::Mat stats;
     cv::Mat centroids;
     const int componentCount =
-        cv::connectedComponentsWithStats(delta, labels, stats, centroids, 8, CV_32S);
+        cv::connectedComponentsWithStats(vacatedMask, labels, stats, centroids, 8, CV_32S);
     if (componentCount <= 1) {
         return false;
     }
 
-    const cv::Point2f expectedGapMid = (expectedNose + expectedTail) * 0.5f;
     int bestLabel = -1;
     float bestScore = std::numeric_limits<float>::max();
     for (int label = 1; label < componentCount; ++label) {
@@ -409,10 +243,15 @@ static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
         if (area < 2) {
             continue;
         }
-        const cv::Point2f centroid(
+
+        const cv::Point2f c(
             static_cast<float>(centroids.at<double>(label, 0) + bounds.x),
             static_cast<float>(centroids.at<double>(label, 1) + bounds.y));
-        const float score = ptDist(centroid, expectedGapMid) - 0.15f * static_cast<float>(area);
+        const float dLast = ptDist(c, hiddenLast);
+        const float dVel = (velocityPrediction.x >= 0.f)
+            ? ptDist(c, velocityPrediction)
+            : dLast;
+        const float score = dLast + 0.35f * dVel - 0.20f * std::sqrt(static_cast<float>(area));
         if (score < bestScore) {
             bestScore = score;
             bestLabel = label;
@@ -422,188 +261,71 @@ static bool diffBasedCutHint(const Tracking::DetectedBlob& current,
         return false;
     }
 
-    cv::Point2f componentCentroid(
-        static_cast<float>(centroids.at<double>(bestLabel, 0) + bounds.x),
-        static_cast<float>(centroids.at<double>(bestLabel, 1) + bounds.y));
-    const cv::Point2f nearestFeature =
-        ptDist(componentCentroid, expectedNose) <= ptDist(componentCentroid, expectedTail)
-            ? expectedNose
-            : expectedTail;
-
-    std::vector<cv::Point2f> componentPoints;
-    componentPoints.reserve(static_cast<size_t>(stats.at<int>(bestLabel, cv::CC_STAT_AREA)));
-    float farthestDistance = -1.f;
+    cv::Point2f weightedCenter(0.f, 0.f);
+    float totalWeight = 0.f;
     for (int y = 0; y < labels.rows; ++y) {
-        const int* labelRow = labels.ptr<int>(y);
+        const int* row = labels.ptr<int>(y);
         for (int x = 0; x < labels.cols; ++x) {
-            if (labelRow[x] != bestLabel) {
+            if (row[x] != bestLabel) {
                 continue;
             }
-            const cv::Point2f point(static_cast<float>(bounds.x + x),
-                                    static_cast<float>(bounds.y + y));
-            componentPoints.push_back(point);
-            const float distance = ptDist(point, nearestFeature);
-            if (distance > farthestDistance) {
-                farthestDistance = distance;
-            }
+            const cv::Point2f p(static_cast<float>(x + bounds.x),
+                                static_cast<float>(y + bounds.y));
+            const float d = ptDist(p, hiddenLast);
+            const float w = 1.f / std::max(1.f, d);
+            weightedCenter += w * p;
+            totalWeight += w;
         }
     }
-
-    if (componentPoints.empty() || farthestDistance <= 0.f) {
+    if (totalWeight <= 0.f) {
         return false;
     }
+    weightedCenter *= 1.f / totalWeight;
 
-    std::vector<cv::Point2f> farEdgePoints;
-    farEdgePoints.reserve(componentPoints.size());
-    const float bandWidth = 2.5f;
-    for (const cv::Point2f& point : componentPoints) {
-        if (ptDist(point, nearestFeature) >= farthestDistance - bandWidth) {
-            farEdgePoints.push_back(point);
-        }
-    }
-    if (farEdgePoints.empty()) {
-        return false;
-    }
-
-    cv::Point2f center(0.f, 0.f);
-    for (const cv::Point2f& point : farEdgePoints) {
-        center += point;
-    }
-    center *= 1.f / static_cast<float>(farEdgePoints.size());
-
-    cv::Point2f direction(0.f, 0.f);
-    if (farEdgePoints.size() >= 2) {
-        double xx = 0.0;
-        double xy = 0.0;
-        double yy = 0.0;
-        for (const cv::Point2f& point : farEdgePoints) {
-            const double dx = static_cast<double>(point.x - center.x);
-            const double dy = static_cast<double>(point.y - center.y);
-            xx += dx * dx;
-            xy += dx * dy;
-            yy += dy * dy;
-        }
-        const double theta = 0.5 * std::atan2(2.0 * xy, xx - yy);
-        direction = cv::Point2f(static_cast<float>(std::cos(theta)),
-                                static_cast<float>(std::sin(theta)));
-    }
-    if (ptDist(direction, cv::Point2f(0.f, 0.f)) < 1e-3f) {
-        const cv::Point2f away = center - nearestFeature;
-        direction = cv::Point2f(-away.y, away.x);
-    }
-    const float directionLen = ptDist(direction, cv::Point2f(0.f, 0.f));
-    if (directionLen < 1e-3f) {
-        return false;
-    }
-    direction *= 1.f / directionLen;
-
-    float minProjection = std::numeric_limits<float>::max();
-    float maxProjection = -std::numeric_limits<float>::max();
-    for (const cv::Point2f& point : farEdgePoints) {
-        const cv::Point2f delta = point - center;
-        const float projection = delta.x * direction.x + delta.y * direction.y;
-        minProjection = std::min(minProjection, projection);
-        maxProjection = std::max(maxProjection, projection);
-    }
-
-    const float halfLength = std::max(4.f, 0.5f * (maxProjection - minProjection) + 2.f);
-    outCutStart = center - direction * halfLength;
-    outCutEnd = center + direction * halfLength;
-    outCutCenter = center;
-    return true;
+    return nearestMaskPoint(current, weightedCenter, outCue);
 }
 
-// ── Geodesic shortest path through a mask (Phase C.3) ──────────────────────
-//
-// Dijkstra on the 8-connected pixel graph of a CV_8UC1 mask: orthogonal edges
-// cost 1, diagonal edges cost √2, edges leaving the mask are forbidden. Used
-// to thread a polyline through a curved/coiled body shape from one tip to
-// another, replacing the prev-centerline-as-snake-init that was poisoned by
-// stale topology in self-crossed frames.
-
-struct GeodesicResult {
-    cv::Mat distMap;      // CV_32F, per-pixel geodesic distance from start; ∞ outside mask
-    cv::Mat parentMap;    // CV_32SC1, parent flat index for path back-trace (-1 if unreached)
+struct HiddenTipTarget {
+    cv::Point2f target = {-1.f, -1.f};
+    cv::Point2f velocityTarget = {-1.f, -1.f};
+    cv::Point2f maskCue = {-1.f, -1.f};
+    bool hasTarget = false;
+    bool hasMaskCue = false;
 };
 
-static bool runDijkstraInMask(const cv::Mat& mask,
-                              const cv::Point& start,
-                              GeodesicResult& result)
+static HiddenTipTarget predictHiddenTipTarget(const Tracking::DetectedBlob& current,
+                                              const Tracking::DetectedBlob* previous,
+                                              const cv::Point2f& last,
+                                              const cv::Point2f& velocity,
+                                              bool hasVelocity)
 {
-    if (mask.empty() || mask.type() != CV_8UC1) return false;
-    const int rows = mask.rows, cols = mask.cols;
-    if (start.x < 0 || start.y < 0 || start.x >= cols || start.y >= rows) return false;
-    if (mask.at<uchar>(start) == 0) return false;
-
-    result.distMap = cv::Mat(rows, cols, CV_32F,
-                             cv::Scalar(std::numeric_limits<float>::infinity()));
-    result.parentMap = cv::Mat(rows, cols, CV_32SC1, cv::Scalar(-1));
-    result.distMap.at<float>(start) = 0.f;
-
-    using Entry = std::pair<float, int>;  // (dist, flat idx)
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-    pq.push({0.f, start.y * cols + start.x});
-
-    static const float sqrt2 = std::sqrt(2.f);
-    static const std::array<int, 8> dx = {-1,  0,  1, -1,  1, -1,  0,  1};
-    static const std::array<int, 8> dy = {-1, -1, -1,  0,  0,  1,  1,  1};
-    static const std::array<float, 8> ew = {sqrt2, 1.f, sqrt2, 1.f, 1.f, sqrt2, 1.f, sqrt2};
-
-    while (!pq.empty()) {
-        const auto [d, idx] = pq.top();
-        pq.pop();
-        const int cy = idx / cols, cx = idx % cols;
-        if (d > result.distMap.at<float>(cy, cx)) continue;
-        for (int k = 0; k < 8; ++k) {
-            const int nx = cx + dx[k], ny = cy + dy[k];
-            if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
-            if (mask.at<uchar>(ny, nx) == 0) continue;
-            const float nd = d + ew[k];
-            if (nd < result.distMap.at<float>(ny, nx)) {
-                result.distMap.at<float>(ny, nx) = nd;
-                result.parentMap.at<int>(ny, nx) = idx;
-                pq.push({nd, ny * cols + nx});
-            }
-        }
+    HiddenTipTarget result;
+    if (last.x == 0.f && last.y == 0.f) {
+        return result;
     }
-    return true;
-}
 
-// Reconstruct an ordered start→goal path from a populated parent map.
-// Returns false if goal is unreachable from start.
-static bool reconstructPath(const GeodesicResult& g,
-                            const cv::Point& start,
-                            const cv::Point& goal,
-                            std::vector<cv::Point>& outPath)
-{
-    outPath.clear();
-    if (g.parentMap.empty()) return false;
-    const int cols = g.parentMap.cols;
-    if (!std::isfinite(g.distMap.at<float>(goal))) return false;
+    result.velocityTarget = hasVelocity ? (last + velocity) : last;
+    result.target = result.velocityTarget;
+    result.hasTarget = true;
 
-    std::vector<cv::Point> reverse;
-    reverse.push_back(goal);
-    int curIdx = goal.y * cols + goal.x;
-    const int startIdx = start.y * cols + start.x;
-    while (curIdx != startIdx) {
-        const int parent = g.parentMap.at<int>(curIdx / cols, curIdx % cols);
-        if (parent < 0) return false;  // disconnected
-        curIdx = parent;
-        reverse.emplace_back(curIdx % cols, curIdx / cols);
+    if (previous && previous->isValid &&
+        hiddenTipMaskDifferenceCue(current,
+                                   *previous,
+                                   last,
+                                   result.velocityTarget,
+                                   result.maskCue)) {
+        constexpr float kMaskCueWeight = 0.75f;
+        result.target = kMaskCueWeight * result.maskCue +
+                        (1.f - kMaskCueWeight) * result.velocityTarget;
+        result.hasMaskCue = true;
     }
-    outPath.assign(reverse.rbegin(), reverse.rend());
-    return outPath.size() >= 2;
-}
 
-// Convenience: one-shot start→goal geodesic.
-static bool geodesicPathInMask(const cv::Mat& mask,
-                               const cv::Point& start,
-                               const cv::Point& goal,
-                               std::vector<cv::Point>& outPath)
-{
-    GeodesicResult g;
-    if (!runDijkstraInMask(mask, start, g)) return false;
-    return reconstructPath(g, start, goal, outPath);
+    cv::Point2f snappedTarget;
+    if (nearestMaskPoint(current, result.target, snappedTarget)) {
+        result.target = snappedTarget;
+    }
+
+    return result;
 }
 
 // ── Skeleton-graph shortest path (used by the new Clean centerline branch) ─
@@ -1270,19 +992,10 @@ static bool addSyntheticHoleAtDTMax(const Tracking::DetectedBlob& src,
 //                        D's ridge IS the medial axis, so following ∇D pulls the
 //                        snake onto the body axis.
 //
-// Initialization is the previous-frame centerline translated by centroid motion;
-// endpoints are pinned to the nearest outer-contour point of the predicted nose/tail
-// (worm endpoints must lie on the boundary). When the U-shaped prior should curl
-// into a self-crossing curve, gradient descent finds that minimum naturally.
-//
-// Returns false on any structural failure; outPts is populated with nPoints
-// resampled points on success, and outOverlapCenter / outHasOverlap describe
-// any self-intersection detected in the result (used for debug overlay).
-// Snake core: takes a pre-built mask + an explicit init polyline + explicit
-// pinned head/tail positions. Both the legacy prev-centerline path and the
-// new geodesic-from-tips path (Phase C.3 / D-2, D-3) wrap this function so
-// the snake math (DT, gradient, Euler loop, overlap detection) is single-
-// sourced.
+// Snake core takes a pre-built mask, an explicit init polyline, and explicit
+// pinned head/tail positions. The active pipeline uses it to lightly refine
+// Clean-frame skeleton paths while keeping the DT, gradient, Euler loop, and
+// overlap detection in one place.
 //
 // `v` is mutated in place: caller passes the init polyline; on success it
 // contains the refined, nPoint-resampled centerline.
@@ -1423,444 +1136,19 @@ static bool buildSnakeMask(const Tracking::DetectedBlob& blob,
     return true;
 }
 
-// Legacy wrapper: prev-centerline-based init, used by Pass 2's ring branch.
-static bool refineCenterlineSnake(const Tracking::DetectedBlob& blob,
-                                  const CenterlineState& prev,
-                                  float /*refLength*/,
-                                  int nPoints,
-                                  const Tracking::CenterlineSnakeParams& params,
-                                  std::vector<cv::Point2f>& outPts,
-                                  cv::Point2f& outOverlapCenter,
-                                  bool& outHasOverlap)
-{
-    outHasOverlap = false;
-    if (!params.enabled || !prev.valid || prev.points.size() < 4 ||
-        blob.contourPoints.empty()) return false;
-
-    // Init: prev centerline translated by centroid motion.
-    const cv::Point2f curCentroid = blobCentroid(blob);
-    const cv::Point2f offset = curCentroid - prev.blobCentroid;
-    std::vector<cv::Point2f> v;
-    v.reserve(prev.points.size());
-    for (const cv::Point2f& p : prev.points) v.push_back(p + offset);
-
-    cv::Mat mask;
-    cv::Rect bounds;
-    if (!buildSnakeMask(blob, mask, bounds)) return false;
-
-    // Pin endpoints to nearest contour of inherited endpoints.
-    const cv::Point2f pinHead = nearestContourPoint(blob.contourPoints, v.front());
-    const cv::Point2f pinTail = nearestContourPoint(blob.contourPoints, v.back());
-
-    if (!refineSnakeCore(blob, mask, bounds, v, pinHead, pinTail,
-                         nPoints, params, outOverlapCenter, outHasOverlap)) {
-        return false;
-    }
-    outPts = std::move(v);
-    return true;
-}
-
-// New (Phase C.3 / D-2): snake with init derived from a mask-constrained
-// geodesic between the assigned head and tail. Endpoints are pinned exactly
-// to the supplied head/tail positions (no nearest-contour snap — they're
-// already on the outer contour by definition of how tipCandidates were
-// produced). Used when the worm is in SelfCrossed topology and both tips
-// have been successfully assigned in Pass 4.
-static bool refineCenterlineSnakeFromTips(const Tracking::DetectedBlob& blob,
-                                          const cv::Point2f& head,
-                                          const cv::Point2f& tail,
-                                          int nPoints,
-                                          const Tracking::CenterlineSnakeParams& params,
-                                          std::vector<cv::Point2f>& outPts,
-                                          cv::Point2f& outOverlapCenter,
-                                          bool& outHasOverlap)
-{
-    outHasOverlap = false;
-    if (!params.enabled || blob.contourPoints.empty()) return false;
-
-    cv::Mat mask;
-    cv::Rect bounds;
-    if (!buildSnakeMask(blob, mask, bounds)) return false;
-
-    // Convert head/tail to mask coords.
-    const cv::Point headLocal(std::clamp(static_cast<int>(std::lround(head.x - bounds.x)), 0, mask.cols - 1),
-                              std::clamp(static_cast<int>(std::lround(head.y - bounds.y)), 0, mask.rows - 1));
-    const cv::Point tailLocal(std::clamp(static_cast<int>(std::lround(tail.x - bounds.x)), 0, mask.cols - 1),
-                              std::clamp(static_cast<int>(std::lround(tail.y - bounds.y)), 0, mask.rows - 1));
-
-    // Geodesic from head to tail through the mask.
-    std::vector<cv::Point> pathLocal;
-    if (!geodesicPathInMask(mask, headLocal, tailLocal, pathLocal)) return false;
-    if (pathLocal.size() < 2) return false;
-
-    // Convert to video coords for the snake.
-    std::vector<cv::Point2f> v;
-    v.reserve(pathLocal.size());
-    for (const cv::Point& p : pathLocal) {
-        v.emplace_back(static_cast<float>(p.x + bounds.x),
-                       static_cast<float>(p.y + bounds.y));
-    }
-
-    if (!refineSnakeCore(blob, mask, bounds, v, head, tail,
-                         nPoints, params, outOverlapCenter, outHasOverlap)) {
-        return false;
-    }
-    outPts = std::move(v);
-    return true;
-}
-
-// New (Phase C.3 / D-3): only one tip is assigned. Hypothesize where the
-// hidden tip lies by finding the mask pixel that is geodesically farthest
-// from the known tip (double-Dijkstra, same principle as extractCenterline-
-// FromMask's fallback). This is the natural terminus of the body axis through
-// the mask and is far more reliable than projecting to the outer contour at
-// a body-length target distance — the outer contour of a coiled/self-crossing
-// worm traces the outer boundary of the whole mass, not the hidden tip.
-//
-// Returns the hypothesized other tip via outHiddenTip on success.
-static bool refineCenterlineSnakeFromOneTip(const Tracking::DetectedBlob& blob,
-                                            const cv::Point2f& knownTip,
-                                            int nPoints,
-                                            const Tracking::CenterlineSnakeParams& params,
-                                            std::vector<cv::Point2f>& outPts,
-                                            cv::Point2f& outHiddenTip,
-                                            cv::Point2f& outOverlapCenter,
-                                            bool& outHasOverlap)
-{
-    outHasOverlap = false;
-    if (!params.enabled || blob.contourPoints.empty()) return false;
-
-    cv::Mat mask;
-    cv::Rect bounds;
-    if (!buildSnakeMask(blob, mask, bounds)) return false;
-
-    const cv::Point knownLocal(std::clamp(static_cast<int>(std::lround(knownTip.x - bounds.x)), 0, mask.cols - 1),
-                               std::clamp(static_cast<int>(std::lround(knownTip.y - bounds.y)), 0, mask.rows - 1));
-
-    GeodesicResult g;
-    if (!runDijkstraInMask(mask, knownLocal, g)) return false;
-
-    // Find the mask pixel that is geodesically farthest from the known tip.
-    // This is the natural far end of the body axis — the same double-Dijkstra
-    // principle used in extractCenterlineFromMask when skeleton endpoints are
-    // absent. Scanning all mask pixels (not just the outer contour) means we
-    // correctly reach interior points on a self-crossing body.
-    cv::Point bestLocal = knownLocal;
-    float bestDist = 0.f;
-    for (int y = 0; y < mask.rows; ++y) {
-        const float* distRow = g.distMap.ptr<float>(y);
-        const uchar* maskRow = mask.ptr<uchar>(y);
-        for (int x = 0; x < mask.cols; ++x) {
-            if (maskRow[x] == 0) continue;
-            if (std::isfinite(distRow[x]) && distRow[x] > bestDist) {
-                bestDist = distRow[x];
-                bestLocal = cv::Point(x, y);
-            }
-        }
-    }
-    if (bestDist < 1.f) return false;  // degenerate: all points at distance 0
-
-    std::vector<cv::Point> pathLocal;
-    if (!reconstructPath(g, knownLocal, bestLocal, pathLocal)) return false;
-    if (pathLocal.size() < 2) return false;
-
-    const cv::Point2f hiddenTip(static_cast<float>(bestLocal.x + bounds.x),
-                                static_cast<float>(bestLocal.y + bounds.y));
-
-    std::vector<cv::Point2f> v;
-    v.reserve(pathLocal.size());
-    for (const cv::Point& p : pathLocal) {
-        v.emplace_back(static_cast<float>(p.x + bounds.x),
-                       static_cast<float>(p.y + bounds.y));
-    }
-
-    if (!refineSnakeCore(blob, mask, bounds, v, knownTip, hiddenTip,
-                         nPoints, params, outOverlapCenter, outHasOverlap)) {
-        return false;
-    }
-    outPts = std::move(v);
-    outHiddenTip = hiddenTip;
-    return true;
-}
-
-// Compute, orient, validate and (if needed) repair the centerline for one frame.
-// Returns the resulting CenterlineState (always valid if the function returns
-// true; invalid if no usable centerline could be produced).
-static bool processOneFrame(Tracking::DetectedBlob& blob,
-                            const CenterlineState& prev,
-                            float refLength,
-                            int nPoints,
-                            float minArcFraction,
-                            const Tracking::CenterlineSnakeParams& snakeParams,
-                            CenterlineState& out)
-{
-    if (!blob.isValid || blob.contourPoints.empty()) return false;
-    blob.hasCenterlineCutPoint = false;
-
-    // Phase-B preprocessing: surface candidate nose/tail points on this blob
-    // independently of any temporal state. Cheap (skeleton + curvature scan +
-    // distance transform), and the results travel with the blob into storage
-    // for the debug overlay to consume. Downstream head/tail assignment will
-    // read these candidates instead of inheriting endpoints from the previous
-    // frame's centerline.
-    Tracking::findTipCandidates(blob);
-
-    if (blob.centerlinePoints.empty())
-        Tracking::populateCenterlineFromContour(blob);
-    if (blob.centerlinePoints.empty()) return false;
-
-    std::vector<cv::Point2f> pts(blob.centerlinePoints.begin(),
-                                 blob.centerlinePoints.end());
-
-    // Always resample to a consistent point count so shape-correspondence
-    // comparisons are meaningful.
-    if (static_cast<int>(pts.size()) != nPoints)
-        pts = resample(pts, nPoints);
-
-    // Orient by shape correspondence with the previous frame.  This is more
-    // robust than nose-distance alone because nose and tail can be spatially
-    // close on a coiled worm; the *order* along the polyline still
-    // distinguishes them when matched against the previous frame's ordering.
-    if (prev.valid && prev.points.size() == pts.size())
-        orientByShape(pts, prev.points);
-
-    bool isRing  = !blob.holeContourPoints.empty();
-    float curLen = arcLen(pts);
-    bool tooShort = (refLength > 0.f && curLen < minArcFraction * refLength);
-    const cv::Point2f curBlobCentroid = blobCentroid(blob);
-    const bool inconsistent =
-        inconsistentWithPreviousFrame(pts, curLen, prev, curBlobCentroid, refLength);
-    const bool needsRepair = tooShort || inconsistent;
-
-    // ─── Fallback A: ring blobs ──────────────────────────────────────────
-    // A ring is a closed worm mask, not a fundamentally different body shape.
-    // Cut the ring open near the predicted closure seam, skeletonize the split
-    // mask, and choose the candidate that best preserves frame-to-frame shape.
-    if (isRing && prev.valid) {
-        const cv::Point2f expectedOffset = prev.valid
-            ? (curBlobCentroid - prev.blobCentroid)
-            : cv::Point2f(0.f, 0.f);
-        const cv::Point2f expectedNose = prev.nose() + expectedOffset;
-        const cv::Point2f expectedTail = prev.tail() + expectedOffset;
-        const cv::Point2f expectedMid = prev.midpoint() + expectedOffset;
-        const cv::Point2f expectedEndGapMid = (expectedNose + expectedTail) * 0.5f;
-
-        struct CutCandidateSeed {
-            cv::Point2f start;
-            cv::Point2f end;
-            cv::Point2f hint;
-            bool hasSegment = false;
-        };
-
-        std::vector<CutCandidateSeed> cutSeeds;
-        cv::Point2f diffCutStart;
-        cv::Point2f diffCutEnd;
-        cv::Point2f diffCutCenter;
-        if (diffBasedCutHint(blob, prev, expectedOffset, expectedNose, expectedTail,
-                             diffCutStart, diffCutEnd, diffCutCenter)) {
-            cutSeeds.push_back(CutCandidateSeed{diffCutStart, diffCutEnd, diffCutCenter, true});
-        }
-        std::vector<cv::Point2f> cutHints;
-        cutHints.push_back(expectedEndGapMid);
-        cutHints.push_back(expectedNose);
-        cutHints.push_back(expectedTail);
-        cutHints.push_back(expectedMid);
-        cutHints.push_back(expectedNose * 0.75f + expectedTail * 0.25f);
-        cutHints.push_back(expectedNose * 0.25f + expectedTail * 0.75f);
-        for (const cv::Point2f& hint : cutHints) {
-            cutSeeds.push_back(CutCandidateSeed{cv::Point2f(), cv::Point2f(), hint, false});
-        }
-
-        std::vector<cv::Point2f> currentForScore = pts;
-        const float currentScore =
-            continuityScore(currentForScore, prev, expectedOffset, refLength);
-        float bestScore = std::numeric_limits<float>::max();
-        std::vector<cv::Point2f> bestPts;
-        cv::Point2f bestCutPoint;
-        bool bestIsSnake = false;
-        const int cutThickness = 3;
-
-        // Snake candidate first: parametric polyline refined toward the medial axis,
-        // initialized from the prev centerline. Unlike skeleton-with-cut, the snake
-        // is allowed to self-intersect — required when the body crosses over itself.
-        if (snakeParams.enabled) {
-            std::vector<cv::Point2f> snakePts;
-            cv::Point2f snakeOverlapCenter;
-            bool snakeHasOverlap = false;
-            if (refineCenterlineSnake(blob, prev, refLength, nPoints,
-                                      snakeParams, snakePts,
-                                      snakeOverlapCenter, snakeHasOverlap)) {
-                const float snakeScore =
-                    continuityScore(snakePts, prev, expectedOffset, refLength);
-                if (snakeScore < bestScore) {
-                    bestScore = snakeScore;
-                    bestPts = std::move(snakePts);
-                    // For the snake, the "cut point" is repurposed as the
-                    // self-crossing location for the debug overlay (or the
-                    // closure-region centroid as a fallback when no crossing
-                    // was detected this frame).
-                    if (snakeHasOverlap) {
-                        bestCutPoint = snakeOverlapCenter;
-                    } else {
-                        bestCutPoint = (expectedNose + expectedTail) * 0.5f;
-                    }
-                    bestIsSnake = true;
-                }
-            }
-        }
-
-        // Legacy cut-skeleton candidates kept as a fallback / A-B comparison
-        // partner. Use whichever continuity score is lower.
-        for (const CutCandidateSeed& seed : cutSeeds) {
-            std::vector<cv::Point2f> candidate;
-            cv::Point2f cutPoint;
-            const bool built = seed.hasSegment
-                ? buildSplitRingCandidateWithCut(blob, seed.start, seed.end, cutThickness,
-                                                 nPoints, candidate, cutPoint)
-                : buildSplitRingCandidate(blob, seed.hint, cutThickness,
-                                          nPoints, candidate, cutPoint);
-            if (!built) {
-                continue;
-            }
-            const float score =
-                continuityScore(candidate, prev, expectedOffset, refLength);
-            if (score < bestScore) {
-                bestScore = score;
-                bestPts = std::move(candidate);
-                bestCutPoint = cutPoint;
-                bestIsSnake = false;
-            }
-        }
-
-        // The snake doesn't need the "needsRepair" gate the cut-skeleton path
-        // uses, because its initialization IS the prev centerline — it can
-        // only refine, not regress. Always accept a snake winner; for cut
-        // candidates fall back to the original conservative gate.
-        const bool acceptBest = !bestPts.empty() &&
-            (bestIsSnake || needsRepair || bestScore + 2.f < currentScore);
-        if (acceptBest) {
-            pts = std::move(bestPts);
-            blob.centerlineCutPoint = bestCutPoint;
-            blob.hasCenterlineCutPoint = true;
-        }
-    }
-    // ─── Fallback B: non-ring blobs ──────────────────────────────────────
-    // Walking the outer contour wraps the full perimeter (~2× body length),
-    // so it would follow one body *edge* rather than the centerline — worse
-    // than the original skeleton.  Instead, when the skeleton is short and
-    // a previous frame is available, treat the previous centerline as a
-    // shape template: translate it so its centroid aligns with the current
-    // blob's centroid, then snap any point that lands outside the blob to
-    // the nearest outer contour point.  Worms barely move between frames,
-    // so the previous shape is a good estimate of the missing portion.
-    else if (!isRing && needsRepair && prev.valid &&
-             prev.points.size() == pts.size() &&
-             !blob.contourPoints.empty()) {
-
-        // Centroid of the previous (resampled, ordered) centerline points.
-        cv::Point2f prevCentroid(0.f, 0.f);
-        for (const cv::Point2f& p : prev.points) prevCentroid += p;
-        prevCentroid *= 1.f / static_cast<float>(prev.points.size());
-
-        // Centroid of the current blob (mean of contour pixels — robust to
-        // skeleton failure modes since it depends only on the boundary).
-        cv::Point2f curCentroid(0.f, 0.f);
-        for (const cv::Point& p : blob.contourPoints)
-            curCentroid += cv::Point2f(p.x, p.y);
-        curCentroid *= 1.f / static_cast<float>(blob.contourPoints.size());
-
-        cv::Point2f offset = curCentroid - prevCentroid;
-
-        std::vector<cv::Point2f> templatePts(prev.points.size());
-        for (size_t i = 0; i < prev.points.size(); ++i)
-            templatePts[i] = prev.points[i] + offset;
-
-        // Snap out-of-blob points back onto the contour.  pointPolygonTest
-        // returns >0 inside, ==0 on edge, <0 outside.
-        for (cv::Point2f& p : templatePts) {
-            if (cv::pointPolygonTest(blob.contourPoints, p, false) < 0) {
-                int idx = nearestContourIdx(blob.contourPoints, p);
-                p = cv::Point2f(blob.contourPoints[idx].x,
-                                blob.contourPoints[idx].y);
-            }
-        }
-
-        if (inconsistent || arcLen(templatePts) > curLen) {
-            pts = templatePts;  // already ordered, already nPoints long
-        }
-    }
-
-    if (pts.size() < 2) return false;
-
-    // ─── Right-hand-rule orientation veto ───────────────────────────────
-    // orientByShape and continuityScore both choose the orientation that
-    // minimises pointwise distance to prev.  That works well for small
-    // inter-frame motion but can be fooled when the worm is coiled and the
-    // score difference between forward and reversed is small.
-    //
-    // The total signed turning angle (∫κ ds) of the polyline is a stronger
-    // global signal: it equals the net tangent rotation nose→tail, and it
-    // changes sign when the traversal direction is reversed.  Worms don't
-    // instantaneously flip their coiling direction, so the sign of this
-    // angle should be consistent between adjacent frames once it becomes
-    // large enough to be reliable (> threshold).
-    //
-    // Near-straight frames have |angle| ≈ 0 and are genuinely ambiguous in
-    // orientation; the check is skipped there and orientByShape's decision
-    // stands.
-    const float curTurningAngle = totalSignedTurningAngle(pts);
-    const float angleThreshold  = static_cast<float>(
-        std::max(0.0, snakeParams.orientationAngleThreshold));
-    bool vetoFlipped = false;
-    if (prev.valid
-        && std::abs(prev.turningAngle) > angleThreshold
-        && std::abs(curTurningAngle)   > angleThreshold
-        && curTurningAngle * prev.turningAngle < 0.f) {
-        std::reverse(pts.begin(), pts.end());
-        vetoFlipped = true;
-    }
-
-    blob.centerlinePoints.assign(pts.begin(), pts.end());
-    out.points       = pts;
-    out.blobCentroid = curBlobCentroid;
-    out.blob         = blob;
-    out.valid        = true;
-    // Store the angle after any veto flip (flip negates it).
-    out.turningAngle = vetoFlipped ? -curTurningAngle : curTurningAngle;
-    return true;
-}
-
 // ── CenterlineWorker ────────────────────────────────────────────────────────
 
-// Default point count — overridden at runtime by CenterlineSnakeParams::nPoints.
-// More points reduce kinking artefacts on highly curved bodies; fewer are faster.
-static constexpr int   kCenterlinePointsDefault = 20;
-static constexpr float kMinArcLengthFraction    = 0.5f;
-
-CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage, QObject* parent)
-    : QObject(parent), m_storage(storage) {}
+CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage,
+                                   Debug::DebugDataStore* debugStore,
+                                   QObject* parent)
+    : QObject(parent), m_storage(storage), m_debugStore(debugStore) {}
 
 void CenterlineWorker::setSnakeParams(const Tracking::CenterlineSnakeParams& params)
 {
     m_snakeParams = params;
 }
 
-// Compile-time switch between the legacy 5-pass pipeline and the new
-// 2-sweep / 5-step pipeline. Flip to `true` once the new pipeline has been
-// visually validated (green dots present at expected tip locations on a
-// known clip; centerlines tracking the body axis).
-static constexpr bool kUseNewPipeline = true;
-
-void CenterlineWorker::doWork()
-{
-    if (kUseNewPipeline) {
-        doWorkNew();
-    } else {
-        doWorkLegacy();
-    }
-}
-
-// New 2-sweep / 5-step pipeline. See CENTERLINE_REWRITE_PLAN.md for the
+// 2-sweep / 5-step pipeline. See CENTERLINE_REWRITE_PLAN.md for the
 // full design. Structure:
 //
 //   Sweep 0 — read-only walk over all non-merged, non-lost frames; build a
@@ -1875,14 +1163,13 @@ void CenterlineWorker::doWork()
 //             Step 2: build centerline.
 //                       Clean    → skeleton-graph Dijkstra head→tail.
 //                       Ring     → synthetic-hole punch + re-skeletonize.
-//                       SC, 2tp  → D-2 (refineCenterlineSnakeFromTips).
-//                       SC, 1tp  → D-3 (refineCenterlineSnakeFromOneTip)
-//                                  + append HypothesizedHidden tip candidate.
+//                       SC       → skeleton-arc dispatch with optional
+//                                  HypothesizedHidden tip candidate.
 //                       fallback → populateCenterlineFromContour (D-4).
 //             Step 3: resample to nPoints.
 //             Step 4: snake refinement (Clean only); right-hand-rule veto.
 //             Step 5: predictor update for next frame.
-void CenterlineWorker::doWorkNew()
+void CenterlineWorker::doWork()
 {
     if (!m_storage) {
         emit failed("No storage provided to CenterlineWorker");
@@ -1988,7 +1275,7 @@ void CenterlineWorker::doWorkNew()
         };
 
         auto loadPreviousFrameContext =
-            [&](int frameNumber,
+            [&](int frameNumber, int step,
                 Tracking::HeadTailPredictor& outPredictor,
                 CenterlineState& outPrevState,
                 float& outLocalRefLength) -> bool {
@@ -2001,7 +1288,7 @@ void CenterlineWorker::doWorkNew()
             };
 
             Tracking::DetectedBlob prevBlob;
-            if (!blobAt(frameNumber - 1, prevBlob)) {
+            if (!blobAt(frameNumber - step, prevBlob)) {
                 return false;
             }
 
@@ -2021,7 +1308,7 @@ void CenterlineWorker::doWorkNew()
             outPredictor.hasPrev = (prevHead.x >= 0.f || prevTail.x >= 0.f);
 
             Tracking::DetectedBlob prevPrevBlob;
-            if (blobAt(frameNumber - 2, prevPrevBlob)) {
+            if (blobAt(frameNumber - (2 * step), prevPrevBlob)) {
                 const auto prevPrevHead =
                     (prevPrevBlob.assignedHeadTipIdx >= 0 &&
                      prevPrevBlob.assignedHeadTipIdx < static_cast<int>(prevPrevBlob.tipCandidates.size()))
@@ -2075,7 +1362,7 @@ void CenterlineWorker::doWorkNew()
         // `predictor` and `prevState` are CARRIED across frames within one
         // direction; they reset on Lost frames and at the keyframe boundary
         // between forward and backward passes.
-        auto processFrame = [&](int i,
+        auto processFrame = [&](int i, int step,
                                 Tracking::HeadTailPredictor& predictor,
                                 CenterlineState& prevState,
                                 bool isKeyframeBootstrap) -> void {
@@ -2101,7 +1388,7 @@ void CenterlineWorker::doWorkNew()
             float frameRefLength = refLength;
             if (!isKeyframeBootstrap) {
                 float localRefLength = frameRefLength;
-                if (loadPreviousFrameContext(tp.frameNumberOriginal,
+                if (loadPreviousFrameContext(tp.frameNumberOriginal, step,
                                              framePredictor,
                                              framePrevState,
                                              localRefLength)) {
@@ -2114,6 +1401,27 @@ void CenterlineWorker::doWorkNew()
             // ── STEP 1: detect endpoints, write back tip data ───────────
             const Tracking::TipFeatureBaseline baseline =
                 m_storage->getTipBaseline(wormId);
+            Debug::CenterlineFrameDebug debugRecord;
+            debugRecord.wormId = wormId;
+            debugRecord.frameNumber = tp.frameNumberOriginal;
+            debugRecord.directionStep = step;
+            debugRecord.keyframeBootstrap = isKeyframeBootstrap;
+            debugRecord.inMergeGroup = inMerge;
+            debugRecord.predictorBefore = framePredictor;
+            debugRecord.baselineBefore = baseline;
+            debugRecord.refLength = frameRefLength;
+            debugRecord.previousTurningAngle = framePrevState.turningAngle;
+            debugRecord.predictedHead = framePredictor.hasVelocity
+                ? framePredictor.lastHeadPos + framePredictor.velHead
+                : framePredictor.lastHeadPos;
+            debugRecord.predictedTail = framePredictor.hasVelocity
+                ? framePredictor.lastTailPos + framePredictor.velTail
+                : framePredictor.lastTailPos;
+            debugRecord.predictedCenter = framePredictor.hasVelocity
+                ? framePredictor.lastCenterPos + framePredictor.velCenter
+                : framePredictor.lastCenterPos;
+            debugRecord.decisions << QStringLiteral("loaded live predictor and previous-frame state");
+
             Tracking::EndpointResult er = Tracking::detectEndpoints(
                 blob, framePredictor, baseline, inMerge);
 
@@ -2133,6 +1441,15 @@ void CenterlineWorker::doWorkNew()
             blob.assignedHeadTipIdx = er.headIdx;
             blob.assignedTailTipIdx = er.tailIdx;
             blob.topologyState      = er.topology;
+            debugRecord.topology = er.topology;
+            debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
+            debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
+            debugRecord.tipCandidates = blob.tipCandidates;
+            debugRecord.decisions << QStringLiteral("detectEndpoints topology=%1 tips=%2 headIdx=%3 tailIdx=%4")
+                                         .arg(Tracking::topologyStateToString(er.topology))
+                                         .arg(static_cast<int>(blob.tipCandidates.size()))
+                                         .arg(blob.assignedHeadTipIdx)
+                                         .arg(blob.assignedTailTipIdx);
 
             // Sample baseline (curvature + width) on Clean frames with two
             // tips. Body-length sample is taken AFTER step 3 below using
@@ -2156,16 +1473,21 @@ void CenterlineWorker::doWorkNew()
                 if (er.tips.size() >= 2 && blob.assignedHeadTipIdx < 0) {
                     blob.assignedHeadTipIdx = 0;
                     blob.assignedTailTipIdx = 1;
+                    debugRecord.decisions << QStringLiteral("keyframe bootstrap assigned head/tail candidate indices 0/1");
                 } else if (blob.assignedHeadTipIdx < 0 &&
                            blob.assignedTailTipIdx < 0) {
                     blob.assignedHeadTipIdx = 0;
+                    debugRecord.decisions << QStringLiteral("keyframe bootstrap assigned single head candidate index 0");
                 }
+                debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
+                debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
             }
 
             // ── STEP 2: build centerline based on topology ──────────────
             std::vector<cv::Point2f> centerline;
             cv::Point2f overlapCenter(0.f, 0.f);
             bool hasOverlap = false;
+            bool snakeRan = false;
             const cv::Point2f originOffset(static_cast<float>(er.localBounds.x),
                                            static_cast<float>(er.localBounds.y));
             // angleThreshold used by both RHR arc-pick (Step 2) and RHR veto (Step 4).
@@ -2218,10 +1540,16 @@ void CenterlineWorker::doWorkNew()
                     const cv::Point2f& vel  = hiddenIsHead
                         ? framePredictor.velHead    : framePredictor.velTail;
                     if (last.x != 0.f || last.y != 0.f) {
-                        targetPos = framePredictor.hasVelocity ? (last + vel) : last;
-                        cv::Point2f snappedTarget;
-                        if (nearestMaskPoint(dispBlob, targetPos, snappedTarget)) {
-                            targetPos = snappedTarget;
+                        const Tracking::DetectedBlob* previousBlob =
+                            framePrevState.valid ? &framePrevState.blob : nullptr;
+                        const HiddenTipTarget predicted = predictHiddenTipTarget(
+                            dispBlob, previousBlob, last, vel, framePredictor.hasVelocity);
+                        if (predicted.hasTarget) {
+                            targetPos = predicted.target;
+                            debugRecord.hiddenTipTarget = targetPos;
+                            debugRecord.decisions << QStringLiteral("D-3 predicted hidden target at (%1,%2)")
+                                                         .arg(targetPos.x, 0, 'f', 2)
+                                                         .arg(targetPos.y, 0, 'f', 2);
                         }
                     }
                 }
@@ -2266,10 +1594,18 @@ void CenterlineWorker::doWorkNew()
                 if (chosen.size() < 2) return false;
 
                 // Snap endpoints to the actual tip positions if curvature-extended.
-                if (hasHead && dispEr.tips[hIdx].extended)
-                    chosen.front() = dispEr.tips[hIdx].point;
-                if (hasTail && dispEr.tips[tIdx].extended)
-                    chosen.back()  = dispEr.tips[tIdx].point;
+                // Takes into account known may be head OR tail
+                if (hasActualTarget) {
+                    // D-2: Both are known. Ensure orientation matches Head->Tail assumption.
+                    if (hasHead && dispEr.tips[hIdx].extended) chosen.front() = dispEr.tips[hIdx].point;
+                    if (hasTail && dispEr.tips[tIdx].extended) chosen.back()  = dispEr.tips[tIdx].point;
+                } else {
+                    // D-3: Only one is known. 'chosen.front()' is ALWAYS the known tip.
+                    const int knownIdx = hasHead ? hIdx : tIdx;
+                    if (dispEr.tips[knownIdx].extended) {
+                        chosen.front() = dispEr.tips[knownIdx].point;
+                    }
+                }
                 if (!hasActualTarget && framePredictor.hasPrev) {
                     const cv::Point2f& knownLast = hasHead
                         ? framePredictor.lastHeadPos : framePredictor.lastTailPos;
@@ -2296,6 +1632,9 @@ void CenterlineWorker::doWorkNew()
                     const cv::Point2f hiddenPoint =
                         havePredictedHidden ? targetPos : centerline.back();
                     centerline.back() = hiddenPoint;
+                    debugRecord.hiddenTipHypothesized = true;
+                    debugRecord.hiddenTipTarget = targetPos;
+                    debugRecord.hiddenTipFinal = hiddenPoint;
                     Tracking::TipCandidate hyp;
                     hyp.point  = hiddenPoint;
                     hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
@@ -2306,6 +1645,9 @@ void CenterlineWorker::doWorkNew()
                         blob.assignedHeadTipIdx = newIdx;
                         std::reverse(centerline.begin(), centerline.end());
                     }
+                    debugRecord.decisions << QStringLiteral("D-3 registered hypothesized hidden tip at (%1,%2)")
+                                                 .arg(hiddenPoint.x, 0, 'f', 2)
+                                                 .arg(hiddenPoint.y, 0, 'f', 2);
                 }
                 return true;
             };
@@ -2325,6 +1667,8 @@ void CenterlineWorker::doWorkNew()
                 if (skeletonGraphPath(er.skeleton, hGraphIdx, tGraphIdx,
                                       originOffset, graphPath)) {
                     centerline = std::move(graphPath);
+                    debugRecord.branch = Debug::CenterlineBranch::D1CleanGraphPath;
+                    debugRecord.decisions << QStringLiteral("D-1 clean skeleton graph path selected");
                     if (er.tips[blob.assignedHeadTipIdx].extended &&
                         !centerline.empty())
                         centerline.front() = er.tips[blob.assignedHeadTipIdx].point;
@@ -2341,6 +1685,8 @@ void CenterlineWorker::doWorkNew()
                         Tracking::DetectedBlob holeBlob;
                         if (addSyntheticHoleAtDTMax(blob, er.distTransform,
                                                      er.localBounds, holeBlob)) {
+                            debugRecord.syntheticHoleUsed = true;
+                            debugRecord.decisions << QStringLiteral("D-1 path was short; synthetic hole retry attempted");
                             const Tracking::EndpointResult er2 =
                                 Tracking::detectEndpoints(
                                     holeBlob, framePredictor, baseline, inMerge);
@@ -2369,6 +1715,11 @@ void CenterlineWorker::doWorkNew()
                                 // Restore if synthetic-hole dispatch also failed.
                                 blob = savedBlob;
                                 centerline = prevCl;
+                                debugRecord.decisions << QStringLiteral("synthetic hole retry failed; restored D-1 path");
+                            }
+                            else {
+                                debugRecord.branch = Debug::CenterlineBranch::D1SyntheticHoleRetry;
+                                debugRecord.decisions << QStringLiteral("synthetic hole retry supplied centerline");
                             }
                         }
                     }
@@ -2384,10 +1735,16 @@ void CenterlineWorker::doWorkNew()
                     // D-2 (two tips) / D-3 (one tip): trace the skeleton
                     // arc from the known tip to the target, picking the arc
                     // whose turning angle matches the previous frame (RHR).
+                    debugRecord.branch = (hasHead && hasTail)
+                        ? Debug::CenterlineBranch::D2TwoKnownTips
+                        : Debug::CenterlineBranch::D3OneKnownTipHiddenPrediction;
+                    debugRecord.decisions << QStringLiteral("%1 skeleton-arc dispatch attempted")
+                                                 .arg(Debug::centerlineBranchToString(debugRecord.branch));
                     runSkeletonArcDispatch(blob, er, originOffset);
                 }
                 else if (!blob.holeContourPoints.empty()) {
                     // 0 tips, closed ring: synthetic-hole-axis cut.
+                    debugRecord.branch = Debug::CenterlineBranch::ZeroTipRingCut;
                     const std::vector<cv::Point>& hole = blob.holeContourPoints.front();
                     if (hole.size() >= 5) {
                         cv::RotatedRect rr = cv::fitEllipse(hole);
@@ -2407,6 +1764,7 @@ void CenterlineWorker::doWorkNew()
                                               cutBlob.centerlinePoints.end());
                             blob.centerlineCutPoint = (cutA + cutB) * 0.5f;
                             blob.hasCenterlineCutPoint = true;
+                            debugRecord.decisions << QStringLiteral("0-tip ring cut supplied centerline");
                         }
                     }
                 }
@@ -2414,19 +1772,32 @@ void CenterlineWorker::doWorkNew()
 
             if (centerline.empty()) {
                 // D-4 fallback: legacy contour-skeleton path.
+                debugRecord.fallbackUsed = true;
+                debugRecord.branch = Debug::CenterlineBranch::D4FallbackContourSkeleton;
                 Tracking::DetectedBlob fallback = blob;
                 if (Tracking::populateCenterlineFromContour(fallback) &&
                     fallback.centerlinePoints.size() >= 2) {
                     centerline.assign(fallback.centerlinePoints.begin(),
                                       fallback.centerlinePoints.end());
+                    debugRecord.decisions << QStringLiteral("D-4 fallback contour skeleton supplied centerline");
                 }
             }
+
+            debugRecord.initialCenterline = centerline;
+            debugRecord.initialArcLength = centerline.size() >= 2 ? arcLen(centerline) : 0.f;
+            debugRecord.tipCandidates = blob.tipCandidates;
+            debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
+            debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
 
             if (centerline.size() < 2) {
                 // No centerline producible. Persist what we DID compute
                 // (tip data) so the renderer still shows green dots.
                 m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal,
                                                    wormId, blob);
+                debugRecord.decisions << QStringLiteral("no centerline producible; persisted endpoint/debug blob state only");
+                if (m_debugStore) {
+                    m_debugStore->setCenterlineFrame(debugRecord);
+                }
                 prevState.valid = false;
                 return;
             }
@@ -2434,6 +1805,7 @@ void CenterlineWorker::doWorkNew()
             // ── STEP 3: resample to nPoints ─────────────────────────────
             if (static_cast<int>(centerline.size()) != nPts)
                 centerline = resample(centerline, nPts);
+            debugRecord.resampledCenterline = centerline;
 
             if (cleanWithTwoTips) {
                 m_storage->recordBodyLengthSample(wormId, arcLen(centerline));
@@ -2461,6 +1833,8 @@ void CenterlineWorker::doWorkNew()
                     refineSnakeCore(blob, mask, bounds, centerline,
                                     pinH, pinT, nPts, m_snakeParams,
                                     tmpOverlap, tmpHasOverlap);
+                    snakeRan = true;
+                    debugRecord.decisions << QStringLiteral("snake refinement ran on clean topology frame");
                 }
             }
 
@@ -2478,6 +1852,7 @@ void CenterlineWorker::doWorkNew()
                 std::reverse(centerline.begin(), centerline.end());
                 flipped = true;
                 std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+                debugRecord.decisions << QStringLiteral("RHR orientation veto flipped centerline");
             }
 
             // Keyframe bootstrap re-derivation: now that we have a
@@ -2491,6 +1866,7 @@ void CenterlineWorker::doWorkNew()
                 if (tailIdx == headIdx) tailIdx = -1;
                 blob.assignedHeadTipIdx = headIdx;
                 blob.assignedTailTipIdx = tailIdx;
+                debugRecord.decisions << QStringLiteral("keyframe bootstrap re-derived head/tail from centerline orientation");
             }
 
             // Persist centerline + cut/overlap marker on the blob.
@@ -2502,6 +1878,19 @@ void CenterlineWorker::doWorkNew()
 
             m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal,
                                                wormId, blob);
+
+            debugRecord.snakeRan = snakeRan;
+            debugRecord.rhrFlipped = flipped;
+            debugRecord.finalCenterline = centerline;
+            debugRecord.finalArcLength = arcLen(centerline);
+            debugRecord.finalTurningAngle = flipped ? -curTurning : curTurning;
+            debugRecord.tipCandidates = blob.tipCandidates;
+            debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
+            debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
+            debugRecord.topology = blob.topologyState;
+            if (m_debugStore) {
+                m_debugStore->setCenterlineFrame(debugRecord);
+            }
 
             // ── STEP 5: predictor update ────────────────────────────────
             const int hIdx = blob.assignedHeadTipIdx;
@@ -2539,513 +1928,31 @@ void CenterlineWorker::doWorkNew()
         };
 
         // ── Sweep 1 entry: process keyframe, then propagate outward ────
-        Tracking::HeadTailPredictor seedPredictor;
-        CenterlineState seedState;
-        processFrame(keyframeIdx, seedPredictor, seedState,
-                     /*isKeyframeBootstrap=*/true);
+                Tracking::HeadTailPredictor seedPredictor;
+                CenterlineState seedState;
+                processFrame(keyframeIdx, 1, seedPredictor, seedState,
+                             /*isKeyframeBootstrap=*/true);
 
-        // Forward pass.
-        {
-            Tracking::HeadTailPredictor predictor = seedPredictor;
-            CenterlineState prevState = seedState;
-            for (int i = keyframeIdx + 1;
-                 i < static_cast<int>(sortedPoints.size()); ++i) {
-                processFrame(i, predictor, prevState,
-                             /*isKeyframeBootstrap=*/false);
-            }
-        }
-
-        // Backward pass.
-        {
-            Tracking::HeadTailPredictor predictor = seedPredictor;
-            CenterlineState prevState = seedState;
-            for (int i = keyframeIdx - 1; i >= 0; --i) {
-                processFrame(i, predictor, prevState,
-                             /*isKeyframeBootstrap=*/false);
-            }
-        }
-
-        ++processedWorms;
-        emit progress(processedWorms * 100 / totalWorms);
-    }
-
-    emit finished();
-}
-
-void CenterlineWorker::doWorkLegacy()
-{
-    if (!m_storage) {
-        emit failed("No storage provided to CenterlineWorker");
-        return;
-    }
-
-    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    int totalWorms = static_cast<int>(tracks.size());
-    if (totalWorms == 0) {
-        emit progress(100);
-        emit finished();
-        return;
-    }
-
-    // Discard any prior baselines: a rerun reads from the same clean frames
-    // and produces the same distributions, so re-accumulating into existing
-    // counts would double the sample count without adding information.
-    m_storage->clearAllTipBaselines();
-
-    int processedWorms = 0;
-
-    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        int wormId = it->first;
-
-        // Track points are processed in temporal order.  The blob centerlines
-        // are written back to storage but the WormTrackPoint.position values
-        // are *not* modified — the original blob centroid is preserved.
-        std::vector<Tracking::WormTrackPoint> sortedPoints = it->second;
-        std::sort(sortedPoints.begin(), sortedPoints.end(),
-                  [](const Tracking::WormTrackPoint& a,
-                     const Tracking::WormTrackPoint& b) {
-                      return a.frameNumberOriginal < b.frameNumberOriginal;
-                  });
-
-        // Per-worm keyframe: the frame on which the user originally clicked
-        // this worm.  Centerline correction propagates outward from there in
-        // both directions because the keyframe is guaranteed to have a clean,
-        // separated blob (worms are picked when they're individually visible).
-        int keyframe = -1;
-        if (const TableItems::ClickedItem* item = m_storage->getItem(wormId))
-            keyframe = item->frameOfSelection;
-
-        // ── Pass 1: compute first-pass centerlines, learn body length ──
-        std::vector<float> validLengths;
-        validLengths.reserve(sortedPoints.size());
-
-        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
-            if (tp.quality == Tracking::TrackPointQuality::Merged ||
-                tp.quality == Tracking::TrackPointQuality::Lost)
-                continue;
-
-            QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (!frameBlobs.contains(wormId)) continue;
-
-            Tracking::DetectedBlob blob = frameBlobs[wormId];
-            if (!blob.isValid || blob.contourPoints.empty()) continue;
-
-            if (blob.centerlinePoints.empty())
-                Tracking::populateCenterlineFromContour(blob);
-
-            if (!blob.centerlinePoints.empty()) {
-                // Reference length is taken only from non-ring frames where
-                // the skeleton is reliable.
-                if (blob.holeContourPoints.empty()) {
-                    std::vector<cv::Point2f> p(blob.centerlinePoints.begin(),
-                                               blob.centerlinePoints.end());
-                    validLengths.push_back(arcLen(p));
-                }
-                m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-            }
-        }
-
-        // Use the median length as a robust reference (resistant to outliers).
-        float refLength = 0.f;
-        if (!validLengths.empty()) {
-            std::nth_element(validLengths.begin(),
-                             validLengths.begin() + validLengths.size() / 2,
-                             validLengths.end());
-            refLength = validLengths[validLengths.size() / 2];
-        }
-
-        // ── Pass 2: keyframe-outward orientation and repair ──
-        // Find the index in sortedPoints whose frame == keyframe (or fall back
-        // to the first frame if the keyframe didn't yield a valid track point).
-        int keyframeIdx = -1;
-        if (keyframe >= 0) {
-            for (size_t i = 0; i < sortedPoints.size(); ++i) {
-                if (sortedPoints[i].frameNumberOriginal == keyframe) {
-                    keyframeIdx = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
-        if (keyframeIdx < 0) keyframeIdx = 0;
-
-        auto runDirection = [&](int startIdx, int step,
-                                CenterlineState seedState) {
-            CenterlineState prev = seedState;
-            int n = static_cast<int>(sortedPoints.size());
-            for (int i = startIdx; i >= 0 && i < n; i += step) {
-                Tracking::WormTrackPoint& tp = sortedPoints[i];
-                if (tp.quality == Tracking::TrackPointQuality::Merged ||
-                    tp.quality == Tracking::TrackPointQuality::Lost) {
-                    // No prediction available across merged/lost gaps; keep
-                    // the first-pass guess for those frames untouched and
-                    // resume orientation when we see a clean frame again.
-                    prev.valid = false;
-                    continue;
-                }
-
-                QMap<int, Tracking::DetectedBlob> frameBlobs =
-                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-                if (!frameBlobs.contains(wormId)) continue;
-
-                Tracking::DetectedBlob blob = frameBlobs[wormId];
-
-                CenterlineState out;
-                if (processOneFrame(blob, prev, refLength,
-                                    std::max(4, m_snakeParams.nPoints),
-                                    kMinArcLengthFraction,
-                                    m_snakeParams, out)) {
-                    m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-                    prev = out;
-                } else {
-                    prev.valid = false;
-                }
-            }
-        };
-
-        // Seed from the keyframe itself; we orient it without history (its
-        // first-pass centerline simply defines our convention for this worm).
-        CenterlineState seed;
-        {
-            const Tracking::WormTrackPoint& tp = sortedPoints[keyframeIdx];
-            QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (frameBlobs.contains(wormId)) {
-                Tracking::DetectedBlob blob = frameBlobs[wormId];
-                CenterlineState out;
-                CenterlineState empty;
-                if (processOneFrame(blob, empty, refLength,
-                                    std::max(4, m_snakeParams.nPoints),
-                                    kMinArcLengthFraction,
-                                    m_snakeParams, out)) {
-                    m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-                    seed = out;
-                }
-            }
-        }
-
-        // Propagate forward and backward from the keyframe.
-        runDirection(keyframeIdx + 1, +1, seed);
-        runDirection(keyframeIdx - 1, -1, seed);
-
-        // ── Pass 3: per-worm tip-feature baseline (Phase A) ─────────────────
-        // For every clean-topology frame this worm has, sample both tips'
-        // (|curvature|, width) features and the refined centerline arc-length
-        // into the worm's running baseline. Downstream head/tail assignment
-        // scores ambiguous tip candidates against this distribution.
-        //
-        // "Clean" here means: blob is valid, has no holes (no ring topology),
-        // the worm is not part of a merge group at this frame, and the
-        // tip-candidate detector surfaced exactly two SkeletonEndpoint tips
-        // (the strongest available operational signal that the topology is
-        // unambiguous and head/tail are both visible).
-        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
-            if (tp.quality != Tracking::TrackPointQuality::Single &&
-                tp.quality != Tracking::TrackPointQuality::Split)
-                continue;
-
-            // Exclude frames where this worm shares its blob with another.
-            const QList<QList<int>> mergeGroups =
-                m_storage->getMergeGroupsForFrame(tp.frameNumberOriginal);
-            bool inMerge = false;
-            for (const QList<int>& group : mergeGroups) {
-                if (group.size() > 1 && group.contains(wormId)) { inMerge = true; break; }
-            }
-            if (inMerge) continue;
-
-            const QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (!frameBlobs.contains(wormId)) continue;
-            const Tracking::DetectedBlob& blob = frameBlobs[wormId];
-            if (!blob.isValid || !blob.holeContourPoints.empty()) continue;
-
-            // Require exactly two skeleton-derived candidates — our operational
-            // definition of "clean topology with both tips visible."
-            int firstSkel = -1, secondSkel = -1;
-            int extraSkel = 0;
-            for (size_t i = 0; i < blob.tipCandidates.size(); ++i) {
-                if (blob.tipCandidates[i].source !=
-                    Tracking::TipCandidate::Source::SkeletonEndpoint) continue;
-                if (firstSkel < 0) firstSkel = static_cast<int>(i);
-                else if (secondSkel < 0) secondSkel = static_cast<int>(i);
-                else ++extraSkel;
-            }
-            if (firstSkel < 0 || secondSkel < 0 || extraSkel > 0) continue;
-
-            const Tracking::TipCandidate& t1 = blob.tipCandidates[firstSkel];
-            const Tracking::TipCandidate& t2 = blob.tipCandidates[secondSkel];
-            m_storage->recordTipFeatureSample(wormId, std::abs(t1.curvature), t1.width);
-            m_storage->recordTipFeatureSample(wormId, std::abs(t2.curvature), t2.width);
-
-            if (blob.centerlinePoints.size() >= 2) {
-                std::vector<cv::Point2f> p(blob.centerlinePoints.begin(),
-                                           blob.centerlinePoints.end());
-                m_storage->recordBodyLengthSample(wormId, arcLen(p));
-            }
-        }
-
-        // ── Pass 4a: topology classification (Phase C.2) ────────────────────
-        // Classify every blob this worm has into Clean / SelfCrossed / Merged
-        // / Lost before head/tail assignment runs. The classification feeds
-        // both the per-frame log line and the downstream Phase D dispatch
-        // (Pass 5: geodesic-from-tips centerline init on SelfCrossed frames).
-        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
-            const QList<QList<int>> mergeGroups =
-                m_storage->getMergeGroupsForFrame(tp.frameNumberOriginal);
-            bool inMerge = false;
-            for (const QList<int>& group : mergeGroups) {
-                if (group.size() > 1 && group.contains(wormId)) { inMerge = true; break; }
-            }
-
-            QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (!frameBlobs.contains(wormId)) continue;
-            Tracking::DetectedBlob blob = frameBlobs[wormId];
-            Tracking::classifyTopology(blob, inMerge);
-            m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-        }
-
-        // ── Pass 4b: head/tail assignment (Phase C.1) ───────────────────────
-        // Walks frames temporally from keyframe outward, mirroring Pass 2's
-        // direction structure. For each frame:
-        //   • At the keyframe, bootstrap the assignment from the centerline's
-        //     own endpoint convention (front-of-polyline → head, back → tail,
-        //     mapped to the nearest tip candidates). The centerline was
-        //     finalised in Pass 2, so its orientation is already consistent
-        //     with the worm's per-individual convention.
-        //   • At every other frame, call assignHeadTail() with a predictor
-        //     state seeded from the previous frame. Predictor velocity engages
-        //     after two successful assignments.
-        // Each frame's assignment indices are written back to storage.
-        const Tracking::TipFeatureBaseline baseline = m_storage->getTipBaseline(wormId);
-
-        // Map a target point to the nearest tip-candidate index. Used by both
-        // the keyframe seed and any sanity-check overrides on disrupted frames.
-        auto nearestCandidateIdx = [](const Tracking::DetectedBlob& b,
-                                      const cv::Point2f& target) -> int {
-            int bestIdx = -1;
-            float bestDistSq = std::numeric_limits<float>::max();
-            for (size_t i = 0; i < b.tipCandidates.size(); ++i) {
-                const cv::Point2f d = b.tipCandidates[i].point - target;
-                const float dsq = d.x * d.x + d.y * d.y;
-                if (dsq < bestDistSq) { bestDistSq = dsq; bestIdx = static_cast<int>(i); }
-            }
-            return bestIdx;
-        };
-
-        // Seed predictor state from the keyframe's centerline.
-        Tracking::HeadTailPredictor seedPredictor;
-        {
-            const Tracking::WormTrackPoint& tp = sortedPoints[keyframeIdx];
-            QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (frameBlobs.contains(wormId)) {
-                Tracking::DetectedBlob blob = frameBlobs[wormId];
-                if (blob.isValid && !blob.tipCandidates.empty()
-                    && blob.centerlinePoints.size() >= 2) {
-                    const int headIdx = nearestCandidateIdx(blob, blob.centerlinePoints.front());
-                    int       tailIdx = nearestCandidateIdx(blob, blob.centerlinePoints.back());
-                    if (tailIdx == headIdx) tailIdx = -1;  // degenerate: single candidate
-                    blob.assignedHeadTipIdx = headIdx;
-                    blob.assignedTailTipIdx = tailIdx;
-                    m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-
-                    if (headIdx >= 0) {
-                        seedPredictor.hasPrev = true;
-                        seedPredictor.lastHeadPos = blob.tipCandidates[headIdx].point;
-                        if (tailIdx >= 0)
-                            seedPredictor.lastTailPos = blob.tipCandidates[tailIdx].point;
-                        else
-                            seedPredictor.lastTailPos = blob.tipCandidates[headIdx].point;
-                        if (baseline.lengthSamples > 0)
-                            seedPredictor.refDistance = std::max(8.f, 0.5f * baseline.meanBodyLength);
-                        else if (refLength > 0.f)
-                            seedPredictor.refDistance = std::max(8.f, 0.5f * refLength);
-
-                        YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                            "Pass4 seed   worm=%d frame=%d  head=cand[%d] tail=cand[%d]  refDist=%.1f",
-                            wormId, tp.frameNumberOriginal, headIdx, tailIdx,
-                            static_cast<double>(seedPredictor.refDistance));
-                    }
-                }
-            }
-        }
-
-        auto runAssignmentDirection = [&](int startIdx, int step,
-                                          Tracking::HeadTailPredictor predictor) {
-            const int n = static_cast<int>(sortedPoints.size());
-            for (int i = startIdx; i >= 0 && i < n; i += step) {
-                const Tracking::WormTrackPoint& tp = sortedPoints[i];
-                if (tp.quality == Tracking::TrackPointQuality::Lost) {
-                    // Don't propagate priors across a lost segment — when we
-                    // resume tracking the worm is in an unknown position.
-                    predictor = Tracking::HeadTailPredictor{};
-                    YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                        "Pass4 lost   worm=%d frame=%d  -> predictor reset",
-                        wormId, tp.frameNumberOriginal);
-                    continue;
-                }
-
-                QMap<int, Tracking::DetectedBlob> frameBlobs =
-                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-                if (!frameBlobs.contains(wormId)) continue;
-                Tracking::DetectedBlob blob = frameBlobs[wormId];
-
-                // Context header — the assignHeadTail debug lines that follow
-                // will be attributable to this (worm, frame) pair.
-                YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                    "Pass4        worm=%d frame=%d  step=%+d  topo=%s",
-                    wormId, tp.frameNumberOriginal, step,
-                    qUtf8Printable(Tracking::topologyStateToString(blob.topologyState)));
-
-                if (!Tracking::assignHeadTail(blob, predictor, baseline)) continue;
-
-                // ── Inline D-3: one assigned tip on a SelfCrossed frame ────────
-                // assignHeadTail may leave one role unset (-1) when only a single
-                // skeleton endpoint was visible. Run the body-length geodesic HERE
-                // (not in a later pass) so the predictor's lastHeadPos/lastTailPos
-                // is updated before the NEXT frame's assignment runs. Without this
-                // the missing role's predicted position goes stale across runs of
-                // consecutive self-crossed frames.
+                // Forward pass.
                 {
-                    const int hIdx = blob.assignedHeadTipIdx;
-                    const int tIdx = blob.assignedTailTipIdx;
-                    const bool oneHead = (hIdx >= 0 && tIdx < 0);
-                    const bool oneTail = (tIdx >= 0 && hIdx < 0);
-                    if ((oneHead || oneTail)
-                        && blob.topologyState == Tracking::TopologyState::SelfCrossed) {
-                        const int knownIdx = oneHead ? hIdx : tIdx;
-                        const cv::Point2f knownTip = blob.tipCandidates[knownIdx].point;
-                        const int nPts = std::max(4, m_snakeParams.nPoints);
-                        std::vector<cv::Point2f> refined;
-                        cv::Point2f hiddenTip, overlapCenter;
-                        bool hasOverlap = false;
-                        if (refineCenterlineSnakeFromOneTip(blob, knownTip,
-                                                            nPts, m_snakeParams,
-                                                            refined, hiddenTip,
-                                                            overlapCenter, hasOverlap)) {
-                            Tracking::TipCandidate hypTip;
-                            hypTip.point  = hiddenTip;
-                            hypTip.source = Tracking::TipCandidate::Source::HypothesizedHidden;
-                            blob.tipCandidates.push_back(hypTip);
-                            const int newIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
-                            if (oneHead) blob.assignedTailTipIdx = newIdx;
-                            else         blob.assignedHeadTipIdx = newIdx;
-                            blob.centerlinePoints.assign(refined.begin(), refined.end());
-                            if (hasOverlap) {
-                                blob.centerlineCutPoint = overlapCenter;
-                                blob.hasCenterlineCutPoint = true;
-                            }
-                            YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                                "Pass4 D-3    worm=%d frame=%d  known=%s @ (%.1f,%.1f) "
-                                "-> hidden=(%.1f,%.1f)  geodDist=%.1f",
-                                wormId, tp.frameNumberOriginal,
-                                oneHead ? "head" : "tail",
-                                static_cast<double>(knownTip.x),
-                                static_cast<double>(knownTip.y),
-                                static_cast<double>(hiddenTip.x),
-                                static_cast<double>(hiddenTip.y),
-                                static_cast<double>(ptDist(knownTip, hiddenTip)));
-                        }
+                    Tracking::HeadTailPredictor predictor = seedPredictor;
+                    CenterlineState prevState = seedState;
+                    for (int i = keyframeIdx + 1;
+                         i < static_cast<int>(sortedPoints.size()); ++i) {
+                        processFrame(i, 1, predictor, prevState,
+                                     /*isKeyframeBootstrap=*/false);
                     }
                 }
 
-                m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-
-                // Update predictor for the next frame. Velocity engages after
-                // we have two successful assignments in a row for that role.
-                // The indices here reflect both Pass-4b skeleton assignments and
-                // any D-3 hidden-tip that was just inferred above.
-                const int headIdx = blob.assignedHeadTipIdx;
-                const int tailIdx = blob.assignedTailTipIdx;
-                if (headIdx >= 0) {
-                    const cv::Point2f newHead = blob.tipCandidates[headIdx].point;
-                    predictor.velHead = newHead - predictor.lastHeadPos;
-                    predictor.lastHeadPos = newHead;
+                // Backward pass.
+                {
+                    Tracking::HeadTailPredictor predictor = seedPredictor;
+                    CenterlineState prevState = seedState;
+                    for (int i = keyframeIdx - 1; i >= 0; --i) {
+                        processFrame(i, -1, predictor, prevState,
+                                     /*isKeyframeBootstrap=*/false);
+                    }
                 }
-                if (tailIdx >= 0) {
-                    const cv::Point2f newTail = blob.tipCandidates[tailIdx].point;
-                    predictor.velTail = newTail - predictor.lastTailPos;
-                    predictor.lastTailPos = newTail;
-                }
-                // hasVelocity becomes true after the first per-direction step
-                // that found at least one assignment (we just updated velHead
-                // and/or velTail with a meaningful delta).
-                predictor.hasVelocity = predictor.hasPrev &&
-                                        (headIdx >= 0 || tailIdx >= 0);
-                predictor.hasPrev = true;
-            }
-        };
-
-        runAssignmentDirection(keyframeIdx + 1, +1, seedPredictor);
-        runAssignmentDirection(keyframeIdx - 1, -1, seedPredictor);
-
-        // ── Pass 5: D-2 geodesic centerline refinement (Phase C.3) ─────────
-        // For SelfCrossed frames where BOTH head and tail are now assigned
-        // (either both from skeleton endpoints in Pass 4b, or head from skel +
-        // tail from the inline D-3 above), replace the Pass 2 centerline with
-        // a geodesic shortest path through the current blob mask from the
-        // assigned head to the assigned tail. This removes the stale-topology
-        // bias of the Pass 2 snake init.
-        //
-        // D-3 (single visible tip → infer hidden tip by body-length geodesic)
-        // is now handled inline in runAssignmentDirection so that the predictor
-        // is updated immediately. Pass 5 only needs to re-run the snake for
-        // frames where both tips were already assigned by Pass 4b (D-2 case).
-        //
-        // Clean frames are skipped — skeleton centerline is correct.
-        // Merged / Lost frames are skipped — geodesic not meaningful.
-        // SelfCrossed with no assigned tips → D-4 fallback (Pass 2 result kept).
-        const int nPointsSnake = std::max(4, m_snakeParams.nPoints);
-        int d2Count = 0;
-        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
-            QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-            if (!frameBlobs.contains(wormId)) continue;
-            Tracking::DetectedBlob blob = frameBlobs[wormId];
-            if (blob.topologyState != Tracking::TopologyState::SelfCrossed) continue;
-
-            const int hIdx = blob.assignedHeadTipIdx;
-            const int tIdx = blob.assignedTailTipIdx;
-            const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.tipCandidates.size()));
-            const bool hasTail = (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size()));
-
-            // D-3 frames (HypothesizedHidden tail) were already refined inline;
-            // skip them here to avoid re-running the snake redundantly.
-            if (hasTail && blob.tipCandidates[tIdx].source ==
-                               Tracking::TipCandidate::Source::HypothesizedHidden) continue;
-            if (hasHead && blob.tipCandidates[hIdx].source ==
-                               Tracking::TipCandidate::Source::HypothesizedHidden) continue;
-
-            if (!hasHead || !hasTail) continue;
-
-            // D-2: geodesic head → tail, both tips are skeleton-confirmed.
-            const cv::Point2f head = blob.tipCandidates[hIdx].point;
-            const cv::Point2f tail = blob.tipCandidates[tIdx].point;
-            std::vector<cv::Point2f> refined;
-            cv::Point2f overlapCenter;
-            bool hasOverlap = false;
-            if (refineCenterlineSnakeFromTips(blob, head, tail, nPointsSnake,
-                                              m_snakeParams,
-                                              refined, overlapCenter, hasOverlap)) {
-                blob.centerlinePoints.assign(refined.begin(), refined.end());
-                if (hasOverlap) {
-                    blob.centerlineCutPoint = overlapCenter;
-                    blob.hasCenterlineCutPoint = true;
-                }
-                m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
-                ++d2Count;
-                YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-                    "Pass5 D-2    worm=%d frame=%d  head=(%.1f,%.1f) tail=(%.1f,%.1f)  overlap=%d",
-                    wormId, tp.frameNumberOriginal,
-                    static_cast<double>(head.x), static_cast<double>(head.y),
-                    static_cast<double>(tail.x), static_cast<double>(tail.y),
-                    hasOverlap ? 1 : 0);
-            }
-        }
-        YAWT_DEBUG(lcCoreCenterlineWorker) << QString::asprintf(
-            "Pass5 summary worm=%d  D-2=%d",
-            wormId, d2Count);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);
@@ -3057,7 +1964,7 @@ void CenterlineWorker::doWorkLegacy()
 // ── Diagnostic export: per-stage images + decision log ─────────────────────
 //
 // Re-runs the per-frame centerline pipeline (same dispatch as Sweep 1's
-// processFrame in doWorkNew) for one (wormId, frameNumber), writing an image
+// processFrame in doWork) for one (wormId, frameNumber), writing an image
 // after each stage that contributed a decision plus a text log explaining
 // what was decided and why. Reads storage only; never writes back.
 //
@@ -3254,6 +2161,16 @@ bool CenterlineWorker::exportProcessForFrame(
     Tracking::HeadTailPredictor predictor =
         reconstructPredictor(storage, wormId, frameNumber, predictorNote);
     const Tracking::TipFeatureBaseline baseline = storage->getTipBaseline(wormId);
+    Tracking::DetectedBlob previousBlobForExport;
+    const auto previousBlobsForExport =
+        storage->getDetectedBlobsForFrame(frameNumber - 1);
+    const bool hasPreviousBlobForExport =
+        previousBlobsForExport.contains(wormId) &&
+        previousBlobsForExport[wormId].isValid &&
+        !previousBlobsForExport[wormId].contourPoints.empty();
+    if (hasPreviousBlobForExport) {
+        previousBlobForExport = previousBlobsForExport[wormId];
+    }
     const cv::Point2f predictedHead = predictor.hasVelocity
         ? predictor.lastHeadPos + predictor.velHead
         : predictor.lastHeadPos;
@@ -3274,6 +2191,19 @@ bool CenterlineWorker::exportProcessForFrame(
         nearestMaskPoint(blob, predictedCenter, snappedCenter);
         predictedCenter = snappedCenter;
     }
+
+    const HiddenTipTarget hiddenHeadTarget = predictHiddenTipTarget(
+        blob,
+        hasPreviousBlobForExport ? &previousBlobForExport : nullptr,
+        predictor.lastHeadPos,
+        predictor.velHead,
+        predictor.hasVelocity);
+    const HiddenTipTarget hiddenTailTarget = predictHiddenTipTarget(
+        blob,
+        hasPreviousBlobForExport ? &previousBlobForExport : nullptr,
+        predictor.lastTailPos,
+        predictor.velTail,
+        predictor.hasVelocity);
 
     const int nPts = std::max(4, snakeParams.nPoints);
     const float angleThreshold = static_cast<float>(
@@ -3324,6 +2254,26 @@ bool CenterlineWorker::exportProcessForFrame(
     log << "snapped: Hmask=(" << snappedHead.x << "," << snappedHead.y << ")"
         << " Tmask=(" << snappedTail.x << "," << snappedTail.y << ")"
         << " Cmask=(" << snappedCenter.x << "," << snappedCenter.y << ")\n";
+    if (hiddenHeadTarget.hasTarget) {
+        log << "hiddenHeadTarget: blended=(" << hiddenHeadTarget.target.x << ","
+            << hiddenHeadTarget.target.y << ") vel=(" << hiddenHeadTarget.velocityTarget.x
+            << "," << hiddenHeadTarget.velocityTarget.y << ") maskCue="
+            << (hiddenHeadTarget.hasMaskCue ? "Y" : "N");
+        if (hiddenHeadTarget.hasMaskCue) {
+            log << " (" << hiddenHeadTarget.maskCue.x << "," << hiddenHeadTarget.maskCue.y << ")";
+        }
+        log << "\n";
+    }
+    if (hiddenTailTarget.hasTarget) {
+        log << "hiddenTailTarget: blended=(" << hiddenTailTarget.target.x << ","
+            << hiddenTailTarget.target.y << ") vel=(" << hiddenTailTarget.velocityTarget.x
+            << "," << hiddenTailTarget.velocityTarget.y << ") maskCue="
+            << (hiddenTailTarget.hasMaskCue ? "Y" : "N");
+        if (hiddenTailTarget.hasMaskCue) {
+            log << " (" << hiddenTailTarget.maskCue.x << "," << hiddenTailTarget.maskCue.y << ")";
+        }
+        log << "\n";
+    }
     log << "predictorSource: " << predictorNote << "\n";
     log << "baseline: kappaSamples=" << baseline.curvatureSamples
         << " (|kappa|=" << baseline.meanAbsCurvature << "+/-" << baseline.curvatureStdDev() << ")"
@@ -3482,7 +2432,8 @@ bool CenterlineWorker::exportProcessForFrame(
         }
             if (predictor.hasPrev) {
                 auto drawPred = [&](const cv::Point2f& last, const cv::Point2f& vel,
-                                    const cv::Scalar& col, const char* label) {
+                                    const cv::Scalar& col, const char* label,
+                                    const HiddenTipTarget* hiddenTarget) {
                     if (last.x < 0) return;
                     cv::Point2f pred = predictor.hasVelocity ? (last + vel) : last;
                     cv::Point2f snapped = pred;
@@ -3493,21 +2444,32 @@ bool CenterlineWorker::exportProcessForFrame(
                              worldToCanvas(snapped, bounds), col, 1, cv::LINE_AA);
                     drawText(canvas, label,
                              worldToCanvas(snapped, bounds) + cv::Point(7, -4), col);
+                    if (hiddenTarget && hiddenTarget->hasMaskCue) {
+                        cv::drawMarker(canvas, worldToCanvas(hiddenTarget->maskCue, bounds),
+                                       col, cv::MARKER_DIAMOND, 11, 1, cv::LINE_AA);
+                        cv::circle(canvas, worldToCanvas(hiddenTarget->target, bounds),
+                                   5, col, cv::FILLED, cv::LINE_AA);
+                        cv::line(canvas, worldToCanvas(hiddenTarget->maskCue, bounds),
+                                 worldToCanvas(hiddenTarget->target, bounds),
+                                 col, 1, cv::LINE_AA);
+                        drawText(canvas, QString("%1 target").arg(label),
+                                 worldToCanvas(hiddenTarget->target, bounds) + cv::Point(7, 10), col);
+                    }
                 };
             drawPred(predictor.lastHeadPos, predictor.velHead,
-                     cv::Scalar(0, 0, 200), "Hpred");
+                     cv::Scalar(0, 0, 200), "Hpred", &hiddenHeadTarget);
             drawPred(predictor.lastTailPos, predictor.velTail,
-                     cv::Scalar(200, 80, 0), "Tpred");
+                     cv::Scalar(200, 80, 0), "Tpred", &hiddenTailTarget);
             if (hasPredictedCenter) {
                 drawPred(predictor.lastCenterPos, predictor.velCenter,
-                         cv::Scalar(0, 220, 220), "Cpred");
+                         cv::Scalar(0, 220, 220), "Cpred", nullptr);
             }
         }
         drawTitle(canvas, QString("04 head/tail  topo=%1")
                   .arg(Tracking::topologyStateToString(er.topology)));
         drawText(canvas,
             QString("predictor: %1").arg(predictor.hasPrev
-                ? (predictor.hasVelocity ? "prev+vel" : "prev only")
+                ? (predictor.hasVelocity ? "prev+vel+mask" : "prev+mask")
                 : "none"),
             cv::Point(8, canvas.rows - 10));
         writeStageImage(canvas, outputDir, "04_head_tail.png");
@@ -3529,7 +2491,7 @@ bool CenterlineWorker::exportProcessForFrame(
     blob.assignedTailTipIdx = er.tailIdx;
     blob.topologyState      = er.topology;
 
-    // Stage 05 — Step 2 dispatch (mirrors doWorkNew, same logic).
+    // Stage 05 — Step 2 dispatch (mirrors doWork, same logic).
     std::vector<cv::Point2f> centerline;
     bool hasOverlap = false;
     cv::Point2f overlapCenter(0.f, 0.f);
@@ -3580,8 +2542,22 @@ bool CenterlineWorker::exportProcessForFrame(
                 const cv::Point2f& vel  = hiddenIsHead
                     ? predictor.velHead    : predictor.velTail;
                 if (last.x != 0.f || last.y != 0.f) {
-                    targetPos = predictor.hasVelocity ? (last + vel) : last;
-                    nearestMaskPoint(dispBlob, targetPos, targetPos);
+                    const HiddenTipTarget predicted = predictHiddenTipTarget(
+                        dispBlob,
+                        hasPreviousBlobForExport ? &previousBlobForExport : nullptr,
+                        last,
+                        vel,
+                        predictor.hasVelocity);
+                    if (predicted.hasTarget) {
+                        targetPos = predicted.target;
+                    }
+                    if (predicted.hasMaskCue) {
+                        detailOut += QString("  maskCue=(%1,%2) velTarget=(%3,%4)")
+                                     .arg(predicted.maskCue.x,'f',1)
+                                     .arg(predicted.maskCue.y,'f',1)
+                                     .arg(predicted.velocityTarget.x,'f',1)
+                                     .arg(predicted.velocityTarget.y,'f',1);
+                    }
                 }
             }
         }
@@ -3902,13 +2878,23 @@ bool CenterlineWorker::exportProcessForFrame(
         writeStageImage(canvas, outputDir, "07_snake_refined.png");
     }
 
-    // Stage 08 — RHR turning-angle check (informational only in export mode).
+    // Stage 08 — RHR turning-angle check.
     const float curTurning = totalSignedTurningAngle(centerline);
+    bool exportRhrFlipped = false;
+    if (std::abs(prevTurningAngle) > angleThreshold &&
+        std::abs(curTurning) > angleThreshold &&
+        curTurning * prevTurningAngle < 0.f) {
+        std::reverse(centerline.begin(), centerline.end());
+        std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+        exportRhrFlipped = true;
+    }
+    const float finalTurning = exportRhrFlipped ? -curTurning : curTurning;
     log << "Stage 08 (RHR turning-angle check):\n"
         << "  turning angle = " << curTurning << " rad ("
         << (curTurning * 180.0f / float(CV_PI)) << " deg)\n"
         << "  threshold = " << snakeParams.orientationAngleThreshold << " rad\n"
-        << "  no previous-frame sweep state in export mode -> no flip applied.\n\n";
+        << "  previous turning angle = " << prevTurningAngle << " rad\n"
+        << "  flipped = " << (exportRhrFlipped ? "Y" : "N") << "\n\n";
 
     // Stage 09 — final centerline + head/tail markers.
     {
@@ -3926,7 +2912,7 @@ bool CenterlineWorker::exportProcessForFrame(
         drawText(canvas, "T", pts.back()  + cv::Point(-4, 5));
         drawTitle(canvas, QString("09 final  arcLen=%1 px  turning=%2 rad")
                   .arg(arcLen(centerline), 0, 'f', 1)
-                  .arg(curTurning, 0, 'f', 3));
+                  .arg(finalTurning, 0, 'f', 3));
         writeStageImage(canvas, outputDir, "09_final.png");
     }
 

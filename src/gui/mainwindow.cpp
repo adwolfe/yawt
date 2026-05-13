@@ -33,6 +33,7 @@
 #include "trackingprogressdialog.h"
 #include "../core/appcontroller.h"
 #include "../core/centerlineworker.h"
+#include "../debug/debugexporter.h"
 #include "trackingmanager.h"
 #include "trackingdatastorage.h"
 #include "version.h"
@@ -2414,17 +2415,6 @@ void MainWindow::onExportProcessClicked()
         return;
     }
 
-    // Same snake params the Rerun Centerline button uses.
-    Tracking::CenterlineSnakeParams params;
-    if (auto* g = ui->snakeDebugGroup)        params.enabled                   = g->isChecked();
-    if (auto* sb = ui->snakeAlphaSpin)        params.alpha                     = sb->value();
-    if (auto* sb = ui->snakeBetaSpin)         params.beta                      = sb->value();
-    if (auto* sb = ui->snakeLambdaSpin)       params.lambda                    = sb->value();
-    if (auto* sb = ui->snakeItersSpin)        params.iterations                = sb->value();
-    if (auto* sb = ui->snakeStepSpin)         params.stepSize                  = sb->value();
-    if (auto* sb = ui->snakeOrientThreshSpin) params.orientationAngleThreshold = sb->value();
-    if (auto* sb = ui->snakeNPointsSpin)      params.nPoints                   = sb->value();
-
     const QString outDir = QDir(dataDir).absoluteFilePath(
         QString("Debug/worm%1_frame%2").arg(wormId).arg(frame));
     if (!QDir().mkpath(outDir)) {
@@ -2439,8 +2429,13 @@ void MainWindow::onExportProcessClicked()
     QApplication::processEvents();
 
     QString err;
-    const bool ok = CenterlineWorker::exportProcessForFrame(
-        m_trackingDataStorage, wormId, frame, params, outDir, &err);
+    const bool ok = Debug::DebugExporter::exportCenterlineFrame(
+        m_trackingDataStorage,
+        m_appController ? m_appController->debugDataStore() : nullptr,
+        wormId,
+        frame,
+        outDir,
+        &err);
 
     ui->exportProcessButton->setEnabled(true);
     if (ok) {

@@ -30,6 +30,7 @@
 
 #include "trackingmanager.h"
 #include "../data/trackingdatastorage.h"
+#include "../debug/debugdatastore.h"
 #include "../models/blobtablemodel.h"
 #include "../models/annotationtablemodel.h"
 #include "../gui/trackingprogressdialog.h"
@@ -60,7 +61,10 @@ AppController::AppController(TrackingDataStorage* storage, QObject* parent)
     if (!m_blobModel) m_blobModel = new BlobTableModel(m_storage, this);
     if (!m_annotationModel) m_annotationModel = new AnnotationTableModel(m_storage, this);
     if (!m_manager) {
-        m_manager = new TrackingManager(m_storage, this);
+        if (!m_debugStore) {
+            m_debugStore = new Debug::DebugDataStore();
+        }
+        m_manager = new TrackingManager(m_storage, m_debugStore, this);
     }
     connectTrackingManagerSignals();
 }
@@ -69,6 +73,7 @@ AppController::~AppController()
 {
     // QObject parent-child will delete owned children (m_manager, m_blobModel, m_annotationModel, m_storage if created with 'this' parent).
     // If m_storage was provided by caller, we do not delete it here (it may not be parented to us).
+    delete m_debugStore;
     YAWT_DEBUG(lcCoreAppController) << "AppController destroyed";
 }
 
@@ -78,10 +83,13 @@ void AppController::initWithNewStorage()
     if (!m_storage) {
         m_storage = new TrackingDataStorage(this);
     }
+    if (!m_debugStore) {
+        m_debugStore = new Debug::DebugDataStore();
+    }
 
     // Create TrackingManager with storage; TrackingManager expects a storage pointer
     if (!m_manager) {
-        m_manager = new TrackingManager(m_storage, this);
+        m_manager = new TrackingManager(m_storage, m_debugStore, this);
     }
 
     // Create application models that adapt the storage to views
@@ -134,6 +142,11 @@ AnnotationTableModel* AppController::annotationTableModel() const
 TrackingDataStorage* AppController::trackingDataStorage() const
 {
     return m_storage;
+}
+
+Debug::DebugDataStore* AppController::debugDataStore() const
+{
+    return m_debugStore;
 }
 
 void AppController::addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame)

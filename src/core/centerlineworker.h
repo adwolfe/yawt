@@ -6,6 +6,8 @@
 #include "../data/trackingdatastorage.h"
 #include "../data/trackingcommon.h"
 
+namespace Debug { class DebugDataStore; }
+
 /**
  * @class CenterlineWorker
  * @brief Background worker that populates centerline data for all non-merged track points.
@@ -25,7 +27,9 @@ class CenterlineWorker : public QObject {
     Q_OBJECT
 
 public:
-    explicit CenterlineWorker(TrackingDataStorage* storage, QObject* parent = nullptr);
+    explicit CenterlineWorker(TrackingDataStorage* storage,
+                              Debug::DebugDataStore* debugStore = nullptr,
+                              QObject* parent = nullptr);
 
     /**
      * @brief Configure the active-contour refinement used on ring/coiled frames.
@@ -61,15 +65,8 @@ signals:
     void failed(const QString& reason);
 
 private:
-    // The legacy 5-pass pipeline. Kept reachable behind a compile-time
-    // toggle in doWork() so the new 2-sweep pipeline (doWorkNew) can be
-    // A/B-tested against it during the rewrite.
-    void doWorkLegacy();
-
-    // The new 2-sweep / 5-step pipeline. See CENTERLINE_REWRITE_PLAN.md.
-    void doWorkNew();
-
     TrackingDataStorage* m_storage;
+    Debug::DebugDataStore* m_debugStore;
     Tracking::CenterlineSnakeParams m_snakeParams;
 };
 

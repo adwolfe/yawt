@@ -236,8 +236,8 @@ struct TrueTip {
  * the worm's blob: clean topology with both tips visible, self-crossed
  * (ring or hidden tip), shared with another worm (merged), or unavailable.
  *
- * Set by classifyTopology() once per blob per pass; consumed by the
- * centerline-refinement dispatch (Phase D) to pick D-1/D-2/D-3/D-4 branches.
+ * Set by detectEndpoints() once per blob per pass; consumed by the
+ * centerline-refinement dispatch to pick D-1/D-2/D-3/D-4 branches.
  */
 enum class TopologyState : uint8_t {
     Unknown,        // Default, before classification.
@@ -290,13 +290,13 @@ struct EndpointResult {
  * Fed only from frames where the worm's blob has clean topology — defined as:
  *   • no ring (blob.holeContourPoints empty),
  *   • the worm is not part of a multi-worm merge group at this frame,
- *   • findTipCandidates() returned exactly two SkeletonEndpoint candidates.
+ *   • detectEndpoints() returned exactly two SkeletonEndpoint candidates.
  *
  * Under those conditions both candidates are bona-fide tips of this individual,
  * so their (|curvature|, width) features sample the "what does a tip look like
  * on this worm" distribution. The centerline arc length on the same frame
- * samples a body-length distribution that downstream code (Phase D-3) uses as
- * a geodesic-length prior when only one tip is visible.
+ * samples a body-length distribution that downstream code uses as a length
+ * prior when only one tip is visible.
  *
  * Statistics use Welford's online algorithm: numerically stable across many
  * samples, single-pass, no need to retain individual sample values.
@@ -511,7 +511,7 @@ struct CenterlineSnakeParams {
 };
 
 /**
- * @brief Carrier for the per-worm temporal state assignHeadTail() needs.
+ * @brief Carrier for the per-worm temporal state detectEndpoints() needs.
  *
  * Maintained by the caller across frames; updated after each successful
  * assignment. Encodes "where was the head last frame, how fast is it
@@ -531,95 +531,7 @@ struct HeadTailPredictor {
 };
 
 /**
- * @brief Classify a blob's geometric topology for downstream dispatch.
- *
- * Pure function; depends only on the blob's contents and the caller-supplied
- * merge-group flag. The classification rules are:
- *   • !blob.isValid              → Lost
- *   • inMergeGroup                → Merged
- *   • blob.holeContourPoints non-empty
- *     OR  <2 skeleton-source tip candidates → SelfCrossed
- *   • otherwise                   → Clean
- *
- * `inMergeGroup` is the worm-vs-other multi-occupant flag the caller derives
- * by querying TrackingDataStorage::getMergeGroupsForFrame(). This function
- * doesn't depend on TrackingDataStorage so it stays usable from anywhere.
- *
- * The result is written into `blob.topologyState` and returned.
- */
-TopologyState classifyTopology(DetectedBlob& blob, bool inMergeGroup);
-
-/**
- * @brief Assign head and tail roles to tip candidates on a blob.
- *
- * Pure function: depends only on `blob.tipCandidates`, the temporal predictor
- * supplied by the caller, and the worm's accumulated tip-feature baseline.
- * Writes its result into `blob.assignedHeadTipIdx` and `blob.assignedTailTipIdx`
- * (indices into `blob.tipCandidates`, or -1 if no candidate was assigned to
- * that role).
- *
- * Only skeleton-endpoint candidates are eligible for visible head/tail
- * assignment. Curvature peaks remain available for diagnostics and geometry
- * cues, but they are not treated as free endpoints.
- *
- * The cost minimised per candidate × role is a weighted sum of three terms:
- *   • distance from this candidate to the role's predicted position;
- *   • Mahalanobis-style |curvature| distance from the baseline;
- *   • Mahalanobis-style width distance from the baseline.
- * On self-crossed frames with exactly one skeleton endpoint, velocity is used
- * as a visibility gate instead of an angular score: if a role's predicted
- * position has moved into the current blob and is no longer close to a free
- * endpoint, that role is left unassigned for the D-3 hidden-tip pass.
- * The feature terms are disabled when the baseline isn't yet reliable
- * (n < 30 samples in either dist), so on the very first frames of a worm
- * the assignment falls through to distance alone.
- *
- * The keyframe (no `prev`) is bootstrapped separately by the caller —
- * `assignHeadTail` requires `predictor.hasPrev == true`.
- *
- * @return True when at least one role was assigned. False on degenerate input
- *         (no candidates, or no prev state available).
- */
-bool assignHeadTail(DetectedBlob& blob,
-                    const HeadTailPredictor& predictor,
-                    const TipFeatureBaseline& baseline);
-
-/**
- * @brief Detect candidate nose/tail (tip) points on a blob.
- *
- * Pure function: depends only on `blob.contourPoints` and `blob.holeContourPoints`.
- * Populates `blob.tipCandidates` (replacing any prior contents) and returns the
- * same vector for convenience.
- *
- * The two sources (skeleton degree-1 endpoints, outer-contour curvature peaks)
- * are merged; candidates within `mergePlanarDistancePx` of each other in the
- * image plane are deduplicated, with SkeletonEndpoint taking precedence over
- * CurvaturePeak when both surface the same physical tip.
- *
- * Per-candidate features:
- *   - `curvature`: signed local curvature along the outer contour, in a window
- *     of ±`curvatureWindow` contour points. Sign convention matches the
- *     contour's traversal direction; magnitude is the meaningful quantity for
- *     scoring against a per-worm baseline.
- *   - `width`: 2× the distance-transform value sampled ~5px inward from the
- *     candidate along the inward direction (toward the blob centroid). Gives
- *     a robust local body-thickness estimate without needing an explicit
- *     normal direction.
- *
- * @param blob                     Blob to analyse; `tipCandidates` is overwritten.
- * @param curvatureWindow          Half-window (in contour points) for curvature.
- * @param minCurvatureMagnitude    Threshold on |curvature| for a peak to qualify.
- * @param mergePlanarDistancePx    Two candidates within this distance are merged.
- * @return Const reference to `blob.tipCandidates`.
- */
-const std::vector<TipCandidate>& findTipCandidates(DetectedBlob& blob,
-                                                   int   curvatureWindow      = 5,
-                                                   float minCurvatureMagnitude = 0.08f,
-                                                   float mergePlanarDistancePx = 4.0f);
-
-/**
- * @brief Single-pass endpoint detector that supersedes findTipCandidates +
- *        classifyTopology + assignHeadTail for the new centerline pipeline.
+ * @brief Single-pass endpoint detector for the centerline pipeline.
  *
  * Pure function: depends only on `blob.contourPoints`, `blob.holeContourPoints`,
  * the per-worm `predictor` (head/tail tie-breaking), the per-worm `baseline`

@@ -30,6 +30,7 @@ class BlobTableModel;
 class AnnotationTableModel;
 class TrackingProgressDialog;
 class QWidget;
+namespace Debug { class DebugDataStore; }
 
 /**
  * AppController
@@ -71,6 +72,7 @@ public:
     BlobTableModel* blobTableModel() const;
     AnnotationTableModel* annotationTableModel() const;
     TrackingDataStorage* trackingDataStorage() const;
+    Debug::DebugDataStore* debugDataStore() const;
 
     // Model-manipulation commands (can be invoked from UI)
     Q_INVOKABLE void addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame);
@@ -239,6 +241,7 @@ private:
     // - If constructed by AppController, these are children of this and auto-destroyed.
     // - If an external TrackingDataStorage is injected via ctor, m_storage is non-owned.
     TrackingDataStorage* m_storage = nullptr;         // owned unless injected
+    Debug::DebugDataStore* m_debugStore = nullptr;    // owned
     TrackingManager* m_manager = nullptr;             // owned
     BlobTableModel* m_blobModel = nullptr;            // owned
     AnnotationTableModel* m_annotationModel = nullptr;// owned

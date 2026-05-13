@@ -75,6 +75,10 @@ set(SOURCES
     src/data/trackingcommon.cpp
     src/data/wormobject.cpp
 
+    # Debug
+    src/debug/debugdatastore.cpp
+    src/debug/debugexporter.cpp
+
     # Utils
     src/utils/debugutils.cpp
     src/utils/thresholdingutils.cpp
@@ -119,6 +123,11 @@ set(HEADERS
     src/data/trackingdatastorage.h
     src/data/trackingcommon.h
     src/data/wormobject.h
+
+    # Debug
+    src/debug/debugrecords.h
+    src/debug/debugdatastore.h
+    src/debug/debugexporter.h
 
     # Utils
     src/utils/debugutils.h

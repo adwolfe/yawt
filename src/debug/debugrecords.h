@@ -1,0 +1,92 @@
+#ifndef DEBUGRECORDS_H
+#define DEBUGRECORDS_H
+
+#include <QString>
+#include <QStringList>
+#include <vector>
+
+#include "../data/trackingcommon.h"
+
+namespace Debug {
+
+enum class Pipeline {
+    Tracking,
+    Centerline
+};
+
+enum class CenterlineBranch {
+    Unknown,
+    D1CleanGraphPath,
+    D1SyntheticHoleRetry,
+    D2TwoKnownTips,
+    D3OneKnownTipHiddenPrediction,
+    D4FallbackContourSkeleton,
+    ZeroTipRingCut
+};
+
+inline QString centerlineBranchToString(CenterlineBranch branch)
+{
+    switch (branch) {
+    case CenterlineBranch::D1CleanGraphPath:
+        return QStringLiteral("D-1 clean graph path");
+    case CenterlineBranch::D1SyntheticHoleRetry:
+        return QStringLiteral("D-1 synthetic-hole retry");
+    case CenterlineBranch::D2TwoKnownTips:
+        return QStringLiteral("D-2 two known tips");
+    case CenterlineBranch::D3OneKnownTipHiddenPrediction:
+        return QStringLiteral("D-3 one known tip / hidden prediction");
+    case CenterlineBranch::D4FallbackContourSkeleton:
+        return QStringLiteral("D-4 fallback contour skeleton");
+    case CenterlineBranch::ZeroTipRingCut:
+        return QStringLiteral("0-tip ring cut");
+    case CenterlineBranch::Unknown:
+    default:
+        return QStringLiteral("Unknown");
+    }
+}
+
+struct CenterlineFrameDebug {
+    int wormId = -1;
+    int frameNumber = -1;
+    int directionStep = 0;
+    bool keyframeBootstrap = false;
+
+    Tracking::TopologyState topology = Tracking::TopologyState::Unknown;
+    bool inMergeGroup = false;
+    CenterlineBranch branch = CenterlineBranch::Unknown;
+
+    Tracking::HeadTailPredictor predictorBefore;
+    Tracking::TipFeatureBaseline baselineBefore;
+
+    float refLength = 0.f;
+    float previousTurningAngle = 0.f;
+    float initialArcLength = 0.f;
+    float finalArcLength = 0.f;
+    float finalTurningAngle = 0.f;
+
+    bool rhrFlipped = false;
+    bool snakeRan = false;
+    bool fallbackUsed = false;
+    bool syntheticHoleUsed = false;
+    bool hiddenTipHypothesized = false;
+
+    cv::Point2f predictedHead = {0.f, 0.f};
+    cv::Point2f predictedTail = {0.f, 0.f};
+    cv::Point2f predictedCenter = {0.f, 0.f};
+    cv::Point2f hiddenTipTarget = {-1.f, -1.f};
+    cv::Point2f hiddenTipFinal = {-1.f, -1.f};
+
+    std::vector<Tracking::TipCandidate> tipCandidates;
+    int assignedHeadTipIdx = -1;
+    int assignedTailTipIdx = -1;
+
+    std::vector<cv::Point2f> initialCenterline;
+    std::vector<cv::Point2f> resampledCenterline;
+    std::vector<cv::Point2f> finalCenterline;
+
+    QStringList decisions;
+};
+
+} // namespace Debug
+
+#endif // DEBUGRECORDS_H
