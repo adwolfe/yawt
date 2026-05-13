@@ -2049,7 +2049,51 @@ void CenterlineWorker::doWork()
             debugRecord.decisions << QStringLiteral("loaded live predictor and previous-frame state");
 
             Tracking::EndpointResult er = Tracking::detectEndpoints(
-                blob, framePredictor, baseline, inMerge);
+                    blob, framePredictor, baseline, inMerge);
+
+            // ── OMEGA UNZIPPER START ──────────────────────────────────────────
+            if (er.topology == Tracking::TopologyState::SelfCrossed && framePredictor.hasVelocity) {
+                const cv::Point2f predictedHead = framePredictor.lastHeadPos + framePredictor.velHead;
+                const cv::Point2f predictedTail = framePredictor.lastTailPos + framePredictor.velTail;
+                float tipDist = ptDist(predictedHead, predictedTail);
+
+                // 1. Proximity Check
+                if (baseline.isReliable() && tipDist < baseline.meanWidth * 2.5f) {
+                    cv::Point2f midPoint = (predictedHead + predictedTail) * 0.5f;
+                    int localX = static_cast<int>(std::lround(midPoint.x - er.localBounds.x));
+                    int localY = static_cast<int>(std::lround(midPoint.y - er.localBounds.y));
+
+                    if (localX >= 0 && localY >= 0 &&
+                        localX < er.distTransform.cols && localY < er.distTransform.rows) {
+
+                        // 2. Width Check
+                        float localRadius = er.distTransform.at<float>(localY, localX);
+                        float normalRadius = baseline.meanWidth / 2.0f;
+
+                        if (localRadius > normalRadius * 1.4f) {
+                            Tracking::DetectedBlob splitBlob = blob;
+
+                            // 3. The Cut (Draw black line between predicted tips)
+                            cv::Point2f cutA = predictedHead - cv::Point2f(static_cast<float>(er.localBounds.x), static_cast<float>(er.localBounds.y));
+                            cv::Point2f cutB = predictedTail - cv::Point2f(static_cast<float>(er.localBounds.x), static_cast<float>(er.localBounds.y));
+
+                            if (Tracking::populateCenterlineFromContourWithCut(splitBlob, cutA, cutB, 2)) {
+
+                                // 4. Re-evaluate topology
+                                Tracking::EndpointResult splitEr =
+                                    Tracking::detectEndpoints(splitBlob, framePredictor, baseline, inMerge);
+
+                                if (splitEr.topology == Tracking::TopologyState::Clean) {
+                                    blob = splitBlob;
+                                    er = splitEr;
+                                    debugRecord.decisions << QStringLiteral("Omega handle detected and unzipped via predictive DT");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // ── OMEGA UNZIPPER END ────────────────────────────────────────────
 
             // Convert TrueTips → TipCandidates. Source = SkeletonEndpoint
             // for ALL tips so the renderer's filled-green-dot styling
@@ -3052,11 +3096,50 @@ bool CenterlineWorker::exportProcessForFrame(
     log << "Stage 00 (mask): bounds=" << bounds.x << "," << bounds.y
         << " " << bounds.width << "x" << bounds.height << "\n\n";
 
-    // Stage 01/02/03/04 — detectEndpoints output.
+// Stage 01/02/03/04 — detectEndpoints output.
     Tracking::EndpointResult er = Tracking::detectEndpoints(
         blob, predictor, baseline, inMerge);
+
+    // ── OMEGA UNZIPPER START ──────────────────────────────────────────
+    if (er.topology == Tracking::TopologyState::SelfCrossed && predictor.hasVelocity) {
+        const cv::Point2f predictedHead = predictor.lastHeadPos + predictor.velHead;
+        const cv::Point2f predictedTail = predictor.lastTailPos + predictor.velTail;
+        float tipDist = ptDist(predictedHead, predictedTail);
+
+        if (baseline.isReliable() && tipDist < baseline.meanWidth * 2.5f) {
+            cv::Point2f midPoint = (predictedHead + predictedTail) * 0.5f;
+            int localX = static_cast<int>(std::lround(midPoint.x - er.localBounds.x));
+            int localY = static_cast<int>(std::lround(midPoint.y - er.localBounds.y));
+
+            if (localX >= 0 && localY >= 0 &&
+                localX < er.distTransform.cols && localY < er.distTransform.rows) {
+
+                float localRadius = er.distTransform.at<float>(localY, localX);
+                float normalRadius = baseline.meanWidth / 2.0f;
+
+                if (localRadius > normalRadius * 1.4f) {
+                    Tracking::DetectedBlob splitBlob = blob;
+                    cv::Point2f cutA = predictedHead - cv::Point2f(static_cast<float>(er.localBounds.x), static_cast<float>(er.localBounds.y));
+                    cv::Point2f cutB = predictedTail - cv::Point2f(static_cast<float>(er.localBounds.x), static_cast<float>(er.localBounds.y));
+
+                    if (Tracking::populateCenterlineFromContourWithCut(splitBlob, cutA, cutB, 2)) {
+                        Tracking::EndpointResult splitEr =
+                            Tracking::detectEndpoints(splitBlob, predictor, baseline, inMerge);
+
+                        if (splitEr.topology == Tracking::TopologyState::Clean) {
+                            blob = splitBlob;
+                            er = splitEr;
+                            log << "Omega handle detected and unzipped via predictive DT.\n";
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // ── OMEGA UNZIPPER END ────────────────────────────────────────────
+
     const cv::Point2f originOffset(static_cast<float>(er.localBounds.x),
-                                   static_cast<float>(er.localBounds.y));
+                                    static_cast<float>(er.localBounds.y));
 
     // 01 — skeleton + degree-1 endpoints.
     {
