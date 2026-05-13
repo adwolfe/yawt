@@ -1,7 +1,7 @@
 #include "debugutils.h"
 
 // Static member definition
-bool DebugUtils::s_trackingDebugEnabled = true;
+bool DebugUtils::s_trackingDebugEnabled = false;
 
 bool DebugUtils::isTrackingDebugEnabled() {
     return s_trackingDebugEnabled;

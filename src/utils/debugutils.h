@@ -4,10 +4,10 @@
 #include <QDebug>
 
 /**
- * @brief Global debug utilities for controlling verbose debug output
+ * @brief Global debug utilities for controlling debug output
  * 
- * This utility provides a centralized way to control debug output across
- * different components, particularly for performance-sensitive tracking operations.
+ * This utility provides a centralized on/off switch for legacy debug output
+ * that has not yet moved to QLoggingCategory.
  */
 class DebugUtils {
 public:

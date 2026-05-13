@@ -4,6 +4,7 @@
 #include <QMetaType>
 #include <opencv2/core.hpp>
 #include <QCommandLineParser>
+#include "src/utils/debugutils.h"
 #define LOGGING_CATEGORIES_DEFINE
 #include "src/utils/loggingcategories.h"
 
@@ -11,26 +12,19 @@ int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
 
-    // Install unified log message pattern and apply verbosity from command-line arguments.
+    // Install unified log message pattern and apply debug logging from command-line arguments.
     Yawt::Logging::installDefaultMessagePattern();
 
     QCommandLineParser parser;
     parser.setApplicationDescription("YAWT - Yet Another Worm Tracker");
     parser.addHelpOption();
-    QCommandLineOption verbosityOpt(QStringList() << "v" << "verbosity", "Verbosity level (1-4). 1=basic, 2=normal, 3=firehose (YAWT only), 4=firehose (all, incl. Qt).", "level");
-    QCommandLineOption firehoseOpt("firehose", "Alias for --verbosity=4 (full firehose incl. Qt internals)");
-    parser.addOption(verbosityOpt);
-    parser.addOption(firehoseOpt);
+    QCommandLineOption debugOpt("debug", "Enable YAWT debug logging.");
+    parser.addOption(debugOpt);
     parser.process(a);
 
-    if (parser.isSet(firehoseOpt)) {
-        Yawt::Logging::applyFirehose();
-    } else {
-        bool ok = false;
-        int lvl = parser.value(verbosityOpt).toInt(&ok);
-        if (!ok) lvl = 1;
-        Yawt::Logging::applyVerbosity(lvl);
-    }
+    const bool debugEnabled = parser.isSet(debugOpt);
+    Yawt::Logging::applyDebugMode(debugEnabled);
+    DebugUtils::setTrackingDebugEnabled(debugEnabled);
 
     // Register cv::Mat for queued signal/slot delivery across threads.
     // Using the string name ensures the meta-type is registered for queued use.

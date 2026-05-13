@@ -2267,7 +2267,7 @@ void MainWindow::performPostTrackingMemoryCleanup() {
 
 // --- Debug Control ---
 void MainWindow::toggleTrackingDebug() {
-    QString msg = "Logging verbosity is controlled via --verbosity=1..3 or --firehose at launch.";
+    QString msg = "Debug logging is controlled via --debug at launch.";
     qDebug().noquote() << "MainWindow:" << msg;
     statusBar()->showMessage(msg, 4000);
 }

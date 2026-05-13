@@ -161,6 +161,25 @@ static QString pointString(const cv::Point2f& point)
     return QStringLiteral("(%1,%2)").arg(point.x, 0, 'f', 2).arg(point.y, 0, 'f', 2);
 }
 
+static QString tipSourceString(Tracking::TipCandidate::Source source)
+{
+    switch (source) {
+    case Tracking::TipCandidate::Source::SkeletonEndpoint:
+        return QStringLiteral("skel");
+    case Tracking::TipCandidate::Source::CurvaturePeak:
+        return QStringLiteral("curv");
+    case Tracking::TipCandidate::Source::HypothesizedHidden:
+        return QStringLiteral("hidden");
+    default:
+        return QStringLiteral("unknown");
+    }
+}
+
+static bool validPoint(const cv::Point2f& point)
+{
+    return point.x >= 0.f && point.y >= 0.f;
+}
+
 static void writeCenterlineStage(const Tracking::DetectedBlob& blob,
                                  const cv::Rect& bounds,
                                  const std::vector<cv::Point2f>& centerline,
@@ -174,6 +193,175 @@ static void writeCenterlineStage(const Tracking::DetectedBlob& blob,
     drawPolyline(canvas, centerline, bounds, color);
     drawTitle(canvas, title);
     writeStageImage(canvas, outputDir, fileName);
+}
+
+static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
+                               const Tracking::EndpointResult& endpoints,
+                               const cv::Rect& bounds,
+                               const QString& outputDir)
+{
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+
+    const cv::Point2f origin(static_cast<float>(endpoints.localBounds.x),
+                             static_cast<float>(endpoints.localBounds.y));
+    if (!endpoints.skeleton.skeleton.empty()) {
+        for (int y = 0; y < endpoints.skeleton.skeleton.rows; ++y) {
+            const uchar* row = endpoints.skeleton.skeleton.ptr<uchar>(y);
+            for (int x = 0; x < endpoints.skeleton.skeleton.cols; ++x) {
+                if (!row[x]) {
+                    continue;
+                }
+                const cv::Point2f world(static_cast<float>(x) + origin.x,
+                                        static_cast<float>(y) + origin.y);
+                cv::circle(canvas, worldToCanvas(world, bounds), 1,
+                           cv::Scalar(255, 255, 0), cv::FILLED);
+            }
+        }
+    }
+
+    for (int idx : endpoints.skeleton.endpointIndices) {
+        if (idx < 0 || idx >= static_cast<int>(endpoints.skeleton.points.size())) {
+            continue;
+        }
+        const cv::Point local = endpoints.skeleton.points[idx];
+        const cv::Point2f world(static_cast<float>(local.x) + origin.x,
+                                static_cast<float>(local.y) + origin.y);
+        cv::circle(canvas, worldToCanvas(world, bounds), 6,
+                   cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+    }
+
+    drawTitle(canvas, QStringLiteral("01 skeleton  degree-1 endpoints=%1")
+              .arg(endpoints.skeleton.endpointIndices.size()));
+    writeStageImage(canvas, outputDir, QStringLiteral("01_skeleton.png"));
+}
+
+static void writeDistanceTransformStage(const Tracking::EndpointResult& endpoints,
+                                        const cv::Rect& bounds,
+                                        const QString& outputDir)
+{
+    if (endpoints.distTransform.empty()) {
+        cv::Mat canvas = cv::Mat::zeros(bounds.height * kExportScale,
+                                        bounds.width * kExportScale,
+                                        CV_8UC3);
+        drawTitle(canvas, QStringLiteral("02 distance transform unavailable"));
+        writeStageImage(canvas, outputDir, QStringLiteral("02_distance_transform.png"));
+        return;
+    }
+
+    cv::Mat dt8;
+    double minValue = 0.0;
+    double maxValue = 0.0;
+    cv::minMaxLoc(endpoints.distTransform, &minValue, &maxValue);
+    endpoints.distTransform.convertTo(dt8, CV_8U,
+                                      maxValue > 0.0 ? 255.0 / maxValue : 0.0);
+
+    cv::Mat dtFull = cv::Mat::zeros(bounds.height, bounds.width, CV_8U);
+    const int dx = endpoints.localBounds.x - bounds.x;
+    const int dy = endpoints.localBounds.y - bounds.y;
+    for (int y = 0; y < dt8.rows; ++y) {
+        const int dstY = y + dy;
+        if (dstY < 0 || dstY >= dtFull.rows) {
+            continue;
+        }
+        for (int x = 0; x < dt8.cols; ++x) {
+            const int dstX = x + dx;
+            if (dstX < 0 || dstX >= dtFull.cols) {
+                continue;
+            }
+            dtFull.at<uchar>(dstY, dstX) = dt8.at<uchar>(y, x);
+        }
+    }
+
+    cv::Mat dtUp;
+    cv::resize(dtFull, dtUp, cv::Size(), kExportScale, kExportScale,
+               cv::INTER_NEAREST);
+    cv::Mat heat;
+    cv::applyColorMap(dtUp, heat, cv::COLORMAP_INFERNO);
+    drawTitle(heat, QStringLiteral("02 distance transform  max=%1px")
+              .arg(maxValue, 0, 'f', 1));
+    writeStageImage(heat, outputDir, QStringLiteral("02_distance_transform.png"));
+}
+
+static void writeTipStage(const Tracking::DetectedBlob& blob,
+                          const Debug::CenterlineFrameDebug& record,
+                          const cv::Rect& bounds,
+                          const QString& outputDir)
+{
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+
+    for (int i = 0; i < static_cast<int>(record.tipCandidates.size()); ++i) {
+        const Tracking::TipCandidate& tip = record.tipCandidates[i];
+        const cv::Point point = worldToCanvas(tip.point, bounds);
+        cv::Scalar color(80, 255, 80);
+        if (tip.source == Tracking::TipCandidate::Source::CurvaturePeak) {
+            color = cv::Scalar(255, 80, 255);
+        } else if (tip.source == Tracking::TipCandidate::Source::HypothesizedHidden) {
+            color = cv::Scalar(0, 180, 255);
+        }
+
+        cv::circle(canvas, point, 7, color, cv::FILLED);
+        cv::circle(canvas, point, 7, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+        drawText(canvas,
+                 QStringLiteral("tip%1 %2 |k|=%3 w=%4")
+                     .arg(i)
+                     .arg(tipSourceString(tip.source))
+                     .arg(std::abs(tip.curvature), 0, 'f', 3)
+                     .arg(tip.width, 0, 'f', 1),
+                 point + cv::Point(8, -5),
+                 color);
+    }
+
+    drawTitle(canvas, QStringLiteral("03 recorded tip candidates  n=%1")
+              .arg(record.tipCandidates.size()));
+    writeStageImage(canvas, outputDir, QStringLiteral("03_true_tips.png"));
+}
+
+static void writeHeadTailStage(const Tracking::DetectedBlob& blob,
+                               const Debug::CenterlineFrameDebug& record,
+                               const cv::Rect& bounds,
+                               const QString& outputDir)
+{
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+
+    auto drawPrediction = [&](const cv::Point2f& point,
+                              const QString& label,
+                              cv::Scalar color) {
+        if (!validPoint(point)) {
+            return;
+        }
+        const cv::Point canvasPoint = worldToCanvas(point, bounds);
+        cv::drawMarker(canvas, canvasPoint, color, cv::MARKER_CROSS, 13, 1, cv::LINE_AA);
+        drawText(canvas, label, canvasPoint + cv::Point(7, -4), color);
+    };
+
+    drawPrediction(record.predictedHead, QStringLiteral("Hpred"), cv::Scalar(0, 0, 220));
+    drawPrediction(record.predictedTail, QStringLiteral("Tpred"), cv::Scalar(220, 80, 0));
+    drawPrediction(record.predictedCenter, QStringLiteral("Cpred"), cv::Scalar(0, 220, 220));
+    if (record.hiddenTipHypothesized) {
+        drawPrediction(record.hiddenTipTarget, QStringLiteral("hidden target"),
+                       cv::Scalar(0, 180, 255));
+        drawPrediction(record.hiddenTipFinal, QStringLiteral("hidden final"),
+                       cv::Scalar(0, 255, 255));
+    }
+
+    auto drawAssignedTip = [&](int idx, const QString& label, cv::Scalar color) {
+        if (idx < 0 || idx >= static_cast<int>(record.tipCandidates.size())) {
+            return;
+        }
+        const cv::Point point = worldToCanvas(record.tipCandidates[idx].point, bounds);
+        cv::circle(canvas, point, 10, color, 2, cv::LINE_AA);
+        drawText(canvas, label, point + cv::Point(-5, 5), color);
+    };
+    drawAssignedTip(record.assignedHeadTipIdx, QStringLiteral("H"), cv::Scalar(0, 0, 255));
+    drawAssignedTip(record.assignedTailTipIdx, QStringLiteral("T"), cv::Scalar(255, 80, 0));
+
+    drawTitle(canvas, QStringLiteral("04 head/tail  topo=%1  branch=%2")
+              .arg(Tracking::topologyStateToString(record.topology))
+              .arg(Debug::centerlineBranchToString(record.branch)));
+    writeStageImage(canvas, outputDir, QStringLiteral("04_head_tail.png"));
 }
 
 } // namespace
@@ -239,6 +427,16 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
                  cv::Point(8, canvas.rows - 10));
         writeStageImage(canvas, outputDir, QStringLiteral("00_mask.png"));
     }
+
+    const Tracking::EndpointResult endpoints = Tracking::detectEndpoints(
+        blob,
+        record.predictorBefore,
+        record.baselineBefore,
+        record.inMergeGroup);
+    writeSkeletonStage(blob, endpoints, bounds, outputDir);
+    writeDistanceTransformStage(endpoints, bounds, outputDir);
+    writeTipStage(blob, record, bounds, outputDir);
+    writeHeadTailStage(blob, record, bounds, outputDir);
 
     writeCenterlineStage(blob, bounds, record.initialCenterline, outputDir,
                          QStringLiteral("05_initial_centerline.png"),
