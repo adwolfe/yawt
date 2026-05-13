@@ -1336,6 +1336,7 @@ struct D3RouteDebug {
 static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& graph,
                                               int srcIdx,
                                               const cv::Point2f& predictedHidden,
+                                              bool targetIsActualTip,
                                               const cv::Point2f& predictedCenter,
                                               bool hasPredictedCenter,
                                               const cv::Point2f& originOffset,
@@ -1445,7 +1446,13 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
                 bestLongEnoughIndex = i;
             }
         }
-        if (bestLongEnoughIndex >= 1) {
+        if (targetIsActualTip) {
+            c.bestIndex = static_cast<int>(c.nodes.size()) - 1;
+            const cv::Point& endPoint = graph.points[c.nodes[c.bestIndex]];
+            c.hiddenDist = ptDist(cv::Point2f(static_cast<float>(endPoint.x) + originOffset.x,
+                                              static_cast<float>(endPoint.y) + originOffset.y),
+                                  predictedHidden);
+        } else if (bestLongEnoughIndex >= 1) {
             c.bestIndex = bestLongEnoughIndex;
             c.hiddenDist = bestLongEnoughDist;
         } else {
@@ -1457,6 +1464,17 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         c.fullNodes.insert(c.fullNodes.end(),
                            c.nodes.begin() + 1,
                            c.nodes.begin() + c.bestIndex + 1);
+        if (targetIsActualTip) {
+            const int targetNode = nearestSkeletonNode(graph, predictedHidden, originOffset);
+            if (targetNode >= 0 && !c.fullNodes.empty() && c.fullNodes.back() != targetNode) {
+                std::vector<int> extension;
+                if (shortestNodePath(graph, c.fullNodes.back(), targetNode, extension) &&
+                    extension.size() >= 2) {
+                    c.fullNodes.insert(c.fullNodes.end(), extension.begin() + 1, extension.end());
+                    c.hiddenDist = 0.f;
+                }
+            }
+        }
         c.pathLen = nodePathLength(graph, c.fullNodes);
         if (hasPredictedCenter && c.fullNodes.size() >= 2) {
             const float halfLen = 0.5f * c.pathLen;
@@ -1524,13 +1542,15 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
     if (bestCandidate < 0) return false;
 
     if (diagnostics) {
-        diagnostics->append(QStringLiteral("D-3 whole-path candidates=%1 selected=%2")
+        diagnostics->append(QStringLiteral("%1 whole-path candidates=%2 selected=%3")
+                                .arg(targetIsActualTip ? "D-2" : "D-3")
                                 .arg(static_cast<int>(candidates.size()))
                                 .arg(bestCandidate));
         for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
             const BranchCandidate& c = candidates[i];
             diagnostics->append(
-                QStringLiteral("D-3 candidate %1: len=%2 hiddenDist=%3 centerDist=%4 tangent=%5 turn=%6 turnPenalty=%7 score=%8%9")
+                QStringLiteral("%1 candidate %2: len=%3 targetDist=%4 centerDist=%5 tangent=%6 turn=%7 turnPenalty=%8 score=%9%10")
+                    .arg(targetIsActualTip ? "D-2" : "D-3")
                     .arg(i)
                     .arg(c.pathLen, 0, 'f', 2)
                     .arg(c.hiddenDist, 0, 'f', 2)
@@ -2221,6 +2241,27 @@ void CenterlineWorker::doWork()
                 } else {
                     goalNode = farthestSkeletonNode(dispEr.skeleton, srcNode);
                 }
+                if (!hasActualTarget && goalNode == srcNode &&
+                    dispEr.topology == Tracking::TopologyState::SelfCrossed) {
+                    const float targetToKnown = ptDist(targetPos, knownPos);
+                    const bool weakMaskDiff =
+                        debugRecord.hiddenTipMaskDiffArea > 0 &&
+                        debugRecord.hiddenTipMaskDiffArea < 0.35f * frameRefLength;
+                    if (targetToKnown < 0.25f * frameRefLength || weakMaskDiff) {
+                        const JunctionSelection junction = selectLoopAwareJunction(
+                            dispEr.skeleton, srcNode, targetPos, dispOrigin, frameRefLength);
+                        if (junction.valid && !junction.fallbackUsed) {
+                            const cv::Point& jp = dispEr.skeleton.points[junction.junctionIdx];
+                            targetPos = cv::Point2f(static_cast<float>(jp.x) + dispOrigin.x,
+                                                    static_cast<float>(jp.y) + dispOrigin.y);
+                            goalNode = nearestSkeletonNode(dispEr.skeleton, targetPos, dispOrigin);
+                            debugRecord.hiddenTipTarget = targetPos;
+                            debugRecord.decisions << QStringLiteral("D-3 degenerate hidden target near known tip; overridden to loop junction (%1,%2)")
+                                                         .arg(targetPos.x, 0, 'f', 2)
+                                                         .arg(targetPos.y, 0, 'f', 2);
+                        }
+                    }
+                }
                 if (goalNode < 0 || goalNode == srcNode) return false;
 
                 // SelfCrossed routing is loop-aware for both D-2 and D-3.
@@ -2243,6 +2284,7 @@ void CenterlineWorker::doWork()
                         const bool ok = skeletonPathTowardPredictedHidden(dispEr.skeleton,
                                                                            srcNode,
                                                                            targetPos,
+                                                                           hasActualTarget,
                                                                            predictedCenter,
                                                                            hasPredictedCenter,
                                                                            dispOrigin,
@@ -3329,6 +3371,26 @@ bool CenterlineWorker::exportProcessForFrame(
             if (!detailOut.isEmpty()) detailOut += "  ";
             detailOut += "target=farthest skeleton node (no predictor)";
         }
+        if (!hasActualTarget && goalNode == srcNode &&
+            dispEr.topology == Tracking::TopologyState::SelfCrossed) {
+            const float targetToKnown = ptDist(targetPos, knownPos);
+            const bool weakTarget =
+                targetToKnown < 0.25f * refLength ||
+                targetToKnown < 6.f;
+            if (weakTarget) {
+                const JunctionSelection junction = selectLoopAwareJunction(
+                    dispEr.skeleton, srcNode, targetPos, dispOrigin, refLength);
+                if (junction.valid && !junction.fallbackUsed) {
+                    const cv::Point& jp = dispEr.skeleton.points[junction.junctionIdx];
+                    targetPos = cv::Point2f(static_cast<float>(jp.x) + dispOrigin.x,
+                                            static_cast<float>(jp.y) + dispOrigin.y);
+                    goalNode = nearestSkeletonNode(dispEr.skeleton, targetPos, dispOrigin);
+                    detailOut += QString("  degenerate target near known tip; target overridden to junction=(%1,%2)")
+                                 .arg(targetPos.x, 0, 'f', 1)
+                                 .arg(targetPos.y, 0, 'f', 1);
+                }
+            }
+        }
         if (goalNode < 0 || goalNode == srcNode) return false;
 
         std::vector<cv::Point2f> arcA, arcB, chosen;
@@ -3342,6 +3404,7 @@ bool CenterlineWorker::exportProcessForFrame(
                 const bool ok = skeletonPathTowardPredictedHidden(dispEr.skeleton,
                                                                    srcNode,
                                                                    targetPos,
+                                                                   hasActualTarget,
                                                                    centerForRoute,
                                                                    hasPredictedCenter,
                                                                    dispOrigin,
