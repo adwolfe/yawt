@@ -1323,7 +1323,7 @@ QToolButton#lastFrameButton {
              <item>
               <widget class="QPushButton" name="exportProcessButton">
                <property name="text"><string>Export Process</string></property>
-               <property name="toolTip"><string>Export per-stage diagnostic images and a decision log for the currently selected worm on the current frame. Writes to &lt;dataDir&gt;/Debug/worm{id}_frame{n}/.</string></property>
+               <property name="toolTip"><string>Export per-stage diagnostic images and a decision log for the currently selected worm on the current frame. Writes to &lt;dataDir&gt;/&lt;video&gt;/PROC_*/DEBUG/worm{id}_frame{n}/.</string></property>
               </widget>
              </item>
              <item>

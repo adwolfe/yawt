@@ -2415,8 +2415,29 @@ void MainWindow::onExportProcessClicked()
         return;
     }
 
-    const QString outDir = QDir(dataDir).absoluteFilePath(
-        QString("Debug/worm%1_frame%2").arg(wormId).arg(frame));
+    const QString videoPath = ui->videoLoader ? ui->videoLoader->getCurrentVideoPath() : QString();
+    const QString videoBaseName = QFileInfo(videoPath).completeBaseName();
+    if (videoBaseName.isEmpty()) {
+        QMessageBox::warning(this, "Export Process",
+            "No current video name available.");
+        return;
+    }
+
+    const QString videoSpecificDir = QDir(dataDir).absoluteFilePath(videoBaseName);
+    QDir videoDir(videoSpecificDir);
+    const QStringList procDirs = videoDir.entryList(QStringList() << "PROC_*",
+                                                    QDir::Dirs | QDir::NoDotAndDotDot,
+                                                    QDir::Name);
+    if (procDirs.isEmpty()) {
+        QMessageBox::warning(this, "Export Process",
+            QString("No processing output directory found under:\n%1\n\nRun tracking first.")
+                .arg(videoSpecificDir));
+        return;
+    }
+
+    const QString processingDir = videoDir.absoluteFilePath(procDirs.constLast());
+    const QString outDir = QDir(processingDir).absoluteFilePath(
+        QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
     if (!QDir().mkpath(outDir)) {
         QMessageBox::warning(this, "Export Process",
             QString("Could not create output directory:\n%1").arg(outDir));
