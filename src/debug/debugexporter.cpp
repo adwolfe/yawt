@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace {
 
@@ -84,48 +83,6 @@ static cv::Mat makeMask(const Tracking::DetectedBlob& blob, const cv::Rect& boun
         }
     }
     return mask;
-}
-
-static bool nearestMaskPointForDebug(const Tracking::DetectedBlob& blob,
-                                     const cv::Point2f& target,
-                                     cv::Point2f& out)
-{
-    if (blob.contourPoints.empty()) {
-        return false;
-    }
-
-    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
-    constexpr int kPad = 4;
-    bounds.x -= kPad;
-    bounds.y -= kPad;
-    bounds.width += 2 * kPad;
-    bounds.height += 2 * kPad;
-    if (bounds.width <= 1 || bounds.height <= 1) {
-        return false;
-    }
-
-    cv::Mat mask = makeMask(blob, bounds);
-    cv::Mat nonZero;
-    cv::findNonZero(mask, nonZero);
-    if (nonZero.empty()) {
-        return false;
-    }
-
-    float bestD = std::numeric_limits<float>::max();
-    cv::Point bestPoint(0, 0);
-    for (int i = 0; i < nonZero.rows; ++i) {
-        const cv::Point p = nonZero.at<cv::Point>(i);
-        const cv::Point2f world(static_cast<float>(p.x + bounds.x),
-                                static_cast<float>(p.y + bounds.y));
-        const float d = pointDistance(world, target);
-        if (d < bestD) {
-            bestD = d;
-            bestPoint = p;
-        }
-    }
-    out = cv::Point2f(static_cast<float>(bestPoint.x + bounds.x),
-                      static_cast<float>(bestPoint.y + bounds.y));
-    return true;
 }
 
 static cv::Mat makeBaseCanvas(const Tracking::DetectedBlob& blob, const cv::Rect& bounds)
@@ -249,72 +206,39 @@ static void writeCenterlineStage(const Tracking::DetectedBlob& blob,
 }
 
 static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
-                               const Tracking::EndpointResult& endpoints,
+                               const Debug::CenterlineFrameDebug& record,
                                const cv::Rect& bounds,
                                const QString& outputDir)
 {
     cv::Mat canvas = makeBaseCanvas(blob, bounds);
     drawContoursOverlay(canvas, blob, bounds);
 
-    const cv::Point2f origin(static_cast<float>(endpoints.localBounds.x),
-                             static_cast<float>(endpoints.localBounds.y));
-    if (!endpoints.skeleton.skeleton.empty()) {
-        for (int y = 0; y < endpoints.skeleton.skeleton.rows; ++y) {
-            const uchar* row = endpoints.skeleton.skeleton.ptr<uchar>(y);
-            for (int x = 0; x < endpoints.skeleton.skeleton.cols; ++x) {
-                if (!row[x]) {
-                    continue;
-                }
-                const cv::Point2f world(static_cast<float>(x) + origin.x,
-                                        static_cast<float>(y) + origin.y);
-                cv::circle(canvas, worldToCanvas(world, bounds), 1,
-                           cv::Scalar(255, 255, 0), cv::FILLED);
-            }
-        }
+    for (const cv::Point2f& world : record.skeletonPixels) {
+        cv::circle(canvas, worldToCanvas(world, bounds), 1,
+                   cv::Scalar(255, 255, 0), cv::FILLED);
     }
 
-    for (int idx : endpoints.skeleton.endpointIndices) {
-        if (idx < 0 || idx >= static_cast<int>(endpoints.skeleton.points.size())) {
-            continue;
-        }
-        const cv::Point local = endpoints.skeleton.points[idx];
-        const cv::Point2f world(static_cast<float>(local.x) + origin.x,
-                                static_cast<float>(local.y) + origin.y);
+    for (const cv::Point2f& world : record.skeletonEndpointPoints) {
         cv::circle(canvas, worldToCanvas(world, bounds), 6,
                    cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
     }
 
     drawTitle(canvas, QStringLiteral("01 skeleton  degree-1 endpoints=%1")
-              .arg(endpoints.skeleton.endpointIndices.size()));
+              .arg(record.skeletonEndpointPoints.size()));
     writeStageImage(canvas, outputDir, QStringLiteral("01_skeleton.png"));
 }
 
 static void drawSkeletonPixels(cv::Mat& canvas,
-                               const Tracking::EndpointResult& endpoints,
+                               const Debug::CenterlineFrameDebug& record,
                                const cv::Rect& bounds,
                                cv::Scalar color = cv::Scalar(255, 255, 0))
 {
-    const cv::Point2f origin(static_cast<float>(endpoints.localBounds.x),
-                             static_cast<float>(endpoints.localBounds.y));
-    if (endpoints.skeleton.skeleton.empty()) {
-        return;
-    }
-
-    for (int y = 0; y < endpoints.skeleton.skeleton.rows; ++y) {
-        const uchar* row = endpoints.skeleton.skeleton.ptr<uchar>(y);
-        for (int x = 0; x < endpoints.skeleton.skeleton.cols; ++x) {
-            if (!row[x]) {
-                continue;
-            }
-            const cv::Point2f world(static_cast<float>(x) + origin.x,
-                                    static_cast<float>(y) + origin.y);
-            cv::circle(canvas, worldToCanvas(world, bounds), 1, color, cv::FILLED);
-        }
+    for (const cv::Point2f& world : record.skeletonPixels) {
+        cv::circle(canvas, worldToCanvas(world, bounds), 1, color, cv::FILLED);
     }
 }
 
 static void writeD3RouteKeypointsStage(const Tracking::DetectedBlob& blob,
-                                       const Tracking::EndpointResult& endpoints,
                                        const Debug::CenterlineFrameDebug& record,
                                        const cv::Rect& bounds,
                                        const QString& outputDir)
@@ -325,7 +249,7 @@ static void writeD3RouteKeypointsStage(const Tracking::DetectedBlob& blob,
 
     cv::Mat canvas = makeBaseCanvas(blob, bounds);
     drawContoursOverlay(canvas, blob, bounds);
-    drawSkeletonPixels(canvas, endpoints, bounds);
+    drawSkeletonPixels(canvas, record, bounds);
 
     auto drawPoint = [&](const cv::Point2f& point,
                          const QString& label,
@@ -358,7 +282,6 @@ static void writeD3RouteKeypointsStage(const Tracking::DetectedBlob& blob,
 }
 
 static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
-                                       const Tracking::EndpointResult& endpoints,
                                        const Debug::CenterlineFrameDebug& record,
                                        const cv::Rect& bounds,
                                        const QString& outputDir)
@@ -369,7 +292,7 @@ static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
 
     cv::Mat canvas = makeBaseCanvas(blob, bounds);
     drawContoursOverlay(canvas, blob, bounds);
-    drawSkeletonPixels(canvas, endpoints, bounds, cv::Scalar(120, 120, 0));
+    drawSkeletonPixels(canvas, record, bounds, cv::Scalar(120, 120, 0));
 
     const std::vector<cv::Scalar> colors = {
         cv::Scalar(255, 120, 0),
@@ -422,11 +345,11 @@ static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
     writeStageImage(canvas, outputDir, QStringLiteral("04c_d3_possible_paths.png"));
 }
 
-static void writeDistanceTransformStage(const Tracking::EndpointResult& endpoints,
+static void writeDistanceTransformStage(const Debug::CenterlineFrameDebug& record,
                                         const cv::Rect& bounds,
                                         const QString& outputDir)
 {
-    if (endpoints.distTransform.empty()) {
+    if (record.distanceTransform.empty()) {
         cv::Mat canvas = cv::Mat::zeros(bounds.height * kExportScale,
                                         bounds.width * kExportScale,
                                         CV_8UC3);
@@ -436,15 +359,22 @@ static void writeDistanceTransformStage(const Tracking::EndpointResult& endpoint
     }
 
     cv::Mat dt8;
-    double minValue = 0.0;
     double maxValue = 0.0;
-    cv::minMaxLoc(endpoints.distTransform, &minValue, &maxValue);
-    endpoints.distTransform.convertTo(dt8, CV_8U,
-                                      maxValue > 0.0 ? 255.0 / maxValue : 0.0);
+    for (float value : record.distanceTransform.values) {
+        maxValue = std::max(maxValue, static_cast<double>(value));
+    }
+    cv::Mat dtSource(record.distanceTransform.rows, record.distanceTransform.cols, CV_32F);
+    for (int y = 0; y < record.distanceTransform.rows; ++y) {
+        float* row = dtSource.ptr<float>(y);
+        for (int x = 0; x < record.distanceTransform.cols; ++x) {
+            row[x] = record.distanceTransform.at(y, x);
+        }
+    }
+    dtSource.convertTo(dt8, CV_8U, maxValue > 0.0 ? 255.0 / maxValue : 0.0);
 
     cv::Mat dtFull = cv::Mat::zeros(bounds.height, bounds.width, CV_8U);
-    const int dx = endpoints.localBounds.x - bounds.x;
-    const int dy = endpoints.localBounds.y - bounds.y;
+    const int dx = record.distanceTransform.localBounds.x - bounds.x;
+    const int dy = record.distanceTransform.localBounds.y - bounds.y;
     for (int y = 0; y < dt8.rows; ++y) {
         const int dstY = y + dy;
         if (dstY < 0 || dstY >= dtFull.rows) {
@@ -566,10 +496,10 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
     cv::Mat currentMask = makeMask(currentBlob, bounds);
     cv::Mat previousMask = makeMask(*previousBlob, bounds);
 
-    cv::Mat inverseCurrent;
-    cv::bitwise_not(currentMask, inverseCurrent);
-    cv::Mat vacatedMask;
-    cv::bitwise_and(previousMask, inverseCurrent, vacatedMask);
+    cv::Mat inversePrevious;
+    cv::bitwise_not(previousMask, inversePrevious);
+    cv::Mat enteredMask;
+    cv::bitwise_and(currentMask, inversePrevious, enteredMask);
 
     cv::Mat upCurrent;
     cv::Mat upPrevious;
@@ -578,7 +508,7 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
                cv::INTER_NEAREST);
     cv::resize(previousMask, upPrevious, cv::Size(), kExportScale, kExportScale,
                cv::INTER_NEAREST);
-    cv::resize(vacatedMask, upVacated, cv::Size(), kExportScale, kExportScale,
+    cv::resize(enteredMask, upVacated, cv::Size(), kExportScale, kExportScale,
                cv::INTER_NEAREST);
 
     cv::Mat canvas = cv::Mat::zeros(upCurrent.size(), CV_8UC3);
@@ -623,77 +553,7 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
     drawPoint(velocityTarget, QStringLiteral("velocity target"),
               cv::Scalar(200, 80, 0), 5);
 
-    cv::Point2f maskCue(-1.f, -1.f);
-    cv::Point2f weightedCenter(-1.f, -1.f);
-    bool cueAvailable = false;
-    const int totalVacatedArea = cv::countNonZero(vacatedMask);
-    int selectedArea = 0;
-    cv::Mat labels;
-    cv::Mat stats;
-    cv::Mat centroids;
-    const int componentCount =
-        cv::connectedComponentsWithStats(vacatedMask, labels, stats, centroids, 8, CV_32S);
-    int bestLabel = -1;
-    float bestScore = std::numeric_limits<float>::max();
-    for (int label = 1; label < componentCount; ++label) {
-        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
-        if (area < 2) {
-            continue;
-        }
-        const cv::Point2f centroid(
-            static_cast<float>(centroids.at<double>(label, 0) + bounds.x),
-            static_cast<float>(centroids.at<double>(label, 1) + bounds.y));
-        const float dLast = pointDistance(centroid, last);
-        const float dVel = validPoint(velocityTarget)
-            ? pointDistance(centroid, velocityTarget)
-            : dLast;
-        const float score = dLast + 0.35f * dVel - 0.20f * std::sqrt(static_cast<float>(area));
-        if (score < bestScore) {
-            bestScore = score;
-            bestLabel = label;
-        }
-    }
-    if (bestLabel >= 1) {
-        selectedArea = stats.at<int>(bestLabel, cv::CC_STAT_AREA);
-        cv::Mat selectedVacated = cv::Mat::zeros(vacatedMask.size(), CV_8UC1);
-        cv::Point2f sum(0.f, 0.f);
-        float totalWeight = 0.f;
-        for (int y = 0; y < labels.rows; ++y) {
-            const int* labelRow = labels.ptr<int>(y);
-            uchar* selectedRow = selectedVacated.ptr<uchar>(y);
-            for (int x = 0; x < labels.cols; ++x) {
-                if (labelRow[x] != bestLabel) {
-                    continue;
-                }
-                selectedRow[x] = 255;
-                const cv::Point2f p(static_cast<float>(x + bounds.x),
-                                    static_cast<float>(y + bounds.y));
-                const float d = pointDistance(p, last);
-                const float w = 1.f / std::max(1.f, d);
-                sum += w * p;
-                totalWeight += w;
-            }
-        }
-        if (totalWeight > 0.f) {
-            weightedCenter = sum * (1.f / totalWeight);
-            cueAvailable = nearestMaskPointForDebug(currentBlob, weightedCenter, maskCue);
-        }
-
-        cv::Mat upSelected;
-        cv::resize(selectedVacated, upSelected, cv::Size(), kExportScale, kExportScale,
-                   cv::INTER_NEAREST);
-        canvas.setTo(cv::Scalar(0, 255, 255), upSelected == 255);
-    }
-
-    drawPoint(weightedCenter, QStringLiteral("weighted vacated"),
-              cv::Scalar(0, 255, 255), 4, cv::MARKER_CROSS);
-    if (cueAvailable) {
-        drawPoint(maskCue, QStringLiteral("mask cue"),
-                  cv::Scalar(0, 255, 255), 5, cv::MARKER_DIAMOND);
-        cv::line(canvas, worldToCanvas(maskCue, bounds),
-                 worldToCanvas(record.hiddenTipTarget, bounds),
-                 cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
-    }
+    const int totalVacatedArea = cv::countNonZero(enteredMask);
     drawPoint(record.hiddenTipTarget, QStringLiteral("hidden target"),
               cv::Scalar(0, 180, 255), 7);
 
@@ -701,7 +561,7 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
     drawText(canvas,
              QStringLiteral("current=gray previous=dark yellow=vacated area=%1 selected=%2")
                  .arg(totalVacatedArea)
-                 .arg(selectedArea),
+                 .arg(record.hiddenTipMaskDiffSelectedArea),
              cv::Point(8, canvas.rows - 10));
     writeStageImage(canvas, outputDir, QStringLiteral("04a_hidden_prediction_maskdiff.png"));
 }
@@ -781,13 +641,8 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         writeStageImage(canvas, outputDir, QStringLiteral("00_mask.png"));
     }
 
-    const Tracking::EndpointResult endpoints = Tracking::detectEndpoints(
-        blob,
-        record.predictorBefore,
-        record.baselineBefore,
-        record.inMergeGroup);
-    writeSkeletonStage(blob, endpoints, bounds, outputDir);
-    writeDistanceTransformStage(endpoints, bounds, outputDir);
+    writeSkeletonStage(blob, record, bounds, outputDir);
+    writeDistanceTransformStage(record, bounds, outputDir);
     writeTipStage(blob, record, bounds, outputDir);
     writeHeadTailStage(blob, record, bounds, outputDir);
     writeHiddenPredictionMaskDiffStage(blob,
@@ -795,8 +650,8 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
                                        record,
                                        bounds,
                                        outputDir);
-    writeD3RouteKeypointsStage(blob, endpoints, record, bounds, outputDir);
-    writeD3CandidatePathsStage(blob, endpoints, record, bounds, outputDir);
+    writeD3RouteKeypointsStage(blob, record, bounds, outputDir);
+    writeD3CandidatePathsStage(blob, record, bounds, outputDir);
 
     writeCenterlineStage(blob, bounds, record.initialCenterline, outputDir,
                          QStringLiteral("05_initial_centerline.png"),

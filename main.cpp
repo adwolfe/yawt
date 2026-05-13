@@ -12,19 +12,23 @@ int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
 
-    // Install unified log message pattern and apply debug logging from command-line arguments.
+    // Install unified log message pattern and apply debug/verbose flags.
     Yawt::Logging::installDefaultMessagePattern();
 
     QCommandLineParser parser;
     parser.setApplicationDescription("YAWT - Yet Another Worm Tracker");
     parser.addHelpOption();
-    QCommandLineOption debugOpt("debug", "Enable YAWT debug logging.");
+    QCommandLineOption verboseOpt("verbose", "Enable YAWT command-line debug logging.");
+    QCommandLineOption debugOpt("debug", "Enable the Debug tab and in-memory debug capture.");
+    parser.addOption(verboseOpt);
     parser.addOption(debugOpt);
     parser.process(a);
 
+    const bool verboseEnabled = parser.isSet(verboseOpt);
     const bool debugEnabled = parser.isSet(debugOpt);
-    Yawt::Logging::applyDebugMode(debugEnabled);
-    DebugUtils::setTrackingDebugEnabled(debugEnabled);
+    Yawt::Logging::applyDebugMode(verboseEnabled);
+    DebugUtils::setTrackingDebugEnabled(verboseEnabled);
+    DebugUtils::setDebugCaptureEnabled(debugEnabled);
 
     // Register cv::Mat for queued signal/slot delivery across threads.
     // Using the string name ensures the meta-type is registered for queued use.

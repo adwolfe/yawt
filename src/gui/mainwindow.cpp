@@ -96,6 +96,13 @@ MainWindow::MainWindow(QWidget *parent)
     ui->skeletonButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     ui->skeletonButton->setMinimumWidth(36);
 
+    if (ui->tabWidget && ui->cleanupTab) {
+        const int debugTabIndex = ui->tabWidget->indexOf(ui->cleanupTab);
+        if (debugTabIndex >= 0) {
+            ui->tabWidget->setTabVisible(debugTabIndex, DebugUtils::isDebugCaptureEnabled());
+        }
+    }
+
     // Initialize AppController which owns storage, manager and models.
     m_appController = new AppController(this);
     m_appController->setPixelSizePixelsPerUm(ui->pixelSizeSpinBoxD->value());
@@ -2267,7 +2274,7 @@ void MainWindow::performPostTrackingMemoryCleanup() {
 
 // --- Debug Control ---
 void MainWindow::toggleTrackingDebug() {
-    QString msg = "Debug logging is controlled via --debug at launch.";
+    QString msg = "Command-line logging uses --verbose; Debug tab capture uses --debug.";
     qDebug().noquote() << "MainWindow:" << msg;
     statusBar()->showMessage(msg, 4000);
 }

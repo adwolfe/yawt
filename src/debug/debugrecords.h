@@ -24,6 +24,21 @@ enum class CenterlineBranch {
     ZeroTipRingCut
 };
 
+struct DistanceTransformDebug {
+    cv::Rect localBounds;
+    int rows = 0;
+    int cols = 0;
+    std::vector<float> values;
+
+    bool empty() const {
+        return rows <= 0 || cols <= 0 || values.empty();
+    }
+
+    float at(int y, int x) const {
+        return values[static_cast<size_t>(y * cols + x)];
+    }
+};
+
 inline QString centerlineBranchToString(CenterlineBranch branch)
 {
     switch (branch) {
@@ -81,6 +96,11 @@ struct CenterlineFrameDebug {
     std::vector<Tracking::TipCandidate> tipCandidates;
     int assignedHeadTipIdx = -1;
     int assignedTailTipIdx = -1;
+
+    cv::Rect endpointLocalBounds;
+    std::vector<cv::Point2f> skeletonPixels;
+    std::vector<cv::Point2f> skeletonEndpointPoints;
+    DistanceTransformDebug distanceTransform;
 
     std::vector<cv::Point2f> initialCenterline;
     std::vector<cv::Point2f> resampledCenterline;

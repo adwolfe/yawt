@@ -2,6 +2,7 @@
 #include "../debug/debugdatastore.h"
 #include "../debug/debugrecords.h"
 #include "../data/trackingcommon.h"
+#include "../utils/debugutils.h"
 #include "../utils/loggingcategories.h"
 #include <QDebug>
 #include <QDir>
@@ -261,19 +262,19 @@ static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
     fillBlobMask(currentMask, current, bounds, cv::Point2f(0.f, 0.f));
     fillBlobMask(previousMask, previous, bounds, cv::Point2f(0.f, 0.f));
 
-    cv::Mat inverseCurrent;
-    cv::bitwise_not(currentMask, inverseCurrent);
-    cv::Mat vacatedMask;
-    cv::bitwise_and(previousMask, inverseCurrent, vacatedMask);
+    cv::Mat inversePrevious;
+    cv::bitwise_not(previousMask, inversePrevious);
+    cv::Mat enteredMask;
+    cv::bitwise_and(currentMask, inversePrevious, enteredMask);
     if (outTotalArea) {
-        *outTotalArea = cv::countNonZero(vacatedMask);
+        *outTotalArea = cv::countNonZero(enteredMask);
     }
 
     cv::Mat labels;
     cv::Mat stats;
     cv::Mat centroids;
     const int componentCount =
-        cv::connectedComponentsWithStats(vacatedMask, labels, stats, centroids, 8, CV_32S);
+        cv::connectedComponentsWithStats(enteredMask, labels, stats, centroids, 8, CV_32S);
     if (componentCount <= 1) {
         return false;
     }
@@ -1762,6 +1763,55 @@ static bool buildSnakeMask(const Tracking::DetectedBlob& blob,
     return true;
 }
 
+static void captureEndpointDebug(const Tracking::EndpointResult& er,
+                                 Debug::CenterlineFrameDebug& record)
+{
+    record.endpointLocalBounds = er.localBounds;
+    record.skeletonPixels.clear();
+    record.skeletonEndpointPoints.clear();
+
+    const cv::Point2f origin(static_cast<float>(er.localBounds.x),
+                             static_cast<float>(er.localBounds.y));
+    if (!er.skeleton.skeleton.empty()) {
+        for (int y = 0; y < er.skeleton.skeleton.rows; ++y) {
+            const uchar* row = er.skeleton.skeleton.ptr<uchar>(y);
+            for (int x = 0; x < er.skeleton.skeleton.cols; ++x) {
+                if (!row[x]) {
+                    continue;
+                }
+                record.skeletonPixels.push_back(
+                    cv::Point2f(static_cast<float>(x) + origin.x,
+                                static_cast<float>(y) + origin.y));
+            }
+        }
+    }
+
+    for (int idx : er.skeleton.endpointIndices) {
+        if (idx < 0 || idx >= static_cast<int>(er.skeleton.points.size())) {
+            continue;
+        }
+        const cv::Point& point = er.skeleton.points[idx];
+        record.skeletonEndpointPoints.push_back(
+            cv::Point2f(static_cast<float>(point.x) + origin.x,
+                        static_cast<float>(point.y) + origin.y));
+    }
+
+    record.distanceTransform = Debug::DistanceTransformDebug{};
+    record.distanceTransform.localBounds = er.localBounds;
+    if (!er.distTransform.empty() && er.distTransform.type() == CV_32F) {
+        record.distanceTransform.rows = er.distTransform.rows;
+        record.distanceTransform.cols = er.distTransform.cols;
+        record.distanceTransform.values.reserve(
+            static_cast<size_t>(er.distTransform.rows * er.distTransform.cols));
+        for (int y = 0; y < er.distTransform.rows; ++y) {
+            const float* row = er.distTransform.ptr<float>(y);
+            for (int x = 0; x < er.distTransform.cols; ++x) {
+                record.distanceTransform.values.push_back(row[x]);
+            }
+        }
+    }
+}
+
 // ── CenterlineWorker ────────────────────────────────────────────────────────
 
 CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage,
@@ -2027,6 +2077,8 @@ void CenterlineWorker::doWork()
             // ── STEP 1: detect endpoints, write back tip data ───────────
             const Tracking::TipFeatureBaseline baseline =
                 m_storage->getTipBaseline(wormId);
+            const bool captureDebug =
+                m_debugStore && DebugUtils::isDebugCaptureEnabled();
             Debug::CenterlineFrameDebug debugRecord;
             debugRecord.wormId = wormId;
             debugRecord.frameNumber = tp.frameNumberOriginal;
@@ -2094,6 +2146,10 @@ void CenterlineWorker::doWork()
                 }
             }
             // ── OMEGA UNZIPPER END ────────────────────────────────────────────
+
+            if (captureDebug) {
+                captureEndpointDebug(er, debugRecord);
+            }
 
             // Convert TrueTips → TipCandidates. Source = SkeletonEndpoint
             // for ALL tips so the renderer's filled-green-dot styling
@@ -2572,7 +2628,7 @@ void CenterlineWorker::doWork()
                 m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal,
                                                    wormId, blob);
                 debugRecord.decisions << QStringLiteral("no centerline producible; persisted endpoint/debug blob state only");
-                if (m_debugStore) {
+                if (captureDebug) {
                     m_debugStore->setCenterlineFrame(debugRecord);
                 }
                 prevState.valid = false;
@@ -2665,7 +2721,7 @@ void CenterlineWorker::doWork()
             debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
             debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
             debugRecord.topology = blob.topologyState;
-            if (m_debugStore) {
+            if (captureDebug) {
                 m_debugStore->setCenterlineFrame(debugRecord);
             }
 

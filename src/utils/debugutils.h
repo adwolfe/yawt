@@ -16,12 +16,14 @@ public:
      * @return True if tracking debug is enabled
      */
     static bool isTrackingDebugEnabled();
+    static bool isDebugCaptureEnabled();
     
     /**
      * @brief Set the tracking debug state
      * @param enabled True to enable tracking debug messages
      */
     static void setTrackingDebugEnabled(bool enabled);
+    static void setDebugCaptureEnabled(bool enabled);
     
     /**
      * @brief Convenience macro for conditional tracking debug output
@@ -31,6 +33,7 @@ public:
     
 private:
     static bool s_trackingDebugEnabled;
+    static bool s_debugCaptureEnabled;
 };
 
 // Convenience macro for tracking debug messages
