@@ -350,6 +350,145 @@ static bool enforceTwoTipCenterlineOrderRoles(
     return changed;
 }
 
+static bool selectZeroTipRingCutCenterline(
+    const Tracking::DetectedBlob& blob,
+    const cv::Point2f& predictedHead,
+    const cv::Point2f& predictedTail,
+    bool hasPredictedTips,
+    const cv::Point2f& predictedCenter,
+    bool hasPredictedCenter,
+    float previousCrossSum,
+    float refLength,
+    QStringList* diagnostics,
+    std::vector<cv::Point2f>& outCenterline,
+    cv::Point2f& outCutPoint)
+{
+    outCenterline.clear();
+    outCutPoint = cv::Point2f(-1.f, -1.f);
+    if (blob.holeContourPoints.empty()) {
+        return false;
+    }
+
+    struct CutCandidate {
+        QString label;
+        cv::Point2f a;
+        cv::Point2f b;
+    };
+
+    std::vector<CutCandidate> cuts;
+    if (hasPredictedTips) {
+        cuts.push_back({QStringLiteral("predicted tips"), predictedHead, predictedTail});
+    }
+
+    const std::vector<cv::Point>& hole = blob.holeContourPoints.front();
+    if (hole.size() >= 5) {
+        const cv::RotatedRect rr = cv::fitEllipse(hole);
+        const float ang = static_cast<float>(rr.angle * CV_PI / 180.0);
+        const float halfMajor = std::max(rr.size.width, rr.size.height) * 0.5f + 6.f;
+        const cv::Point2f dir(std::cos(ang), std::sin(ang));
+        cuts.push_back({QStringLiteral("hole ellipse"),
+                        rr.center - dir * halfMajor,
+                        rr.center + dir * halfMajor});
+    }
+
+    struct ScoredCandidate {
+        std::vector<cv::Point2f> points;
+        cv::Point2f cutPoint = {-1.f, -1.f};
+        QString label;
+        float len = 0.f;
+        float endpointDist = 0.f;
+        float centerDist = 0.f;
+        float crossSum = 0.f;
+        float crossPenalty = 0.f;
+        float score = std::numeric_limits<float>::max();
+    };
+
+    std::vector<ScoredCandidate> scored;
+    for (const CutCandidate& cut : cuts) {
+        Tracking::DetectedBlob cutBlob = blob;
+        if (!Tracking::populateCenterlineFromContourWithCut(cutBlob, cut.a, cut.b, 3) ||
+            cutBlob.centerlinePoints.size() < 2) {
+            if (diagnostics) {
+                diagnostics->append(QStringLiteral("0-tip ring cut candidate %1 failed")
+                                        .arg(cut.label));
+            }
+            continue;
+        }
+
+        ScoredCandidate c;
+        c.label = cut.label;
+        c.cutPoint = (cut.a + cut.b) * 0.5f;
+        c.points.assign(cutBlob.centerlinePoints.begin(), cutBlob.centerlinePoints.end());
+        if (hasPredictedTips) {
+            const float forward = ptDist(c.points.front(), predictedHead) +
+                                  ptDist(c.points.back(), predictedTail);
+            const float reversed = ptDist(c.points.front(), predictedTail) +
+                                   ptDist(c.points.back(), predictedHead);
+            if (reversed < forward) {
+                std::reverse(c.points.begin(), c.points.end());
+            }
+            c.endpointDist = std::min(forward, reversed);
+        }
+        c.len = arcLen(c.points);
+        if (hasPredictedCenter && c.points.size() >= 2) {
+            c.centerDist = ptDist(c.points[c.points.size() / 2], predictedCenter);
+        }
+        c.crossSum = centerlineCrossSum(c.points);
+        constexpr float kCrossSumEpsilon = 1e-4f;
+        if (std::abs(previousCrossSum) > kCrossSumEpsilon &&
+            std::abs(c.crossSum) > kCrossSumEpsilon) {
+            c.crossPenalty = (c.crossSum * previousCrossSum > 0.f) ? 0.f : 1.f;
+        }
+
+        constexpr float kEndpointWeight = 3.0f;
+        constexpr float kCenterWeight = 2.0f;
+        constexpr float kCrossMismatchWeight = 100.0f;
+        constexpr float kLengthWeight = 1.0f;
+        c.score = kEndpointWeight * c.endpointDist +
+                  kCenterWeight * c.centerDist +
+                  kCrossMismatchWeight * c.crossPenalty;
+        if (refLength > 0.f) {
+            c.score += kLengthWeight * std::abs(c.len - refLength);
+        }
+        scored.push_back(std::move(c));
+    }
+
+    if (scored.empty()) {
+        return false;
+    }
+
+    int bestIdx = 0;
+    for (int i = 1; i < static_cast<int>(scored.size()); ++i) {
+        if (scored[i].score < scored[bestIdx].score) {
+            bestIdx = i;
+        }
+    }
+
+    if (diagnostics) {
+        diagnostics->append(QStringLiteral("0-tip ring cut candidates=%1 selected=%2")
+                                .arg(static_cast<int>(scored.size()))
+                                .arg(bestIdx));
+        for (int i = 0; i < static_cast<int>(scored.size()); ++i) {
+            const ScoredCandidate& c = scored[i];
+            diagnostics->append(
+                QStringLiteral("0-tip candidate %1 %2: len=%3 endpointDist=%4 centerDist=%5 crossSum=%6 crossPenalty=%7 score=%8%9")
+                    .arg(i)
+                    .arg(c.label)
+                    .arg(c.len, 0, 'f', 2)
+                    .arg(c.endpointDist, 0, 'f', 2)
+                    .arg(c.centerDist, 0, 'f', 2)
+                    .arg(c.crossSum, 0, 'f', 4)
+                    .arg(c.crossPenalty, 0, 'f', 1)
+                    .arg(c.score, 0, 'f', 2)
+                    .arg(i == bestIdx ? QStringLiteral(" SELECTED") : QString()));
+        }
+    }
+
+    outCenterline = scored[bestIdx].points;
+    outCutPoint = scored[bestIdx].cutPoint;
+    return outCenterline.size() >= 2;
+}
+
 static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
                                        const Tracking::DetectedBlob& previous,
                                        const cv::Point2f& hiddenLast,
@@ -1192,6 +1331,190 @@ static float minPathDistanceToPoint(const Tracking::SkeletonGraph& graph,
         best = std::min(best, ptDist(world, target));
     }
     return best;
+}
+
+static bool selectZeroTipRingGraphCenterline(
+    const Tracking::SkeletonGraph& graph,
+    const cv::Point2f& originOffset,
+    const cv::Point2f& predictedHead,
+    const cv::Point2f& predictedTail,
+    const cv::Point2f& predictedCenter,
+    bool hasPredictedCenter,
+    float previousCrossSum,
+    float refLength,
+    QStringList* diagnostics,
+    std::vector<cv::Point2f>& outCenterline)
+{
+    outCenterline.clear();
+    const int headNode = nearestSkeletonNode(graph, predictedHead, originOffset);
+    const int tailNode = nearestSkeletonNode(graph, predictedTail, originOffset);
+    if (headNode < 0 || tailNode < 0 || headNode == tailNode) {
+        if (diagnostics) {
+            diagnostics->append(QStringLiteral("0-tip graph route failed: invalid predicted endpoint nodes head=%1 tail=%2")
+                                    .arg(headNode)
+                                    .arg(tailNode));
+        }
+        return false;
+    }
+
+    std::vector<std::vector<cv::Point2f>> paths;
+    const float minUsableLen = refLength > 0.f ? std::max(6.f, 0.5f * refLength) : 6.f;
+
+    const std::vector<JunctionCluster> clusters = findJunctionClusters(graph);
+    for (const JunctionCluster& cluster : clusters) {
+        if (cluster.nodes.empty()) {
+            continue;
+        }
+        std::vector<int> hTrunk;
+        if (!shortestPathToCluster(graph, headNode, cluster, hTrunk) || hTrunk.size() < 2) {
+            continue;
+        }
+        const int hClusterNode = hTrunk.back();
+        const int hIncoming = hTrunk[hTrunk.size() - 2];
+
+        std::vector<int> tTrunk;
+        if (!shortestPathToCluster(graph, tailNode, cluster, tTrunk) || tTrunk.size() < 2) {
+            continue;
+        }
+        const int tClusterNode = tTrunk.back();
+        const int tIncoming = tTrunk[tTrunk.size() - 2];
+        if (hIncoming == tIncoming) {
+            continue;
+        }
+
+        std::vector<int> internal = clusterInternalPath(graph, cluster, hClusterNode, tClusterNode);
+        if (internal.empty()) {
+            continue;
+        }
+        std::vector<int> full = hTrunk;
+        full.insert(full.end(), internal.begin() + 1, internal.end());
+        std::reverse(tTrunk.begin(), tTrunk.end());
+        full.insert(full.end(), tTrunk.begin() + 1, tTrunk.end());
+        if (full.size() >= 2 && nodePathLength(graph, full) >= minUsableLen) {
+            paths.push_back(nodesToWorldPath(graph, full, originOffset));
+        }
+
+        const std::vector<JunctionPort> ports = clusterPorts(graph, cluster);
+        for (const JunctionPort& port : ports) {
+            if (port.outsideNode == hIncoming || port.outsideNode == tIncoming) {
+                continue;
+            }
+            LoopReturnPath loop;
+            if (!findLoopReturnPath(graph, cluster, port, loop) ||
+                loop.length < minUsableLen) {
+                continue;
+            }
+            std::vector<int> loopToTail =
+                clusterInternalPath(graph, cluster, loop.nodes.back(), tClusterNode);
+            if (loopToTail.empty()) {
+                continue;
+            }
+            std::vector<int> loopFull = hTrunk;
+            loopFull.insert(loopFull.end(), internal.begin() + 1, internal.end());
+            loopFull.insert(loopFull.end(), loop.nodes.begin() + 1, loop.nodes.end());
+            loopFull.insert(loopFull.end(), loopToTail.begin() + 1, loopToTail.end());
+            std::vector<int> tailToCluster = tTrunk;
+            std::reverse(tailToCluster.begin(), tailToCluster.end());
+            loopFull.insert(loopFull.end(), tailToCluster.begin() + 1, tailToCluster.end());
+            if (loopFull.size() >= 2 && nodePathLength(graph, loopFull) >= minUsableLen) {
+                paths.push_back(nodesToWorldPath(graph, loopFull, originOffset));
+            }
+        }
+    }
+
+    if (paths.empty()) {
+        if (diagnostics) {
+            diagnostics->append(QStringLiteral("0-tip graph route failed: no skeleton path between predicted endpoint nodes"));
+        }
+        return false;
+    }
+
+    struct Candidate {
+        std::vector<cv::Point2f> points;
+        float len = 0.f;
+        float endpointDist = 0.f;
+        float centerDist = 0.f;
+        float crossSum = 0.f;
+        float crossPenalty = 0.f;
+        float score = std::numeric_limits<float>::max();
+    };
+
+    std::vector<Candidate> candidates;
+    for (std::vector<cv::Point2f> path : paths) {
+        if (path.size() < 2) {
+            continue;
+        }
+        const float forward = ptDist(path.front(), predictedHead) +
+                              ptDist(path.back(), predictedTail);
+        const float reversed = ptDist(path.front(), predictedTail) +
+                               ptDist(path.back(), predictedHead);
+        if (reversed < forward) {
+            std::reverse(path.begin(), path.end());
+        }
+
+        Candidate c;
+        c.points = std::move(path);
+        c.endpointDist = std::min(forward, reversed);
+        c.len = arcLen(c.points);
+        if (hasPredictedCenter && c.points.size() >= 2) {
+            c.centerDist = ptDist(c.points[c.points.size() / 2], predictedCenter);
+        }
+        c.crossSum = centerlineCrossSum(c.points);
+        constexpr float kCrossSumEpsilon = 1e-4f;
+        if (std::abs(previousCrossSum) > kCrossSumEpsilon &&
+            std::abs(c.crossSum) > kCrossSumEpsilon) {
+            c.crossPenalty = (c.crossSum * previousCrossSum > 0.f) ? 0.f : 1.f;
+        }
+
+        constexpr float kEndpointWeight = 3.0f;
+        constexpr float kCenterWeight = 2.0f;
+        constexpr float kCrossMismatchWeight = 100.0f;
+        constexpr float kLengthWeight = 1.0f;
+        c.score = kEndpointWeight * c.endpointDist +
+                  kCenterWeight * c.centerDist +
+                  kCrossMismatchWeight * c.crossPenalty;
+        if (refLength > 0.f) {
+            c.score += kLengthWeight * std::abs(c.len - refLength);
+        }
+        candidates.push_back(std::move(c));
+    }
+
+    if (candidates.empty()) {
+        return false;
+    }
+
+    int bestIdx = 0;
+    for (int i = 1; i < static_cast<int>(candidates.size()); ++i) {
+        if (candidates[i].score < candidates[bestIdx].score) {
+            bestIdx = i;
+        }
+    }
+
+    if (diagnostics) {
+        diagnostics->append(QStringLiteral("0-tip graph route candidates=%1 selected=%2 headNode=(%3,%4) tailNode=(%5,%6)")
+                                .arg(static_cast<int>(candidates.size()))
+                                .arg(bestIdx)
+                                .arg(graph.points[headNode].x)
+                                .arg(graph.points[headNode].y)
+                                .arg(graph.points[tailNode].x)
+                                .arg(graph.points[tailNode].y));
+        for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+            const Candidate& c = candidates[i];
+            diagnostics->append(
+                QStringLiteral("0-tip graph candidate %1: len=%2 endpointDist=%3 centerDist=%4 crossSum=%5 crossPenalty=%6 score=%7%8")
+                    .arg(i)
+                    .arg(c.len, 0, 'f', 2)
+                    .arg(c.endpointDist, 0, 'f', 2)
+                    .arg(c.centerDist, 0, 'f', 2)
+                    .arg(c.crossSum, 0, 'f', 4)
+                    .arg(c.crossPenalty, 0, 'f', 1)
+                    .arg(c.score, 0, 'f', 2)
+                    .arg(i == bestIdx ? QStringLiteral(" SELECTED") : QString()));
+        }
+    }
+
+    outCenterline = candidates[bestIdx].points;
+    return outCenterline.size() >= 2;
 }
 
 static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& graph,
@@ -2711,29 +3034,59 @@ void CenterlineWorker::doWork()
                     runSkeletonArcDispatch(blob, er, originOffset);
                 }
                 else if (!blob.holeContourPoints.empty()) {
-                    // 0 tips, closed ring: synthetic-hole-axis cut.
+                    // 0 tips, closed ring: route between predicted endpoint nodes.
                     debugRecord.branch = Debug::CenterlineBranch::ZeroTipRingCut;
-                    const std::vector<cv::Point>& hole = blob.holeContourPoints.front();
-                    if (hole.size() >= 5) {
-                        cv::RotatedRect rr = cv::fitEllipse(hole);
-                        const float ang = static_cast<float>(rr.angle * CV_PI / 180.0);
-                        const float halfMajor = std::max(rr.size.width,
-                                                         rr.size.height) * 0.5f + 6.f;
-                        const cv::Point2f dir(std::cos(ang), std::sin(ang));
-                        const cv::Point2f cutA(rr.center.x - dir.x * halfMajor,
-                                               rr.center.y - dir.y * halfMajor);
-                        const cv::Point2f cutB(rr.center.x + dir.x * halfMajor,
-                                               rr.center.y + dir.y * halfMajor);
-                        Tracking::DetectedBlob cutBlob = blob;
-                        if (Tracking::populateCenterlineFromContourWithCut(
-                                cutBlob, cutA, cutB, /*thickness*/ 3) &&
-                            cutBlob.centerlinePoints.size() >= 2) {
-                            centerline.assign(cutBlob.centerlinePoints.begin(),
-                                              cutBlob.centerlinePoints.end());
-                            blob.centerlineCutPoint = (cutA + cutB) * 0.5f;
+                    const bool hasPredictedTips =
+                        framePredictor.hasPrev &&
+                        (debugRecord.predictedHead.x != 0.f || debugRecord.predictedHead.y != 0.f) &&
+                        (debugRecord.predictedTail.x != 0.f || debugRecord.predictedTail.y != 0.f);
+                    const bool hasCenterPrediction =
+                        framePredictor.lastCenterPos.x != 0.f ||
+                        framePredictor.lastCenterPos.y != 0.f;
+                    cv::Point2f cutPoint(-1.f, -1.f);
+                    bool zeroTipOk = false;
+                    if (hasPredictedTips) {
+                        zeroTipOk = selectZeroTipRingGraphCenterline(er.skeleton,
+                                                                      originOffset,
+                                                                      debugRecord.predictedHead,
+                                                                      debugRecord.predictedTail,
+                                                                      debugRecord.predictedCenter,
+                                                                      hasCenterPrediction,
+                                                                      framePrevState.turningAngle,
+                                                                      frameRefLength,
+                                                                      &debugRecord.decisions,
+                                                                      centerline);
+                    }
+                    if (!zeroTipOk) {
+                        zeroTipOk = selectZeroTipRingCutCenterline(blob,
+                                                                   debugRecord.predictedHead,
+                                                                   debugRecord.predictedTail,
+                                                                   hasPredictedTips,
+                                                                   debugRecord.predictedCenter,
+                                                                   hasCenterPrediction,
+                                                                   framePrevState.turningAngle,
+                                                                   frameRefLength,
+                                                                   &debugRecord.decisions,
+                                                                   centerline,
+                                                                   cutPoint);
+                        if (zeroTipOk) {
+                            blob.centerlineCutPoint = cutPoint;
                             blob.hasCenterlineCutPoint = true;
-                            debugRecord.decisions << QStringLiteral("0-tip ring cut supplied centerline");
                         }
+                    }
+
+                    if (zeroTipOk) {
+                        Tracking::TipCandidate hypHead;
+                        hypHead.point = centerline.front();
+                        hypHead.source = Tracking::TipCandidate::Source::HypothesizedHidden;
+                        Tracking::TipCandidate hypTail;
+                        hypTail.point = centerline.back();
+                        hypTail.source = Tracking::TipCandidate::Source::HypothesizedHidden;
+                        blob.tipCandidates.push_back(hypHead);
+                        blob.tipCandidates.push_back(hypTail);
+                        blob.assignedHeadTipIdx = static_cast<int>(blob.tipCandidates.size()) - 2;
+                        blob.assignedTailTipIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
+                        debugRecord.decisions << QStringLiteral("0-tip ring supplied predictor-scored centerline");
                     }
                 }
             }
@@ -3841,30 +4194,55 @@ bool CenterlineWorker::exportProcessForFrame(
             exportSkeletonArcDispatch(blob, er, originOffset, step2Branch, step2Detail);
         }
         else if (!blob.holeContourPoints.empty()) {
-            step2Branch = "SelfCrossed / synthetic hole-axis cut (0-tip ring)";
-            const std::vector<cv::Point>& hole = blob.holeContourPoints.front();
-            if (hole.size() >= 5) {
-                cv::RotatedRect rr = cv::fitEllipse(hole);
-                const float ang = static_cast<float>(rr.angle * CV_PI / 180.0);
-                const float halfMajor = std::max(rr.size.width, rr.size.height) * 0.5f + 6.f;
-                const cv::Point2f dir(std::cos(ang), std::sin(ang));
-                const cv::Point2f cutA(rr.center.x - dir.x * halfMajor,
-                                       rr.center.y - dir.y * halfMajor);
-                const cv::Point2f cutB(rr.center.x + dir.x * halfMajor,
-                                       rr.center.y + dir.y * halfMajor);
-                Tracking::DetectedBlob cutBlob = blob;
-                if (Tracking::populateCenterlineFromContourWithCut(cutBlob, cutA, cutB, 3) &&
-                    cutBlob.centerlinePoints.size() >= 2) {
-                    centerline.assign(cutBlob.centerlinePoints.begin(),
-                                      cutBlob.centerlinePoints.end());
-                    blob.centerlineCutPoint = (cutA + cutB) * 0.5f;
+            step2Branch = "SelfCrossed / predicted graph route (0-tip ring)";
+            QStringList zeroTipDiagnostics;
+            cv::Point2f cutPoint(-1.f, -1.f);
+            bool zeroTipOk = false;
+            if (predictor.hasPrev) {
+                zeroTipOk = selectZeroTipRingGraphCenterline(er.skeleton,
+                                                             originOffset,
+                                                             predictedHead,
+                                                             predictedTail,
+                                                             predictedCenter,
+                                                             hasPredictedCenter,
+                                                             prevTurningAngle,
+                                                             refLength,
+                                                             &zeroTipDiagnostics,
+                                                             centerline);
+            }
+            if (!zeroTipOk) {
+                zeroTipOk = selectZeroTipRingCutCenterline(blob,
+                                                           predictedHead,
+                                                           predictedTail,
+                                                           predictor.hasPrev,
+                                                           predictedCenter,
+                                                           hasPredictedCenter,
+                                                           prevTurningAngle,
+                                                           refLength,
+                                                           &zeroTipDiagnostics,
+                                                           centerline,
+                                                           cutPoint);
+                if (zeroTipOk) {
+                    blob.centerlineCutPoint = cutPoint;
                     blob.hasCenterlineCutPoint = true;
-                    step2Detail = QString("cut center=(%1,%2)")
-                        .arg(blob.centerlineCutPoint.x,'f',1)
-                        .arg(blob.centerlineCutPoint.y,'f',1);
-                } else {
-                    step2Detail = "populateCenterlineFromContourWithCut FAILED";
                 }
+            }
+
+            if (zeroTipOk) {
+                Tracking::TipCandidate hypHead;
+                hypHead.point = centerline.front();
+                hypHead.source = Tracking::TipCandidate::Source::HypothesizedHidden;
+                Tracking::TipCandidate hypTail;
+                hypTail.point = centerline.back();
+                hypTail.source = Tracking::TipCandidate::Source::HypothesizedHidden;
+                blob.tipCandidates.push_back(hypHead);
+                blob.tipCandidates.push_back(hypTail);
+                blob.assignedHeadTipIdx = static_cast<int>(blob.tipCandidates.size()) - 2;
+                blob.assignedTailTipIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
+
+                step2Detail = zeroTipDiagnostics.join(QStringLiteral(" | "));
+            } else {
+                step2Detail = "zero-tip ring graph/cut candidates FAILED";
             }
         }
     }
