@@ -1536,6 +1536,7 @@ static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& 
     const std::vector<JunctionCluster> clusters = findJunctionClusters(graph);
     selection.clusterCount = static_cast<int>(clusters.size());
 
+    const float minTrunkLen = refLength > 0.f ? std::max(3.f, 0.10f * refLength) : 3.f;
     float bestScore = std::numeric_limits<float>::max();
     int bestLoopCount = 0;
     float bestLoopLength = 0.f;
@@ -1549,6 +1550,17 @@ static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& 
         }
         const int incomingIdx = trunk[trunk.size() - 2];
         const std::vector<JunctionPort> ports = clusterPorts(graph, cluster);
+
+        const float trunkLen = nodePathLength(graph, trunk);
+        if (trunkLen < minTrunkLen) {
+            selection.diagnostics << QStringLiteral("cluster %1 rejected short trunk=%2 min=%3 rep=(%4,%5)")
+                                         .arg(cluster.id)
+                                         .arg(trunkLen, 0, 'f', 2)
+                                         .arg(minTrunkLen, 0, 'f', 2)
+                                         .arg(graph.points[trunk.back()].x)
+                                         .arg(graph.points[trunk.back()].y);
+            continue;
+        }
 
         int loopCount = 0;
         float clusterBestLoopLength = std::numeric_limits<float>::max();
@@ -1572,7 +1584,6 @@ static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& 
                 minPathDistanceToPoint(graph, loop.nodes, predictedHidden, originOffset));
         }
 
-        const float trunkLen = nodePathLength(graph, trunk);
         const bool hasLoop = loopCount > 0;
         const float loopLenForLog = hasLoop ? clusterBestLoopLength : 0.f;
         selection.diagnostics << QStringLiteral("cluster %1 rep=(%2,%3) trunk=%4 ports=%5 returningLoops=%6 bestLoop=%7")
@@ -1620,6 +1631,16 @@ static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& 
     if (fallback >= 0) {
         std::vector<int> trunk;
         if (shortestNodePath(graph, srcIdx, fallback, trunk) && trunk.size() >= 2) {
+            const float trunkLen = nodePathLength(graph, trunk);
+            if (trunkLen < minTrunkLen) {
+                selection.diagnostics << QStringLiteral("fallback nearest degree-3 node rejected short trunk=%1 min=%2 node=(%3,%4)")
+                                             .arg(trunkLen, 0, 'f', 2)
+                                             .arg(minTrunkLen, 0, 'f', 2)
+                                             .arg(graph.points[fallback].x)
+                                             .arg(graph.points[fallback].y);
+                return selection;
+            }
+
             JunctionCluster cluster;
             const int n = static_cast<int>(graph.points.size());
             cluster.id = -1;
