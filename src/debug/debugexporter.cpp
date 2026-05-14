@@ -523,10 +523,11 @@ static void writeHeadTailStage(const Tracking::DetectedBlob& blob,
     drawAssignedTip(record.assignedHeadTipIdx, QStringLiteral("H"), cv::Scalar(0, 0, 255));
     drawAssignedTip(record.assignedTailTipIdx, QStringLiteral("T"), cv::Scalar(255, 80, 0));
 
-    drawTitle(canvas, QStringLiteral("04 head/tail final labels  topo=%1  branch=%2")
+    drawTitle(canvas, QStringLiteral("04b final assigned head/tail  topo=%1  branch=%2")
               .arg(Tracking::topologyStateToString(record.topology))
               .arg(Debug::centerlineBranchToString(record.branch)));
     drawCoordinateEdges(canvas, bounds);
+    writeStageImage(canvas, outputDir, QStringLiteral("04b_final_assigned_head_tail.png"));
     writeStageImage(canvas, outputDir, QStringLiteral("04_head_tail.png"));
 }
 

@@ -120,6 +120,15 @@ static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
                        static_cast<float>(blob.centroid.y()));
 }
 
+static cv::Point2f trustedTipPointForCleanD1(const Tracking::TrueTip& tip)
+{
+    constexpr float kMaxCleanD1Extension = 6.f;
+    if (!tip.extended || ptDist(tip.point, tip.skelPoint) > kMaxCleanD1Extension) {
+        return tip.skelPoint;
+    }
+    return tip.point;
+}
+
 static void fillBlobMask(cv::Mat& mask,
                          const Tracking::DetectedBlob& blob,
                          const cv::Rect& bounds,
@@ -2960,12 +2969,10 @@ void CenterlineWorker::doWork()
                     centerline = std::move(graphPath);
                     debugRecord.branch = Debug::CenterlineBranch::D1CleanGraphPath;
                     debugRecord.decisions << QStringLiteral("D-1 clean skeleton graph path selected");
-                    if (er.tips[blob.assignedHeadTipIdx].extended &&
-                        !centerline.empty())
-                        centerline.front() = er.tips[blob.assignedHeadTipIdx].point;
-                    if (er.tips[blob.assignedTailTipIdx].extended &&
-                        !centerline.empty())
-                        centerline.back() = er.tips[blob.assignedTailTipIdx].point;
+                    if (!centerline.empty())
+                        centerline.front() = trustedTipPointForCleanD1(er.tips[blob.assignedHeadTipIdx]);
+                    if (!centerline.empty())
+                        centerline.back() = trustedTipPointForCleanD1(er.tips[blob.assignedTailTipIdx]);
 
                     // If D-1 result is suspiciously short the worm is
                     // tightly self-coiled but had no visible hole in the
@@ -3786,11 +3793,11 @@ bool CenterlineWorker::exportProcessForFrame(
     }
     log << "\n";
 
-    // 04 — head/tail assignment + topology.
-    log << "Stage 04 (head/tail + topology):\n";
+    // 04a — raw detector head/tail assignment + topology.
+    log << "Stage 04a (raw detectEndpoints head/tail + topology):\n";
     log << "  topology    = " << Tracking::topologyStateToString(er.topology) << "\n";
     log << "  inMergeGroup= " << (inMerge ? "true" : "false") << "\n";
-    log << "  headIdx     = " << er.headIdx << "   tailIdx = " << er.tailIdx << "\n";
+    log << "  rawHeadIdx  = " << er.headIdx << "   rawTailIdx = " << er.tailIdx << "\n";
     {
         cv::Mat canvas = makeBaseCanvas(blob, bounds);
         drawContoursOverlay(canvas, blob, bounds);
@@ -3840,14 +3847,14 @@ bool CenterlineWorker::exportProcessForFrame(
                          cv::Scalar(0, 220, 220), "Cpred", nullptr);
             }
         }
-        drawTitle(canvas, QString("04 head/tail  topo=%1")
+        drawTitle(canvas, QString("04a raw detectEndpoints head/tail  topo=%1")
                   .arg(Tracking::topologyStateToString(er.topology)));
         drawText(canvas,
             QString("predictor: %1").arg(predictor.hasPrev
                 ? (predictor.hasVelocity ? "prev+vel+mask" : "prev+mask")
                 : "none"),
             cv::Point(8, canvas.rows - 10));
-        writeStageImage(canvas, outputDir, "04_head_tail.png");
+        writeStageImage(canvas, outputDir, "04a_raw_detect_head_tail.png");
     }
 
     // Mirror onto blob what detectEndpoints would have written so subsequent
@@ -3872,6 +3879,38 @@ bool CenterlineWorker::exportProcessForFrame(
                                           previousCenterlineForExport,
                                           blobCentroid(previousBlobForExport),
                                           &roleDiagnostics);
+    }
+
+    // 04b — final assigned labels after role checks that subsequent stages use.
+    {
+        cv::Mat canvas = makeBaseCanvas(blob, bounds);
+        drawContoursOverlay(canvas, blob, bounds);
+        for (int i = 0; i < static_cast<int>(blob.tipCandidates.size()); ++i) {
+            const cv::Point cp = worldToCanvas(blob.tipCandidates[i].point, bounds);
+            cv::Scalar col(180, 180, 180);
+            QString label = QStringLiteral("?");
+            if (i == blob.assignedHeadTipIdx) {
+                col = cv::Scalar(0, 0, 255);
+                label = QStringLiteral("H");
+            } else if (i == blob.assignedTailTipIdx) {
+                col = cv::Scalar(255, 80, 0);
+                label = QStringLiteral("T");
+            }
+            cv::circle(canvas, cp, 8, col, cv::FILLED);
+            cv::circle(canvas, cp, 8, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+            drawText(canvas, label, cv::Point(cp.x - 4, cp.y + 5));
+        }
+        drawTitle(canvas, QString("04b final assigned head/tail  topo=%1")
+                  .arg(Tracking::topologyStateToString(blob.topologyState)));
+        drawText(canvas,
+                 QString("raw H/T=%1/%2 final H/T=%3/%4")
+                     .arg(er.headIdx)
+                     .arg(er.tailIdx)
+                     .arg(blob.assignedHeadTipIdx)
+                     .arg(blob.assignedTailTipIdx),
+                 cv::Point(8, canvas.rows - 10));
+        writeStageImage(canvas, outputDir, "04b_final_assigned_head_tail.png");
+        writeStageImage(canvas, outputDir, "04_head_tail.png");
     }
 
     // Stage 05 — Step 2 dispatch (mirrors doWork, same logic).
@@ -4134,10 +4173,10 @@ bool CenterlineWorker::exportProcessForFrame(
         if (skeletonGraphPath(er.skeleton, hGraphIdx, tGraphIdx,
                               originOffset, graphPath)) {
             centerline = std::move(graphPath);
-            if (er.tips[blob.assignedHeadTipIdx].extended && !centerline.empty())
-                centerline.front() = er.tips[blob.assignedHeadTipIdx].point;
-            if (er.tips[blob.assignedTailTipIdx].extended && !centerline.empty())
-                centerline.back()  = er.tips[blob.assignedTailTipIdx].point;
+            if (!centerline.empty())
+                centerline.front() = trustedTipPointForCleanD1(er.tips[blob.assignedHeadTipIdx]);
+            if (!centerline.empty())
+                centerline.back()  = trustedTipPointForCleanD1(er.tips[blob.assignedTailTipIdx]);
             const float d1Len = arcLen(centerline);
             step2Branch = "Clean / skeleton-graph path (D-1)";
             step2Detail = QString("path=%1pts arcLen=%2")

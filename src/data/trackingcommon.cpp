@@ -561,23 +561,26 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
                                     snapLocal.y + originOffset.y);
         }
 
-        // Search radius scales with local body half-width at the endpoint.
+        // Search radius scales with local body half-width at the endpoint,
+        // but stays local to the endpoint. A larger radius can grab a nearby
+        // body kink instead of the actual end contour.
         const float dtAtEp = r.distTransform.at<float>(epLocal.y, epLocal.x);
-        const float searchR = std::max(dtAtEp * 1.5f, 4.0f);
+        const float searchR = std::min(std::max(dtAtEp * 1.5f, 4.0f), 6.0f);
         const float searchRSq = searchR * searchR;
 
-        // Find the strongest curvature peak within `searchR` of the
-        // skeleton-endpoint contour-snap point. "Strongest" = max |curvature|.
+        // Find the nearest strong curvature peak within `searchR` of the
+        // skeleton-endpoint contour-snap point. Choosing nearest keeps this
+        // as a local endpoint extension rather than a jump to a stronger
+        // curvature feature elsewhere on the nearby body contour.
         int bestPeak = -1;
-        float bestMag = -1.f;
+        float bestDistSq = std::numeric_limits<float>::max();
         for (int peakIdx : curvaturePeakIdx) {
             const cv::Point2f& peakLocal = contourLocal[peakIdx];
             const cv::Point2f d = peakLocal - snapLocal;
             const float dsq = d.x * d.x + d.y * d.y;
             if (dsq > searchRSq) continue;
-            const float mag = std::abs(curvature[peakIdx]);
-            if (mag > bestMag) {
-                bestMag = mag;
+            if (dsq < bestDistSq) {
+                bestDistSq = dsq;
                 bestPeak = peakIdx;
             }
         }
@@ -608,6 +611,13 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
         r.topology = (hasRing || r.tips.size() < 2)
                          ? TopologyState::SelfCrossed
                          : TopologyState::Clean;
+    }
+
+    if (r.topology == TopologyState::Clean) {
+        for (TrueTip& tip : r.tips) {
+            tip.point = tip.skelPoint;
+            tip.extended = false;
+        }
     }
 
     // (g) ── Head/tail assignment ──────────────────────────────────────────
