@@ -193,6 +193,163 @@ static bool nearestMaskPoint(const Tracking::DetectedBlob& blob,
     return found;
 }
 
+static bool enforceSelfCrossedTwoTipPredictorRoles(
+    Tracking::DetectedBlob& blob,
+    const Tracking::HeadTailPredictor& predictor,
+    QStringList* diagnostics)
+{
+    if (blob.topologyState != Tracking::TopologyState::SelfCrossed ||
+        blob.tipCandidates.size() != 2 ||
+        !predictor.hasPrev) {
+        return false;
+    }
+
+    auto distSq = [](const cv::Point2f& a, const cv::Point2f& b) -> float {
+        const cv::Point2f d = a - b;
+        return d.x * d.x + d.y * d.y;
+    };
+
+    const cv::Point2f predHead = predictor.hasVelocity
+        ? predictor.lastHeadPos + predictor.velHead
+        : predictor.lastHeadPos;
+    const cv::Point2f predTail = predictor.hasVelocity
+        ? predictor.lastTailPos + predictor.velTail
+        : predictor.lastTailPos;
+
+    auto assignmentCost = [&](int headIdx, int tailIdx) -> float {
+        const cv::Point2f& h = blob.tipCandidates[headIdx].point;
+        const cv::Point2f& t = blob.tipCandidates[tailIdx].point;
+
+        float cost = distSq(h, predHead) + distSq(t, predTail);
+        cost += 0.5f * (distSq(h, predictor.lastHeadPos) +
+                        distSq(t, predictor.lastTailPos));
+        if (predictor.hasVelocity) {
+            cost += 0.25f * (distSq(h - predictor.lastHeadPos, predictor.velHead) +
+                             distSq(t - predictor.lastTailPos, predictor.velTail));
+        }
+        return cost;
+    };
+
+    const float cost01 = assignmentCost(0, 1);
+    const float cost10 = assignmentCost(1, 0);
+    const int oldHead = blob.assignedHeadTipIdx;
+    const int oldTail = blob.assignedTailTipIdx;
+
+    if (cost01 <= cost10) {
+        blob.assignedHeadTipIdx = 0;
+        blob.assignedTailTipIdx = 1;
+    } else {
+        blob.assignedHeadTipIdx = 1;
+        blob.assignedTailTipIdx = 0;
+    }
+
+    const bool changed =
+        oldHead != blob.assignedHeadTipIdx ||
+        oldTail != blob.assignedTailTipIdx;
+    if (diagnostics) {
+        diagnostics->append(
+            QStringLiteral("SelfCrossed two-tip predictor role check cost01=%1 cost10=%2 selected headIdx=%3 tailIdx=%4%5")
+                .arg(cost01, 0, 'f', 2)
+                .arg(cost10, 0, 'f', 2)
+                .arg(blob.assignedHeadTipIdx)
+                .arg(blob.assignedTailTipIdx)
+                .arg(changed ? QStringLiteral(" reassigned") : QString()));
+    }
+    return changed;
+}
+
+static bool enforceTwoTipCenterlineOrderRoles(
+    Tracking::DetectedBlob& blob,
+    const std::vector<cv::Point2f>& previousCenterline,
+    const cv::Point2f& previousCentroid,
+    QStringList* diagnostics)
+{
+    if (blob.tipCandidates.size() != 2 || previousCenterline.size() < 2) {
+        return false;
+    }
+
+    const cv::Point2f delta = blobCentroid(blob) - previousCentroid;
+    std::vector<cv::Point2f> translatedPrev;
+    translatedPrev.reserve(previousCenterline.size());
+    for (const cv::Point2f& p : previousCenterline) {
+        translatedPrev.push_back(p + delta);
+    }
+
+    std::vector<float> cumulative(translatedPrev.size(), 0.f);
+    for (int i = 1; i < static_cast<int>(translatedPrev.size()); ++i) {
+        cumulative[i] = cumulative[i - 1] + ptDist(translatedPrev[i - 1], translatedPrev[i]);
+    }
+    const float total = cumulative.back();
+    if (total <= 1e-6f) {
+        return false;
+    }
+
+    struct Projection {
+        float fraction = 0.f;
+        float distSq = std::numeric_limits<float>::max();
+    };
+
+    auto projectOntoPreviousOrder = [&](const cv::Point2f& q) -> Projection {
+        Projection best;
+        for (int i = 1; i < static_cast<int>(translatedPrev.size()); ++i) {
+            const cv::Point2f a = translatedPrev[i - 1];
+            const cv::Point2f b = translatedPrev[i];
+            const cv::Point2f ab = b - a;
+            const float lenSq = ab.x * ab.x + ab.y * ab.y;
+            float t = 0.f;
+            if (lenSq > 1e-6f) {
+                const cv::Point2f aq = q - a;
+                t = std::clamp((aq.x * ab.x + aq.y * ab.y) / lenSq, 0.f, 1.f);
+            }
+            const cv::Point2f proj = a + t * ab;
+            const cv::Point2f d = q - proj;
+            const float distSq = d.x * d.x + d.y * d.y;
+            if (distSq < best.distSq) {
+                best.distSq = distSq;
+                const float along = cumulative[i - 1] +
+                                    t * (cumulative[i] - cumulative[i - 1]);
+                best.fraction = along / total;
+            }
+        }
+        return best;
+    };
+
+    const Projection p0 = projectOntoPreviousOrder(blob.tipCandidates[0].point);
+    const Projection p1 = projectOntoPreviousOrder(blob.tipCandidates[1].point);
+    const float cost01 = p0.fraction * p0.fraction +
+                         (1.f - p1.fraction) * (1.f - p1.fraction);
+    const float cost10 = p1.fraction * p1.fraction +
+                         (1.f - p0.fraction) * (1.f - p0.fraction);
+    const int oldHead = blob.assignedHeadTipIdx;
+    const int oldTail = blob.assignedTailTipIdx;
+
+    if (cost01 <= cost10) {
+        blob.assignedHeadTipIdx = 0;
+        blob.assignedTailTipIdx = 1;
+    } else {
+        blob.assignedHeadTipIdx = 1;
+        blob.assignedTailTipIdx = 0;
+    }
+
+    const bool changed =
+        oldHead != blob.assignedHeadTipIdx ||
+        oldTail != blob.assignedTailTipIdx;
+    if (diagnostics) {
+        diagnostics->append(
+            QStringLiteral("two-tip centerline-order role check s0=%1 d0=%2 s1=%3 d1=%4 cost01=%5 cost10=%6 selected headIdx=%7 tailIdx=%8%9")
+                .arg(p0.fraction, 0, 'f', 3)
+                .arg(std::sqrt(p0.distSq), 0, 'f', 2)
+                .arg(p1.fraction, 0, 'f', 3)
+                .arg(std::sqrt(p1.distSq), 0, 'f', 2)
+                .arg(cost01, 0, 'f', 4)
+                .arg(cost10, 0, 'f', 4)
+                .arg(blob.assignedHeadTipIdx)
+                .arg(blob.assignedTailTipIdx)
+                .arg(changed ? QStringLiteral(" reassigned") : QString()));
+    }
+    return changed;
+}
+
 static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
                                        const Tracking::DetectedBlob& previous,
                                        const cv::Point2f& hiddenLast,
@@ -1302,6 +1459,7 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
                                               int srcIdx,
                                               const cv::Point2f& predictedHidden,
                                               bool targetIsActualTip,
+                                              bool pathStartsAtHead,
                                               const cv::Point2f& predictedCenter,
                                               bool hasPredictedCenter,
                                               const cv::Point2f& originOffset,
@@ -1471,7 +1629,13 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         if (routeDebug) {
             routeDebug->candidatePaths.push_back(candidatePath);
         }
-        c.crossSum = centerlineCrossSum(candidatePath);
+        if (pathStartsAtHead) {
+            c.crossSum = centerlineCrossSum(candidatePath);
+        } else {
+            std::vector<cv::Point2f> headToTailPath = candidatePath;
+            std::reverse(headToTailPath.begin(), headToTailPath.end());
+            c.crossSum = centerlineCrossSum(headToTailPath);
+        }
         constexpr float kCrossSumEpsilon = 1e-4f;
         if (std::abs(prevTurningAngle) > kCrossSumEpsilon &&
             std::abs(c.crossSum) > kCrossSumEpsilon) {
@@ -2128,15 +2292,24 @@ void CenterlineWorker::doWork()
             blob.assignedHeadTipIdx = er.headIdx;
             blob.assignedTailTipIdx = er.tailIdx;
             blob.topologyState      = er.topology;
-            debugRecord.topology = er.topology;
-            debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
-            debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
-            debugRecord.tipCandidates = blob.tipCandidates;
             debugRecord.decisions << QStringLiteral("detectEndpoints topology=%1 tips=%2 headIdx=%3 tailIdx=%4")
                                          .arg(Tracking::topologyStateToString(er.topology))
                                          .arg(static_cast<int>(blob.tipCandidates.size()))
                                          .arg(blob.assignedHeadTipIdx)
                                          .arg(blob.assignedTailTipIdx);
+            enforceSelfCrossedTwoTipPredictorRoles(blob,
+                                                   framePredictor,
+                                                   &debugRecord.decisions);
+            if (framePrevState.valid) {
+                enforceTwoTipCenterlineOrderRoles(blob,
+                                                  framePrevState.points,
+                                                  framePrevState.blobCentroid,
+                                                  &debugRecord.decisions);
+            }
+            debugRecord.topology = er.topology;
+            debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
+            debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
+            debugRecord.tipCandidates = blob.tipCandidates;
 
             // Sample baseline (curvature + width) on Clean frames with two
             // tips. Body-length sample is taken AFTER step 3 below using
@@ -2346,6 +2519,7 @@ void CenterlineWorker::doWork()
                                                                            srcNode,
                                                                            targetPos,
                                                                            hasActualTarget,
+                                                                           hasHead,
                                                                            predictedCenter,
                                                                            hasPredictedCenter,
                                                                            dispOrigin,
@@ -3338,6 +3512,14 @@ bool CenterlineWorker::exportProcessForFrame(
     blob.assignedHeadTipIdx = er.headIdx;
     blob.assignedTailTipIdx = er.tailIdx;
     blob.topologyState      = er.topology;
+    QStringList roleDiagnostics;
+    enforceSelfCrossedTwoTipPredictorRoles(blob, predictor, &roleDiagnostics);
+    if (!previousCenterlineForExport.empty() && hasPreviousBlobForExport) {
+        enforceTwoTipCenterlineOrderRoles(blob,
+                                          previousCenterlineForExport,
+                                          blobCentroid(previousBlobForExport),
+                                          &roleDiagnostics);
+    }
 
     // Stage 05 — Step 2 dispatch (mirrors doWork, same logic).
     std::vector<cv::Point2f> centerline;
@@ -3508,6 +3690,7 @@ bool CenterlineWorker::exportProcessForFrame(
                                                                    srcNode,
                                                                    targetPos,
                                                                    hasActualTarget,
+                                                                   hasHead,
                                                                    centerForRoute,
                                                                    hasPredictedCenter,
                                                                    dispOrigin,
@@ -3698,6 +3881,9 @@ bool CenterlineWorker::exportProcessForFrame(
 
     log << "Stage 05 (Step 2 dispatch):\n";
     log << "  branch = " << step2Branch << "\n";
+    for (const QString& line : roleDiagnostics) {
+        log << "  role = " << line << "\n";
+    }
     log << "  detail = " << step2Detail << "\n";
     log << "  previousCrossSum = " << prevTurningAngle << "\n";
     log << "  refLength = " << refLength << " px ("
