@@ -17,6 +17,9 @@ namespace {
 
 constexpr int kExportScale = 4;
 constexpr int kExportPad = 12;
+constexpr double kTitleTextScale = 0.42;
+constexpr double kLabelTextScale = 0.32;
+constexpr double kEdgeTextScale = 0.28;
 
 static float pointDistance(const cv::Point2f& a, const cv::Point2f& b)
 {
@@ -127,7 +130,7 @@ static void drawContoursOverlay(cv::Mat& canvas,
 static void drawTitle(cv::Mat& canvas, const QString& title)
 {
     cv::putText(canvas, title.toStdString(), cv::Point(8, 22),
-                cv::FONT_HERSHEY_SIMPLEX, 0.55,
+                cv::FONT_HERSHEY_SIMPLEX, kTitleTextScale,
                 cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
 }
 
@@ -135,7 +138,46 @@ static void drawText(cv::Mat& canvas, const QString& text, cv::Point at,
                      cv::Scalar color = cv::Scalar(255, 255, 255))
 {
     cv::putText(canvas, text.toStdString(), at, cv::FONT_HERSHEY_SIMPLEX,
-                0.45, color, 1, cv::LINE_AA);
+                kLabelTextScale, color, 1, cv::LINE_AA);
+}
+
+static void drawSmallText(cv::Mat& canvas, const QString& text, cv::Point at,
+                          cv::Scalar color = cv::Scalar(210, 210, 210))
+{
+    const std::string s = text.toStdString();
+    cv::putText(canvas, s, at, cv::FONT_HERSHEY_SIMPLEX,
+                kEdgeTextScale, cv::Scalar(0, 0, 0), 2, cv::LINE_AA);
+    cv::putText(canvas, s, at, cv::FONT_HERSHEY_SIMPLEX,
+                kEdgeTextScale, color, 1, cv::LINE_AA);
+}
+
+static int textWidth(const QString& text, double scale)
+{
+    int baseline = 0;
+    return cv::getTextSize(text.toStdString(), cv::FONT_HERSHEY_SIMPLEX,
+                           scale, 1, &baseline).width;
+}
+
+static void drawCoordinateEdges(cv::Mat& canvas, const cv::Rect& bounds)
+{
+    const int xMin = bounds.x;
+    const int xMax = bounds.x + bounds.width - 1;
+    const int yMin = bounds.y;
+    const int yMax = bounds.y + bounds.height - 1;
+
+    const QString leftLabel = QStringLiteral("x=%1").arg(xMin);
+    const QString rightLabel = QStringLiteral("x=%1").arg(xMax);
+    const QString topLabel = QStringLiteral("y=%1").arg(yMin);
+    const QString bottomLabel = QStringLiteral("y=%1").arg(yMax);
+
+    drawSmallText(canvas, leftLabel, cv::Point(8, 42));
+    drawSmallText(canvas, topLabel, cv::Point(8, 56));
+
+    const int rightX = std::max(8, canvas.cols - textWidth(rightLabel, kEdgeTextScale) - 8);
+    drawSmallText(canvas, rightLabel, cv::Point(rightX, 42));
+
+    const int bottomX = std::max(8, canvas.cols - textWidth(bottomLabel, kEdgeTextScale) - 8);
+    drawSmallText(canvas, bottomLabel, cv::Point(bottomX, canvas.rows - 10));
 }
 
 static void drawPolyline(cv::Mat& canvas,
@@ -202,6 +244,7 @@ static void writeCenterlineStage(const Tracking::DetectedBlob& blob,
     drawContoursOverlay(canvas, blob, bounds);
     drawPolyline(canvas, centerline, bounds, color);
     drawTitle(canvas, title);
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, fileName);
 }
 
@@ -225,6 +268,7 @@ static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
 
     drawTitle(canvas, QStringLiteral("01 skeleton  degree-1 endpoints=%1")
               .arg(record.skeletonEndpointPoints.size()));
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("01_skeleton.png"));
 }
 
@@ -278,6 +322,7 @@ static void writeD3RouteKeypointsStage(const Tracking::DetectedBlob& blob,
               .arg(record.d3SelectedJunctionCluster)
               .arg(record.d3SelectedCandidate)
               .arg(record.d3JunctionFallbackUsed ? " fallback" : ""));
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("04b_d3_route_keypoints.png"));
 }
 
@@ -342,6 +387,7 @@ static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
               .arg(record.d3SelectedJunctionCluster)
               .arg(record.d3SelectedCandidate)
               .arg(record.d3JunctionFallbackUsed ? " fallback" : ""));
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("04c_d3_possible_paths.png"));
 }
 
@@ -354,6 +400,7 @@ static void writeDistanceTransformStage(const Debug::CenterlineFrameDebug& recor
                                         bounds.width * kExportScale,
                                         CV_8UC3);
         drawTitle(canvas, QStringLiteral("02 distance transform unavailable"));
+        drawCoordinateEdges(canvas, bounds);
         writeStageImage(canvas, outputDir, QStringLiteral("02_distance_transform.png"));
         return;
     }
@@ -396,6 +443,7 @@ static void writeDistanceTransformStage(const Debug::CenterlineFrameDebug& recor
     cv::applyColorMap(dtUp, heat, cv::COLORMAP_INFERNO);
     drawTitle(heat, QStringLiteral("02 distance transform  max=%1px")
               .arg(maxValue, 0, 'f', 1));
+    drawCoordinateEdges(heat, bounds);
     writeStageImage(heat, outputDir, QStringLiteral("02_distance_transform.png"));
 }
 
@@ -431,6 +479,7 @@ static void writeTipStage(const Tracking::DetectedBlob& blob,
 
     drawTitle(canvas, QStringLiteral("03 recorded tip candidates  n=%1")
               .arg(record.tipCandidates.size()));
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("03_true_tips.png"));
 }
 
@@ -477,6 +526,7 @@ static void writeHeadTailStage(const Tracking::DetectedBlob& blob,
     drawTitle(canvas, QStringLiteral("04 head/tail final labels  topo=%1  branch=%2")
               .arg(Tracking::topologyStateToString(record.topology))
               .arg(Debug::centerlineBranchToString(record.branch)));
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("04_head_tail.png"));
 }
 
@@ -563,6 +613,7 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
                  .arg(totalVacatedArea)
                  .arg(record.hiddenTipMaskDiffSelectedArea),
              cv::Point(8, canvas.rows - 10));
+    drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("04a_hidden_prediction_maskdiff.png"));
 }
 
@@ -638,6 +689,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
                      .arg(blob.convexHullArea, 0, 'f', 0)
                      .arg(blob.holeContourPoints.size()),
                  cv::Point(8, canvas.rows - 10));
+        drawCoordinateEdges(canvas, bounds);
         writeStageImage(canvas, outputDir, QStringLiteral("00_mask.png"));
     }
 
@@ -668,7 +720,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
                          cv::Scalar(80, 255, 255));
     writeCenterlineStage(blob, bounds, record.finalCenterline, outputDir,
                          QStringLiteral("09_final.png"),
-                         QStringLiteral("09 final  arcLen=%1 px  turning=%2 rad")
+                         QStringLiteral("09 final  arcLen=%1 px  crossSum=%2")
                              .arg(record.finalArcLength, 0, 'f', 1)
                              .arg(record.finalTurningAngle, 0, 'f', 3),
                          cv::Scalar(0, 255, 0));
@@ -717,10 +769,10 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         << " bodyLengthStdDev=" << record.baselineBefore.bodyLengthStdDev() << "\n";
     log << "\n--- Centerline decisions ---\n";
     log << "refLength=" << record.refLength
-        << " previousTurningAngle=" << record.previousTurningAngle << "\n";
+        << " previousCrossSum=" << record.previousTurningAngle << "\n";
     log << "initialArcLength=" << record.initialArcLength
         << " finalArcLength=" << record.finalArcLength
-        << " finalTurningAngle=" << record.finalTurningAngle << "\n";
+        << " finalCrossSum=" << record.finalTurningAngle << "\n";
     log << "assignedHeadTipIdx=" << record.assignedHeadTipIdx
         << " assignedTailTipIdx=" << record.assignedTailTipIdx << "\n";
     if (record.hiddenTipHypothesized) {

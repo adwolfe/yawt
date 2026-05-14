@@ -87,9 +87,9 @@ struct CenterlineState {
     cv::Point2f blobCentroid;
     Tracking::DetectedBlob blob;
     bool valid = false;
-    // Total signed turning angle of the centerline (∑ signed inter-segment
-    // angles, nose→tail). Negated when traversal direction is reversed.
-    // Used as a right-hand-rule orientation consistency check between frames.
+    // Sum of consecutive 2D segment cross products along the centerline.
+    // Positive means counterclockwise, negative means clockwise, and the sign
+    // flips when traversal direction is reversed.
     float turningAngle = 0.f;
 
     cv::Point2f nose()     const { return points.front(); }
@@ -97,59 +97,21 @@ struct CenterlineState {
     cv::Point2f midpoint() const { return points[points.size() / 2]; }
 };
 
-// Total signed turning angle of a discrete polyline: the sum of signed
-// angles between consecutive segment pairs (atan2 of cross/dot products).
-// For a nose→tail traversal this equals the net tangent rotation from the
-// first segment to the last. It is negated when the traversal direction is
-// reversed — making it a reliable orientation invariant when the worm is
-// non-trivially bent.  Returns 0 for point sets with fewer than 3 points.
-static float totalSignedTurningAngle(const std::vector<cv::Point2f>& pts)
+// Sum of consecutive 2D segment cross products along a polyline:
+//   vi = p[i+1] - p[i]
+//   sum += vi.x * v(i+1).y - v(i+1).x * vi.y
+// The sign captures clockwise/counterclockwise bend sense and flips when the
+// traversal direction is reversed. Returns 0 for fewer than 3 points.
+static float centerlineCrossSum(const std::vector<cv::Point2f>& pts)
 {
     float total = 0.f;
     const int n = static_cast<int>(pts.size());
     for (int i = 1; i < n - 1; ++i) {
         const cv::Point2f v1 = pts[i]     - pts[i - 1];
         const cv::Point2f v2 = pts[i + 1] - pts[i];
-        // signed angle: positive = CCW turn (right-hand rule: +z out of screen)
-        total += std::atan2(v1.x * v2.y - v1.y * v2.x,
-                            v1.x * v2.x + v1.y * v2.y);
+        total += v1.x * v2.y - v2.x * v1.y;
     }
     return total;
-}
-
-static float tangentCorrespondenceScore(const std::vector<cv::Point2f>& previous,
-                                        const std::vector<cv::Point2f>& candidate,
-                                        int nPoints)
-{
-    if (previous.size() < 2 || candidate.size() < 2 || nPoints < 2) {
-        return 0.f;
-    }
-
-    std::vector<cv::Point2f> prev = previous;
-    std::vector<cv::Point2f> cand = candidate;
-    if (static_cast<int>(prev.size()) != nPoints) prev = resample(prev, nPoints);
-    if (static_cast<int>(cand.size()) != nPoints) cand = resample(cand, nPoints);
-    if (prev.size() < 2 || cand.size() < 2) {
-        return 0.f;
-    }
-
-    const int n = std::min(static_cast<int>(prev.size()),
-                           static_cast<int>(cand.size()));
-    float score = 0.f;
-    int samples = 0;
-    for (int i = 1; i < n; ++i) {
-        const cv::Point2f p = prev[i] - prev[i - 1];
-        const cv::Point2f c = cand[i] - cand[i - 1];
-        const float pLen = std::hypot(p.x, p.y);
-        const float cLen = std::hypot(c.x, c.y);
-        if (pLen < 1e-6f || cLen < 1e-6f) {
-            continue;
-        }
-        const float dot = (p.x * c.x + p.y * c.y) / (pLen * cLen);
-        score += 1.f - std::clamp(dot, -1.f, 1.f);
-        ++samples;
-    }
-    return samples > 0 ? score / static_cast<float>(samples) : 0.f;
 }
 
 static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
@@ -450,9 +412,9 @@ static bool skeletonGraphPath(const Tracking::SkeletonGraph& graph,
 // it takes the short arc across the ring rather than tracing the body axis
 // all the way around. The three helpers below let the caller enumerate BOTH
 // arcs of the skeleton between a source and a goal node, then pick the arc
-// whose total signed turning angle matches the previous frame's (right-hand
-// rule), falling back to arc-length proximity to refLength when no previous
-// turning state is available.
+// whose consecutive-segment cross-sum sign matches the previous frame's
+// right-hand-rule state, falling back to arc-length proximity to refLength
+// when no previous state is available.
 
 // Nearest skeleton graph node (by squared Euclidean distance) to a world point.
 static int nearestSkeletonNode(const Tracking::SkeletonGraph& graph,
@@ -636,10 +598,10 @@ static bool skeletonBothArcs(const Tracking::SkeletonGraph& graph,
 }
 
 // Pick one of two skeleton arcs.
-// Primary selector: the arc whose totalSignedTurningAngle matches the sign
-//   of prevTurningAngle (right-hand rule from the previous frame).
-// Fallback when prev angle is below the threshold or both/neither match:
-//   pick the arc whose arcLen is closer to refLength.
+// Primary selector: the arc whose consecutive-segment cross-sum matches the
+// sign of the previous frame's cross-sum. Fallback when the previous cross-sum
+// is too close to zero or both/neither match: pick the arc whose arcLen is
+// closer to refLength.
 // Last resort: return arcA.
 static std::vector<cv::Point2f> pickArcByRHR(
     const std::vector<cv::Point2f>& arcA,
@@ -648,10 +610,12 @@ static std::vector<cv::Point2f> pickArcByRHR(
     float angleThreshold,
     float refLength)
 {
-    const float turA = totalSignedTurningAngle(arcA);
-    const float turB = totalSignedTurningAngle(arcB);
+    const float turA = centerlineCrossSum(arcA);
+    const float turB = centerlineCrossSum(arcB);
+    constexpr float kCrossSumEpsilon = 1e-4f;
+    (void)angleThreshold;
 
-    if (std::abs(prevTurningAngle) > angleThreshold) {
+    if (std::abs(prevTurningAngle) > kCrossSumEpsilon) {
         const bool aOk = (turA * prevTurningAngle > 0.f);
         const bool bOk = (turB * prevTurningAngle > 0.f);
         if (aOk && !bOk) return arcA;
@@ -1351,6 +1315,9 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
                                               std::vector<cv::Point2f>& outPath)
 {
     outPath.clear();
+    (void)previousCenterline;
+    (void)angleThreshold;
+    (void)nPoints;
     JunctionSelection junction = selectLoopAwareJunction(graph, srcIdx, predictedHidden,
                                                          originOffset, refLength);
     if (!junction.valid || junction.trunk.size() < 2) {
@@ -1394,9 +1361,8 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         int bestIndex = -1;
         float hiddenDist = std::numeric_limits<float>::max();
         float centerDist = 0.f;
-        float tangentScore = 0.f;
-        float turningAngle = 0.f;
-        float turnPenalty = 0.f;
+        float crossSum = 0.f;
+        float crossPenalty = 0.f;
         float pathLen = 0.f;
         float totalScore = std::numeric_limits<float>::max();
     };
@@ -1505,25 +1471,21 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         if (routeDebug) {
             routeDebug->candidatePaths.push_back(candidatePath);
         }
-        c.tangentScore = tangentCorrespondenceScore(previousCenterline,
-                                                    candidatePath,
-                                                    nPoints);
-        c.turningAngle = totalSignedTurningAngle(candidatePath);
-        if (std::abs(prevTurningAngle) > std::max(0.f, angleThreshold) &&
-            std::abs(c.turningAngle) > std::max(0.f, angleThreshold)) {
-            c.turnPenalty = (c.turningAngle * prevTurningAngle > 0.f) ? 0.f : 1.f;
+        c.crossSum = centerlineCrossSum(candidatePath);
+        constexpr float kCrossSumEpsilon = 1e-4f;
+        if (std::abs(prevTurningAngle) > kCrossSumEpsilon &&
+            std::abs(c.crossSum) > kCrossSumEpsilon) {
+            c.crossPenalty = (c.crossSum * prevTurningAngle > 0.f) ? 0.f : 1.f;
         }
 
         constexpr float kHiddenWeight = 3.0f;
         constexpr float kCenterWeight = 2.0f;
-        constexpr float kTangentWeight = 15.0f;
-        constexpr float kTurnMismatchWeight = 100.0f;
+        constexpr float kCrossMismatchWeight = 100.0f;
         constexpr float kLengthWeight = 1.0f;
         c.totalScore =
             kHiddenWeight * c.hiddenDist +
             kCenterWeight * c.centerDist +
-            kTangentWeight * c.tangentScore +
-            kTurnMismatchWeight * c.turnPenalty;
+            kCrossMismatchWeight * c.crossPenalty;
         if (refLength > 0.f) {
             c.totalScore += kLengthWeight * std::abs(c.pathLen - refLength);
         }
@@ -1550,15 +1512,14 @@ static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& gra
         for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
             const BranchCandidate& c = candidates[i];
             diagnostics->append(
-                QStringLiteral("%1 candidate %2: len=%3 targetDist=%4 centerDist=%5 tangent=%6 turn=%7 turnPenalty=%8 score=%9%10")
+                QStringLiteral("%1 candidate %2: len=%3 targetDist=%4 centerDist=%5 crossSum=%6 crossPenalty=%7 score=%8%9")
                     .arg(targetIsActualTip ? "D-2" : "D-3")
                     .arg(i)
                     .arg(c.pathLen, 0, 'f', 2)
                     .arg(c.hiddenDist, 0, 'f', 2)
                     .arg(c.centerDist, 0, 'f', 2)
-                    .arg(c.tangentScore, 0, 'f', 4)
-                    .arg(c.turningAngle, 0, 'f', 4)
-                    .arg(c.turnPenalty, 0, 'f', 1)
+                    .arg(c.crossSum, 0, 'f', 4)
+                    .arg(c.crossPenalty, 0, 'f', 1)
                     .arg(c.totalScore, 0, 'f', 2)
                     .arg(i == bestCandidate ? QStringLiteral(" SELECTED") : QString()));
         }
@@ -2022,7 +1983,7 @@ void CenterlineWorker::doWork()
                 outPrevState.blobCentroid = blobCentroid(prevBlob);
                 outPrevState.blob = prevBlob;
                 outPrevState.valid = true;
-                outPrevState.turningAngle = totalSignedTurningAngle(outPrevState.points);
+                outPrevState.turningAngle = centerlineCrossSum(outPrevState.points);
                 outLocalRefLength = arcLen(outPrevState.points);
                 outPredictor.lastCenterPos =
                     outPrevState.points[outPrevState.points.size() / 2];
@@ -2567,7 +2528,7 @@ void CenterlineWorker::doWork()
                 if (hasHead || hasTail) {
                     // D-2 (two tips) / D-3 (one tip): trace the skeleton
                     // arc from the known tip to the target, picking the arc
-                    // whose turning angle matches the previous frame (RHR).
+                    // whose cross-sum sign matches the previous frame (RHR).
                     debugRecord.branch = (hasHead && hasTail)
                         ? Debug::CenterlineBranch::D2TwoKnownTips
                         : Debug::CenterlineBranch::D3OneKnownTipHiddenPrediction;
@@ -2671,16 +2632,19 @@ void CenterlineWorker::doWork()
                 }
             }
 
-            // Right-hand-rule orientation veto. The total signed turning
-            // angle of the polyline negates when the traversal direction
-            // is reversed; worms don't instantaneously flip their coiling
-            // sense, so a sign flip across frames is a strong evidence of
-            // a wrong orientation pick.
-            const float curTurning = totalSignedTurningAngle(centerline);
+            // Right-hand-rule orientation veto. The consecutive-segment
+            // cross-sum negates when traversal direction is reversed; worms
+            // don't instantaneously flip their coiling sense, so a sign flip
+            // across frames is strong evidence of a wrong orientation pick.
+            const float curTurning = centerlineCrossSum(centerline);
             bool flipped = false;
-            if (framePrevState.valid &&
-                std::abs(framePrevState.turningAngle) > angleThreshold &&
-                std::abs(curTurning) > angleThreshold &&
+            constexpr float kCrossSumEpsilon = 1e-4f;
+            const bool allowRhrFlip =
+                debugRecord.branch != Debug::CenterlineBranch::D1CleanGraphPath;
+            if (allowRhrFlip &&
+                framePrevState.valid &&
+                std::abs(framePrevState.turningAngle) > kCrossSumEpsilon &&
+                std::abs(curTurning) > kCrossSumEpsilon &&
                 curTurning * framePrevState.turningAngle < 0.f) {
                 std::reverse(centerline.begin(), centerline.end());
                 flipped = true;
@@ -3052,7 +3016,7 @@ bool CenterlineWorker::exportProcessForFrame(
     const float angleThreshold = static_cast<float>(
         std::max(0.0, snakeParams.orientationAngleThreshold));
 
-    // Recover the previous frame's turning angle from its stored centerline
+    // Recover the previous frame's cross-sum from its stored centerline
     // so the RHR arc-picker in Stage 05 behaves like the live sweep.
     float prevTurningAngle = 0.f;
     float prevFrameArcLength = 0.f;
@@ -3064,7 +3028,7 @@ bool CenterlineWorker::exportProcessForFrame(
             const auto& pts = adjBlobs[wormId].centerlinePoints;
             if (pts.size() >= 2) {
                 std::vector<cv::Point2f> v(pts.begin(), pts.end());
-                prevTurningAngle = totalSignedTurningAngle(v);
+                prevTurningAngle = centerlineCrossSum(v);
                 prevFrameArcLength = arcLen(v);
                 previousCenterlineForExport = v;
             }
@@ -3566,7 +3530,7 @@ bool CenterlineWorker::exportProcessForFrame(
                                     dispOrigin, arcA, arcB)) {
             chosen = pickArcByRHR(arcA, arcB, prevTurningAngle,
                                    angleThreshold, refLength);
-            detailOut += QString("  arcA_len=%1  arcB_len=%2  prevTurning=%3")
+            detailOut += QString("  arcA_len=%1  arcB_len=%2  prevCrossSum=%3")
                          .arg(arcLen(arcA),'f',1)
                          .arg(arcLen(arcB),'f',1)
                          .arg(prevTurningAngle,'f',3);
@@ -3735,8 +3699,7 @@ bool CenterlineWorker::exportProcessForFrame(
     log << "Stage 05 (Step 2 dispatch):\n";
     log << "  branch = " << step2Branch << "\n";
     log << "  detail = " << step2Detail << "\n";
-    log << "  prevTurningAngle = " << prevTurningAngle
-        << " rad (thresh=" << angleThreshold << ")\n";
+    log << "  previousCrossSum = " << prevTurningAngle << "\n";
     log << "  refLength = " << refLength << " px ("
         << (prevFrameArcLength > 0.f ? "previous frame arc length" : "baseline mean")
         << ")\n";
@@ -3847,22 +3810,26 @@ bool CenterlineWorker::exportProcessForFrame(
         writeStageImage(canvas, outputDir, "07_snake_refined.png");
     }
 
-    // Stage 08 — RHR turning-angle check.
-    const float curTurning = totalSignedTurningAngle(centerline);
+    // Stage 08 — RHR cross-sum check.
+    const float curTurning = centerlineCrossSum(centerline);
     bool exportRhrFlipped = false;
-    if (std::abs(prevTurningAngle) > angleThreshold &&
-        std::abs(curTurning) > angleThreshold &&
+    constexpr float kCrossSumEpsilon = 1e-4f;
+    const bool exportAllowRhrFlip =
+        step2Branch != QStringLiteral("Clean / skeleton-graph path (D-1)");
+    if (exportAllowRhrFlip &&
+        std::abs(prevTurningAngle) > kCrossSumEpsilon &&
+        std::abs(curTurning) > kCrossSumEpsilon &&
         curTurning * prevTurningAngle < 0.f) {
         std::reverse(centerline.begin(), centerline.end());
         std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
         exportRhrFlipped = true;
     }
     const float finalTurning = exportRhrFlipped ? -curTurning : curTurning;
-    log << "Stage 08 (RHR turning-angle check):\n"
-        << "  turning angle = " << curTurning << " rad ("
-        << (curTurning * 180.0f / float(CV_PI)) << " deg)\n"
-        << "  threshold = " << snakeParams.orientationAngleThreshold << " rad\n"
-        << "  previous turning angle = " << prevTurningAngle << " rad\n"
+    log << "Stage 08 (RHR cross-sum check):\n"
+        << "  crossSum = " << curTurning << "\n"
+        << "  threshold = " << kCrossSumEpsilon << "\n"
+        << "  previous crossSum = " << prevTurningAngle << "\n"
+        << "  allowed = " << (exportAllowRhrFlip ? "Y" : "N (D-1 clean)") << "\n"
         << "  flipped = " << (exportRhrFlipped ? "Y" : "N") << "\n\n";
 
     // Stage 09 — final centerline + head/tail markers.
@@ -3879,7 +3846,7 @@ bool CenterlineWorker::exportProcessForFrame(
         cv::circle(canvas, pts.back(),  9, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
         drawText(canvas, "H", pts.front() + cv::Point(-4, 5));
         drawText(canvas, "T", pts.back()  + cv::Point(-4, 5));
-        drawTitle(canvas, QString("09 final  arcLen=%1 px  turning=%2 rad")
+        drawTitle(canvas, QString("09 final  arcLen=%1 px  crossSum=%2")
                   .arg(arcLen(centerline), 0, 'f', 1)
                   .arg(finalTurning, 0, 'f', 3));
         writeStageImage(canvas, outputDir, "09_final.png");
