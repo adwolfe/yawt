@@ -63,6 +63,33 @@ struct CenterlineFrameIo {
     std::function<void(const Debug::CenterlineFrameDebug&)> setCenterlineDebugFrame;
 };
 
+struct GraphSearchResult {
+    std::vector<double> distances;
+    std::vector<int> parents;
+};
+
+// Thin a binary worm mask into a Zhang-Suen one-pixel skeleton.
+cv::Mat skeletonizeBinaryMask(const cv::Mat& binaryMask);
+
+// Run weighted Dijkstra over an 8-connected skeleton pixel graph.
+GraphSearchResult dijkstraSkeleton(const std::vector<cv::Point>& points,
+                                   const std::vector<std::vector<int>>& adjacency,
+                                   int startIndex);
+
+// Reconstruct a world-coordinate centerline from Dijkstra parent links.
+std::vector<cv::Point2f> reconstructCenterlinePath(const std::vector<cv::Point>& points,
+                                                   const std::vector<int>& parents,
+                                                   int startIndex,
+                                                   int endIndex,
+                                                   const cv::Point2f& offset);
+
+// Build an 8-connected skeleton graph from a binary worm mask.
+Tracking::SkeletonGraph buildSkeletonGraph(const cv::Mat& mask);
+
+// Extract the longest usable ordered centerline from a binary worm mask.
+std::vector<cv::Point2f> extractCenterlineFromMask(const cv::Mat& mask,
+                                                   const cv::Point2f& offset);
+
 // Measure the arc length of an ordered centerline polyline.
 float arcLength(const std::vector<cv::Point2f>& points);
 
