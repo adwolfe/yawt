@@ -62,6 +62,7 @@
 #include <QPair>
 #include <QRectF>
 #include <QSizeF>
+#include <QVector>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -1289,6 +1290,27 @@ void TrackingManager::cleanupThreadsAndObjects() {
     for (QPointer<QThread> thread : trackerThreadsToClean) { /* ... quit, wait, delete ... */
         if (thread) { if (thread->isRunning()) { thread->requestInterruption(); thread->quit(); if (!thread->wait(1000)) { thread->terminate(); thread->wait();}} delete thread;}
     }
+
+    QList<QPointer<QThread>> centerlineThreadsToClean = m_centerlineThreads;
+    m_centerlineThreads.clear();
+    m_centerlineWorkers.clear();
+    for (QPointer<QThread> thread : centerlineThreadsToClean) {
+        if (thread) {
+            if (thread->isRunning()) {
+                thread->requestInterruption();
+                thread->quit();
+                if (!thread->wait(1000)) {
+                    thread->terminate();
+                    thread->wait();
+                }
+            }
+            delete thread;
+        }
+    }
+    m_centerlineWorkerProgress.clear();
+    m_centerlineWorkersFinishedCount = 0;
+    m_totalCenterlineWorkers = 0;
+    m_centerlineStorageMutex.clear();
 
     // Clean up video saver thread
     if (m_videoSaverThread) {
@@ -3087,39 +3109,110 @@ void TrackingManager::startCenterlineComputation() {
         return;
     }
 
-    emit trackingStatusUpdate("Computing centerlines...");
+    QList<int> wormIds;
+    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
+    for (const auto& trackEntry : tracks) {
+        wormIds.append(trackEntry.first);
+    }
+    if (wormIds.isEmpty()) {
+        emit centerlineProgress(100);
+        emit centerlineFinished();
+        return;
+    }
 
-    auto* thread = new QThread(this);
+    int numThreads = QThread::idealThreadCount();
+    numThreads = qMax(1, qMin(numThreads, 8));
+    numThreads = qMin(numThreads, wormIds.size());
+
+    emit trackingStatusUpdate(QString("Computing centerlines across %1 threads...").arg(numThreads));
+
+    m_centerlineThreads.clear();
+    m_centerlineWorkers.clear();
+    m_centerlineWorkerProgress.clear();
+    m_centerlineWorkersFinishedCount = 0;
+    m_totalCenterlineWorkers = numThreads;
+    m_centerlineStorageMutex = QSharedPointer<QMutex>::create();
+
+    {
+        QMutexLocker locker(m_centerlineStorageMutex.data());
+        m_storage->clearAllTipBaselines();
+    }
     if (m_debugStore) {
+        QMutexLocker locker(m_centerlineStorageMutex.data());
         m_debugStore->clearCenterline();
     }
 
-    auto* worker = new CenterlineWorker(m_storage, m_debugStore);
-    worker->setSnakeParams(m_centerlineSnakeParams);
-    worker->moveToThread(thread);
+    QVector<QList<int>> wormBuckets(numThreads);
+    for (int i = 0; i < wormIds.size(); ++i) {
+        wormBuckets[i % numThreads].append(wormIds.at(i));
+    }
 
-    m_centerlineThread = thread;
-    m_centerlineWorker = worker;
+    for (int workerIndex = 0; workerIndex < numThreads; ++workerIndex) {
+        auto* thread = new QThread(this);
+        auto* worker = new CenterlineWorker(m_storage, m_debugStore);
+        worker->setSnakeParams(m_centerlineSnakeParams);
+        worker->setWormIds(wormBuckets.at(workerIndex));
+        worker->setClearBaselinesAtStart(false);
+        worker->setSharedStorageMutex(m_centerlineStorageMutex);
+        worker->moveToThread(thread);
 
-    connect(thread, &QThread::started, worker, &CenterlineWorker::doWork);
-    connect(worker, &CenterlineWorker::progress, this, &TrackingManager::centerlineProgress);
-    connect(worker, &CenterlineWorker::finished, this, &TrackingManager::handleCenterlineFinished);
-    connect(worker, &CenterlineWorker::failed, this, &TrackingManager::handleCenterlineFailed);
-    connect(worker, &CenterlineWorker::finished, thread, &QThread::quit);
-    connect(worker, &CenterlineWorker::failed, thread, &QThread::quit);
-    connect(thread, &QThread::finished, worker, &QObject::deleteLater);
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+        m_centerlineThreads.append(thread);
+        m_centerlineWorkers.append(worker);
+        m_centerlineWorkerProgress[workerIndex] = 0;
 
-    thread->start();
+        connect(thread, &QThread::started, worker, &CenterlineWorker::doWork);
+        connect(worker, &CenterlineWorker::progress, this,
+                [this, workerIndex](int percentage) {
+                    m_centerlineWorkerProgress[workerIndex] = percentage;
+                    int total = 0;
+                    for (int progress : m_centerlineWorkerProgress) {
+                        total += progress;
+                    }
+                    emit centerlineProgress(total / qMax(1, m_totalCenterlineWorkers));
+                });
+        connect(worker, &CenterlineWorker::finished, this,
+                [this, workerIndex]() {
+                    m_centerlineWorkerProgress[workerIndex] = 100;
+                    ++m_centerlineWorkersFinishedCount;
+                    if (m_centerlineWorkersFinishedCount >= m_totalCenterlineWorkers) {
+                        handleCenterlineFinished();
+                    }
+                });
+        connect(worker, &CenterlineWorker::failed, this,
+                [this](const QString& reason) {
+                    handleCenterlineFailed(reason);
+                });
+        connect(worker, &CenterlineWorker::finished, thread, &QThread::quit);
+        connect(worker, &CenterlineWorker::failed, thread, &QThread::quit);
+        connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+        connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+
+        thread->start();
+    }
 }
 
 void TrackingManager::handleCenterlineFinished() {
+    if (m_totalCenterlineWorkers == 0) {
+        return;
+    }
+    m_totalCenterlineWorkers = 0;
     emit trackingStatusUpdate("Centerline computation complete.");
+    emit centerlineProgress(100);
     emit centerlineFinished();
     QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
 }
 
 void TrackingManager::handleCenterlineFailed(const QString& reason) {
+    if (m_totalCenterlineWorkers == 0) {
+        return;
+    }
+    m_totalCenterlineWorkers = 0;
+    for (QPointer<QThread> thread : m_centerlineThreads) {
+        if (thread && thread->isRunning()) {
+            thread->requestInterruption();
+            thread->quit();
+        }
+    }
     qWarning() << "TrackingManager: Centerline computation failed:" << reason;
     emit trackingStatusUpdate("Warning: Centerline computation failed - " + reason);
     emit centerlineFinished();

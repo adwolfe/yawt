@@ -44,6 +44,7 @@
 #include <QThread>
 #include <QSet>
 #include <QMutex>
+#include <QSharedPointer>
 #include <QDateTime>
 #include <QPointer>
 #include <QDir>
@@ -455,8 +456,12 @@ private:
     QString m_savedVideoPath; // Path where the thresholded video will be saved
 
     // Centerline computation members (post-tracking background phase)
-    QPointer<QThread> m_centerlineThread;
-    QPointer<CenterlineWorker> m_centerlineWorker;
+    QList<QPointer<QThread>> m_centerlineThreads;
+    QList<QPointer<CenterlineWorker>> m_centerlineWorkers;
+    QMap<int, int> m_centerlineWorkerProgress;
+    int m_centerlineWorkersFinishedCount = 0;
+    int m_totalCenterlineWorkers = 0;
+    QSharedPointer<QMutex> m_centerlineStorageMutex;
 
     // Active-contour parameters for ring/coiled-frame refinement. Configured via
     // setCenterlineSnakeParams(); applied to the worker right before doWork().

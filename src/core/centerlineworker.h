@@ -2,11 +2,17 @@
 #define CENTERLINEWORKER_H
 
 #include <QObject>
+#include <QList>
+#include <QMutex>
+#include <QSharedPointer>
 #include <QString>
 #include "../data/trackingdatastorage.h"
 #include "../data/trackingcommon.h"
 
-namespace Debug { class DebugDataStore; }
+namespace Debug {
+class DebugDataStore;
+struct CenterlineFrameDebug;
+}
 
 /**
  * @class CenterlineWorker
@@ -36,6 +42,9 @@ public:
      *        Must be called before doWork() to take effect.
      */
     void setSnakeParams(const Tracking::CenterlineSnakeParams& params);
+    void setWormIds(const QList<int>& wormIds);
+    void setClearBaselinesAtStart(bool clearAtStart);
+    void setSharedStorageMutex(const QSharedPointer<QMutex>& mutex);
 
     /**
      * @brief Diagnostic: re-runs the per-frame centerline pipeline for one
@@ -65,9 +74,20 @@ signals:
     void failed(const QString& reason);
 
 private:
+    QMap<int, Tracking::DetectedBlob> getDetectedBlobsForFrame(int frameNumber) const;
+    QList<QList<int>> getMergeGroupsForFrame(int frameNumber) const;
+    Tracking::TipFeatureBaseline getTipBaseline(int wormId) const;
+    void setDetectedBlobForFrame(int frameNumber, int wormId, const Tracking::DetectedBlob& blob);
+    void recordTipFeatureSample(int wormId, float curvatureMagnitude, float width);
+    void recordBodyLengthSample(int wormId, float length);
+    void setCenterlineDebugFrame(const Debug::CenterlineFrameDebug& record);
+
     TrackingDataStorage* m_storage;
     Debug::DebugDataStore* m_debugStore;
     Tracking::CenterlineSnakeParams m_snakeParams;
+    QList<int> m_wormIds;
+    bool m_clearBaselinesAtStart = true;
+    QSharedPointer<QMutex> m_sharedStorageMutex;
 };
 
 #endif // CENTERLINEWORKER_H

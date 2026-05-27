@@ -8,6 +8,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMutexLocker>
+#include <QSet>
 #include <QTextStream>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -361,6 +363,7 @@ static bool enforceTwoTipCenterlineOrderRoles(
 
 static bool relabelTrackHeadTailByMotion(
     TrackingDataStorage* storage,
+    QMutex* storageMutex,
     int wormId,
     const std::vector<Tracking::WormTrackPoint>& sortedPoints)
 {
@@ -382,8 +385,11 @@ static bool relabelTrackHeadTailByMotion(
             continue;
         }
 
-        const QMap<int, Tracking::DetectedBlob> blobs =
-            storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+        QMap<int, Tracking::DetectedBlob> blobs;
+        {
+            QMutexLocker locker(storageMutex);
+            blobs = storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+        }
         if (!blobs.contains(wormId)) {
             continue;
         }
@@ -436,8 +442,11 @@ static bool relabelTrackHeadTailByMotion(
     }
 
     for (const MotionSample& sample : samples) {
-        QMap<int, Tracking::DetectedBlob> blobs =
-            storage->getDetectedBlobsForFrame(sample.frameNumber);
+        QMap<int, Tracking::DetectedBlob> blobs;
+        {
+            QMutexLocker locker(storageMutex);
+            blobs = storage->getDetectedBlobsForFrame(sample.frameNumber);
+        }
         if (!blobs.contains(wormId)) {
             continue;
         }
@@ -447,7 +456,10 @@ static bool relabelTrackHeadTailByMotion(
             std::reverse(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
         }
         std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
-        storage->setDetectedBlobForFrame(sample.frameNumber, wormId, blob);
+        {
+            QMutexLocker locker(storageMutex);
+            storage->setDetectedBlobForFrame(sample.frameNumber, wormId, blob);
+        }
     }
 
     YAWT_INFO(lcCoreCenterlineWorker)
@@ -2402,6 +2414,67 @@ void CenterlineWorker::setSnakeParams(const Tracking::CenterlineSnakeParams& par
     m_snakeParams = params;
 }
 
+void CenterlineWorker::setWormIds(const QList<int>& wormIds)
+{
+    m_wormIds = wormIds;
+}
+
+void CenterlineWorker::setClearBaselinesAtStart(bool clearAtStart)
+{
+    m_clearBaselinesAtStart = clearAtStart;
+}
+
+void CenterlineWorker::setSharedStorageMutex(const QSharedPointer<QMutex>& mutex)
+{
+    m_sharedStorageMutex = mutex;
+}
+
+QMap<int, Tracking::DetectedBlob> CenterlineWorker::getDetectedBlobsForFrame(int frameNumber) const
+{
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    return m_storage->getDetectedBlobsForFrame(frameNumber);
+}
+
+QList<QList<int>> CenterlineWorker::getMergeGroupsForFrame(int frameNumber) const
+{
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    return m_storage->getMergeGroupsForFrame(frameNumber);
+}
+
+Tracking::TipFeatureBaseline CenterlineWorker::getTipBaseline(int wormId) const
+{
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    return m_storage->getTipBaseline(wormId);
+}
+
+void CenterlineWorker::setDetectedBlobForFrame(int frameNumber, int wormId,
+                                               const Tracking::DetectedBlob& blob)
+{
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    m_storage->setDetectedBlobForFrame(frameNumber, wormId, blob);
+}
+
+void CenterlineWorker::recordTipFeatureSample(int wormId, float curvatureMagnitude, float width)
+{
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    m_storage->recordTipFeatureSample(wormId, curvatureMagnitude, width);
+}
+
+void CenterlineWorker::recordBodyLengthSample(int wormId, float length)
+{
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    m_storage->recordBodyLengthSample(wormId, length);
+}
+
+void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug& record)
+{
+    if (!m_debugStore) {
+        return;
+    }
+    QMutexLocker locker(m_sharedStorageMutex.data());
+    m_debugStore->setCenterlineFrame(record);
+}
+
 // 2-sweep / 5-step pipeline. See CENTERLINE_REWRITE_PLAN.md for the
 // full design. Structure:
 //
@@ -2430,8 +2503,27 @@ void CenterlineWorker::doWork()
         return;
     }
 
+    if (m_sharedStorageMutex.isNull()) {
+        m_sharedStorageMutex = QSharedPointer<QMutex>::create();
+    }
+
     const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    const int totalWorms = static_cast<int>(tracks.size());
+    std::vector<std::pair<int, std::vector<Tracking::WormTrackPoint>>> assignedTracks;
+    assignedTracks.reserve(m_wormIds.isEmpty()
+                               ? tracks.size()
+                               : static_cast<size_t>(m_wormIds.size()));
+    QSet<int> assignedIds;
+    for (int wormId : m_wormIds) {
+        assignedIds.insert(wormId);
+    }
+    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        if (!assignedIds.isEmpty() && !assignedIds.contains(it->first)) {
+            continue;
+        }
+        assignedTracks.push_back(*it);
+    }
+
+    const int totalWorms = static_cast<int>(assignedTracks.size());
     if (totalWorms == 0) {
         emit progress(100);
         emit finished();
@@ -2440,15 +2532,18 @@ void CenterlineWorker::doWork()
 
     // A rerun reads the same clean frames, so re-accumulating into existing
     // baseline counts would inflate the sample count without new info.
-    m_storage->clearAllTipBaselines();
+    if (m_clearBaselinesAtStart) {
+        QMutexLocker locker(m_sharedStorageMutex.data());
+        m_storage->clearAllTipBaselines();
+    }
 
     const int nPts = std::max(4, m_snakeParams.nPoints);
     int processedWorms = 0;
 
-    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        const int wormId = it->first;
+    for (const auto& trackEntry : assignedTracks) {
+        const int wormId = trackEntry.first;
 
-        std::vector<Tracking::WormTrackPoint> sortedPoints = it->second;
+        std::vector<Tracking::WormTrackPoint> sortedPoints = trackEntry.second;
         std::sort(sortedPoints.begin(), sortedPoints.end(),
                   [](const Tracking::WormTrackPoint& a,
                      const Tracking::WormTrackPoint& b) {
@@ -2469,7 +2564,7 @@ void CenterlineWorker::doWork()
             if (tp.quality == Tracking::TrackPointQuality::Merged ||
                 tp.quality == Tracking::TrackPointQuality::Lost) continue;
             QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                getDetectedBlobsForFrame(tp.frameNumberOriginal);
             if (!frameBlobs.contains(wormId)) continue;
             Tracking::DetectedBlob temp = frameBlobs[wormId];
             if (!temp.isValid || temp.contourPoints.empty()) continue;
@@ -2506,7 +2601,7 @@ void CenterlineWorker::doWork()
         // ── helpers used inside the per-frame lambda ────────────────────
         auto inMergeGroupAtFrame = [&](int frameNumber) -> bool {
             const QList<QList<int>> groups =
-                m_storage->getMergeGroupsForFrame(frameNumber);
+                getMergeGroupsForFrame(frameNumber);
             for (const QList<int>& g : groups) {
                 if (g.size() > 1 && g.contains(wormId)) return true;
             }
@@ -2535,7 +2630,7 @@ void CenterlineWorker::doWork()
                 float& outLocalRefLength) -> bool {
             auto blobAt = [&](int f, Tracking::DetectedBlob& out) -> bool {
                 const QMap<int, Tracking::DetectedBlob> blobs =
-                    m_storage->getDetectedBlobsForFrame(f);
+                    getDetectedBlobsForFrame(f);
                 if (!blobs.contains(wormId)) return false;
                 out = blobs[wormId];
                 return out.isValid && !out.contourPoints.empty();
@@ -2630,7 +2725,7 @@ void CenterlineWorker::doWork()
             }
 
             QMap<int, Tracking::DetectedBlob> frameBlobs =
-                m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                getDetectedBlobsForFrame(tp.frameNumberOriginal);
             if (!frameBlobs.contains(wormId)) return;
             Tracking::DetectedBlob blob = frameBlobs[wormId];
             if (!blob.isValid || blob.contourPoints.empty()) return;
@@ -2654,7 +2749,7 @@ void CenterlineWorker::doWork()
 
             // ── STEP 1: detect endpoints, write back tip data ───────────
             const Tracking::TipFeatureBaseline baseline =
-                m_storage->getTipBaseline(wormId);
+                getTipBaseline(wormId);
             const bool captureDebug =
                 m_debugStore && DebugUtils::isDebugCaptureEnabled();
             Debug::CenterlineFrameDebug debugRecord;
@@ -2772,7 +2867,7 @@ void CenterlineWorker::doWork()
                 er.tips.size() == 2;
             if (cleanWithTwoTips) {
                 for (const Tracking::TrueTip& t : er.tips) {
-                    m_storage->recordTipFeatureSample(
+                    recordTipFeatureSample(
                         wormId, std::abs(t.curvature), t.width);
                 }
             }
@@ -2877,7 +2972,7 @@ void CenterlineWorker::doWork()
                     framePrevState.blob.topologyState == Tracking::TopologyState::SelfCrossed &&
                     dispEr.topology == Tracking::TopologyState::SelfCrossed) {
                     const QMap<int, Tracking::DetectedBlob> prevPrevBlobs =
-                        m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal - (2 * step));
+                        getDetectedBlobsForFrame(tp.frameNumberOriginal - (2 * step));
                     const bool prevPrevSelfCrossed =
                         prevPrevBlobs.contains(wormId) &&
                         prevPrevBlobs[wormId].topologyState == Tracking::TopologyState::SelfCrossed;
@@ -3241,11 +3336,10 @@ void CenterlineWorker::doWork()
             if (centerline.size() < 2) {
                 // No centerline producible. Persist what we DID compute
                 // (tip data) so the renderer still shows green dots.
-                m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal,
-                                                   wormId, blob);
+                setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
                 debugRecord.decisions << QStringLiteral("no centerline producible; persisted endpoint/debug blob state only");
                 if (captureDebug) {
-                    m_debugStore->setCenterlineFrame(debugRecord);
+                    setCenterlineDebugFrame(debugRecord);
                 }
                 prevState.valid = false;
                 return;
@@ -3257,7 +3351,7 @@ void CenterlineWorker::doWork()
             debugRecord.resampledCenterline = centerline;
 
             if (cleanWithTwoTips) {
-                m_storage->recordBodyLengthSample(wormId, arcLen(centerline));
+                recordBodyLengthSample(wormId, arcLen(centerline));
             }
 
             // ── STEP 4: snake refinement (Clean only) + RHR veto ────────
@@ -3328,8 +3422,7 @@ void CenterlineWorker::doWork()
                 blob.hasCenterlineCutPoint = true;
             }
 
-            m_storage->setDetectedBlobForFrame(tp.frameNumberOriginal,
-                                               wormId, blob);
+            setDetectedBlobForFrame(tp.frameNumberOriginal, wormId, blob);
 
             debugRecord.snakeRan = snakeRan;
             debugRecord.rhrFlipped = flipped;
@@ -3341,7 +3434,7 @@ void CenterlineWorker::doWork()
             debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
             debugRecord.topology = blob.topologyState;
             if (captureDebug) {
-                m_debugStore->setCenterlineFrame(debugRecord);
+                setCenterlineDebugFrame(debugRecord);
             }
 
             // ── STEP 5: predictor update ────────────────────────────────
@@ -3406,7 +3499,8 @@ void CenterlineWorker::doWork()
                     }
                 }
 
-        relabelTrackHeadTailByMotion(m_storage, wormId, sortedPoints);
+        relabelTrackHeadTailByMotion(m_storage, m_sharedStorageMutex.data(),
+                                     wormId, sortedPoints);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);
