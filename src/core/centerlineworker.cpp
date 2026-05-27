@@ -359,6 +359,106 @@ static bool enforceTwoTipCenterlineOrderRoles(
     return changed;
 }
 
+static bool relabelTrackHeadTailByMotion(
+    TrackingDataStorage* storage,
+    int wormId,
+    const std::vector<Tracking::WormTrackPoint>& sortedPoints)
+{
+    if (!storage) {
+        return false;
+    }
+
+    struct MotionSample {
+        int frameNumber = -1;
+        cv::Point2f centroid;
+        cv::Point2f front;
+        cv::Point2f back;
+    };
+
+    std::vector<MotionSample> samples;
+    samples.reserve(sortedPoints.size());
+    for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+        if (tp.quality == Tracking::TrackPointQuality::Lost) {
+            continue;
+        }
+
+        const QMap<int, Tracking::DetectedBlob> blobs =
+            storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+        if (!blobs.contains(wormId)) {
+            continue;
+        }
+
+        const Tracking::DetectedBlob& blob = blobs[wormId];
+        if (!blob.isValid || blob.centerlinePoints.size() < 2) {
+            continue;
+        }
+
+        MotionSample sample;
+        sample.frameNumber = tp.frameNumberOriginal;
+        sample.centroid = tp.position;
+        sample.front = blob.centerlinePoints.front();
+        sample.back = blob.centerlinePoints.back();
+        samples.push_back(sample);
+    }
+
+    float currentForwardEvidence = 0.f;
+    float reverseEvidence = 0.f;
+    int usableSteps = 0;
+    for (size_t i = 1; i < samples.size(); ++i) {
+        const cv::Point2f movement = samples[i].centroid - samples[i - 1].centroid;
+        const float movementLen = std::hypot(movement.x, movement.y);
+        if (movementLen < 0.5f) {
+            continue;
+        }
+
+        const cv::Point2f tailToHead = samples[i - 1].front - samples[i - 1].back;
+        const float axisLen = std::hypot(tailToHead.x, tailToHead.y);
+        if (axisLen < 2.f) {
+            continue;
+        }
+
+        const float alignment =
+            (movement.x * tailToHead.x + movement.y * tailToHead.y) /
+            (movementLen * axisLen);
+        if (alignment >= 0.f) {
+            currentForwardEvidence += alignment;
+        } else {
+            reverseEvidence += -alignment;
+        }
+        ++usableSteps;
+    }
+
+    const float totalEvidence = currentForwardEvidence + reverseEvidence;
+    if (usableSteps < 3 || totalEvidence <= 1e-3f ||
+        reverseEvidence <= currentForwardEvidence ||
+        (reverseEvidence - currentForwardEvidence) < 0.05f * totalEvidence) {
+        return false;
+    }
+
+    for (const MotionSample& sample : samples) {
+        QMap<int, Tracking::DetectedBlob> blobs =
+            storage->getDetectedBlobsForFrame(sample.frameNumber);
+        if (!blobs.contains(wormId)) {
+            continue;
+        }
+
+        Tracking::DetectedBlob blob = blobs[wormId];
+        if (blob.centerlinePoints.size() >= 2) {
+            std::reverse(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
+        }
+        std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+        storage->setDetectedBlobForFrame(sample.frameNumber, wormId, blob);
+    }
+
+    YAWT_INFO(lcCoreCenterlineWorker)
+        << QStringLiteral("Worm %1 final head/tail relabel: reverse=%2 forward=%3 steps=%4")
+               .arg(wormId)
+               .arg(reverseEvidence, 0, 'f', 2)
+               .arg(currentForwardEvidence, 0, 'f', 2)
+               .arg(usableSteps);
+    return true;
+}
+
 static bool selectZeroTipRingCutCenterline(
     const Tracking::DetectedBlob& blob,
     const cv::Point2f& predictedHead,
@@ -3305,6 +3405,8 @@ void CenterlineWorker::doWork()
                                      /*isKeyframeBootstrap=*/false);
                     }
                 }
+
+        relabelTrackHeadTailByMotion(m_storage, wormId, sortedPoints);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);

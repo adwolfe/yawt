@@ -613,13 +613,6 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
                          : TopologyState::Clean;
     }
 
-    if (r.topology == TopologyState::Clean) {
-        for (TrueTip& tip : r.tips) {
-            tip.point = tip.skelPoint;
-            tip.extended = false;
-        }
-    }
-
     // (g) ── Head/tail assignment ──────────────────────────────────────────
     // Distance-only assignment, with velocity-extrapolated tiebreak when the
     // 2-tip cost spread is < 10%. Predictor-less (keyframe) calls return
