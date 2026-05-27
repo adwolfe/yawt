@@ -3263,6 +3263,48 @@ void CenterlineWorker::doWork()
                 }
             }
             else if (er.topology == Tracking::TopologyState::SelfCrossed) {
+                // ── Hole-first: ensure the blob has a ring hole ──────────────
+                // If no contour hole exists, punch a synthetic one at the
+                // distance-transform maximum (the widest body cross-section).
+                // This ensures the 0-tip ring-cut routing always has a hole
+                // to work with, and unifies the no-hole SelfCrossed case
+                // rather than silently falling through to D-4.
+                if (blob.holeContourPoints.empty()) {
+                    Tracking::DetectedBlob holeBlob;
+                    if (addSyntheticHoleAtDTMax(blob, er.distTransform,
+                                                er.localBounds, holeBlob)) {
+                        const Tracking::EndpointResult er2 =
+                            Tracking::detectEndpoints(
+                                holeBlob, framePredictor, baseline, inMerge);
+                        holeBlob.tipCandidates.clear();
+                        for (const Tracking::TrueTip& t : er2.tips) {
+                            Tracking::TipCandidate tc;
+                            tc.point     = t.point;
+                            tc.curvature = t.curvature;
+                            tc.width     = t.width;
+                            tc.source    = t.extended
+                                ? Tracking::TipCandidate::Source::CurvaturePeak
+                                : Tracking::TipCandidate::Source::SkeletonEndpoint;
+                            holeBlob.tipCandidates.push_back(tc);
+                        }
+                        holeBlob.assignedHeadTipIdx = er2.headIdx;
+                        holeBlob.assignedTailTipIdx = er2.tailIdx;
+                        holeBlob.topologyState      = er2.topology;
+                        blob = holeBlob;
+                        er   = er2;
+                        debugRecord.syntheticHoleUsed = true;
+                        debugRecord.decisions << QStringLiteral(
+                            "SelfCrossed no-hole: punched synthetic hole at DT max, re-detected endpoints");
+                    }
+                }
+
+                // Derive local origin from the (potentially updated) er so
+                // skeleton node lookups are in the right coordinate frame.
+                const cv::Point2f scOrigin(
+                    static_cast<float>(er.localBounds.x),
+                    static_cast<float>(er.localBounds.y));
+
+                // ── Tip-count dispatch ────────────────────────────────────────
                 const int hIdx = blob.assignedHeadTipIdx;
                 const int tIdx = blob.assignedTailTipIdx;
                 const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.tipCandidates.size()));
@@ -3277,10 +3319,11 @@ void CenterlineWorker::doWork()
                         : Debug::CenterlineBranch::D3OneKnownTipHiddenPrediction;
                     debugRecord.decisions << QStringLiteral("%1 skeleton-arc dispatch attempted")
                                                  .arg(Debug::centerlineBranchToString(debugRecord.branch));
-                    runSkeletonArcDispatch(blob, er, originOffset);
+                    runSkeletonArcDispatch(blob, er, scOrigin);
                 }
                 else if (!blob.holeContourPoints.empty()) {
-                    // 0 tips, closed ring: route between predicted endpoint nodes.
+                    // 0 tips, ring (real or synthetic): route between predicted
+                    // endpoint positions using the ring skeleton or a cut.
                     debugRecord.branch = Debug::CenterlineBranch::ZeroTipRingCut;
                     const bool hasPredictedTips =
                         framePredictor.hasPrev &&
@@ -3293,7 +3336,7 @@ void CenterlineWorker::doWork()
                     bool zeroTipOk = false;
                     if (hasPredictedTips) {
                         zeroTipOk = selectZeroTipRingGraphCenterline(er.skeleton,
-                                                                      originOffset,
+                                                                      scOrigin,
                                                                       debugRecord.predictedHead,
                                                                       debugRecord.predictedTail,
                                                                       debugRecord.predictedCenter,
@@ -3335,6 +3378,9 @@ void CenterlineWorker::doWork()
                         debugRecord.decisions << QStringLiteral("0-tip ring supplied predictor-scored centerline");
                     }
                 }
+                // Implicit: if 0 tips and synthetic hole punch also failed,
+                // blob.holeContourPoints remains empty and centerline stays
+                // empty → falls through to the D-4 fallback below.
             }
 
             if (centerline.empty()) {
