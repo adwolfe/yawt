@@ -2286,7 +2286,7 @@ void MainWindow::onRerunCenterlineClicked()
     if (!m_appController) return;
 
     // Read current spinbox values from the Debug tab into a params struct.
-    Tracking::CenterlineSnakeParams params;
+    Centerline::CenterlineSnakeParams params;
     if (auto* g = ui->snakeDebugGroup) {
         params.enabled = g->isChecked();
     }
@@ -2337,7 +2337,7 @@ void MainWindow::onDebugCenterlineFinished()
     // discriminator to be useful.
     if (auto* edit = ui->tipBaselineTextEdit) {
         if (m_trackingDataStorage) {
-            const QMap<int, Tracking::TipFeatureBaseline> baselines =
+            const QMap<int, Centerline::TipFeatureBaseline> baselines =
                 m_trackingDataStorage->getAllTipBaselines();
             if (baselines.isEmpty()) {
                 edit->setPlainText("No clean-topology frames found in this pass.");
@@ -2369,7 +2369,7 @@ void MainWindow::onDebugCenterlineFinished()
                     "─── ──────────────────── ──────────────────── ──────────────────── ───── ────── ──── ────  ──\n");
                 for (auto it = baselines.constBegin(); it != baselines.constEnd(); ++it) {
                     const int wormId = it.key();
-                    const Tracking::TipFeatureBaseline& b = it.value();
+                    const Centerline::TipFeatureBaseline& b = it.value();
                     const auto& c = stateCounts.value(wormId, {0, 0, 0, 0, 0});
                     report += QString::asprintf(
                         "%-3d %5.3f ± %5.3f (%4d) %5.2f ± %4.2f (%4d) %6.1f ± %5.1f (%4d) %5d %6d %4d %4d  %s\n",

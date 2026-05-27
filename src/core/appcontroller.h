@@ -18,6 +18,7 @@
 #include <QObject>
 #include <QString>
 #include <QRectF>
+#include "centerlinetypes.h"
 #include <vector>
 
 #include "../data/trackingcommon.h" // for Tracking::DetectedBlob, Tracking::AllWormTracks, Thresholding::ThresholdSettings, InitialWormInfo
@@ -152,7 +153,7 @@ public:
      *
      * Safe to call at any time (not just before tracking).
      */
-    void setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params);
+    void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
 
     /**
      * @brief Re-run the post-tracking centerline computation with the given params.
@@ -164,7 +165,7 @@ public:
      *
      * No-op when no tracking data is in storage or when a centerline pass is already running.
      */
-    Q_INVOKABLE void rerunCenterline(const Tracking::CenterlineSnakeParams& params);
+    Q_INVOKABLE void rerunCenterline(const Centerline::CenterlineSnakeParams& params);
 
 signals:
     /**
@@ -256,7 +257,7 @@ private:
 
     // Active-contour params stored persistently. Updated by the Debug tab via
     // setCenterlineSnakeParams(); used for both new tracking runs and on-demand reruns.
-    Tracking::CenterlineSnakeParams m_snakeParams;
+    Centerline::CenterlineSnakeParams m_snakeParams;
 
     // Controller-owned tracking progress dialog (created on demand, parented to provided 'parent' widget)
     TrackingProgressDialog* m_trackingDialog = nullptr;

@@ -1,7 +1,7 @@
 #ifndef CENTERLINEPROCESSOR_H
 #define CENTERLINEPROCESSOR_H
 
-#include "../data/trackingcommon.h"
+#include "centerlinetypes.h"
 #include "../debug/debugrecords.h"
 
 #include <QList>
@@ -31,12 +31,12 @@ struct CenterlineFrameContext {
     const std::vector<Tracking::WormTrackPoint>* sortedPoints = nullptr;
     int nPts = 4;
     float refLength = 0.f;
-    Tracking::CenterlineSnakeParams snakeParams;
+    CenterlineSnakeParams snakeParams;
     bool captureDebug = false;
 };
 
 struct CenterlineSweepState {
-    Tracking::HeadTailPredictor predictor;
+    HeadTailPredictor predictor;
     CenterlineState prevState;
 };
 
@@ -56,7 +56,7 @@ struct CenterlineFrameResult {
 struct CenterlineFrameIo {
     std::function<QMap<int, Tracking::DetectedBlob>(int)> getDetectedBlobsForFrame;
     std::function<QList<QList<int>>(int)> getMergeGroupsForFrame;
-    std::function<Tracking::TipFeatureBaseline(int)> getTipBaseline;
+    std::function<TipFeatureBaseline(int)> getTipBaseline;
     std::function<void(int, int, const Tracking::DetectedBlob&)> setDetectedBlobForFrame;
     std::function<void(int, float, float)> recordTipFeatureSample;
     std::function<void(int, float)> recordBodyLengthSample;
@@ -84,7 +84,10 @@ std::vector<cv::Point2f> reconstructCenterlinePath(const std::vector<cv::Point>&
                                                    const cv::Point2f& offset);
 
 // Build an 8-connected skeleton graph from a binary worm mask.
-Tracking::SkeletonGraph buildSkeletonGraph(const cv::Mat& mask);
+SkeletonGraph buildSkeletonGraph(const cv::Mat& mask);
+
+// Build the padded binary blob mask used by centerline and endpoint analysis.
+cv::Rect buildCenterlineMask(const Tracking::DetectedBlob& blob, cv::Mat& mask);
 
 // Extract the longest usable ordered centerline from a binary worm mask.
 std::vector<cv::Point2f> extractCenterlineFromMask(const cv::Mat& mask,

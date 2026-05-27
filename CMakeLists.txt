@@ -113,6 +113,7 @@ set(HEADERS
     # Core
     src/core/trackingmanager.h
     src/core/wormtracker.h
+    src/core/centerlinetypes.h
     src/core/centerlineworker.h
     src/core/centerlineprocessor.h
     src/core/appcontroller.h

@@ -13,6 +13,7 @@
 #include <vector>
 #include <limits>
 #include "trackingcommon.h"
+#include "../core/centerlinetypes.h"
 
 /**
  * Central storage for all tracking data (single source of truth).
@@ -361,13 +362,13 @@ public:
      * @brief Retrieve the running baseline for a worm. Returns a default-
      *        constructed baseline (all zeros, no samples) if none exists.
      */
-    Tracking::TipFeatureBaseline getTipBaseline(int wormId) const;
+    Centerline::TipFeatureBaseline getTipBaseline(int wormId) const;
 
     /**
      * @brief Retrieve the full baseline map, keyed by worm ID. Useful for the
      *        Debug-tab readout that lists every worm.
      */
-    QMap<int, Tracking::TipFeatureBaseline> getAllTipBaselines() const;
+    QMap<int, Centerline::TipFeatureBaseline> getAllTipBaselines() const;
 
     /**
      * @brief Discard all accumulated baselines. Called at the start of each
@@ -480,7 +481,7 @@ private:
     // Per-worm tip-feature baseline (Welford running stats over clean frames).
     // Populated by recordTipFeatureSample / recordBodyLengthSample, consumed
     // by the head/tail discriminator in Phase C.
-    QMap<int, Tracking::TipFeatureBaseline> m_tipBaselines;
+    QMap<int, Centerline::TipFeatureBaseline> m_tipBaselines;
     
     // Helper methods
     QColor getNextColor();                                 // Get next color from palette

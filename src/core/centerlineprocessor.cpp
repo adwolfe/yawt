@@ -1,4 +1,5 @@
 #include "centerlineprocessor.h"
+#include "../utils/loggingcategories.h"
 
 #include <QDebug>
 #include <algorithm>
@@ -8,6 +9,8 @@
 #include <opencv2/imgproc.hpp>
 
 namespace Centerline {
+
+constexpr int kCenterlinePaddingPixels = 2;
 
 // Run one Zhang-Suen thinning sub-iteration over a normalized 0/1 mask.
 static void zhangSuenThinningIteration(cv::Mat& image, int iteration)
@@ -167,9 +170,9 @@ std::vector<cv::Point2f> reconstructCenterlinePath(const std::vector<cv::Point>&
     return path;
 }
 
-Tracking::SkeletonGraph buildSkeletonGraph(const cv::Mat& mask)
+Centerline::SkeletonGraph buildSkeletonGraph(const cv::Mat& mask)
 {
-    Tracking::SkeletonGraph graph;
+    Centerline::SkeletonGraph graph;
     if (mask.empty()) {
         return graph;
     }
@@ -196,7 +199,7 @@ Tracking::SkeletonGraph buildSkeletonGraph(const cv::Mat& mask)
     }
 
     if (graph.points.size() < 2) {
-        graph = Tracking::SkeletonGraph{};
+        graph = Centerline::SkeletonGraph{};
         return graph;
     }
 
@@ -234,7 +237,7 @@ Tracking::SkeletonGraph buildSkeletonGraph(const cv::Mat& mask)
 std::vector<cv::Point2f> extractCenterlineFromMask(const cv::Mat& mask,
                                                    const cv::Point2f& offset)
 {
-    Tracking::SkeletonGraph graph = buildSkeletonGraph(mask);
+    Centerline::SkeletonGraph graph = buildSkeletonGraph(mask);
     if (graph.points.size() < 2) {
         return {};
     }
@@ -288,6 +291,609 @@ std::vector<cv::Point2f> extractCenterlineFromMask(const cv::Mat& mask,
     }
 
     return reconstructCenterlinePath(graph.points, bestParents, bestStart, bestEnd, offset);
+}
+
+
+cv::Rect buildCenterlineMask(const Tracking::DetectedBlob& blob, cv::Mat& mask)
+{
+    cv::Rect localBounds = cv::boundingRect(blob.contourPoints);
+    localBounds.x -= kCenterlinePaddingPixels;
+    localBounds.y -= kCenterlinePaddingPixels;
+    localBounds.width += 2 * kCenterlinePaddingPixels;
+    localBounds.height += 2 * kCenterlinePaddingPixels;
+
+    if (localBounds.width <= 1 || localBounds.height <= 1) {
+        mask.release();
+        return localBounds;
+    }
+
+    mask = cv::Mat::zeros(localBounds.height, localBounds.width, CV_8UC1);
+
+    std::vector<std::vector<cv::Point>> outerContours(1);
+    outerContours.front().reserve(blob.contourPoints.size());
+    for (const cv::Point& pt : blob.contourPoints) {
+        outerContours.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
+    }
+    cv::fillPoly(mask, outerContours, cv::Scalar(255));
+
+    for (const std::vector<cv::Point>& hole : blob.holeContourPoints) {
+        std::vector<std::vector<cv::Point>> holeContour(1);
+        holeContour.front().reserve(hole.size());
+        for (const cv::Point& pt : hole) {
+            holeContour.front().push_back(cv::Point(pt.x - localBounds.x, pt.y - localBounds.y));
+        }
+        cv::fillPoly(mask, holeContour, cv::Scalar(0));
+    }
+
+    if (!blob.holeContourPoints.empty()) {
+        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+        cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+    }
+
+    return localBounds;
+}
+
+
+EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
+                               const HeadTailPredictor& predictor,
+                               const TipFeatureBaseline& baseline,
+                               bool inMergeGroup)
+{
+    EndpointResult r;
+
+    if (!blob.isValid) {
+        r.topology = Tracking::TopologyState::Lost;
+        return r;
+    }
+    // Merged blobs still get their skeleton + tips harvested when possible —
+    // the topology label is set to Merged at the end. centerlineworker treats
+    // Merged as a no-op for centerline computation but the tip data is still
+    // useful for the renderer.
+    if (blob.contourPoints.size() < 8) {
+        r.topology = inMergeGroup ? Tracking::TopologyState::Merged
+                                  : Tracking::TopologyState::SelfCrossed;
+        return r;
+    }
+
+    // (a) ── Mask + DT ──────────────────────────────────────────────────────
+    cv::Mat mask;
+    r.localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) {
+        r.topology = inMergeGroup ? Tracking::TopologyState::Merged
+                                  : Tracking::TopologyState::SelfCrossed;
+        return r;
+    }
+    cv::distanceTransform(mask, r.distTransform, cv::DIST_L2, 3);
+
+    const cv::Point2f originOffset(static_cast<float>(r.localBounds.x),
+                                   static_cast<float>(r.localBounds.y));
+
+    // (b) ── Skeleton + adjacency + indexImage ──────────────────────────────
+    // Shared with the centerline path so endpoint detection and extraction
+    // reason over exactly the same graph representation.
+    r.skeleton = Centerline::buildSkeletonGraph(mask);
+    if (r.skeleton.points.size() < 2) {
+        r.topology = inMergeGroup ? Tracking::TopologyState::Merged
+                                  : Tracking::TopologyState::SelfCrossed;
+        return r;
+    }
+    std::vector<int> rawEndpoints = r.skeleton.endpointIndices;
+
+    // (c) ── Prune to ≤ 2 endpoints (longest-path pair) ─────────────────────
+    int rawEndpointCount = static_cast<int>(rawEndpoints.size());
+    if (rawEndpoints.size() <= 2) {
+        r.skeleton.endpointIndices = rawEndpoints;
+    } else {
+        int bestA = rawEndpoints[0];
+        int bestB = rawEndpoints[1];
+        double bestDist = -1.0;
+        for (int ep : rawEndpoints) {
+            Centerline::GraphSearchResult sr = Centerline::dijkstraSkeleton(
+                r.skeleton.points, r.skeleton.adjacency, ep);
+            for (int other : rawEndpoints) {
+                if (other == ep) continue;
+                const double d = sr.distances[other];
+                if (std::isfinite(d) && d > bestDist) {
+                    bestDist = d;
+                    bestA = ep;
+                    bestB = other;
+                }
+            }
+        }
+        r.skeleton.endpointIndices = {bestA, bestB};
+    }
+
+    // (d) ── Outer-contour signed curvature + local maxima ─────────────────
+    const std::vector<cv::Point>& contour = blob.contourPoints;
+    const int nContour = static_cast<int>(contour.size());
+    std::vector<cv::Point2f> contourLocal;
+    contourLocal.reserve(nContour);
+    for (const cv::Point& p : contour) {
+        contourLocal.emplace_back(static_cast<float>(p.x - r.localBounds.x),
+                                  static_cast<float>(p.y - r.localBounds.y));
+    }
+
+    constexpr int kCurvatureWindow = 5;
+    const int k = std::max(2, kCurvatureWindow);
+    std::vector<float> curvature(nContour, 0.f);
+    for (int i = 0; i < nContour; ++i) {
+        const cv::Point2f& a = contourLocal[(i - k + nContour) % nContour];
+        const cv::Point2f& b = contourLocal[i];
+        const cv::Point2f& c = contourLocal[(i + k) % nContour];
+        const cv::Point2f v1 = b - a;
+        const cv::Point2f v2 = c - b;
+        const float cross = v1.x * v2.y - v1.y * v2.x;
+        const float dot   = v1.x * v2.x + v1.y * v2.y;
+        const float angle = std::atan2(cross, dot);
+        const float arc   = 0.5f * (std::hypot(v1.x, v1.y) + std::hypot(v2.x, v2.y));
+        curvature[i] = (arc > 1e-3f) ? (angle / arc) : 0.f;
+    }
+
+    // Curvature peak threshold: scaled by baseline if reliable, else default.
+    const float curvFloor = baseline.isReliable()
+        ? std::max(0.5f * baseline.meanAbsCurvature, 0.04f)
+        : 0.08f;
+
+    std::vector<int> curvaturePeakIdx;
+    curvaturePeakIdx.reserve(8);
+    for (int i = 0; i < nContour; ++i) {
+        const float mag = std::abs(curvature[i]);
+        if (mag < curvFloor) continue;
+        bool isLocalMax = true;
+        for (int d = -k; d <= k; ++d) {
+            if (d == 0) continue;
+            const int j = (i + d + nContour) % nContour;
+            if (std::abs(curvature[j]) > mag) { isLocalMax = false; break; }
+        }
+        if (isLocalMax) curvaturePeakIdx.push_back(i);
+    }
+    r.contourPoints.reserve(nContour);
+    r.contourCurvatures = curvature;
+    r.contourCurvaturePeaks = curvaturePeakIdx;
+    for (const cv::Point& p : contour) {
+        r.contourPoints.emplace_back(static_cast<float>(p.x),
+                                     static_cast<float>(p.y));
+    }
+
+    // ── Width probe ────────────────────────────────────────────────────────
+    auto probeDT = [&](const cv::Point2f& origin, const cv::Point2f& dir, float depth) -> float {
+        const int px = std::clamp(static_cast<int>(std::round(origin.x + dir.x * depth)),
+                                  0, r.distTransform.cols - 1);
+        const int py = std::clamp(static_cast<int>(std::round(origin.y + dir.y * depth)),
+                                  0, r.distTransform.rows - 1);
+        return r.distTransform.at<float>(py, px);
+    };
+
+    auto widthAt = [&](const cv::Point2f& tipLocal, int contourIdx) -> float {
+        const int nC = static_cast<int>(contourLocal.size());
+        if (nC < 4) return 0.f;
+        const int tangentK = 3;
+        const cv::Point2f& a = contourLocal[(contourIdx - tangentK + nC) % nC];
+        const cv::Point2f& c = contourLocal[(contourIdx + tangentK) % nC];
+        cv::Point2f tangent = c - a;
+        const float tNorm = std::hypot(tangent.x, tangent.y);
+        if (tNorm < 1e-3f) return 0.f;
+        tangent *= 1.f / tNorm;
+        const cv::Point2f perpA(-tangent.y,  tangent.x);
+        const cv::Point2f perpB( tangent.y, -tangent.x);
+        const float dtA = probeDT(tipLocal, perpA, 1.5f);
+        const float dtB = probeDT(tipLocal, perpB, 1.5f);
+        if (dtA < 0.5f && dtB < 0.5f) return 0.f;
+        const cv::Point2f inward = (dtA >= dtB) ? perpA : perpB;
+        return 2.f * probeDT(tipLocal, inward, 3.f);
+    };
+
+    // ── nearest contour idx to a local-coords point ────────────────────────
+    auto nearestContourIdx = [&](const cv::Point2f& q) -> int {
+        int bestIdx = -1;
+        float bestDistSq = std::numeric_limits<float>::max();
+        for (int i = 0; i < nContour; ++i) {
+            const cv::Point2f d = contourLocal[i] - q;
+            const float dsq = d.x * d.x + d.y * d.y;
+            if (dsq < bestDistSq) { bestDistSq = dsq; bestIdx = i; }
+        }
+        return bestIdx;
+    };
+
+    auto endpointOutwardDirection = [&](int epIdx) -> cv::Point2f {
+        if (epIdx < 0 || epIdx >= static_cast<int>(r.skeleton.points.size()) ||
+            r.skeleton.adjacency[epIdx].empty()) {
+            return cv::Point2f(0.f, 0.f);
+        }
+
+        int prev = epIdx;
+        int cur = r.skeleton.adjacency[epIdx].front();
+        cv::Point inner = r.skeleton.points[cur];
+        constexpr int kEndpointDirectionSteps = 6;
+        for (int step = 1; step < kEndpointDirectionSteps; ++step) {
+            int next = -1;
+            for (int candidate : r.skeleton.adjacency[cur]) {
+                if (candidate != prev) {
+                    next = candidate;
+                    break;
+                }
+            }
+            if (next < 0) {
+                break;
+            }
+            prev = cur;
+            cur = next;
+            inner = r.skeleton.points[cur];
+        }
+
+        const cv::Point& ep = r.skeleton.points[epIdx];
+        cv::Point2f dir(static_cast<float>(ep.x - inner.x),
+                        static_cast<float>(ep.y - inner.y));
+        const float norm = std::hypot(dir.x, dir.y);
+        if (norm < 1e-3f) {
+            return cv::Point2f(0.f, 0.f);
+        }
+        return dir * (1.f / norm);
+    };
+
+    auto projectedEndpointContourIdx = [&](const cv::Point2f& epLocalF,
+                                           const cv::Point2f& outwardDir,
+                                           float dtAtEp) -> int {
+        if (std::hypot(outwardDir.x, outwardDir.y) < 1e-3f) {
+            return nearestContourIdx(epLocalF);
+        }
+
+        const float maxForward = std::clamp(6.f + 4.f * dtAtEp, 8.f, 18.f);
+        const float maxSide = std::clamp(2.f + 2.5f * dtAtEp, 4.f, 10.f);
+        int bestIdx = -1;
+        float bestScore = -std::numeric_limits<float>::max();
+        for (int i = 0; i < nContour; ++i) {
+            const cv::Point2f rel = contourLocal[i] - epLocalF;
+            const float forward = rel.x * outwardDir.x + rel.y * outwardDir.y;
+            if (forward < -1.f || forward > maxForward) {
+                continue;
+            }
+            const float cross = rel.x * outwardDir.y - rel.y * outwardDir.x;
+            const float side = std::abs(cross);
+            if (side > maxSide) {
+                continue;
+            }
+
+            const float curvatureBonus = 2.f * std::abs(curvature[i]);
+            const float score = forward - 0.25f * side + curvatureBonus;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx = i;
+            }
+        }
+
+        return bestIdx >= 0 ? bestIdx : nearestContourIdx(epLocalF);
+    };
+
+    // (e) ── Extend each skeleton endpoint to the strongest reachable peak ──
+    for (int epIdx : r.skeleton.endpointIndices) {
+        const cv::Point& epLocal = r.skeleton.points[epIdx];
+        const cv::Point2f epLocalF(static_cast<float>(epLocal.x),
+                                   static_cast<float>(epLocal.y));
+        const cv::Point2f epWorld(epLocalF.x + originOffset.x,
+                                  epLocalF.y + originOffset.y);
+
+        const float dtAtEp = r.distTransform.at<float>(epLocal.y, epLocal.x);
+        const cv::Point2f outwardDir = endpointOutwardDirection(epIdx);
+
+        // Skeleton endpoint projected outward to the cap contour. A nearest
+        // contour snap often lands on the side of a rounded tip instead of at
+        // the end-cap apex.
+        const int snapIdx = projectedEndpointContourIdx(epLocalF, outwardDir, dtAtEp);
+        cv::Point2f snapLocal(0.f, 0.f);
+        cv::Point2f snapWorld = epWorld;
+        if (snapIdx >= 0) {
+            snapLocal = contourLocal[snapIdx];
+            snapWorld = cv::Point2f(snapLocal.x + originOffset.x,
+                                    snapLocal.y + originOffset.y);
+        }
+
+        // Find a strong curvature peak in the local end-cap region defined by
+        // the skeleton endpoint and its outward direction. This avoids making
+        // curvature depend on a possibly side-biased contour snap.
+        const float maxForward = std::clamp(6.f + 4.f * dtAtEp, 8.f, 18.f);
+        const float maxSide = std::clamp(2.f + 2.5f * dtAtEp, 4.f, 10.f);
+        int bestPeak = -1;
+        float bestScore = -std::numeric_limits<float>::max();
+        for (int peakIdx : curvaturePeakIdx) {
+            const cv::Point2f& peakLocal = contourLocal[peakIdx];
+            const cv::Point2f rel = peakLocal - epLocalF;
+            float forward = 0.f;
+            float side = std::sqrt(rel.x * rel.x + rel.y * rel.y);
+            if (std::hypot(outwardDir.x, outwardDir.y) >= 1e-3f) {
+                forward = rel.x * outwardDir.x + rel.y * outwardDir.y;
+                const float cross = rel.x * outwardDir.y - rel.y * outwardDir.x;
+                side = std::abs(cross);
+            }
+            if (forward < -1.f || forward > maxForward || side > maxSide) {
+                continue;
+            }
+
+            const float score = forward - 0.25f * side + 4.f * std::abs(curvature[peakIdx]);
+            if (score > bestScore) {
+                bestScore = score;
+                bestPeak = peakIdx;
+            }
+        }
+
+        if (bestPeak >= 0) {
+            const cv::Point2f peakDelta = contourLocal[bestPeak] - snapLocal;
+            const float peakDist = std::hypot(peakDelta.x, peakDelta.y);
+            const float maxPeakShift = std::clamp(1.0f + 0.75f * dtAtEp, 2.0f, 4.0f);
+            if (peakDist > maxPeakShift) {
+                bestPeak = -1;
+            }
+        }
+
+        // ── (e2) Bilateral cap midpoint ───────────────────────────────────────
+        //
+        // Instead of relying on a single best-scored contour point (which can
+        // jump 1–2 px between frames when the mask is imperfect), we split the
+        // end-cap contour points into left-of-axis and right-of-axis halves,
+        // then independently find the "apex" on each side — the point with the
+        // greatest forward component along the outward direction. Taking the
+        // midpoint of these two apexes gives a tip estimate that is robust to
+        // one-sided mask noise because both sides' errors partially cancel.
+        //
+        // To further suppress single-pixel outliers we use a weighted centroid
+        // of the top-forward fraction of cap points on each side rather than the
+        // single furthest point. Points in the forward quartile (within
+        // kFwdFraction of the side's own peak) contribute with weight
+        // proportional to their forward depth, so genuine tip pixels dominate.
+        //
+        // A TipCapDebug is populated in parallel for the debug exporter.
+        {
+            constexpr float kFwdFraction = 0.25f; // include points within 25% of apex fwd
+
+            const cv::Point2f perp(-outwardDir.y, outwardDir.x); // left of D
+
+            // Debug snapshot — always populated so the exporter can show the
+            // search window even when the bilateral computation falls through.
+            TipCapDebug capDbg;
+            capDbg.valid       = true;
+            capDbg.skelEndpoint = snapWorld;
+            capDbg.outwardDir  = outwardDir;
+            capDbg.dtAtEp      = dtAtEp;
+            capDbg.maxForward  = maxForward;
+            capDbg.maxSide     = maxSide;
+            capDbg.snapPoint       = snapWorld;
+            capDbg.peakOrSnapPoint = snapWorld; // updated below if a peak is found
+            capDbg.hadPeak         = false;
+
+            float leftPeakFwd  = -std::numeric_limits<float>::max();
+            float rightPeakFwd = -std::numeric_limits<float>::max();
+
+            // First pass: find peak forward depth on each side and collect
+            // all cap contour points for the debug snapshot.
+            for (int i = 0; i < nContour; ++i) {
+                const cv::Point2f rel = contourLocal[i] - epLocalF;
+                const float fwd = rel.x * outwardDir.x + rel.y * outwardDir.y;
+                if (fwd < -1.f || fwd > maxForward) continue;
+                const float lat = rel.x * perp.x + rel.y * perp.y;
+                if (std::abs(lat) > maxSide) continue;
+
+                const cv::Point2f worldPt(contourLocal[i].x + originOffset.x,
+                                          contourLocal[i].y + originOffset.y);
+                if (lat >= 0.f) {
+                    capDbg.leftCapPoints.push_back(worldPt);
+                    if (fwd > leftPeakFwd) leftPeakFwd = fwd;
+                }
+                if (lat <= 0.f) {
+                    capDbg.rightCapPoints.push_back(worldPt);
+                    if (fwd > rightPeakFwd) rightPeakFwd = fwd;
+                }
+            }
+
+            const bool hasLeft  = leftPeakFwd  > -std::numeric_limits<float>::max();
+            const bool hasRight = rightPeakFwd > -std::numeric_limits<float>::max();
+            capDbg.hasLeft       = hasLeft;
+            capDbg.hasRight      = hasRight;
+            capDbg.leftPeakFwd   = hasLeft  ? leftPeakFwd  : 0.f;
+            capDbg.rightPeakFwd  = hasRight ? rightPeakFwd : 0.f;
+
+            if (hasLeft && hasRight) {
+                // Sanity: both sides' apexes should be at similar forward depths.
+                // If one side is dramatically deeper the mask is degenerate; skip.
+                const float fwdSpan = std::max(leftPeakFwd, rightPeakFwd) -
+                                      std::min(leftPeakFwd, rightPeakFwd);
+                const float fwdMean = 0.5f * (leftPeakFwd + rightPeakFwd);
+
+                if (fwdSpan <= 0.6f * fwdMean + 2.f) {
+                    capDbg.sanityPassed = true;
+
+                    // Second pass: weighted centroid of points near each apex.
+                    const float leftThresh  = leftPeakFwd  - kFwdFraction * leftPeakFwd;
+                    const float rightThresh = rightPeakFwd - kFwdFraction * rightPeakFwd;
+
+                    cv::Point2f leftSum(0.f, 0.f),  rightSum(0.f, 0.f);
+                    float       leftWt = 0.f,        rightWt = 0.f;
+
+                    for (int i = 0; i < nContour; ++i) {
+                        const cv::Point2f rel = contourLocal[i] - epLocalF;
+                        const float fwd = rel.x * outwardDir.x + rel.y * outwardDir.y;
+                        if (fwd < -1.f || fwd > maxForward) continue;
+                        const float lat = rel.x * perp.x + rel.y * perp.y;
+                        if (std::abs(lat) > maxSide) continue;
+
+                        if (lat >= 0.f && fwd >= leftThresh) {
+                            const float w = fwd + 1.f; // weight by forward depth
+                            leftSum += w * contourLocal[i];
+                            leftWt  += w;
+                        }
+                        if (lat <= 0.f && fwd >= rightThresh) {
+                            const float w = fwd + 1.f;
+                            rightSum += w * contourLocal[i];
+                            rightWt  += w;
+                        }
+                    }
+
+                    if (leftWt > 0.f && rightWt > 0.f) {
+                        const cv::Point2f leftCentroid  = leftSum  * (1.f / leftWt);
+                        const cv::Point2f rightCentroid = rightSum * (1.f / rightWt);
+                        const cv::Point2f midLocal = (leftCentroid + rightCentroid) * 0.5f;
+                        const cv::Point2f bilateralWorld(midLocal.x + originOffset.x,
+                                                         midLocal.y + originOffset.y);
+                        const cv::Point2f leftApexWorld(leftCentroid.x + originOffset.x,
+                                                        leftCentroid.y + originOffset.y);
+                        const cv::Point2f rightApexWorld(rightCentroid.x + originOffset.x,
+                                                         rightCentroid.y + originOffset.y);
+                        capDbg.leftApex      = leftApexWorld;
+                        capDbg.rightApex     = rightApexWorld;
+                        capDbg.bilateralTip  = bilateralWorld;
+                        capDbg.hasBilateral  = true;
+
+                        TrueTip t;
+                        t.skelPoint     = snapWorld;
+                        t.bilateralTip  = bilateralWorld;
+                        t.hasBilateral  = true;
+                        if (bestPeak >= 0) {
+                            const cv::Point2f peakLocal = contourLocal[bestPeak];
+                            const cv::Point2f peakWorld(peakLocal.x + originOffset.x,
+                                                        peakLocal.y + originOffset.y);
+                            t.point     = peakWorld;
+                            t.curvature = curvature[bestPeak];
+                            t.width     = widthAt(peakLocal, bestPeak);
+                            t.extended  = true;
+                            capDbg.peakOrSnapPoint = peakWorld;
+                            capDbg.hadPeak         = true;
+                        } else {
+                            t.point     = snapWorld;
+                            t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
+                            t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
+                            t.extended  = false;
+                        }
+                        r.tips.push_back(t);
+                        r.tipCapDebug.push_back(capDbg);
+                        continue; // skip the fallback TrueTip construction below
+                    }
+                }
+            }
+
+            // Fallback path: bilateral not available. Fill in comparison fields.
+            if (bestPeak >= 0) {
+                const cv::Point2f peakWorld(contourLocal[bestPeak].x + originOffset.x,
+                                            contourLocal[bestPeak].y + originOffset.y);
+                capDbg.peakOrSnapPoint = peakWorld;
+                capDbg.hadPeak         = true;
+            }
+            r.tipCapDebug.push_back(capDbg);
+        }
+
+        // Fallback (no valid bilateral): construct TrueTip with snap/peak only.
+        TrueTip t;
+        t.skelPoint = snapWorld;
+        if (bestPeak >= 0) {
+            const cv::Point2f peakLocal = contourLocal[bestPeak];
+            t.point     = cv::Point2f(peakLocal.x + originOffset.x,
+                                      peakLocal.y + originOffset.y);
+            t.curvature = curvature[bestPeak];
+            t.width     = widthAt(peakLocal, bestPeak);
+            t.extended  = true;
+        } else {
+            t.point     = snapWorld;
+            t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
+            t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
+            t.extended  = false;
+        }
+        r.tips.push_back(t);
+    }
+
+    // (f) ── Topology classification ───────────────────────────────────────
+    if (inMergeGroup) {
+        r.topology = Tracking::TopologyState::Merged;
+    } else {
+        const bool hasRing = !blob.holeContourPoints.empty();
+        r.topology = (hasRing || r.tips.size() < 2)
+                         ? Tracking::TopologyState::SelfCrossed
+                         : Tracking::TopologyState::Clean;
+    }
+
+    // (g) ── Head/tail assignment ──────────────────────────────────────────
+    // Distance-only assignment, with velocity-extrapolated tiebreak when the
+    // 2-tip cost spread is < 10%. Predictor-less (keyframe) calls return
+    // (-1, -1); the caller bootstraps from the centerline orientation.
+    auto distSq = [](const cv::Point2f& a, const cv::Point2f& b) -> float {
+        const cv::Point2f d = a - b;
+        return d.x * d.x + d.y * d.y;
+    };
+
+    if (r.tips.empty() || !predictor.hasPrev) {
+        // Nothing to do — caller handles bootstrap.
+    } else {
+        const cv::Point2f predHead = predictor.hasVelocity
+            ? predictor.lastHeadPos + predictor.velHead
+            : predictor.lastHeadPos;
+        const cv::Point2f predTail = predictor.hasVelocity
+            ? predictor.lastTailPos + predictor.velTail
+            : predictor.lastTailPos;
+
+        if (r.tips.size() == 1) {
+            // One visible tip — assign to whichever role's predicted point
+            // is closer. The other role stays -1 so D-3 can fill it.
+            const float dH = distSq(r.tips[0].point, predHead);
+            const float dT = distSq(r.tips[0].point, predTail);
+            if (dH <= dT) r.headIdx = 0;
+            else          r.tailIdx = 0;
+        } else {
+            // Two tips — minimum-cost ordered assignment.
+            const float c00 = distSq(r.tips[0].point, predHead) +
+                              distSq(r.tips[1].point, predTail);
+            const float c01 = distSq(r.tips[1].point, predHead) +
+                              distSq(r.tips[0].point, predTail);
+            const float winner = std::min(c00, c01);
+            const float loser  = std::max(c00, c01);
+            const bool spreadIsTight = (winner > 0.f) &&
+                                       ((loser - winner) / winner < 0.10f);
+
+            int headPick = (c00 <= c01) ? 0 : 1;
+            int tailPick = (c00 <= c01) ? 1 : 0;
+
+            // Velocity-extrapolated tiebreak for tight spreads.
+            if (spreadIsTight && predictor.hasVelocity) {
+                const cv::Point2f extrapHead = predictor.lastHeadPos +
+                                               2.f * predictor.velHead;
+                const cv::Point2f extrapTail = predictor.lastTailPos +
+                                               2.f * predictor.velTail;
+                const float c00x = distSq(r.tips[0].point, extrapHead) +
+                                   distSq(r.tips[1].point, extrapTail);
+                const float c01x = distSq(r.tips[1].point, extrapHead) +
+                                   distSq(r.tips[0].point, extrapTail);
+                if (c00x <= c01x) { headPick = 0; tailPick = 1; }
+                else              { headPick = 1; tailPick = 0; }
+            }
+
+            r.headIdx = headPick;
+            r.tailIdx = tailPick;
+        }
+    }
+
+    // ── Debug log ───────────────────────────────────────────────────────────
+    if (lcDataCommon().isDebugEnabled()) {
+        YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+            "detectEndpoints: rawEnds=%d  prunedEnds=%d  tips=%d  peaks=%d  "
+            "topo=%s  head=%d  tail=%d",
+            rawEndpointCount,
+            static_cast<int>(r.skeleton.endpointIndices.size()),
+            static_cast<int>(r.tips.size()),
+            static_cast<int>(curvaturePeakIdx.size()),
+            qUtf8Printable(Tracking::topologyStateToString(r.topology)),
+            r.headIdx, r.tailIdx);
+        for (size_t i = 0; i < r.tips.size(); ++i) {
+            const TrueTip& t = r.tips[i];
+            YAWT_DEBUG(lcDataCommon) << QString::asprintf(
+                "  tip[%zu] %s  point=(%.1f,%.1f)  skel=(%.1f,%.1f)  "
+                "k=%+.4f  w=%.2f",
+                i, t.extended ? "ext " : "skel",
+                static_cast<double>(t.point.x),
+                static_cast<double>(t.point.y),
+                static_cast<double>(t.skelPoint.x),
+                static_cast<double>(t.skelPoint.y),
+                static_cast<double>(t.curvature),
+                static_cast<double>(t.width));
+        }
+    }
+
+    return r;
 }
 
 } // namespace Centerline
@@ -383,7 +989,7 @@ static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
 }
 
 // Choose the most reliable endpoint coordinate for a clean two-tip centerline.
-static cv::Point2f trustedTipPointForCleanD1(const Tracking::TrueTip& tip)
+static cv::Point2f trustedTipPointForCleanD1(const Centerline::TrueTip& tip)
 {
     // Bilateral cap midpoint is the most stable estimate: it averages the
     // furthest-forward cap contour points on both sides of the body axis, so
@@ -479,7 +1085,7 @@ static bool nearestMaskPoint(const Tracking::DetectedBlob& blob,
 // Reassign two self-crossed tip candidates using predictor position and velocity.
 static bool enforceSelfCrossedTwoTipPredictorRoles(
     Tracking::DetectedBlob& blob,
-    const Tracking::HeadTailPredictor& predictor,
+    const Centerline::HeadTailPredictor& predictor,
     QStringList* diagnostics)
 {
     if (blob.topologyState != Tracking::TopologyState::SelfCrossed ||
@@ -928,7 +1534,7 @@ static HiddenTipTarget predictHiddenTipTarget(const Tracking::DetectedBlob& curr
 //
 // Run Dijkstra on a prepared skeleton graph and return a world-coordinate
 // start-to-goal path for the clean centerline branch.
-static bool skeletonGraphPath(const Tracking::SkeletonGraph& graph,
+static bool skeletonGraphPath(const Centerline::SkeletonGraph& graph,
                               int startIdx, int goalIdx,
                               const cv::Point2f& originOffset,
                               std::vector<cv::Point2f>& outPath)
@@ -960,7 +1566,7 @@ static bool skeletonGraphPath(const Tracking::SkeletonGraph& graph,
 
 // Nearest skeleton graph node (by squared Euclidean distance) to a world point.
 // Find the skeleton graph node nearest to a world-coordinate point.
-static int nearestSkeletonNode(const Tracking::SkeletonGraph& graph,
+static int nearestSkeletonNode(const Centerline::SkeletonGraph& graph,
                                 const cv::Point2f& worldPt,
                                 const cv::Point2f& originOffset)
 {
@@ -979,7 +1585,7 @@ static int nearestSkeletonNode(const Tracking::SkeletonGraph& graph,
 // Skeleton node that is geodesically farthest from srcIdx (Dijkstra on graph).
 // Useful as a D-3 fallback when the predictor has no previous position.
 // Find the reachable skeleton node farthest from a source node.
-static int farthestSkeletonNode(const Tracking::SkeletonGraph& graph, int srcIdx)
+static int farthestSkeletonNode(const Centerline::SkeletonGraph& graph, int srcIdx)
 {
     const int n = static_cast<int>(graph.points.size());
     if (srcIdx < 0 || srcIdx >= n) return -1;
@@ -1016,7 +1622,7 @@ static int farthestSkeletonNode(const Tracking::SkeletonGraph& graph, int srcIdx
 // open-curve skeletons where srcIdx has only one neighbour — the caller
 // should then just use the single path from skeletonGraphPath().
 // Split a cyclic skeleton into the two arcs connecting a source and goal node.
-static bool skeletonBothArcs(const Tracking::SkeletonGraph& graph,
+static bool skeletonBothArcs(const Centerline::SkeletonGraph& graph,
                               int srcIdx, int goalIdx,
                               const cv::Point2f& originOffset,
                               std::vector<cv::Point2f>& outA,
@@ -1177,7 +1783,7 @@ static std::vector<cv::Point2f> pickArcByRHR(
 }
 
 // Convert a skeleton node-index path into world-coordinate points.
-static std::vector<cv::Point2f> nodesToWorldPath(const Tracking::SkeletonGraph& graph,
+static std::vector<cv::Point2f> nodesToWorldPath(const Centerline::SkeletonGraph& graph,
                                                  const std::vector<int>& nodePath,
                                                  const cv::Point2f& originOffset)
 {
@@ -1192,7 +1798,7 @@ static std::vector<cv::Point2f> nodesToWorldPath(const Tracking::SkeletonGraph& 
 }
 
 // Measure the weighted path length for a skeleton node-index path.
-static float nodePathLength(const Tracking::SkeletonGraph& graph,
+static float nodePathLength(const Centerline::SkeletonGraph& graph,
                             const std::vector<int>& nodePath,
                             int endExclusive = -1)
 {
@@ -1212,7 +1818,7 @@ static float nodePathLength(const Tracking::SkeletonGraph& graph,
 }
 
 // Find the shortest skeleton node path between two graph nodes.
-static bool shortestNodePath(const Tracking::SkeletonGraph& graph,
+static bool shortestNodePath(const Centerline::SkeletonGraph& graph,
                              int startIdx,
                              int goalIdx,
                              std::vector<int>& outPath)
@@ -1263,7 +1869,7 @@ static bool shortestNodePath(const Tracking::SkeletonGraph& graph,
 }
 
 // Find the nearest junction reachable from a source node.
-static int nearestReachableJunction(const Tracking::SkeletonGraph& graph,
+static int nearestReachableJunction(const Centerline::SkeletonGraph& graph,
                                     int srcIdx)
 {
     const int n = static_cast<int>(graph.points.size());
@@ -1299,7 +1905,7 @@ static int nearestReachableJunction(const Tracking::SkeletonGraph& graph,
 }
 
 // Return whether a skeleton node has junction-like graph degree.
-static bool isJunctionNode(const Tracking::SkeletonGraph& graph, int idx)
+static bool isJunctionNode(const Centerline::SkeletonGraph& graph, int idx)
 {
     return idx >= 0 && idx < static_cast<int>(graph.adjacency.size()) &&
            static_cast<int>(graph.adjacency[idx].size()) >= 3;
@@ -1334,7 +1940,7 @@ struct JunctionSelection {
 };
 
 // Group adjacent junction nodes into connected junction clusters.
-static std::vector<JunctionCluster> findJunctionClusters(const Tracking::SkeletonGraph& graph)
+static std::vector<JunctionCluster> findJunctionClusters(const Centerline::SkeletonGraph& graph)
 {
     const int n = static_cast<int>(graph.points.size());
     std::vector<JunctionCluster> clusters;
@@ -1373,7 +1979,7 @@ static std::vector<JunctionCluster> findJunctionClusters(const Tracking::Skeleto
 }
 
 // Find graph ports where a junction cluster connects to non-cluster branches.
-static std::vector<JunctionPort> clusterPorts(const Tracking::SkeletonGraph& graph,
+static std::vector<JunctionPort> clusterPorts(const Centerline::SkeletonGraph& graph,
                                               const JunctionCluster& cluster)
 {
     std::vector<JunctionPort> ports;
@@ -1396,7 +2002,7 @@ static std::vector<JunctionPort> clusterPorts(const Tracking::SkeletonGraph& gra
 }
 
 // Find the shortest path from a source node to any node in a junction cluster.
-static bool shortestPathToCluster(const Tracking::SkeletonGraph& graph,
+static bool shortestPathToCluster(const Centerline::SkeletonGraph& graph,
                                   int srcIdx,
                                   const JunctionCluster& cluster,
                                   std::vector<int>& outPath)
@@ -1454,7 +2060,7 @@ static bool shortestPathToCluster(const Tracking::SkeletonGraph& graph,
 }
 
 // Find a path through the interior of a junction cluster between two ports.
-static std::vector<int> clusterInternalPath(const Tracking::SkeletonGraph& graph,
+static std::vector<int> clusterInternalPath(const Centerline::SkeletonGraph& graph,
                                             const JunctionCluster& cluster,
                                             int startNode,
                                             int goalNode)
@@ -1500,7 +2106,7 @@ static std::vector<int> clusterInternalPath(const Tracking::SkeletonGraph& graph
 }
 
 // Find the loop branch that leaves and returns to a junction through different ports.
-static bool findLoopReturnPath(const Tracking::SkeletonGraph& graph,
+static bool findLoopReturnPath(const Centerline::SkeletonGraph& graph,
                                const JunctionCluster& cluster,
                                const JunctionPort& startPort,
                                LoopReturnPath& out)
@@ -1579,7 +2185,7 @@ static bool findLoopReturnPath(const Tracking::SkeletonGraph& graph,
 }
 
 // Compute the minimum distance from a skeleton node path to a target point.
-static float minPathDistanceToPoint(const Tracking::SkeletonGraph& graph,
+static float minPathDistanceToPoint(const Centerline::SkeletonGraph& graph,
                                     const std::vector<int>& nodes,
                                     const cv::Point2f& target,
                                     const cv::Point2f& originOffset)
@@ -1596,7 +2202,7 @@ static float minPathDistanceToPoint(const Tracking::SkeletonGraph& graph,
 
 // Select a zero-tip ring centerline directly from ring skeleton graph routes.
 static bool selectZeroTipRingGraphCenterline(
-    const Tracking::SkeletonGraph& graph,
+    const Centerline::SkeletonGraph& graph,
     const cv::Point2f& originOffset,
     const cv::Point2f& predictedHead,
     const cv::Point2f& predictedTail,
@@ -1780,7 +2386,7 @@ static bool selectZeroTipRingGraphCenterline(
 }
 
 // Select the junction that best represents the loop-aware self-crossing route.
-static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& graph,
+static JunctionSelection selectLoopAwareJunction(const Centerline::SkeletonGraph& graph,
                                                  int srcIdx,
                                                  const cv::Point2f& predictedHidden,
                                                  const cv::Point2f& originOffset,
@@ -1918,7 +2524,7 @@ static JunctionSelection selectLoopAwareJunction(const Tracking::SkeletonGraph& 
 }
 
 // Trace a simple skeleton branch from a starting node until a stop condition.
-static std::vector<int> traceSkeletonBranch(const Tracking::SkeletonGraph& graph,
+static std::vector<int> traceSkeletonBranch(const Centerline::SkeletonGraph& graph,
                                             int junctionIdx,
                                             int incomingIdx,
                                             int firstBranchIdx)
@@ -1979,7 +2585,7 @@ static std::vector<int> traceSkeletonBranch(const Tracking::SkeletonGraph& graph
 }
 
 // Trace a branch leaving a junction cluster through one of its ports.
-static std::vector<int> traceSkeletonBranchFromCluster(const Tracking::SkeletonGraph& graph,
+static std::vector<int> traceSkeletonBranchFromCluster(const Centerline::SkeletonGraph& graph,
                                                        const JunctionCluster& cluster,
                                                        int clusterNode,
                                                        int firstBranchIdx)
@@ -2065,7 +2671,7 @@ struct D3RouteDebug {
 // terminates by the shortest route to the node nearest Tpred and the failure
 // mode where one noisy junction pixel decides the branch orientation.
 // Route from a visible tip toward an actual or predicted hidden target.
-static bool skeletonPathTowardPredictedHidden(const Tracking::SkeletonGraph& graph,
+static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& graph,
                                               int srcIdx,
                                               const cv::Point2f& predictedHidden,
                                               bool targetIsActualTip,
@@ -2368,7 +2974,7 @@ static bool refineSnakeCore(const Tracking::DetectedBlob& blob,
                             const cv::Point2f& pinHead,
                             const cv::Point2f& pinTail,
                             int nPoints,
-                            const Tracking::CenterlineSnakeParams& params,
+                            const Centerline::CenterlineSnakeParams& params,
                             cv::Point2f& outOverlapCenter,
                             bool& outHasOverlap)
 {
@@ -2499,7 +3105,7 @@ static bool buildSnakeMask(const Tracking::DetectedBlob& blob,
 }
 
 // Copy endpoint-detection internals into a frame debug record for export.
-static void captureEndpointDebug(const Tracking::EndpointResult& er,
+static void captureEndpointDebug(const Centerline::EndpointResult& er,
                                  Debug::CenterlineFrameDebug& record)
 {
     record.endpointLocalBounds = er.localBounds;
@@ -2598,7 +3204,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
 
     auto loadPreviousFrameContext =
         [&](int frameNumber, int frameStep,
-            Tracking::HeadTailPredictor& outPredictor,
+            Centerline::HeadTailPredictor& outPredictor,
             CenterlineState& outPrevState,
             float& outLocalRefLength) -> bool {
         auto blobAt = [&](int f, Tracking::DetectedBlob& out) -> bool {
@@ -2613,7 +3219,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
             return false;
         }
 
-        outPredictor = Tracking::HeadTailPredictor{};
+        outPredictor = Centerline::HeadTailPredictor{};
         const auto prevHead =
             (prevBlob.assignedHeadTipIdx >= 0 &&
              prevBlob.assignedHeadTipIdx < static_cast<int>(prevBlob.tipCandidates.size()))
@@ -2683,7 +3289,7 @@ if (i < 0 || i >= static_cast<int>(points.size())) return result;
 const Tracking::WormTrackPoint& tp = points[i];
 
 if (tp.quality == Tracking::TrackPointQuality::Lost) {
-    predictor = Tracking::HeadTailPredictor{};
+    predictor = Centerline::HeadTailPredictor{};
     prevState.valid = false;
     return result;
 }
@@ -2696,7 +3302,7 @@ if (!blob.isValid || blob.contourPoints.empty()) return result;
 blob.hasCenterlineCutPoint = false;
 
 const bool inMerge = inMergeGroupAtFrame(tp.frameNumberOriginal);
-Tracking::HeadTailPredictor framePredictor = predictor;
+Centerline::HeadTailPredictor framePredictor = predictor;
 CenterlineState framePrevState = prevState;
 float frameRefLength = ctx.refLength;
 if (!req.isKeyframeBootstrap) {
@@ -2712,7 +3318,7 @@ if (!req.isKeyframeBootstrap) {
 }
 
 // ── STEP 1: detect endpoints, write back tip data ───────────
-const Tracking::TipFeatureBaseline baseline =
+const Centerline::TipFeatureBaseline baseline =
     io.getTipBaseline(ctx.wormId);
 const bool captureDebug =
     ctx.captureDebug;
@@ -2737,7 +3343,7 @@ debugRecord.predictedCenter = framePredictor.hasVelocity
     : framePredictor.lastCenterPos;
 debugRecord.decisions << QStringLiteral("loaded live predictor and previous-frame state");
 
-Tracking::EndpointResult er = Tracking::detectEndpoints(
+Centerline::EndpointResult er = Centerline::detectEndpoints(
         blob, framePredictor, baseline, inMerge);
 
 // ── OMEGA UNZIPPER START ──────────────────────────────────────────
@@ -2769,8 +3375,8 @@ if (er.topology == Tracking::TopologyState::SelfCrossed && framePredictor.hasVel
                 if (Tracking::populateCenterlineFromContourWithCut(splitBlob, cutA, cutB, 2)) {
 
                     // 4. Re-evaluate topology
-                    Tracking::EndpointResult splitEr =
-                        Tracking::detectEndpoints(splitBlob, framePredictor, baseline, inMerge);
+                    Centerline::EndpointResult splitEr =
+                        Centerline::detectEndpoints(splitBlob, framePredictor, baseline, inMerge);
 
                     if (splitEr.topology == Tracking::TopologyState::Clean) {
                         blob = splitBlob;
@@ -2793,7 +3399,7 @@ if (captureDebug) {
 // applies regardless of whether the position came from the
 // skeleton-snap or the curvature-peak extension.
 blob.tipCandidates.clear();
-for (const Tracking::TrueTip& t : er.tips) {
+for (const Centerline::TrueTip& t : er.tips) {
     Tracking::TipCandidate tc;
     tc.point     = t.point;
     tc.curvature = t.curvature;
@@ -2840,7 +3446,7 @@ const bool cleanWithTwoTips =
     er.topology == Tracking::TopologyState::Clean &&
     er.tips.size() == 2;
 if (cleanWithTwoTips) {
-    for (const Tracking::TrueTip& t : er.tips) {
+    for (const Centerline::TrueTip& t : er.tips) {
         io.recordTipFeatureSample(
             ctx.wormId, std::abs(t.curvature), t.width);
     }
@@ -2883,7 +3489,7 @@ const float angleThreshold = static_cast<float>(
 // there is no actual target.
 auto runSkeletonArcDispatch =
     [&](const Tracking::DetectedBlob& dispBlob,
-        const Tracking::EndpointResult& dispEr,
+        const Centerline::EndpointResult& dispEr,
         const cv::Point2f& dispOrigin) -> bool {
     const int hIdx = dispBlob.assignedHeadTipIdx;
     const int tIdx = dispBlob.assignedTailTipIdx;
@@ -2971,7 +3577,7 @@ auto runSkeletonArcDispatch =
                     if (tipIdx == knownIdx) {
                         continue;
                     }
-                    const Tracking::TrueTip& tip = dispEr.tips[tipIdx];
+                    const Centerline::TrueTip& tip = dispEr.tips[tipIdx];
                     if (ptDist(tip.point, junctionPoint) <= bumpRadius &&
                         std::abs(tip.curvature) >= curvatureThreshold) {
                         hasSecondBumpNearJunction = true;
@@ -3175,8 +3781,8 @@ if (er.topology == Tracking::TopologyState::Clean &&
                                          er.localBounds, holeBlob)) {
                 debugRecord.syntheticHoleUsed = true;
                 debugRecord.decisions << QStringLiteral("D-1 path was short; synthetic hole retry attempted");
-                const Tracking::EndpointResult er2 =
-                    Tracking::detectEndpoints(
+                const Centerline::EndpointResult er2 =
+                    Centerline::detectEndpoints(
                         holeBlob, framePredictor, baseline, inMerge);
                 const cv::Point2f origin2(
                     static_cast<float>(er2.localBounds.x),
@@ -3187,7 +3793,7 @@ if (er.topology == Tracking::TopologyState::Clean &&
                 Tracking::DetectedBlob savedBlob = blob;
                 blob = holeBlob;
                 blob.tipCandidates.clear();
-                for (const Tracking::TrueTip& t : er2.tips) {
+                for (const Centerline::TrueTip& t : er2.tips) {
                     Tracking::TipCandidate tc;
                     tc.point     = t.point;
                     tc.curvature = t.curvature;
@@ -3225,11 +3831,11 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
         Tracking::DetectedBlob holeBlob;
         if (addSyntheticHoleAtDTMax(blob, er.distTransform,
                                     er.localBounds, holeBlob)) {
-            const Tracking::EndpointResult er2 =
-                Tracking::detectEndpoints(
+            const Centerline::EndpointResult er2 =
+                Centerline::detectEndpoints(
                     holeBlob, framePredictor, baseline, inMerge);
             holeBlob.tipCandidates.clear();
-            for (const Tracking::TrueTip& t : er2.tips) {
+            for (const Centerline::TrueTip& t : er2.tips) {
                 Tracking::TipCandidate tc;
                 tc.point     = t.point;
                 tc.curvature = t.curvature;

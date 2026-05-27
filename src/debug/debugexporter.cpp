@@ -257,7 +257,7 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
         pixelColor[{cp.x, cp.y}] = cv::Scalar(0, 180, 0); // default: outside-cap green
     }
     for (int ti = 0; ti < static_cast<int>(record.tipCapDebug.size()); ++ti) {
-        const Tracking::TipCapDebug& cd = record.tipCapDebug[ti];
+        const Centerline::TipCapDebug& cd = record.tipCapDebug[ti];
         if (!cd.valid) continue;
         const cv::Scalar leftColor  = cv::Scalar(255, 200,  50);  // cyan-gold: left side
         const cv::Scalar rightColor = cv::Scalar( 50, 120, 255);  // orange-red: right side
@@ -280,7 +280,7 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
     // Draw skeleton endpoint, search window arrow and lateral extents,
     // apex centroids, bilateral midpoint, and old-snap/peak for each tip.
     for (int ti = 0; ti < static_cast<int>(record.tipCapDebug.size()); ++ti) {
-        const Tracking::TipCapDebug& cd = record.tipCapDebug[ti];
+        const Centerline::TipCapDebug& cd = record.tipCapDebug[ti];
         if (!cd.valid) continue;
         const QString& role = (ti < static_cast<int>(record.tipCapRoles.size()))
                               ? record.tipCapRoles[ti] : QString();
@@ -366,7 +366,7 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
 // zoomScale is applied on top of kExportScale (so total = kExportScale × zoomScale).
 static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
                                  const Debug::CenterlineFrameDebug& record,
-                                 const Tracking::TipCapDebug& cd,
+                                 const Centerline::TipCapDebug& cd,
                                  const QString& role,
                                  const QString& fileName,
                                  const QString& outputDir)
@@ -1205,7 +1205,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     log << "\n--- Bilateral cap-midpoint selection ---\n";
     log << "tipCapDebug entries=" << record.tipCapDebug.size() << "\n";
     for (int i = 0; i < static_cast<int>(record.tipCapDebug.size()); ++i) {
-        const Tracking::TipCapDebug& cd = record.tipCapDebug[i];
+        const Centerline::TipCapDebug& cd = record.tipCapDebug[i];
         const QString& role = (i < static_cast<int>(record.tipCapRoles.size()))
                               ? record.tipCapRoles[i] : QString();
         log << "  tip" << i << " role=" << (role.isEmpty() ? QStringLiteral("?") : role) << "\n";

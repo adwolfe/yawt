@@ -39,6 +39,7 @@
 #include <QObject>
 #include <QList>
 #include <QMap>
+#include "centerlinetypes.h"
 #include <QString>
 #include <QRectF>
 #include <QThread>
@@ -227,7 +228,7 @@ public:
      * Must be called before startCenterlineComputation() (i.e. before tracking finishes
      * or just at startup) for the values to be picked up by the worker.
      */
-    void setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params);
+    void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
 
 public slots:
     /**
@@ -465,7 +466,7 @@ private:
 
     // Active-contour parameters for ring/coiled-frame refinement. Configured via
     // setCenterlineSnakeParams(); applied to the worker right before doWork().
-    Tracking::CenterlineSnakeParams m_centerlineSnakeParams;
+    Centerline::CenterlineSnakeParams m_centerlineSnakeParams;
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures

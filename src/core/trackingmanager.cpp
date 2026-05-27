@@ -3098,7 +3098,7 @@ bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath
     return true;
 }
 
-void TrackingManager::setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params)
+void TrackingManager::setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params)
 {
     m_centerlineSnakeParams = params;
 }

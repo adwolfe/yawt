@@ -497,7 +497,7 @@ void AppController::onDialogBeginRequested()
     // Leave the dialog open — progress/status signals from the manager will be forwarded to it.
 }
 
-void AppController::setCenterlineSnakeParams(const Tracking::CenterlineSnakeParams& params)
+void AppController::setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params)
 {
     m_snakeParams = params;
     if (m_manager) {
@@ -505,7 +505,7 @@ void AppController::setCenterlineSnakeParams(const Tracking::CenterlineSnakePara
     }
 }
 
-void AppController::rerunCenterline(const Tracking::CenterlineSnakeParams& params)
+void AppController::rerunCenterline(const Centerline::CenterlineSnakeParams& params)
 {
     if (!m_manager) {
         YAWT_WARN(lcCoreAppController) << "rerunCenterline: no TrackingManager available";

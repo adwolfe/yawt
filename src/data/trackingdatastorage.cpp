@@ -594,7 +594,7 @@ QMap<int, Tracking::DetectedBlob> TrackingDataStorage::getDetectedBlobsForFrame(
 // --- Per-worm tip-feature baselines (Phase A) ---
 
 void TrackingDataStorage::recordTipFeatureSample(int wormId, float curvatureMagnitude, float width) {
-    Tracking::TipFeatureBaseline& baseline = m_tipBaselines[wormId];
+    Centerline::TipFeatureBaseline& baseline = m_tipBaselines[wormId];
     baseline.addCurvatureSample(curvatureMagnitude);
     baseline.addWidthSample(width);
 }
@@ -603,11 +603,11 @@ void TrackingDataStorage::recordBodyLengthSample(int wormId, float length) {
     m_tipBaselines[wormId].addLengthSample(length);
 }
 
-Tracking::TipFeatureBaseline TrackingDataStorage::getTipBaseline(int wormId) const {
+Centerline::TipFeatureBaseline TrackingDataStorage::getTipBaseline(int wormId) const {
     return m_tipBaselines.value(wormId);
 }
 
-QMap<int, Tracking::TipFeatureBaseline> TrackingDataStorage::getAllTipBaselines() const {
+QMap<int, Centerline::TipFeatureBaseline> TrackingDataStorage::getAllTipBaselines() const {
     return m_tipBaselines;
 }
 

@@ -5,7 +5,7 @@
 #include <QStringList>
 #include <vector>
 
-#include "../data/trackingcommon.h"
+#include "../core/centerlinetypes.h"
 
 namespace Debug {
 
@@ -70,8 +70,8 @@ struct CenterlineFrameDebug {
     bool inMergeGroup = false;
     CenterlineBranch branch = CenterlineBranch::Unknown;
 
-    Tracking::HeadTailPredictor predictorBefore;
-    Tracking::TipFeatureBaseline baselineBefore;
+    Centerline::HeadTailPredictor predictorBefore;
+    Centerline::TipFeatureBaseline baselineBefore;
 
     float refLength = 0.f;
     float previousTurningAngle = 0.f;
@@ -108,7 +108,7 @@ struct CenterlineFrameDebug {
     // Bilateral cap-midpoint debug — one entry per tip (parallel to tipCandidates).
     // Populated whenever the new bilateral path ran (Clean frames primarily).
     // tipCapRoles[i] is "head" / "tail" / "" matching tipCandidates[i].
-    std::vector<Tracking::TipCapDebug> tipCapDebug;
+    std::vector<Centerline::TipCapDebug> tipCapDebug;
     std::vector<QString>               tipCapRoles;
 
     std::vector<cv::Point2f> initialCenterline;

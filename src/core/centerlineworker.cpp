@@ -128,7 +128,7 @@ CenterlineWorker::CenterlineWorker(TrackingDataStorage* storage,
                                    QObject* parent)
     : QObject(parent), m_storage(storage), m_debugStore(debugStore) {}
 
-void CenterlineWorker::setSnakeParams(const Tracking::CenterlineSnakeParams& params)
+void CenterlineWorker::setSnakeParams(const Centerline::CenterlineSnakeParams& params)
 {
     m_snakeParams = params;
 }
@@ -160,7 +160,7 @@ QList<QList<int>> CenterlineWorker::getMergeGroupsForFrame(int frameNumber) cons
     return m_storage->getMergeGroupsForFrame(frameNumber);
 }
 
-Tracking::TipFeatureBaseline CenterlineWorker::getTipBaseline(int wormId) const
+Centerline::TipFeatureBaseline CenterlineWorker::getTipBaseline(int wormId) const
 {
     QMutexLocker locker(m_sharedStorageMutex.data());
     return m_storage->getTipBaseline(wormId);
