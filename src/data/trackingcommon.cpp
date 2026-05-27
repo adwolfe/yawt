@@ -502,6 +502,13 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
         }
         if (isLocalMax) curvaturePeakIdx.push_back(i);
     }
+    r.contourPoints.reserve(nContour);
+    r.contourCurvatures = curvature;
+    r.contourCurvaturePeaks = curvaturePeakIdx;
+    for (const cv::Point& p : contour) {
+        r.contourPoints.emplace_back(static_cast<float>(p.x),
+                                     static_cast<float>(p.y));
+    }
 
     // ── Width probe ────────────────────────────────────────────────────────
     auto probeDT = [&](const cv::Point2f& origin, const cv::Point2f& dir, float depth) -> float {
@@ -543,6 +550,76 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
         return bestIdx;
     };
 
+    auto endpointOutwardDirection = [&](int epIdx) -> cv::Point2f {
+        if (epIdx < 0 || epIdx >= static_cast<int>(r.skeleton.points.size()) ||
+            r.skeleton.adjacency[epIdx].empty()) {
+            return cv::Point2f(0.f, 0.f);
+        }
+
+        int prev = epIdx;
+        int cur = r.skeleton.adjacency[epIdx].front();
+        cv::Point inner = r.skeleton.points[cur];
+        constexpr int kEndpointDirectionSteps = 6;
+        for (int step = 1; step < kEndpointDirectionSteps; ++step) {
+            int next = -1;
+            for (int candidate : r.skeleton.adjacency[cur]) {
+                if (candidate != prev) {
+                    next = candidate;
+                    break;
+                }
+            }
+            if (next < 0) {
+                break;
+            }
+            prev = cur;
+            cur = next;
+            inner = r.skeleton.points[cur];
+        }
+
+        const cv::Point& ep = r.skeleton.points[epIdx];
+        cv::Point2f dir(static_cast<float>(ep.x - inner.x),
+                        static_cast<float>(ep.y - inner.y));
+        const float norm = std::hypot(dir.x, dir.y);
+        if (norm < 1e-3f) {
+            return cv::Point2f(0.f, 0.f);
+        }
+        return dir * (1.f / norm);
+    };
+
+    auto projectedEndpointContourIdx = [&](const cv::Point2f& epLocalF,
+                                           const cv::Point2f& outwardDir,
+                                           float dtAtEp) -> int {
+        if (std::hypot(outwardDir.x, outwardDir.y) < 1e-3f) {
+            return nearestContourIdx(epLocalF);
+        }
+
+        const float maxForward = std::clamp(6.f + 4.f * dtAtEp, 8.f, 18.f);
+        const float maxSide = std::clamp(2.f + 2.5f * dtAtEp, 4.f, 10.f);
+        int bestIdx = -1;
+        float bestScore = -std::numeric_limits<float>::max();
+        for (int i = 0; i < nContour; ++i) {
+            const cv::Point2f rel = contourLocal[i] - epLocalF;
+            const float forward = rel.x * outwardDir.x + rel.y * outwardDir.y;
+            if (forward < -1.f || forward > maxForward) {
+                continue;
+            }
+            const float cross = rel.x * outwardDir.y - rel.y * outwardDir.x;
+            const float side = std::abs(cross);
+            if (side > maxSide) {
+                continue;
+            }
+
+            const float curvatureBonus = 2.f * std::abs(curvature[i]);
+            const float score = forward - 0.25f * side + curvatureBonus;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx = i;
+            }
+        }
+
+        return bestIdx >= 0 ? bestIdx : nearestContourIdx(epLocalF);
+    };
+
     // (e) ── Extend each skeleton endpoint to the strongest reachable peak ──
     for (int epIdx : r.skeleton.endpointIndices) {
         const cv::Point& epLocal = r.skeleton.points[epIdx];
@@ -551,8 +628,13 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
         const cv::Point2f epWorld(epLocalF.x + originOffset.x,
                                   epLocalF.y + originOffset.y);
 
-        // Skeleton endpoint snapped to nearest outer-contour point.
-        const int snapIdx = nearestContourIdx(epLocalF);
+        const float dtAtEp = r.distTransform.at<float>(epLocal.y, epLocal.x);
+        const cv::Point2f outwardDir = endpointOutwardDirection(epIdx);
+
+        // Skeleton endpoint projected outward to the cap contour. A nearest
+        // contour snap often lands on the side of a rounded tip instead of at
+        // the end-cap apex.
+        const int snapIdx = projectedEndpointContourIdx(epLocalF, outwardDir, dtAtEp);
         cv::Point2f snapLocal(0.f, 0.f);
         cv::Point2f snapWorld = epWorld;
         if (snapIdx >= 0) {
@@ -561,27 +643,40 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
                                     snapLocal.y + originOffset.y);
         }
 
-        // Search radius scales with local body half-width at the endpoint,
-        // but stays local to the endpoint. A larger radius can grab a nearby
-        // body kink instead of the actual end contour.
-        const float dtAtEp = r.distTransform.at<float>(epLocal.y, epLocal.x);
-        const float searchR = std::min(std::max(dtAtEp * 1.5f, 4.0f), 6.0f);
-        const float searchRSq = searchR * searchR;
-
-        // Find the nearest strong curvature peak within `searchR` of the
-        // skeleton-endpoint contour-snap point. Choosing nearest keeps this
-        // as a local endpoint extension rather than a jump to a stronger
-        // curvature feature elsewhere on the nearby body contour.
+        // Find a strong curvature peak in the local end-cap region defined by
+        // the skeleton endpoint and its outward direction. This avoids making
+        // curvature depend on a possibly side-biased contour snap.
+        const float maxForward = std::clamp(6.f + 4.f * dtAtEp, 8.f, 18.f);
+        const float maxSide = std::clamp(2.f + 2.5f * dtAtEp, 4.f, 10.f);
         int bestPeak = -1;
-        float bestDistSq = std::numeric_limits<float>::max();
+        float bestScore = -std::numeric_limits<float>::max();
         for (int peakIdx : curvaturePeakIdx) {
             const cv::Point2f& peakLocal = contourLocal[peakIdx];
-            const cv::Point2f d = peakLocal - snapLocal;
-            const float dsq = d.x * d.x + d.y * d.y;
-            if (dsq > searchRSq) continue;
-            if (dsq < bestDistSq) {
-                bestDistSq = dsq;
+            const cv::Point2f rel = peakLocal - epLocalF;
+            float forward = 0.f;
+            float side = std::sqrt(rel.x * rel.x + rel.y * rel.y);
+            if (std::hypot(outwardDir.x, outwardDir.y) >= 1e-3f) {
+                forward = rel.x * outwardDir.x + rel.y * outwardDir.y;
+                const float cross = rel.x * outwardDir.y - rel.y * outwardDir.x;
+                side = std::abs(cross);
+            }
+            if (forward < -1.f || forward > maxForward || side > maxSide) {
+                continue;
+            }
+
+            const float score = forward - 0.25f * side + 4.f * std::abs(curvature[peakIdx]);
+            if (score > bestScore) {
+                bestScore = score;
                 bestPeak = peakIdx;
+            }
+        }
+
+        if (bestPeak >= 0) {
+            const cv::Point2f peakDelta = contourLocal[bestPeak] - snapLocal;
+            const float peakDist = std::hypot(peakDelta.x, peakDelta.y);
+            const float maxPeakShift = std::clamp(1.0f + 0.75f * dtAtEp, 2.0f, 4.0f);
+            if (peakDist > maxPeakShift) {
+                bestPeak = -1;
             }
         }
 

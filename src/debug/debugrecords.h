@@ -101,6 +101,9 @@ struct CenterlineFrameDebug {
     std::vector<cv::Point2f> skeletonPixels;
     std::vector<cv::Point2f> skeletonEndpointPoints;
     DistanceTransformDebug distanceTransform;
+    std::vector<cv::Point2f> contourCurvaturePoints;
+    std::vector<float> contourCurvatures;
+    std::vector<int> contourCurvaturePeaks;
 
     std::vector<cv::Point2f> initialCenterline;
     std::vector<cv::Point2f> resampledCenterline;

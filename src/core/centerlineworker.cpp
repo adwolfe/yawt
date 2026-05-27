@@ -2359,6 +2359,9 @@ static void captureEndpointDebug(const Tracking::EndpointResult& er,
     record.endpointLocalBounds = er.localBounds;
     record.skeletonPixels.clear();
     record.skeletonEndpointPoints.clear();
+    record.contourCurvaturePoints = er.contourPoints;
+    record.contourCurvatures = er.contourCurvatures;
+    record.contourCurvaturePeaks = er.contourCurvaturePeaks;
 
     const cv::Point2f origin(static_cast<float>(er.localBounds.x),
                              static_cast<float>(er.localBounds.y));
@@ -2834,7 +2837,8 @@ void CenterlineWorker::doWork()
                 tc.point     = t.point;
                 tc.curvature = t.curvature;
                 tc.width     = t.width;
-                tc.source    = Tracking::TipCandidate::Source::SkeletonEndpoint;
+                tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
+                                          : Tracking::TipCandidate::Source::SkeletonEndpoint;
                 blob.tipCandidates.push_back(tc);
             }
             blob.assignedHeadTipIdx = er.headIdx;
@@ -3218,7 +3222,8 @@ void CenterlineWorker::doWork()
                                 tc.point     = t.point;
                                 tc.curvature = t.curvature;
                                 tc.width     = t.width;
-                                tc.source    = Tracking::TipCandidate::Source::SkeletonEndpoint;
+                                tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
+                                                          : Tracking::TipCandidate::Source::SkeletonEndpoint;
                                 blob.tipCandidates.push_back(tc);
                             }
                             blob.assignedHeadTipIdx = er2.headIdx;
@@ -4083,7 +4088,8 @@ bool CenterlineWorker::exportProcessForFrame(
         tc.point     = t.point;
         tc.curvature = t.curvature;
         tc.width     = t.width;
-        tc.source    = Tracking::TipCandidate::Source::SkeletonEndpoint;
+        tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
+                                  : Tracking::TipCandidate::Source::SkeletonEndpoint;
         blob.tipCandidates.push_back(tc);
     }
     blob.assignedHeadTipIdx = er.headIdx;
@@ -4418,7 +4424,8 @@ bool CenterlineWorker::exportProcessForFrame(
                         Tracking::TipCandidate tc;
                         tc.point = t.point; tc.curvature = t.curvature;
                         tc.width = t.width;
-                        tc.source = Tracking::TipCandidate::Source::SkeletonEndpoint;
+                        tc.source = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
+                                               : Tracking::TipCandidate::Source::SkeletonEndpoint;
                         blob.tipCandidates.push_back(tc);
                     }
                     blob.assignedHeadTipIdx = er2.headIdx;

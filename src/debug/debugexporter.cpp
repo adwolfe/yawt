@@ -447,6 +447,65 @@ static void writeDistanceTransformStage(const Debug::CenterlineFrameDebug& recor
     writeStageImage(heat, outputDir, QStringLiteral("02_distance_transform.png"));
 }
 
+static void writeContourCurvatureStage(const Tracking::DetectedBlob& blob,
+                                       const Debug::CenterlineFrameDebug& record,
+                                       const cv::Rect& bounds,
+                                       const QString& outputDir)
+{
+    if (record.contourCurvaturePoints.empty() ||
+        record.contourCurvatures.size() != record.contourCurvaturePoints.size()) {
+        return;
+    }
+
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+
+    float maxAbs = 0.f;
+    for (float k : record.contourCurvatures) {
+        maxAbs = std::max(maxAbs, std::abs(k));
+    }
+    if (maxAbs < 1e-6f) {
+        maxAbs = 1.f;
+    }
+
+    auto curvatureColor = [&](float k) -> cv::Scalar {
+        const float scaled = std::min(std::abs(k) / maxAbs, 1.f);
+        cv::Mat value(1, 1, CV_8UC1, cv::Scalar(static_cast<int>(std::lround(255.f * scaled))));
+        cv::Mat color;
+        cv::applyColorMap(value, color, cv::COLORMAP_INFERNO);
+        const cv::Vec3b bgr = color.at<cv::Vec3b>(0, 0);
+        return cv::Scalar(bgr[0], bgr[1], bgr[2]);
+    };
+
+    for (size_t i = 0; i < record.contourCurvaturePoints.size(); ++i) {
+        const cv::Point p = worldToCanvas(record.contourCurvaturePoints[i], bounds);
+        cv::circle(canvas, p, 2, curvatureColor(record.contourCurvatures[i]), cv::FILLED);
+    }
+
+    for (int idx : record.contourCurvaturePeaks) {
+        if (idx < 0 || idx >= static_cast<int>(record.contourCurvaturePoints.size())) {
+            continue;
+        }
+        const cv::Point p = worldToCanvas(record.contourCurvaturePoints[idx], bounds);
+        cv::rectangle(canvas, p - cv::Point(4, 4), p + cv::Point(4, 4),
+                      cv::Scalar(255, 80, 255), 1, cv::LINE_AA);
+    }
+
+    for (int i = 0; i < static_cast<int>(record.tipCandidates.size()); ++i) {
+        const Tracking::TipCandidate& tip = record.tipCandidates[i];
+        const cv::Point p = worldToCanvas(tip.point, bounds);
+        cv::circle(canvas, p, 6, cv::Scalar(80, 255, 80), 2, cv::LINE_AA);
+        drawText(canvas, QStringLiteral("tip%1").arg(i), p + cv::Point(7, -5),
+                 cv::Scalar(80, 255, 80));
+    }
+
+    drawTitle(canvas, QStringLiteral("02b contour curvature  max|k|=%1 peaks=%2")
+              .arg(maxAbs, 0, 'f', 3)
+              .arg(record.contourCurvaturePeaks.size()));
+    drawCoordinateEdges(canvas, bounds);
+    writeStageImage(canvas, outputDir, QStringLiteral("02b_contour_curvature.png"));
+}
+
 static void writeTipStage(const Tracking::DetectedBlob& blob,
                           const Debug::CenterlineFrameDebug& record,
                           const cv::Rect& bounds,
@@ -696,6 +755,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
 
     writeSkeletonStage(blob, record, bounds, outputDir);
     writeDistanceTransformStage(record, bounds, outputDir);
+    writeContourCurvatureStage(blob, record, bounds, outputDir);
     writeTipStage(blob, record, bounds, outputDir);
     writeHeadTailStage(blob, record, bounds, outputDir);
     writeHiddenPredictionMaskDiffStage(blob,

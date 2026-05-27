@@ -275,6 +275,9 @@ struct EndpointResult {
     cv::Mat              distTransform;        // CV_32F, local coords
     cv::Rect             localBounds;          // origin offset (LOCAL->WORLD)
     std::vector<TrueTip> tips;                 // 0-2 entries (post-prune)
+    std::vector<cv::Point2f> contourPoints;    // WORLD coords, for curvature debug
+    std::vector<float> contourCurvatures;      // Signed curvature, aligned with contourPoints
+    std::vector<int> contourCurvaturePeaks;    // Indices into contourPoints
     TopologyState        topology = TopologyState::Unknown;
     int                  headIdx = -1;         // index into `tips`
     int                  tailIdx = -1;         // index into `tips`
