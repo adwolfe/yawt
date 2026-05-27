@@ -65,6 +65,7 @@ set(SOURCES
     src/core/wormtracker.cpp
     src/core/centerlineworker.cpp
     src/core/centerlineprocessor.cpp
+    src/core/centerlinegeometry.cpp
     src/core/appcontroller.cpp
 
     # Core processing
@@ -116,6 +117,7 @@ set(HEADERS
     src/core/centerlinetypes.h
     src/core/centerlineworker.h
     src/core/centerlineprocessor.h
+    src/core/centerlinegeometry.h
     src/core/appcontroller.h
 
     # Core processing
