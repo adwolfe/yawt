@@ -680,6 +680,161 @@ EndpointResult detectEndpoints(const DetectedBlob& blob,
             }
         }
 
+        // ── (e2) Bilateral cap midpoint ───────────────────────────────────────
+        //
+        // Instead of relying on a single best-scored contour point (which can
+        // jump 1–2 px between frames when the mask is imperfect), we split the
+        // end-cap contour points into left-of-axis and right-of-axis halves,
+        // then independently find the "apex" on each side — the point with the
+        // greatest forward component along the outward direction. Taking the
+        // midpoint of these two apexes gives a tip estimate that is robust to
+        // one-sided mask noise because both sides' errors partially cancel.
+        //
+        // To further suppress single-pixel outliers we use a weighted centroid
+        // of the top-forward fraction of cap points on each side rather than the
+        // single furthest point. Points in the forward quartile (within
+        // kFwdFraction of the side's own peak) contribute with weight
+        // proportional to their forward depth, so genuine tip pixels dominate.
+        //
+        // A TipCapDebug is populated in parallel for the debug exporter.
+        {
+            constexpr float kFwdFraction = 0.25f; // include points within 25% of apex fwd
+
+            const cv::Point2f perp(-outwardDir.y, outwardDir.x); // left of D
+
+            // Debug snapshot — always populated so the exporter can show the
+            // search window even when the bilateral computation falls through.
+            TipCapDebug capDbg;
+            capDbg.valid       = true;
+            capDbg.skelEndpoint = snapWorld;
+            capDbg.outwardDir  = outwardDir;
+            capDbg.dtAtEp      = dtAtEp;
+            capDbg.maxForward  = maxForward;
+            capDbg.maxSide     = maxSide;
+            capDbg.snapPoint       = snapWorld;
+            capDbg.peakOrSnapPoint = snapWorld; // updated below if a peak is found
+            capDbg.hadPeak         = false;
+
+            float leftPeakFwd  = -std::numeric_limits<float>::max();
+            float rightPeakFwd = -std::numeric_limits<float>::max();
+
+            // First pass: find peak forward depth on each side and collect
+            // all cap contour points for the debug snapshot.
+            for (int i = 0; i < nContour; ++i) {
+                const cv::Point2f rel = contourLocal[i] - epLocalF;
+                const float fwd = rel.x * outwardDir.x + rel.y * outwardDir.y;
+                if (fwd < -1.f || fwd > maxForward) continue;
+                const float lat = rel.x * perp.x + rel.y * perp.y;
+                if (std::abs(lat) > maxSide) continue;
+
+                const cv::Point2f worldPt(contourLocal[i].x + originOffset.x,
+                                          contourLocal[i].y + originOffset.y);
+                if (lat >= 0.f) {
+                    capDbg.leftCapPoints.push_back(worldPt);
+                    if (fwd > leftPeakFwd) leftPeakFwd = fwd;
+                }
+                if (lat <= 0.f) {
+                    capDbg.rightCapPoints.push_back(worldPt);
+                    if (fwd > rightPeakFwd) rightPeakFwd = fwd;
+                }
+            }
+
+            const bool hasLeft  = leftPeakFwd  > -std::numeric_limits<float>::max();
+            const bool hasRight = rightPeakFwd > -std::numeric_limits<float>::max();
+            capDbg.hasLeft       = hasLeft;
+            capDbg.hasRight      = hasRight;
+            capDbg.leftPeakFwd   = hasLeft  ? leftPeakFwd  : 0.f;
+            capDbg.rightPeakFwd  = hasRight ? rightPeakFwd : 0.f;
+
+            if (hasLeft && hasRight) {
+                // Sanity: both sides' apexes should be at similar forward depths.
+                // If one side is dramatically deeper the mask is degenerate; skip.
+                const float fwdSpan = std::max(leftPeakFwd, rightPeakFwd) -
+                                      std::min(leftPeakFwd, rightPeakFwd);
+                const float fwdMean = 0.5f * (leftPeakFwd + rightPeakFwd);
+
+                if (fwdSpan <= 0.6f * fwdMean + 2.f) {
+                    capDbg.sanityPassed = true;
+
+                    // Second pass: weighted centroid of points near each apex.
+                    const float leftThresh  = leftPeakFwd  - kFwdFraction * leftPeakFwd;
+                    const float rightThresh = rightPeakFwd - kFwdFraction * rightPeakFwd;
+
+                    cv::Point2f leftSum(0.f, 0.f),  rightSum(0.f, 0.f);
+                    float       leftWt = 0.f,        rightWt = 0.f;
+
+                    for (int i = 0; i < nContour; ++i) {
+                        const cv::Point2f rel = contourLocal[i] - epLocalF;
+                        const float fwd = rel.x * outwardDir.x + rel.y * outwardDir.y;
+                        if (fwd < -1.f || fwd > maxForward) continue;
+                        const float lat = rel.x * perp.x + rel.y * perp.y;
+                        if (std::abs(lat) > maxSide) continue;
+
+                        if (lat >= 0.f && fwd >= leftThresh) {
+                            const float w = fwd + 1.f; // weight by forward depth
+                            leftSum += w * contourLocal[i];
+                            leftWt  += w;
+                        }
+                        if (lat <= 0.f && fwd >= rightThresh) {
+                            const float w = fwd + 1.f;
+                            rightSum += w * contourLocal[i];
+                            rightWt  += w;
+                        }
+                    }
+
+                    if (leftWt > 0.f && rightWt > 0.f) {
+                        const cv::Point2f leftCentroid  = leftSum  * (1.f / leftWt);
+                        const cv::Point2f rightCentroid = rightSum * (1.f / rightWt);
+                        const cv::Point2f midLocal = (leftCentroid + rightCentroid) * 0.5f;
+                        const cv::Point2f bilateralWorld(midLocal.x + originOffset.x,
+                                                         midLocal.y + originOffset.y);
+                        const cv::Point2f leftApexWorld(leftCentroid.x + originOffset.x,
+                                                        leftCentroid.y + originOffset.y);
+                        const cv::Point2f rightApexWorld(rightCentroid.x + originOffset.x,
+                                                         rightCentroid.y + originOffset.y);
+                        capDbg.leftApex      = leftApexWorld;
+                        capDbg.rightApex     = rightApexWorld;
+                        capDbg.bilateralTip  = bilateralWorld;
+                        capDbg.hasBilateral  = true;
+
+                        TrueTip t;
+                        t.skelPoint     = snapWorld;
+                        t.bilateralTip  = bilateralWorld;
+                        t.hasBilateral  = true;
+                        if (bestPeak >= 0) {
+                            const cv::Point2f peakLocal = contourLocal[bestPeak];
+                            const cv::Point2f peakWorld(peakLocal.x + originOffset.x,
+                                                        peakLocal.y + originOffset.y);
+                            t.point     = peakWorld;
+                            t.curvature = curvature[bestPeak];
+                            t.width     = widthAt(peakLocal, bestPeak);
+                            t.extended  = true;
+                            capDbg.peakOrSnapPoint = peakWorld;
+                            capDbg.hadPeak         = true;
+                        } else {
+                            t.point     = snapWorld;
+                            t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
+                            t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
+                            t.extended  = false;
+                        }
+                        r.tips.push_back(t);
+                        r.tipCapDebug.push_back(capDbg);
+                        continue; // skip the fallback TrueTip construction below
+                    }
+                }
+            }
+
+            // Fallback path: bilateral not available. Fill in comparison fields.
+            if (bestPeak >= 0) {
+                const cv::Point2f peakWorld(contourLocal[bestPeak].x + originOffset.x,
+                                            contourLocal[bestPeak].y + originOffset.y);
+                capDbg.peakOrSnapPoint = peakWorld;
+                capDbg.hadPeak         = true;
+            }
+            r.tipCapDebug.push_back(capDbg);
+        }
+
+        // Fallback (no valid bilateral): construct TrueTip with snap/peak only.
         TrueTip t;
         t.skelPoint = snapWorld;
         if (bestPeak >= 0) {

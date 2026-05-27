@@ -232,6 +232,321 @@ static bool validPoint(const cv::Point2f& point)
     return point.x >= 0.f && point.y >= 0.f;
 }
 
+// ── Tip cap debug images ─────────────────────────────────────────────────────
+//
+// Two helper functions:
+//   writeTipCapOverviewStage   — full-frame view, all tips, contour coloured
+//                                by cap classification (left/right/outside)
+//   writeTipCapZoomStage       — per-tip zoomed close-up showing all the
+//                                computed landmarks and comparison points
+
+static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
+                                     const Debug::CenterlineFrameDebug& record,
+                                     const cv::Rect& bounds,
+                                     const QString& outputDir)
+{
+    if (record.tipCapDebug.empty()) return;
+
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+
+    // Draw each contour point, coloured by which tip-cap zone it belongs to.
+    // Points can appear in multiple caps; the last colour written wins.
+    // Outside-cap points use the standard green contour colour.
+    std::map<std::pair<int,int>, cv::Scalar> pixelColor;
+    for (const cv::Point& cp : blob.contourPoints) {
+        pixelColor[{cp.x, cp.y}] = cv::Scalar(0, 180, 0); // default: outside-cap green
+    }
+    for (int ti = 0; ti < static_cast<int>(record.tipCapDebug.size()); ++ti) {
+        const Tracking::TipCapDebug& cd = record.tipCapDebug[ti];
+        if (!cd.valid) continue;
+        const cv::Scalar leftColor  = cv::Scalar(255, 200,  50);  // cyan-gold: left side
+        const cv::Scalar rightColor = cv::Scalar( 50, 120, 255);  // orange-red: right side
+        for (const cv::Point2f& wp : cd.leftCapPoints) {
+            pixelColor[{static_cast<int>(std::lround(wp.x)),
+                        static_cast<int>(std::lround(wp.y))}] = leftColor;
+        }
+        for (const cv::Point2f& wp : cd.rightCapPoints) {
+            pixelColor[{static_cast<int>(std::lround(wp.x)),
+                        static_cast<int>(std::lround(wp.y))}] = rightColor;
+        }
+    }
+    for (const auto& [xy, color] : pixelColor) {
+        const cv::Point cp = worldToCanvas(cv::Point2f(static_cast<float>(xy.first),
+                                                       static_cast<float>(xy.second)),
+                                           bounds);
+        cv::circle(canvas, cp, 2, color, cv::FILLED);
+    }
+
+    // Draw skeleton endpoint, search window arrow and lateral extents,
+    // apex centroids, bilateral midpoint, and old-snap/peak for each tip.
+    for (int ti = 0; ti < static_cast<int>(record.tipCapDebug.size()); ++ti) {
+        const Tracking::TipCapDebug& cd = record.tipCapDebug[ti];
+        if (!cd.valid) continue;
+        const QString& role = (ti < static_cast<int>(record.tipCapRoles.size()))
+                              ? record.tipCapRoles[ti] : QString();
+
+        const cv::Point epCv   = worldToCanvas(cd.skelEndpoint, bounds);
+        const cv::Point2f fwdEnd(cd.skelEndpoint.x + cd.outwardDir.x * cd.maxForward,
+                                 cd.skelEndpoint.y + cd.outwardDir.y * cd.maxForward);
+        const cv::Point2f perpDir(-cd.outwardDir.y, cd.outwardDir.x);
+        const cv::Point2f sideL(cd.skelEndpoint.x + perpDir.x * cd.maxSide,
+                                cd.skelEndpoint.y + perpDir.y * cd.maxSide);
+        const cv::Point2f sideR(cd.skelEndpoint.x - perpDir.x * cd.maxSide,
+                                cd.skelEndpoint.y - perpDir.y * cd.maxSide);
+
+        // Outward direction arrow
+        cv::arrowedLine(canvas, epCv, worldToCanvas(fwdEnd, bounds),
+                        cv::Scalar(200, 200, 200), 1, cv::LINE_AA, 0, 0.15);
+        // Lateral extent ticks
+        cv::line(canvas, worldToCanvas(sideL, bounds), worldToCanvas(sideR, bounds),
+                 cv::Scalar(80, 80, 80), 1, cv::LINE_AA);
+
+        // Skeleton endpoint (white circle)
+        cv::circle(canvas, epCv, 5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+
+        // Old snap point (grey X)
+        if (validPoint(cd.snapPoint)) {
+            const cv::Point sp = worldToCanvas(cd.snapPoint, bounds);
+            cv::drawMarker(canvas, sp, cv::Scalar(180, 180, 180),
+                           cv::MARKER_CROSS, 9, 1, cv::LINE_AA);
+        }
+        // Old curvature peak (magenta X) if different from snap
+        if (cd.hadPeak && validPoint(cd.peakOrSnapPoint)) {
+            const cv::Point pp = worldToCanvas(cd.peakOrSnapPoint, bounds);
+            cv::drawMarker(canvas, pp, cv::Scalar(255, 80, 255),
+                           cv::MARKER_TILTED_CROSS, 9, 1, cv::LINE_AA);
+        }
+
+        // Left apex (cyan filled circle)
+        if (cd.hasLeft && cd.hasBilateral) {
+            cv::circle(canvas, worldToCanvas(cd.leftApex, bounds),
+                       4, cv::Scalar(255, 220, 50), cv::FILLED);
+        }
+        // Right apex (orange filled circle)
+        if (cd.hasRight && cd.hasBilateral) {
+            cv::circle(canvas, worldToCanvas(cd.rightApex, bounds),
+                       4, cv::Scalar(50, 130, 255), cv::FILLED);
+        }
+        // Bilateral midpoint (yellow diamond)
+        if (cd.hasBilateral) {
+            const cv::Point bp = worldToCanvas(cd.bilateralTip, bounds);
+            const std::vector<cv::Point> diamond = {
+                bp + cv::Point(0, -7), bp + cv::Point(5, 0),
+                bp + cv::Point(0,  7), bp + cv::Point(-5, 0)
+            };
+            cv::fillConvexPoly(canvas, diamond, cv::Scalar(0, 240, 255));
+            cv::polylines(canvas, std::vector<std::vector<cv::Point>>{diamond},
+                          true, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+            const QString roleLabel = role.isEmpty()
+                ? QStringLiteral("tip%1 bilateral").arg(ti)
+                : QStringLiteral("%1 bilateral").arg(role);
+            drawText(canvas, roleLabel, bp + cv::Point(8, -4), cv::Scalar(0, 240, 255));
+        } else {
+            // No bilateral: label the snap instead
+            const QString roleLabel = role.isEmpty()
+                ? QStringLiteral("tip%1 snap (no bilateral)").arg(ti)
+                : QStringLiteral("%1 snap (no bilateral)").arg(role);
+            drawSmallText(canvas, roleLabel,
+                          worldToCanvas(cd.snapPoint, bounds) + cv::Point(8, -4));
+        }
+    }
+
+    drawTitle(canvas, QStringLiteral("02c tip cap overview  "
+                                     "cyan=left orange=right green=outside"));
+    drawText(canvas,
+             QStringLiteral("grey X = old snap  magenta X = old peak  "
+                            "cyan dot = left apex  orange dot = right apex  "
+                            "yellow diamond = bilateral midpoint"),
+             cv::Point(8, canvas.rows - 10));
+    drawCoordinateEdges(canvas, bounds);
+    writeStageImage(canvas, outputDir, QStringLiteral("02c_tip_cap_overview.png"));
+}
+
+// Renders a zoomed close-up of a single tip's cap region.
+// zoomScale is applied on top of kExportScale (so total = kExportScale × zoomScale).
+static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
+                                 const Debug::CenterlineFrameDebug& record,
+                                 const Tracking::TipCapDebug& cd,
+                                 const QString& role,
+                                 const QString& fileName,
+                                 const QString& outputDir)
+{
+    if (!cd.valid) return;
+
+    // Build a local crop centred on the skeleton endpoint.
+    constexpr int kZoomScale   = 3;
+    constexpr int kZoomPad     = 6; // extra world-pixel padding around cap window
+    const float halfW = cd.maxSide  + static_cast<float>(kZoomPad);
+    const float halfH = cd.maxForward * 1.1f + static_cast<float>(kZoomPad);
+
+    // Bounding box in world coords (axis-aligned, generous).
+    const cv::Point2f ep = cd.skelEndpoint;
+    const int wxMin = static_cast<int>(std::floor(ep.x - halfW - halfH));
+    const int wyMin = static_cast<int>(std::floor(ep.y - halfW - halfH));
+    const int wxMax = static_cast<int>(std::ceil( ep.x + halfW + halfH));
+    const int wyMax = static_cast<int>(std::ceil( ep.y + halfW + halfH));
+    const cv::Rect zBounds(wxMin, wyMin,
+                           std::max(1, wxMax - wxMin),
+                           std::max(1, wyMax - wyMin));
+
+    // Base canvas: mask fill + contour at kZoomScale.
+    const int totalScale = kExportScale * kZoomScale;
+    const int cW = zBounds.width  * totalScale;
+    const int cH = zBounds.height * totalScale;
+
+    auto worldToCrop = [&](const cv::Point2f& w) -> cv::Point {
+        return cv::Point(
+            static_cast<int>(std::lround((w.x - zBounds.x) * totalScale)),
+            static_cast<int>(std::lround((w.y - zBounds.y) * totalScale)));
+    };
+
+    cv::Mat canvas = cv::Mat::zeros(cH, cW, CV_8UC3);
+
+    // Render mask fill.
+    {
+        cv::Mat zMask = cv::Mat::zeros(zBounds.height, zBounds.width, CV_8UC1);
+        std::vector<cv::Point> outer;
+        outer.reserve(blob.contourPoints.size());
+        for (const cv::Point& p : blob.contourPoints) {
+            outer.push_back(cv::Point(p.x - zBounds.x, p.y - zBounds.y));
+        }
+        if (!outer.empty())
+            cv::fillPoly(zMask, std::vector<std::vector<cv::Point>>{outer}, cv::Scalar(255));
+        cv::Mat zMaskUp;
+        cv::resize(zMask, zMaskUp, cv::Size(cW, cH), 0, 0, cv::INTER_NEAREST);
+        canvas.setTo(cv::Scalar(50, 50, 50), zMaskUp == 255);
+    }
+
+    // Colour contour points by cap zone.
+    for (const cv::Point& cp : blob.contourPoints) {
+        const cv::Point2f wp(static_cast<float>(cp.x), static_cast<float>(cp.y));
+        const cv::Point cc = worldToCrop(wp);
+        if (cc.x < 0 || cc.y < 0 || cc.x >= cW || cc.y >= cH) continue;
+        cv::circle(canvas, cc, 2, cv::Scalar(0, 180, 0), cv::FILLED); // default green
+    }
+    for (const cv::Point2f& wp : cd.leftCapPoints) {
+        const cv::Point cc = worldToCrop(wp);
+        if (cc.x >= 0 && cc.y >= 0 && cc.x < cW && cc.y < cH)
+            cv::circle(canvas, cc, 3, cv::Scalar(255, 220, 50), cv::FILLED);
+    }
+    for (const cv::Point2f& wp : cd.rightCapPoints) {
+        const cv::Point cc = worldToCrop(wp);
+        if (cc.x >= 0 && cc.y >= 0 && cc.x < cW && cc.y < cH)
+            cv::circle(canvas, cc, 3, cv::Scalar(50, 130, 255), cv::FILLED);
+    }
+
+    // Search window boundary: forward cap rectangle in the outward direction.
+    {
+        const cv::Point2f D  = cd.outwardDir;
+        const cv::Point2f P(-D.y, D.x);
+        // Four corners of the search window.
+        const std::vector<cv::Point2f> corners = {
+            ep + P *  cd.maxSide + D * (-1.f),
+            ep + P *  cd.maxSide + D * cd.maxForward,
+            ep + P * -cd.maxSide + D * cd.maxForward,
+            ep + P * -cd.maxSide + D * (-1.f),
+        };
+        std::vector<cv::Point> cpts;
+        for (const cv::Point2f& c : corners) cpts.push_back(worldToCrop(c));
+        cv::polylines(canvas, std::vector<std::vector<cv::Point>>{cpts},
+                      true, cv::Scalar(60, 60, 60), 1, cv::LINE_AA);
+    }
+
+    // Lateral midline at forward = 0 (skeleton endpoint level).
+    {
+        const cv::Point2f P(-cd.outwardDir.y, cd.outwardDir.x);
+        cv::line(canvas,
+                 worldToCrop(ep + P * cd.maxSide),
+                 worldToCrop(ep - P * cd.maxSide),
+                 cv::Scalar(70, 70, 70), 1, cv::LINE_AA);
+    }
+
+    // Outward direction arrow.
+    {
+        const cv::Point2f tip2(ep.x + cd.outwardDir.x * cd.maxForward,
+                               ep.y + cd.outwardDir.y * cd.maxForward);
+        cv::arrowedLine(canvas, worldToCrop(ep), worldToCrop(tip2),
+                        cv::Scalar(200, 200, 200), 1, cv::LINE_AA, 0, 0.12);
+    }
+
+    // Skeleton endpoint (white circle).
+    cv::circle(canvas, worldToCrop(ep), 6, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+
+    // Old snap point (grey X).
+    if (validPoint(cd.snapPoint)) {
+        cv::drawMarker(canvas, worldToCrop(cd.snapPoint),
+                       cv::Scalar(180, 180, 180), cv::MARKER_CROSS, 14, 1, cv::LINE_AA);
+        drawSmallText(canvas, QStringLiteral("snap"),
+                      worldToCrop(cd.snapPoint) + cv::Point(7, -4),
+                      cv::Scalar(180, 180, 180));
+    }
+    // Old curvature peak (magenta tilted X) if different.
+    if (cd.hadPeak && validPoint(cd.peakOrSnapPoint)) {
+        cv::drawMarker(canvas, worldToCrop(cd.peakOrSnapPoint),
+                       cv::Scalar(255, 80, 255), cv::MARKER_TILTED_CROSS, 14, 1, cv::LINE_AA);
+        drawSmallText(canvas, QStringLiteral("peak"),
+                      worldToCrop(cd.peakOrSnapPoint) + cv::Point(7, 4),
+                      cv::Scalar(255, 80, 255));
+    }
+
+    // Left apex centroid (cyan filled) + right apex (orange filled).
+    if (cd.hasLeft && cd.hasBilateral) {
+        cv::circle(canvas, worldToCrop(cd.leftApex),
+                   6, cv::Scalar(255, 220, 50), cv::FILLED);
+        drawSmallText(canvas, QStringLiteral("L apex fwd=%1")
+                      .arg(cd.leftPeakFwd, 0, 'f', 1),
+                      worldToCrop(cd.leftApex) + cv::Point(8, 0),
+                      cv::Scalar(255, 220, 50));
+    }
+    if (cd.hasRight && cd.hasBilateral) {
+        cv::circle(canvas, worldToCrop(cd.rightApex),
+                   6, cv::Scalar(50, 130, 255), cv::FILLED);
+        drawSmallText(canvas, QStringLiteral("R apex fwd=%1")
+                      .arg(cd.rightPeakFwd, 0, 'f', 1),
+                      worldToCrop(cd.rightApex) + cv::Point(8, 0),
+                      cv::Scalar(50, 130, 255));
+    }
+
+    // Bilateral midpoint (yellow diamond, large + label).
+    if (cd.hasBilateral) {
+        const cv::Point bp = worldToCrop(cd.bilateralTip);
+        const std::vector<cv::Point> diamond = {
+            bp + cv::Point(0, -10), bp + cv::Point(8, 0),
+            bp + cv::Point(0,  10), bp + cv::Point(-8, 0)
+        };
+        cv::fillConvexPoly(canvas, diamond, cv::Scalar(0, 240, 255));
+        cv::polylines(canvas, std::vector<std::vector<cv::Point>>{diamond},
+                      true, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+        drawSmallText(canvas, QStringLiteral("bilateral"),
+                      bp + cv::Point(11, -3), cv::Scalar(0, 240, 255));
+        // Line connecting the two apexes through the midpoint.
+        if (cd.hasLeft && cd.hasRight) {
+            cv::line(canvas, worldToCrop(cd.leftApex), worldToCrop(cd.rightApex),
+                     cv::Scalar(0, 180, 180), 1, cv::LINE_AA);
+        }
+    }
+
+    // Build the title line.
+    const float snap2bilateral = (cd.hasBilateral && validPoint(cd.snapPoint))
+        ? pointDistance(cd.bilateralTip, cd.snapPoint) : -1.f;
+    const float peak2bilateral = (cd.hasBilateral && cd.hadPeak)
+        ? pointDistance(cd.bilateralTip, cd.peakOrSnapPoint) : -1.f;
+    QString title = QStringLiteral("02d tip cap zoom  %1  bilateral=%2  "
+                                   "fwd L=%3 R=%4  sanity=%5")
+        .arg(role.isEmpty() ? QStringLiteral("tip") : role)
+        .arg(cd.hasBilateral ? QStringLiteral("YES") : QStringLiteral("NO"))
+        .arg(cd.leftPeakFwd, 0, 'f', 1)
+        .arg(cd.rightPeakFwd, 0, 'f', 1)
+        .arg(cd.sanityPassed ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
+    if (snap2bilateral >= 0.f)
+        title += QStringLiteral("  snap→bilateral=%1px").arg(snap2bilateral, 0, 'f', 2);
+    if (peak2bilateral >= 0.f)
+        title += QStringLiteral("  peak→bilateral=%1px").arg(peak2bilateral, 0, 'f', 2);
+    drawTitle(canvas, title);
+
+    writeStageImage(canvas, outputDir, fileName);
+}
+
 static void writeCenterlineStage(const Tracking::DetectedBlob& blob,
                                  const cv::Rect& bounds,
                                  const std::vector<cv::Point2f>& centerline,
@@ -758,6 +1073,17 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     writeContourCurvatureStage(blob, record, bounds, outputDir);
     writeTipStage(blob, record, bounds, outputDir);
     writeHeadTailStage(blob, record, bounds, outputDir);
+    writeTipCapOverviewStage(blob, record, bounds, outputDir);
+    // Per-tip zoomed close-ups — head first (if present), then tail.
+    for (int ti = 0; ti < static_cast<int>(record.tipCapDebug.size()); ++ti) {
+        const QString& role = (ti < static_cast<int>(record.tipCapRoles.size()))
+                              ? record.tipCapRoles[ti] : QString();
+        const QString fileSuffix = role.isEmpty()
+            ? QStringLiteral("tip%1").arg(ti) : role;
+        writeTipCapZoomStage(blob, record, record.tipCapDebug[ti],
+                             role, QStringLiteral("02d_tip_cap_%1.png").arg(fileSuffix),
+                             outputDir);
+    }
     writeHiddenPredictionMaskDiffStage(blob,
                                        hasPreviousBlob ? &previousBlob : nullptr,
                                        record,
@@ -875,6 +1201,42 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
             << " curvature=" << tip.curvature
             << " width=" << tip.width
             << " source=" << static_cast<int>(tip.source) << "\n";
+    }
+    log << "\n--- Bilateral cap-midpoint selection ---\n";
+    log << "tipCapDebug entries=" << record.tipCapDebug.size() << "\n";
+    for (int i = 0; i < static_cast<int>(record.tipCapDebug.size()); ++i) {
+        const Tracking::TipCapDebug& cd = record.tipCapDebug[i];
+        const QString& role = (i < static_cast<int>(record.tipCapRoles.size()))
+                              ? record.tipCapRoles[i] : QString();
+        log << "  tip" << i << " role=" << (role.isEmpty() ? QStringLiteral("?") : role) << "\n";
+        if (!cd.valid) { log << "    (no bilateral debug captured)\n"; continue; }
+        log << "    skelEndpoint=" << pointString(cd.skelEndpoint)
+            << " outwardDir=(" << cd.outwardDir.x << "," << cd.outwardDir.y << ")"
+            << " dtAtEp=" << cd.dtAtEp << "\n";
+        log << "    searchWindow: maxForward=" << cd.maxForward
+            << " maxSide=" << cd.maxSide
+            << " leftCapPts=" << cd.leftCapPoints.size()
+            << " rightCapPts=" << cd.rightCapPoints.size() << "\n";
+        log << "    leftPeakFwd=" << cd.leftPeakFwd
+            << " rightPeakFwd=" << cd.rightPeakFwd
+            << " hasLeft=" << (cd.hasLeft ? "Y" : "N")
+            << " hasRight=" << (cd.hasRight ? "Y" : "N")
+            << " sanityPassed=" << (cd.sanityPassed ? "Y" : "N") << "\n";
+        if (cd.hasBilateral) {
+            log << "    leftApex=" << pointString(cd.leftApex)
+                << " rightApex=" << pointString(cd.rightApex) << "\n";
+            log << "    bilateralTip=" << pointString(cd.bilateralTip) << "\n";
+        } else {
+            log << "    bilateral: NOT computed\n";
+        }
+        log << "    snapPoint=" << pointString(cd.snapPoint);
+        if (cd.hadPeak)
+            log << " peakPoint=" << pointString(cd.peakOrSnapPoint);
+        log << " hadPeak=" << (cd.hadPeak ? "Y" : "N") << "\n";
+        if (cd.hasBilateral && validPoint(cd.snapPoint))
+            log << "    snap→bilateral dist=" << pointDistance(cd.bilateralTip, cd.snapPoint) << "px\n";
+        if (cd.hasBilateral && cd.hadPeak)
+            log << "    peak→bilateral dist=" << pointDistance(cd.bilateralTip, cd.peakOrSnapPoint) << "px\n";
     }
     for (const QString& decision : record.decisions) {
         log << "decision: " << decision << "\n";

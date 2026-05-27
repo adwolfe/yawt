@@ -221,11 +221,13 @@ struct SkeletonGraph {
  * skeleton-endpoint contour snap.
  */
 struct TrueTip {
-    cv::Point2f point;       // world coords; either curvature peak or skel pt
-    cv::Point2f skelPoint;   // world coords; raw skeleton degree-1 node
-    float       curvature = 0.f;
-    float       width     = 0.f;
-    bool        extended  = false;
+    cv::Point2f point;          // world coords; either curvature peak or skel pt
+    cv::Point2f skelPoint;      // world coords; raw skeleton degree-1 node
+    cv::Point2f bilateralTip;   // world coords; midpoint of left/right cap-wall apexes
+    float       curvature    = 0.f;
+    float       width        = 0.f;
+    bool        extended     = false;
+    bool        hasBilateral = false; // true when bilateralTip is valid
 };
 
 /**
@@ -259,6 +261,49 @@ inline QString topologyStateToString(TopologyState s) {
 }
 
 /**
+ * @brief Per-tip debug snapshot of the bilateral cap midpoint computation.
+ *
+ * Populated inside detectEndpoints() for every skeleton endpoint and carried
+ * on EndpointResult::tipCapDebug (parallel to EndpointResult::tips).
+ * Consumed only by the debug exporter — zero cost in release when unused.
+ *
+ * All point coordinates are in WORLD (video) space.
+ */
+struct TipCapDebug {
+    bool valid = false;
+
+    // Search window parameters (mirroring what detectEndpoints used).
+    cv::Point2f skelEndpoint;   // skeleton degree-1 node projected to contour snap
+    cv::Point2f outwardDir;     // normalised direction away from body interior
+    float dtAtEp    = 0.f;     // DT value at skeleton endpoint
+    float maxForward = 0.f;    // forward search limit (pixels)
+    float maxSide    = 0.f;    // lateral search limit (pixels)
+
+    // Contour points classified by which half-plane they fall in.
+    std::vector<cv::Point2f> leftCapPoints;    // fwd in window, left of outwardDir
+    std::vector<cv::Point2f> rightCapPoints;   // fwd in window, right of outwardDir
+    // (points outside the window are not stored — they are uncoloured on the canvas)
+
+    // Apex weighted centroids from the top-forward fraction of each side.
+    cv::Point2f leftApex;    // weighted centroid of top-forward left points
+    cv::Point2f rightApex;   // weighted centroid of top-forward right points
+    bool  hasLeft  = false;
+    bool  hasRight = false;
+    float leftPeakFwd  = 0.f;  // forward depth of the leftmost apex contour point
+    float rightPeakFwd = 0.f;  // forward depth of the rightmost apex contour point
+    bool  sanityPassed = false; // did the left/right apex depths agree well enough?
+
+    // Bilateral result.
+    cv::Point2f bilateralTip;
+    bool hasBilateral = false;
+
+    // Old-approach comparison points (for overlay in exporter).
+    cv::Point2f snapPoint;       // projectedEndpointContourIdx snap (= t.skelPoint)
+    cv::Point2f peakOrSnapPoint; // curvature peak if found, else same as snapPoint
+    bool hadPeak = false;        // true when a curvature peak was accepted
+};
+
+/**
  * @brief Combined output of `detectEndpoints()`.
  *
  * Bundles the skeleton graph, distance transform, true tips, topology
@@ -274,7 +319,8 @@ struct EndpointResult {
     SkeletonGraph        skeleton;
     cv::Mat              distTransform;        // CV_32F, local coords
     cv::Rect             localBounds;          // origin offset (LOCAL->WORLD)
-    std::vector<TrueTip> tips;                 // 0-2 entries (post-prune)
+    std::vector<TrueTip>     tips;             // 0-2 entries (post-prune)
+    std::vector<TipCapDebug> tipCapDebug;      // parallel to tips[], bilateral debug
     std::vector<cv::Point2f> contourPoints;    // WORLD coords, for curvature debug
     std::vector<float> contourCurvatures;      // Signed curvature, aligned with contourPoints
     std::vector<int> contourCurvaturePeaks;    // Indices into contourPoints

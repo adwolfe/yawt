@@ -124,10 +124,19 @@ static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
 
 static cv::Point2f trustedTipPointForCleanD1(const Tracking::TrueTip& tip)
 {
+    // Bilateral cap midpoint is the most stable estimate: it averages the
+    // furthest-forward cap contour points on both sides of the body axis, so
+    // single-pixel mask noise on one side is partially cancelled by the other.
+    // Use it whenever it was successfully computed.
+    if (tip.hasBilateral)
+        return tip.bilateralTip;
+
+    // Fallback: use the curvature-peak position only when it sits close to
+    // the raw contour snap (large shifts indicate the peak landed on a body
+    // kink rather than the genuine end-cap).
     constexpr float kMaxCleanD1Extension = 6.f;
-    if (!tip.extended || ptDist(tip.point, tip.skelPoint) > kMaxCleanD1Extension) {
+    if (!tip.extended || ptDist(tip.point, tip.skelPoint) > kMaxCleanD1Extension)
         return tip.skelPoint;
-    }
     return tip.point;
 }
 
@@ -2862,6 +2871,15 @@ void CenterlineWorker::doWork()
             debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
             debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
             debugRecord.tipCandidates = blob.tipCandidates;
+
+            // Copy bilateral cap debug — parallel to tipCandidates, with role labels.
+            debugRecord.tipCapDebug = er.tipCapDebug;
+            debugRecord.tipCapRoles.resize(er.tipCapDebug.size());
+            for (int ci = 0; ci < static_cast<int>(er.tipCapDebug.size()); ++ci) {
+                if (ci == blob.assignedHeadTipIdx)      debugRecord.tipCapRoles[ci] = QStringLiteral("head");
+                else if (ci == blob.assignedTailTipIdx) debugRecord.tipCapRoles[ci] = QStringLiteral("tail");
+                else                                    debugRecord.tipCapRoles[ci] = QString();
+            }
 
             // Sample baseline (curvature + width) on Clean frames with two
             // tips. Body-length sample is taken AFTER step 3 below using

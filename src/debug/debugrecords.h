@@ -105,6 +105,12 @@ struct CenterlineFrameDebug {
     std::vector<float> contourCurvatures;
     std::vector<int> contourCurvaturePeaks;
 
+    // Bilateral cap-midpoint debug — one entry per tip (parallel to tipCandidates).
+    // Populated whenever the new bilateral path ran (Clean frames primarily).
+    // tipCapRoles[i] is "head" / "tail" / "" matching tipCandidates[i].
+    std::vector<Tracking::TipCapDebug> tipCapDebug;
+    std::vector<QString>               tipCapRoles;
+
     std::vector<cv::Point2f> initialCenterline;
     std::vector<cv::Point2f> resampledCenterline;
     std::vector<cv::Point2f> finalCenterline;
