@@ -46,25 +46,6 @@ public:
     void setClearBaselinesAtStart(bool clearAtStart);
     void setSharedStorageMutex(const QSharedPointer<QMutex>& mutex);
 
-    /**
-     * @brief Diagnostic: re-runs the per-frame centerline pipeline for one
-     *        (wormId, frameNumber) using the supplied snake params, and writes
-     *        per-stage visualisation images plus a decision log to outputDir.
-     *
-     * Reads from `storage` only; never writes back. Predictor state is
-     *  reconstructed from the worm's blob in the immediately adjacent frame
-     * (frameNumber-1 if available, otherwise frameNumber+1) so head/tail
-     * assignment behaves like the live sweep on that frame.
-     *
-     * @return true on success. On false, *outErrorMsg (if non-null) is filled.
-     */
-    static bool exportProcessForFrame(TrackingDataStorage* storage,
-                                      int wormId,
-                                      int frameNumber,
-                                      const Tracking::CenterlineSnakeParams& snakeParams,
-                                      const QString& outputDir,
-                                      QString* outErrorMsg = nullptr);
-
 public slots:
     void doWork();
 

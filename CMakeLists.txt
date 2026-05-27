@@ -64,6 +64,7 @@ set(SOURCES
     src/core/trackingmanager.cpp
     src/core/wormtracker.cpp
     src/core/centerlineworker.cpp
+    src/core/centerlineprocessor.cpp
     src/core/appcontroller.cpp
 
     # Core processing
@@ -113,6 +114,7 @@ set(HEADERS
     src/core/trackingmanager.h
     src/core/wormtracker.h
     src/core/centerlineworker.h
+    src/core/centerlineprocessor.h
     src/core/appcontroller.h
 
     # Core processing
