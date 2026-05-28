@@ -81,8 +81,8 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    if (ui->tabWidget && ui->cleanupTab) {
-        const int debugTabIndex = ui->tabWidget->indexOf(ui->cleanupTab);
+    if (ui->tabWidget && ui->debugTab) {
+        const int debugTabIndex = ui->tabWidget->indexOf(ui->debugTab);
         if (debugTabIndex >= 0) {
             ui->tabWidget->setTabVisible(debugTabIndex, DebugUtils::isDebugCaptureEnabled());
         }
@@ -337,6 +337,9 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop);
+    connect(ui->videoLoader, &VideoLoader::frameChanged, this, [this](int, const QImage&) {
+        if (m_debugTabActive) runDebugExport(true);
+    });
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
@@ -558,6 +561,12 @@ void MainWindow::setupConnections() {
         }
     });
 
+    // Debug tab auto-export on worm selection change
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection&, const QItemSelection&) {
+        if (m_debugTabActive) runDebugExport(true);
+    });
+
     // Playback speed control
     connect(ui->comboPlaybackSpeed, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onPlaybackSpeedChanged);
@@ -621,6 +630,12 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onRerunCenterlineClicked);
     connect(ui->exportProcessButton, &QPushButton::clicked,
             this, &MainWindow::onExportProcessClicked);
+    connect(ui->debugImageTable, &QTableWidget::itemSelectionChanged,
+            this, &MainWindow::onDebugImageTableSelectionChanged);
+    connect(ui->tabWidget, &QTabWidget::currentChanged, this, [this](int index) {
+        const bool isDebug = (ui->tabWidget->widget(index) == ui->debugTab);
+        onDebugTabChanged(isDebug);
+    });
     if (m_appController) {
         connect(m_appController, &AppController::centerlineProgress,
                 this, &MainWindow::onDebugCenterlineProgress);
@@ -834,6 +849,7 @@ void MainWindow::onViewTracksToggled(bool checked) {
 }
 void MainWindow::onViewSkeletonsToggled(bool checked) {
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Skeletons, checked);
+    if (ui->miniLoader) ui->miniLoader->setShowSkeleton(checked);
 }
 // Optional:
 // void MainWindow::onViewNoneClicked() {
@@ -872,6 +888,7 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
 
     const bool showOverlays = newModes.testFlag(VideoLoader::ViewModeOption::Blobs);
     if (ui->miniLoader) ui->miniLoader->setShowOverlays(showOverlays);
+    if (ui->miniLoader) ui->miniLoader->setShowSkeleton(newModes.testFlag(VideoLoader::ViewModeOption::Skeletons));
 
     if (ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
         int currentFrame = ui->videoLoader->getCurrentFrameNumber();
@@ -1303,7 +1320,7 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
 }
 
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
-    if (!ui->miniLoader || currentFrame.isNull()) {
+    if (!ui->miniLoader || currentFrame.isNull() || m_debugTabActive) {
         return;
     }
 
@@ -1355,18 +1372,9 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         }
     }
 
-    // Second priority: use MiniLoader's last known center point
     if (!foundCenterPoint) {
-       const QPointF lastCenter = ui->miniLoader->getLastCenterPoint();
-        if (!lastCenter.isNull() && lastCenter.x() >= 0 && lastCenter.y() >= 0) {
-            centerPoint = lastCenter;
-            foundCenterPoint = true;
-        }
-    }
-
-    // Third priority: use center of the provided (central) image
-    if (!foundCenterPoint) {
-        centerPoint = QPointF(currentFrame.width() / 2.0, currentFrame.height() / 2.0);
+        ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, QImage(), QPointF(), QSizeF(), QPointF());
+        return;
     }
 
     // Calculate the crop rectangle (same for all frames we will send)
@@ -1697,7 +1705,8 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     if (!tracks.empty()) { // Optionally switch to tracks view
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
         ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::PanZoom);
-        ui->wormTableView->selectAll();
+        if (m_wormProxyModel && m_wormProxyModel->rowCount() > 0)
+            ui->wormTableView->selectRow(0);
         // ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditTracks); // If desired
     }
 
@@ -1984,13 +1993,12 @@ void MainWindow::onDebugCenterlineFinished()
 
 }
 
-void MainWindow::onExportProcessClicked()
+void MainWindow::runDebugExport(bool silent)
 {
-    // Resolve the currently selected worm in the worm table.
+    // Resolve selected worm
     int wormId = -1;
     if (ui->wormTableView->selectionModel() && m_wormProxyModel && m_blobTableModel) {
-        const QModelIndexList sel =
-            ui->wormTableView->selectionModel()->selectedIndexes();
+        const QModelIndexList sel = ui->wormTableView->selectionModel()->selectedIndexes();
         if (!sel.isEmpty()) {
             const QModelIndex proxyIdx = m_wormProxyModel->index(sel.first().row(), 0);
             const QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
@@ -1999,75 +2007,131 @@ void MainWindow::onExportProcessClicked()
         }
     }
     if (wormId < 0) {
-        QMessageBox::information(this, "Export Process",
+        if (!silent) QMessageBox::information(this, "Export Process",
             "Select a worm in the worm table first.");
         return;
     }
 
     const int frame = ui->videoLoader ? ui->videoLoader->getCurrentFrameNumber() : -1;
     if (frame < 0) {
-        QMessageBox::warning(this, "Export Process", "No current frame available.");
+        if (!silent) QMessageBox::warning(this, "Export Process", "No current frame available.");
         return;
     }
 
     const QString dataDir = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
     if (dataDir.isEmpty()) {
-        QMessageBox::warning(this, "Export Process",
+        if (!silent) QMessageBox::warning(this, "Export Process",
             "No yawt data directory available. Load a video first.");
         return;
     }
 
-    const QString videoPath = ui->videoLoader ? ui->videoLoader->getCurrentVideoPath() : QString();
-    const QString videoBaseName = QFileInfo(videoPath).completeBaseName();
+    const QString videoBaseName = QFileInfo(
+        ui->videoLoader ? ui->videoLoader->getCurrentVideoPath() : QString()).completeBaseName();
     if (videoBaseName.isEmpty()) {
-        QMessageBox::warning(this, "Export Process",
+        if (!silent) QMessageBox::warning(this, "Export Process",
             "No current video name available.");
         return;
     }
 
     const QString videoSpecificDir = QDir(dataDir).absoluteFilePath(videoBaseName);
-    QDir videoDir(videoSpecificDir);
-    const QStringList procDirs = videoDir.entryList(QStringList() << "PROC_*",
-                                                    QDir::Dirs | QDir::NoDotAndDotDot,
-                                                    QDir::Name);
+    const QStringList procDirs = QDir(videoSpecificDir).entryList(
+        QStringList() << "PROC_*", QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     if (procDirs.isEmpty()) {
-        QMessageBox::warning(this, "Export Process",
+        if (!silent) QMessageBox::warning(this, "Export Process",
             QString("No processing output directory found under:\n%1\n\nRun tracking first.")
                 .arg(videoSpecificDir));
         return;
     }
 
-    const QString processingDir = videoDir.absoluteFilePath(procDirs.constLast());
-    const QString outDir = QDir(processingDir).absoluteFilePath(
-        QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
+    const QString outDir = QDir(QDir(videoSpecificDir).absoluteFilePath(procDirs.constLast()))
+        .absoluteFilePath(QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
     if (!QDir().mkpath(outDir)) {
-        QMessageBox::warning(this, "Export Process",
+        if (!silent) QMessageBox::warning(this, "Export Process",
             QString("Could not create output directory:\n%1").arg(outDir));
         return;
     }
 
     ui->exportProcessButton->setEnabled(false);
     ui->centerlineDebugStatusLabel->setText(
-        QString("Exporting worm %1 frame %2...").arg(wormId).arg(frame));
-    QApplication::processEvents();
+        QString("worm %1  frame %2").arg(wormId).arg(frame));
+    if (!silent) QApplication::processEvents();
 
     QString err;
     const bool ok = Debug::DebugExporter::exportCenterlineFrame(
         m_trackingDataStorage,
         m_appController ? m_appController->debugDataStore() : nullptr,
-        wormId,
-        frame,
-        outDir,
-        &err);
+        wormId, frame, outDir, &err);
 
     ui->exportProcessButton->setEnabled(true);
     if (ok) {
-        ui->centerlineDebugStatusLabel->setText(
-            QString("Exported to %1").arg(outDir));
+        m_debugExportDir = outDir;
+        populateDebugImageTable(outDir);
     } else {
         ui->centerlineDebugStatusLabel->setText(QString("Export failed: %1").arg(err));
-        QMessageBox::warning(this, "Export Process",
+        if (!silent) QMessageBox::warning(this, "Export Process",
             QString("Export failed: %1").arg(err));
+    }
+}
+
+void MainWindow::onExportProcessClicked()
+{
+    runDebugExport(false);
+}
+
+void MainWindow::populateDebugImageTable(const QString& dir)
+{
+    ui->debugImageTable->clearContents();
+    ui->debugImageTable->setRowCount(0);
+
+    const QStringList pngFiles = QDir(dir).entryList(
+        QStringList() << "*.png", QDir::Files, QDir::Name);
+
+    ui->debugImageTable->setRowCount(pngFiles.size());
+    for (int i = 0; i < pngFiles.size(); ++i) {
+        auto* item = new QTableWidgetItem(QFileInfo(pngFiles[i]).completeBaseName());
+        item->setData(Qt::UserRole, QDir(dir).absoluteFilePath(pngFiles[i]));
+        ui->debugImageTable->setItem(i, 0, item);
+    }
+    ui->debugImageTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+
+    if (!pngFiles.isEmpty())
+        ui->debugImageTable->selectRow(0);
+}
+
+void MainWindow::onDebugImageTableSelectionChanged()
+{
+    const QList<QTableWidgetItem*> selected = ui->debugImageTable->selectedItems();
+    if (selected.isEmpty() || !ui->miniLoader) return;
+
+    const QString path = selected.first()->data(Qt::UserRole).toString();
+    if (path.isEmpty()) return;
+
+    const QImage img(path);
+    if (img.isNull()) return;
+
+    ui->miniLoader->updateWithCroppedFrame(
+        -1, img, QPointF(0, 0),
+        QSizeF(img.width(), img.height()), QPointF(img.width() / 2.0, img.height() / 2.0));
+}
+
+void MainWindow::onDebugTabChanged(bool active)
+{
+    m_debugTabActive = active;
+
+    if (active) {
+        runDebugExport(true);
+    } else {
+        // Restore normal miniLoader view
+        if (ui->miniLoader && ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
+            const int frame = ui->videoLoader->getCurrentFrameNumber();
+            const QImage img = ui->videoLoader->getCurrentQImageFrame();
+            if (!img.isNull())
+                updateMiniLoaderCrop(frame, img);
+            else
+                ui->miniLoader->updateWithCroppedFrame(-1, QImage(), QPointF(), QSizeF(), QPointF());
+        } else if (ui->miniLoader) {
+            ui->miniLoader->updateWithCroppedFrame(-1, QImage(), QPointF(), QSizeF(), QPointF());
+        }
     }
 }
 

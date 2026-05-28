@@ -175,6 +175,7 @@ public slots:
     void syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes); // Updated for QFlags
     void onPlaybackStateChanged(bool isPlaying, double currentSpeed);
     void resultsButtonClicked();
+    void onDebugImageTableSelectionChanged();
 
 private:
     void setupConnections();
@@ -184,6 +185,9 @@ private:
     void updateWormTimeline();
     bool applyThresholdSettingsFromJsonFile(const QString& filePath);
     bool loadRunFromDirectoryInternal(const QString& directoryPath);
+    void populateDebugImageTable(const QString& dir);
+    void onDebugTabChanged(bool active);
+    void runDebugExport(bool silent);
 
     /**
      * Keep the mirrored play/pause buttons in sync with the current playback state.
@@ -244,6 +248,9 @@ private:
     /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;
 
+    // Debug image viewer state
+    QString m_debugExportDir;   // last successful export output directory
+    bool m_debugTabActive = false; // true while the Debug tab is the current tab
 };
 
 #endif // MAINWINDOW_H

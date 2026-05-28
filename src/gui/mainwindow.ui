@@ -401,7 +401,7 @@
               <bool>true</bool>
              </property>
              <property name="autoRaise">
-              <bool>true</bool>
+              <bool>false</bool>
              </property>
             </widget>
            </item>
@@ -1202,11 +1202,11 @@ QToolButton#lastFrameButton {
              </item>
             </layout>
            </widget>
-           <widget class="QWidget" name="cleanupTab">
+           <widget class="QWidget" name="centerlinesTab">
             <attribute name="title">
-             <string>Debug</string>
+             <string>Centerlines</string>
             </attribute>
-            <layout class="QVBoxLayout" name="debugTabLayout">
+            <layout class="QVBoxLayout" name="centerlinesTabLayout">
              <item>
               <widget class="QGroupBox" name="snakeDebugGroup">
                <property name="title">
@@ -1440,6 +1440,34 @@ QToolButton#lastFrameButton {
                <property name="wordWrap">
                 <bool>true</bool>
                </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+           <widget class="QWidget" name="debugTab">
+            <attribute name="title">
+             <string>Debug</string>
+            </attribute>
+            <layout class="QVBoxLayout" name="debugTabLayout">
+             <item>
+              <widget class="QTableWidget" name="debugImageTable">
+               <property name="selectionBehavior">
+                <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+               </property>
+               <property name="selectionMode">
+                <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
+               </property>
+               <property name="editTriggers">
+                <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
+               </property>
+               <property name="alternatingRowColors">
+                <bool>true</bool>
+               </property>
+               <column>
+                <property name="text">
+                 <string>Stage</string>
+                </property>
+               </column>
               </widget>
              </item>
              <item>

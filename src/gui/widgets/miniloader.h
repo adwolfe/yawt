@@ -47,6 +47,9 @@ public:
     void setShowOverlays(bool show);
     bool showOverlays() const;
 
+    void setShowSkeleton(bool show);
+    bool showSkeleton() const;
+
     /**
      * @brief Gets the currently selected worm ID.
      * @return The worm ID, or -1 if no worm is selected
@@ -204,6 +207,7 @@ private:
     // Overlay functionality
     TrackingDataStorage* m_trackingDataStorage;  // Reference to tracking data storage
     bool m_showOverlays;                         // Whether to draw overlays
+    bool m_showSkeleton;                         // Whether to draw the centerline skeleton
     int m_selectedWormId;                        // Currently selected worm ID (-1 for none)
 
     // Simple storage of currently visible worm IDs (updated each paint/draw)

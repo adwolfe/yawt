@@ -13,6 +13,7 @@ MiniLoader::MiniLoader(QWidget* parent)
     , m_cropSize(100, 100)
     , m_trackingDataStorage(nullptr)
     , m_showOverlays(true)
+    , m_showSkeleton(false)
     , m_selectedWormId(-1)
 {
     setMinimumSize(100, 100);
@@ -121,6 +122,18 @@ void MiniLoader::clearSelection()
 bool MiniLoader::showOverlays() const
 {
     return m_showOverlays;
+}
+
+void MiniLoader::setShowSkeleton(bool show)
+{
+    if (m_showSkeleton == show) return;
+    m_showSkeleton = show;
+    update();
+}
+
+bool MiniLoader::showSkeleton() const
+{
+    return m_showSkeleton;
 }
 
 int MiniLoader::getSelectedWorm() const
@@ -554,6 +567,38 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
                 painter.setPen(QPen(QColor(255, 200, 60), 2));
                 painter.setBrush(Qt::NoBrush);
                 painter.drawPolygon(fullWidgetPoly);
+            }
+        }
+    }
+
+    // Draw centerline skeletons for all visible blobs if enabled
+    if (m_showSkeleton) {
+        for (int wormId : m_visibleWormIds) {
+            if (!blobMap.contains(wormId)) continue;
+            const Tracking::DetectedBlob& blob = blobMap.value(wormId);
+            if (!blob.isValid || blob.centerlinePoints.empty()) continue;
+
+            QPolygonF linePoly;
+            for (const cv::Point2f& pt : blob.centerlinePoints) {
+                QPointF cropLocal(pt.x - m_cropOffset.x(), pt.y - m_cropOffset.y());
+                QPointF widget(
+                    targetRect.left() + cropLocal.x() * targetRect.width()  / m_croppedFrame.width(),
+                    targetRect.top()  + cropLocal.y() * targetRect.height() / m_croppedFrame.height());
+                linePoly << widget;
+            }
+
+            if (linePoly.size() >= 2) {
+                const bool isSelected = (wormId == m_selectedWormId);
+                painter.setPen(QPen(isSelected ? QColor(255, 255, 0) : QColor(0, 220, 255), isSelected ? 2.0 : 1.5));
+                painter.setBrush(Qt::NoBrush);
+                for (int i = 0; i < linePoly.size() - 1; ++i)
+                    painter.drawLine(linePoly[i], linePoly[i + 1]);
+
+                // Draw tip dots
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(isSelected ? QColor(255, 100, 0) : QColor(0, 180, 255));
+                painter.drawEllipse(linePoly.first(), 3.0, 3.0);
+                painter.drawEllipse(linePoly.last(),  3.0, 3.0);
             }
         }
     }
