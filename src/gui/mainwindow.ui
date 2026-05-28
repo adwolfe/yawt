@@ -375,7 +375,7 @@
              </property>
              <property name="icon">
               <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/trax_alt-arrow.svg</normaloff>:/resources/trax_alt-arrow.svg</iconset>
+               <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
              </property>
              <property name="checkable">
               <bool>true</bool>

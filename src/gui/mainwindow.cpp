@@ -429,11 +429,11 @@ void MainWindow::setupConnections() {
 
         QAction* centroidAction = trackMenu->addAction("Centroid track");
         centroidAction->setCheckable(true);
-        centroidAction->setChecked(true);
         trackModeGroup->addAction(centroidAction);
 
         QAction* clMidAction = trackMenu->addAction("Centerline midpoint track");
         clMidAction->setCheckable(true);
+        clMidAction->setChecked(true);
         trackModeGroup->addAction(clMidAction);
 
         ui->viewTracksButton->setMenu(trackMenu);
