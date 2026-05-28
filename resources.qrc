@@ -11,5 +11,8 @@
         <file>resources/poke.svg</file>
         <file>resources/thresh_alt.svg</file>
         <file>resources/roi.svg</file>
+        <file>resources/points.svg</file>
+        <file>resources/trax_alt-arrow.svg</file>
+        <file>resources/centerline.svg</file>
     </qresource>
 </RCC>

@@ -79,22 +79,6 @@ MainWindow::MainWindow(QWidget *parent)
     , roiFactorSpinBoxD(1.5) // Initialize ROI factor to default value 1.5
 {
     ui->setupUi(this);
-    ui->pointButton->setText("SE");
-    ui->pointButton->setToolTip("Select Start/End points");
-    ui->pointButton->setStatusTip("Click once for Start, then once for End");
-    ui->pointButton->setCheckable(true);
-    ui->pointButton->setAutoRaise(true);
-    ui->pointButton->setIcon(QIcon());
-    ui->pointButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    ui->pointButton->setMinimumWidth(36);
-    ui->skeletonButton->setText("CL");
-    ui->skeletonButton->setToolTip("Show/Hide centerline");
-    ui->skeletonButton->setStatusTip("Show/hide skeletonized centerline overlay");
-    ui->skeletonButton->setCheckable(true);
-    ui->skeletonButton->setAutoRaise(true);
-    ui->skeletonButton->setIcon(QIcon());
-    ui->skeletonButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    ui->skeletonButton->setMinimumWidth(36);
 
     if (ui->tabWidget && ui->cleanupTab) {
         const int debugTabIndex = ui->tabWidget->indexOf(ui->cleanupTab);

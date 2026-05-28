@@ -1055,9 +1055,9 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             dotPen.setCosmetic(true);
             painter.setPen(dotPen);
 
-            painter.setBrush(QColor(0, 200, 255));   // cyan = nose
+            painter.setBrush(QColor(0x70, 0xE6, 0x9D));  // head
             painter.drawEllipse(nosePoint, endpointRadius, endpointRadius);
-            painter.setBrush(QColor(255, 80, 80));   // red  = tail
+            painter.setBrush(QColor(0xD0, 0xB8, 0xE0));  // tail
             painter.drawEllipse(tailPoint, endpointRadius, endpointRadius);
             painter.setBrush(QColor(255, 255, 0));   // yellow = centerline-centroid
             painter.drawEllipse(midPoint, centroidRadius, centroidRadius);
@@ -1148,8 +1148,8 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                 painter.setBrush(Qt::NoBrush);
                 painter.drawEllipse(pt, ringRadius, ringRadius);
             };
-            drawRoleRing(blob.assignedHeadTipIdx, QColor(0, 200, 255));  // cyan = head
-            drawRoleRing(blob.assignedTailTipIdx, QColor(255, 80, 80));  // red  = tail
+            drawRoleRing(blob.assignedHeadTipIdx, QColor(0x70, 0xE6, 0x9D));  // head
+            drawRoleRing(blob.assignedTailTipIdx, QColor(0xD0, 0xB8, 0xE0));  // tail
         }
     }
 

@@ -8,4 +8,7 @@
     <path d="M11,5L19,13" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
     <path d="M14,2L22,10" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
     <path d="M7,22L22,7" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    <g transform="matrix(1.75,-3.69779e-32,-3.9443e-32,-1.86667,-14.5,60.9333)">
+        <path d="M20,20L22,23L18,23L20,20Z"/>
+    </g>
 </svg>

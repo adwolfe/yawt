@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1197</width>
-    <height>789</height>
+    <height>986</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -204,13 +204,17 @@
            <item>
             <widget class="QToolButton" name="pointButton">
              <property name="toolTip">
-              <string>Select Start/End points</string>
+              <string>Click once for start and once for end. Can be changed later</string>
              </property>
              <property name="statusTip">
-              <string>Click once for Start, then once for End</string>
+              <string>Select start/end points</string>
              </property>
              <property name="text">
-              <string>SE</string>
+              <string/>
+             </property>
+             <property name="icon">
+              <iconset resource="../../resources.qrc">
+               <normaloff>:/resources/points.svg</normaloff>:/resources/points.svg</iconset>
              </property>
              <property name="checkable">
               <bool>true</bool>
@@ -265,8 +269,11 @@
            </item>
            <item>
             <widget class="QToolButton" name="selectionModeButton">
+             <property name="toolTip">
+              <string>Detect worms by clicking on blobs in threshold mode. </string>
+             </property>
              <property name="statusTip">
-              <string>Detect</string>
+              <string>Detect worms</string>
              </property>
              <property name="text">
               <string>...</string>
@@ -317,6 +324,9 @@
            </item>
            <item>
             <widget class="QToolButton" name="viewThreshButton">
+             <property name="toolTip">
+              <string>Show the current threshold based on settings. </string>
+             </property>
              <property name="statusTip">
               <string>Show/Hide threshold</string>
              </property>
@@ -334,6 +344,12 @@
            </item>
            <item>
             <widget class="QToolButton" name="viewBlobsButton">
+             <property name="toolTip">
+              <string>Show the calculated blobs for worms, if available</string>
+             </property>
+             <property name="statusTip">
+              <string>Show/Hide blobs</string>
+             </property>
              <property name="text">
               <string>...</string>
              </property>
@@ -348,12 +364,18 @@
            </item>
            <item>
             <widget class="QToolButton" name="viewTracksButton">
+             <property name="toolTip">
+              <string>Shows the calculated tracks if available. Hold down to select track type.</string>
+             </property>
+             <property name="statusTip">
+              <string>Show/hide track data</string>
+             </property>
              <property name="text">
               <string>...</string>
              </property>
              <property name="icon">
               <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
+               <normaloff>:/resources/trax_alt-arrow.svg</normaloff>:/resources/trax_alt-arrow.svg</iconset>
              </property>
              <property name="checkable">
               <bool>true</bool>
@@ -363,13 +385,17 @@
            <item>
             <widget class="QToolButton" name="skeletonButton">
              <property name="toolTip">
-              <string>Show/Hide centerline</string>
+              <string>Show the calculated centerline information, if available. </string>
              </property>
              <property name="statusTip">
-              <string>Show/hide skeletonized centerline overlay</string>
+              <string>Show/hide skeletonized centerline</string>
              </property>
              <property name="text">
-              <string>CL</string>
+              <string/>
+             </property>
+             <property name="icon">
+              <iconset resource="../../resources.qrc">
+               <normaloff>:/resources/centerline.svg</normaloff>:/resources/centerline.svg</iconset>
              </property>
              <property name="checkable">
               <bool>true</bool>
