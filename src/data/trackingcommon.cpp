@@ -294,7 +294,6 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
             result.area = cv::contourArea(bestContour); // Already calculated, but store it
             result.contourPoints = bestContour; // These points are relative to binaryImage origin
             result.isValid = true;
-            populateCenterlineFromContour(result);
             // touchesROIboundary is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
         }
         YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Selected contour idx:"
@@ -450,7 +449,6 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             // For example, if any point in contourInSub has x=0, y=0, x=actualRoiCv.width-1, or y=actualRoiCv.height-1.
             // However, the bounding box check is simpler and often what's implied.
 
-            populateCenterlineFromContour(blob);
             plausibleBlobs.append(blob);
         }
     }
