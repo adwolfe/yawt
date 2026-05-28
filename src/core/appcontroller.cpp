@@ -35,6 +35,7 @@
 #include "../models/annotationtablemodel.h"
 #include "../gui/trackingprogressdialog.h"
 #include <QWidget>
+#include <QMessageBox>
 
 #include "../utils/loggingcategories.h"
 #include <QDebug>
@@ -355,6 +356,52 @@ std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel
     return result;
 }
 
+bool AppController::validateAndGetSharedKeyframe(bool onlyTrackMissing, int& outKeyFrame, QString& outError) const {
+    outKeyFrame = -1;
+    outError.clear();
+
+    if (!m_blobModel) {
+        outError = "Internal error: blob model missing.";
+        return false;
+    }
+
+    QSet<int> itemsWithTracks;
+    if (onlyTrackMissing && m_storage)
+        itemsWithTracks = m_storage->getItemsWithTracks();
+
+    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
+    int sharedKeyframe = -2; // sentinel: no worm seen yet
+    QStringList conflictDesc;
+
+    for (const TableItems::ClickedItem& it : items) {
+        if (it.type != TableItems::ItemType::Worm) continue;
+        if (onlyTrackMissing && itemsWithTracks.contains(it.id)) continue;
+
+        if (sharedKeyframe == -2) {
+            sharedKeyframe = it.frameOfSelection;
+        } else if (it.frameOfSelection != sharedKeyframe) {
+            conflictDesc << QString("worm %1 (frame %2)").arg(it.id).arg(it.frameOfSelection);
+        }
+    }
+
+    if (sharedKeyframe == -2) {
+        // No worms to track — not a keyframe error; caught later as "nothing to track".
+        outKeyFrame = 0;
+        return true;
+    }
+
+    if (!conflictDesc.isEmpty()) {
+        outError = QString("All worms to be tracked must be selected on the same frame, "
+                           "but they are not. First worm is on frame %1; conflicting: %2.")
+                       .arg(sharedKeyframe)
+                       .arg(conflictDesc.join(", "));
+        return false;
+    }
+
+    outKeyFrame = sharedKeyframe;
+    return true;
+}
+
 void AppController::beginTrackingFromModel(const QString& videoPath,
                                           int keyFrame,
                                           const Thresholding::ThresholdSettings& settings,
@@ -373,6 +420,13 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
         return;
     }
 
+    int derivedKeyFrame;
+    QString keyFrameError;
+    if (!validateAndGetSharedKeyframe(onlyTrackMissing, derivedKeyFrame, keyFrameError)) {
+        emit trackingFailed(keyFrameError);
+        return;
+    }
+
     std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(onlyTrackMissing);
     if (initialWorms.empty()) {
         emit trackingFailed("No worm items available to track.");
@@ -381,7 +435,7 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
 
     emit trackingStarted();
 
-    m_manager->startFullTrackingProcess(videoPath, dataDirectory, keyFrame, initialWorms, settings, totalFrames);
+    m_manager->startFullTrackingProcess(videoPath, dataDirectory, derivedKeyFrame, initialWorms, settings, totalFrames);
 }
 
 int AppController::countWormItems() const
@@ -416,9 +470,18 @@ void AppController::showTrackingDialog(const QString& videoPath,
                                        const QString& dataDirectory,
                                        QWidget* parent)
 {
+    // Validate that worms-to-track share a keyframe before opening the dialog.
+    int derivedKeyFrame;
+    QString keyFrameError;
+    if (!validateAndGetSharedKeyframe(onlyTrackMissing, derivedKeyFrame, keyFrameError)) {
+        QMessageBox::critical(parent, "Cannot Begin Tracking", keyFrameError);
+        return;
+    }
+
     // Store provided parameters so the dialog begin handler can use them.
+    // Use the per-worm derived keyframe rather than the video's current position.
     m_dialogVideoPath = videoPath;
-    m_dialogKeyFrame = keyFrame;
+    m_dialogKeyFrame = (derivedKeyFrame >= 0) ? derivedKeyFrame : keyFrame;
     m_dialogSettings = settings;
     m_dialogOnlyTrackMissing = onlyTrackMissing;
     m_dialogTotalFrames = totalFrames;
@@ -474,6 +537,20 @@ void AppController::onDialogBeginRequested()
         if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: Blob model missing");
         return;
     }
+
+    // Re-read onlyTrackMissing from the actual dialog checkbox state.
+    if (m_trackingDialog)
+        m_dialogOnlyTrackMissing = m_trackingDialog->onlyTrackMissingChecked();
+
+    // Re-validate keyframes with the actual checkbox state (user may have toggled it).
+    int derivedKeyFrame;
+    QString keyFrameError;
+    if (!validateAndGetSharedKeyframe(m_dialogOnlyTrackMissing, derivedKeyFrame, keyFrameError)) {
+        YAWT_WARN(lcCoreAppController) << "onDialogBeginRequested: keyframe validation failed:" << keyFrameError;
+        if (m_trackingDialog) m_trackingDialog->onTrackingFailed(keyFrameError);
+        return;
+    }
+    m_dialogKeyFrame = (derivedKeyFrame >= 0) ? derivedKeyFrame : m_dialogKeyFrame;
 
     // Build initial worm list from model, respecting the dialog's only-missing preference.
     std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(m_dialogOnlyTrackMissing);

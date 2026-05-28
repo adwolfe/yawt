@@ -238,6 +238,15 @@ private:
      */
     std::vector<Tracking::InitialWormInfo> buildInitialWormsFromModel(bool onlyTrackMissing) const;
 
+    /**
+     * @brief Validate that all worms to be tracked share the same frameOfSelection.
+     * @param onlyTrackMissing When true, skip items that already have tracks in storage.
+     * @param outKeyFrame Set to the shared keyframe on success, -1 on failure, 0 if no worms.
+     * @param outError Human-readable error message on failure; empty on success.
+     * @return true if valid (all worms share a keyframe or there are none to track).
+     */
+    bool validateAndGetSharedKeyframe(bool onlyTrackMissing, int& outKeyFrame, QString& outError) const;
+
     // Owned components (QObject-parented to this controller unless storage is injected)
     // - If constructed by AppController, these are children of this and auto-destroyed.
     // - If an external TrackingDataStorage is injected via ctor, m_storage is non-owned.
