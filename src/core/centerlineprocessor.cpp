@@ -1734,11 +1734,19 @@ struct JunctionSelection {
 };
 
 // Group adjacent junction nodes into connected junction clusters.
+// Uses a proximity radius in addition to direct adjacency so that diagonal X
+// crossings — which the thinning algorithm often represents as two degree-3
+// nodes a pixel or two apart rather than one degree-4 node — are merged into
+// a single cluster.
 static std::vector<JunctionCluster> findJunctionClusters(const Centerline::SkeletonGraph& graph)
 {
     const int n = static_cast<int>(graph.points.size());
     std::vector<JunctionCluster> clusters;
     std::vector<char> visited(static_cast<size_t>(n), 0);
+
+    // Junction nodes within this many pixels are merged into the same cluster
+    // even when not directly connected in the skeleton adjacency list.
+    constexpr int kMergeRadiusPx = 3;
 
     for (int i = 0; i < n; ++i) {
         if (visited[static_cast<size_t>(i)] || !isJunctionNode(graph, i)) {
@@ -1758,12 +1766,29 @@ static std::vector<JunctionCluster> findJunctionClusters(const Centerline::Skele
             cluster.nodes.push_back(cur);
             cluster.contains[static_cast<size_t>(cur)] = 1;
 
+            // Direct skeleton neighbors (existing behavior).
             for (int nb : graph.adjacency[cur]) {
                 if (visited[static_cast<size_t>(nb)] || !isJunctionNode(graph, nb)) {
                     continue;
                 }
                 visited[static_cast<size_t>(nb)] = 1;
                 q.push(nb);
+            }
+
+            // Proximity sweep: absorb any unvisited junction node within
+            // kMergeRadiusPx. Handles diagonal / shallow-angle crossings.
+            const cv::Point& cp = graph.points[cur];
+            for (int j = 0; j < n; ++j) {
+                if (visited[static_cast<size_t>(j)] || !isJunctionNode(graph, j)) {
+                    continue;
+                }
+                const cv::Point& jp = graph.points[j];
+                const int dx = cp.x - jp.x;
+                const int dy = cp.y - jp.y;
+                if (dx * dx + dy * dy <= kMergeRadiusPx * kMergeRadiusPx) {
+                    visited[static_cast<size_t>(j)] = 1;
+                    q.push(j);
+                }
             }
         }
         clusters.push_back(std::move(cluster));
@@ -2274,6 +2299,36 @@ static JunctionSelection selectLoopAwareJunction(const Centerline::SkeletonGraph
     }
 
     if (selection.valid) {
+        // For multi-node clusters, the trunk terminus is whichever cluster node
+        // happens to be nearest to the source — often not the geometric center
+        // of the physical crossing. Use the centroid of all cluster nodes instead
+        // so the reported junction point sits at the middle of the crossing.
+        if (selection.cluster.nodes.size() > 1) {
+            float cx = 0.f, cy = 0.f;
+            for (int node : selection.cluster.nodes) {
+                cx += static_cast<float>(graph.points[node].x);
+                cy += static_cast<float>(graph.points[node].y);
+            }
+            cx /= static_cast<float>(selection.cluster.nodes.size());
+            cy /= static_cast<float>(selection.cluster.nodes.size());
+            int centroidNode = selection.junctionIdx;
+            float bestD2 = std::numeric_limits<float>::max();
+            for (int node : selection.cluster.nodes) {
+                const float dx = static_cast<float>(graph.points[node].x) - cx;
+                const float dy = static_cast<float>(graph.points[node].y) - cy;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) { bestD2 = d2; centroidNode = node; }
+            }
+            if (centroidNode != selection.junctionIdx) {
+                selection.diagnostics << QStringLiteral(
+                    "junction centroid adjusted from (%1,%2) to (%3,%4)")
+                        .arg(graph.points[selection.junctionIdx].x)
+                        .arg(graph.points[selection.junctionIdx].y)
+                        .arg(graph.points[centroidNode].x)
+                        .arg(graph.points[centroidNode].y);
+                selection.junctionIdx = centroidNode;
+            }
+        }
         selection.diagnostics << QStringLiteral("selected loop-valid cluster %1 returningLoops=%2 bestLoop=%3")
                                      .arg(selection.selectedCluster)
                                      .arg(bestLoopCount)
@@ -2533,6 +2588,7 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
         float crossPenalty = 0.f;
         float pathLen = 0.f;
         float totalScore = std::numeric_limits<float>::max();
+        bool centerImplausible = false;
     };
 
     std::vector<BranchCandidate> candidates;
@@ -2663,6 +2719,17 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
         if (refLength > 0.f) {
             c.totalScore += kLengthWeight * std::abs(c.pathLen - refLength);
         }
+        // Center-plausibility gate: if the predicted center is available and
+        // the path midpoint is far from it (> 30% of body length), add a
+        // large penalty. This prevents a short junction-cutthrough from
+        // winning purely on a lucky RHR cross-sum sign — such paths never
+        // pass through the body's mid-region.
+        if (hasPredictedCenter && refLength > 0.f &&
+            c.centerDist > 0.30f * refLength) {
+            constexpr float kCenterImplausiblePenalty = 80.0f;
+            c.totalScore += kCenterImplausiblePenalty;
+            c.centerImplausible = true;
+        }
         candidates.push_back(std::move(c));
     }
     if (candidates.empty()) return false;
@@ -2686,7 +2753,7 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
         for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
             const BranchCandidate& c = candidates[i];
             diagnostics->append(
-                QStringLiteral("%1 candidate %2: len=%3 targetDist=%4 centerDist=%5 crossSum=%6 crossPenalty=%7 score=%8%9")
+                QStringLiteral("%1 candidate %2: len=%3 targetDist=%4 centerDist=%5 crossSum=%6 crossPenalty=%7 centerImplausible=%8 score=%9%10")
                     .arg(targetIsActualTip ? "D-2" : "D-3")
                     .arg(i)
                     .arg(c.pathLen, 0, 'f', 2)
@@ -2694,6 +2761,7 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
                     .arg(c.centerDist, 0, 'f', 2)
                     .arg(c.crossSum, 0, 'f', 4)
                     .arg(c.crossPenalty, 0, 'f', 1)
+                    .arg(c.centerImplausible ? "Y" : "N")
                     .arg(c.totalScore, 0, 'f', 2)
                     .arg(i == bestCandidate ? QStringLiteral(" SELECTED") : QString()));
         }
