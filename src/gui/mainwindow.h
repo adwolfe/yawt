@@ -84,7 +84,7 @@ protected:
  * - Video: initiateFrameDisplay(), updateFrameDisplay(), updateMiniLoaderCrop(), seekFrame(), frameSliderMoved()
  * - Thresholding: setGlobalThresholdType(), setAdaptiveThresholdType(), setGlobalThresholdValue(), setAdaptiveBlockSize(), setAdaptiveCValue(), setBlurEnabled(), setBlurKernel(), setBackgroundAssumption()
  * - Tracking: onStartTrackingActionTriggered(), handleBeginTrackingFromDialog(), handleCancelTrackingFromDialog(), acceptTracksFromManager(), performPostTrackingMemoryCleanup()
- * - UI sync: syncInteractionModeButtons(), syncViewModeOptionButtons(), updateVisibleTracksInVideoLoader(), onMiniLoaderVisibleWormsUpdated(), onMiniLoaderPollTimeout()
+ * - UI sync: syncInteractionModeButtons(), syncViewModeOptionButtons(), updateVisibleTracksInVideoLoader()
  */
 public slots:
     // File/Directory Operations
@@ -173,11 +173,6 @@ public slots:
     // Slots to react to VideoLoader mode changes (for UI sync)
     void syncInteractionModeButtons(VideoLoader::InteractionMode newMode);
     void syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes); // Updated for QFlags
-    // Slot: receive list of visible worm IDs from MiniLoader and update merge history/filtering
-    void onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds);
-
-    // Poll timer tick: periodically poll MiniLoader(s) for visible IDs (fallback if signal missed)
-    void onMiniLoaderPollTimeout();
     void onPlaybackStateChanged(bool isPlaying, double currentSpeed);
     void resultsButtonClicked();
 
@@ -186,7 +181,6 @@ private:
     void initializeUIStates();
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
-    void setSideMiniLoadersPaused(bool paused);
     void updateWormTimeline();
     bool applyThresholdSettingsFromJsonFile(const QString& filePath);
     bool loadRunFromDirectoryInternal(const QString& directoryPath);
@@ -250,14 +244,6 @@ private:
     /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;
 
-    /** Model for merge/split events shown in the UI. Owned by MainWindow unless reparented to a view. */
-    QStandardItemModel* m_mergeSplitModel;
-
-    // MiniLoader polling and cache
-    /** Timer used as a fallback to poll MiniLoader(s) for visible IDs. Owned by MainWindow. */
-    QTimer* m_miniLoaderPollTimer;
-    /** Cache of last polled visible worm IDs to suppress redundant UI updates. */
-    QSet<int> m_lastPolledVisibleIds;
 };
 
 #endif // MAINWINDOW_H

@@ -125,39 +125,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
     ui->miniLoader->setShowOverlays(false);
 
-    if (ui->miniLoaderOverlay) {
-        ui->miniLoaderOverlay->setTrackingDataStorage(m_trackingDataStorage);
-        ui->miniLoaderOverlay->setShowOverlays(true);
-    }
-    if (ui->mlon2) {
-        ui->mlon2->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlon2->setShowOverlays(true);
-    }
-    if (ui->mlon1) {
-        ui->mlon1->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlon1->setShowOverlays(true);
-    }
-    if (ui->mlop1) {
-        ui->mlop1->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlop1->setShowOverlays(true);
-    }
-    if (ui->mlop2) {
-        ui->mlop2->setTrackingDataStorage(m_trackingDataStorage);
-        ui->mlop2->setShowOverlays(true);
-    }
-
     YAWT_INFO(lcGuiMainWindow) << "AppController created and models bound";
-
-    // Merge/Split events model and view
-    m_mergeSplitModel = new QStandardItemModel(this);
-    m_mergeSplitModel->setColumnCount(3);
-    m_mergeSplitModel->setHeaderData(0, Qt::Horizontal, "Frame");
-    m_mergeSplitModel->setHeaderData(1, Qt::Horizontal, "Event");
-    m_mergeSplitModel->setHeaderData(2, Qt::Horizontal, "Details");
-    ui->mergeSplitTableView->setModel(m_mergeSplitModel);
-    ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    ui->mergeSplitTableView->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
 
     if (ui->wormTimeline) {
         connect(ui->wormTimeline, &WormTimeline::eventClicked,
@@ -178,29 +146,6 @@ MainWindow::MainWindow(QWidget *parent)
         connect(ui->wormTimeline, &WormTimeline::frameScrubbed,
                 this, [this](int frame) { seekFrame(frame); });
     }
-
-    // Jump to frame when a merge/split row is clicked
-    connect(ui->mergeSplitTableView, &QTableView::clicked, this, [this](const QModelIndex &index){
-        if (!index.isValid()) return;
-        // Determine currently selected worm in the worm table (if any) so overlay shows correct worm
-        int selectedWormId = -1;
-        if (ui->wormTableView->selectionModel() && !ui->wormTableView->selectionModel()->selectedIndexes().isEmpty()
-            && m_wormProxyModel) {
-            int selRow = ui->wormTableView->selectionModel()->selectedIndexes().first().row();
-            QModelIndex proxyIdx = m_wormProxyModel->index(selRow, 0);
-            QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
-            if (srcIdx.isValid()) selectedWormId = m_blobTableModel->getItem(srcIdx.row()).id;
-        }
-
-
-
-        // Frame number is in column 0
-        QModelIndex frameIdx = m_mergeSplitModel->index(index.row(), 0);
-        QVariant v = m_mergeSplitModel->data(frameIdx, Qt::DisplayRole);
-        bool ok = false;
-        int frame = v.toInt(&ok);
-        if (ok) seekFrame(frame);
-    });
 
     m_itemTypeDelegate = new ItemTypeDelegate(this);
     ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
@@ -472,27 +417,6 @@ void MainWindow::setupConnections() {
                 // When an item's visibility changes, update the VideoLoader with current items
                 ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
             });
-    // Wire the overlay mini loader to the same model if present
-    if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) {
-        // When the blob list changes, instruct overlay to repaint
-        connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
-        // Item visibility changes should also trigger a repaint
-        connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged, ui->miniLoaderOverlay, qOverload<>(&MiniLoader::update));
-
-        // Allow the overlay to respond to selection changes
-        connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
-                ui->miniLoaderOverlay, [this](const QItemSelection &selected, const QItemSelection&) {
-                    // Build the list of selected ClickedItem(s) and call overlay's handler
-                    QList<TableItems::ClickedItem> selItems;
-                    QModelIndexList indexes = selected.indexes();
-                    if (!indexes.isEmpty() && m_wormProxyModel) {
-                        QModelIndex proxyIdx = indexes.first();
-                        QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
-                        if (srcIdx.isValid()) selItems.append(m_blobTableModel->getItem(srcIdx.row()));
-                    }
-                    ui->miniLoaderOverlay->onWormSelectionChanged(selItems);
-                });
-    }
     connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
     connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
 
@@ -508,124 +432,6 @@ void MainWindow::setupConnections() {
     // Table View Selection -> VideoLoader
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &MainWindow::updateVisibleTracksInVideoLoader);
-
-    // When selection changes, update merge/split events table
-    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this](const QItemSelection &selected, const QItemSelection&) {
-        if (selected.isEmpty()) {
-            m_mergeSplitModel->removeRows(0, m_mergeSplitModel->rowCount());
-            return;
-        }
-        if (!m_wormProxyModel) return;
-        QModelIndex proxyIdx = selected.indexes().first();
-        QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
-        if (!srcIdx.isValid()) return;
-        const TableItems::ClickedItem& sel = m_blobTableModel->getItem(srcIdx.row());
-        // Populate merge/split table for this worm
-        m_mergeSplitModel->removeRows(0, m_mergeSplitModel->rowCount());
-        // We'll iterate through stored merge history and split resolution maps in TrackingManager via storage/APIs
-        // For now, collect merge starts from storage's merge history and track point qualities for splits
-        // Iterate frames in ascending order and add the first merged frame before a split
-        QList<int> frames = m_trackingDataStorage->getMergeGroupsForFrame(0).isEmpty() ? QList<int>() : QList<int>();
-        // Simple (but potentially slow) approach: scan all frames present in merge history
-        for (auto it = m_trackingDataStorage->getMergeGroupsForFrame(0).begin(); it != m_trackingDataStorage->getMergeGroupsForFrame(0).end(); ++it) {
-            Q_UNUSED(it);
-        }
-        // Instead, we will query the entire merge history map directly via an accessor - but since none exists, read internal map via getAllTracks as a proxy
-        // Practical approach: scan frames from 0..currentFrame and check if this worm appears in merge groups
-        // Determine frame range from video loader
-        int maxFrame = ui->videoLoader->getTotalFrames();
-        // New approach: compare merge-group membership for the selected worm between consecutive frames.
-        // Whenever the group's membership changes we emit an event row (Merge / Split / Merge/Split).
-        QList<int> prevGroup; // empty means not merged on previous frame
-        for (int f = 0; f < maxFrame; ++f) {
-            QList<QList<int>> groups = m_trackingDataStorage->getMergeGroupsForFrame(f);
-            QList<int> currGroup;
-            for (const QList<int>& g : groups) {
-                if (g.contains(sel.id)) { currGroup = g; break; }
-            }
-
-            // Compare prevGroup and currGroup as sets
-            QSet<int> prevSet;
-            for (int id : prevGroup) prevSet.insert(id);
-            QSet<int> currSet;
-            for (int id : currGroup) currSet.insert(id);
-            if (prevSet == currSet) {
-                prevGroup = currGroup;
-                continue; // no change
-            }
-
-            // Membership changed - decide event type(s)
-            bool prevEmpty = prevSet.isEmpty();
-            bool currEmpty = currSet.isEmpty();
-
-            QString eventType;
-            QString details;
-
-            if (prevEmpty && !currEmpty) {
-                // Newly merged
-                eventType = "Merge";
-                QSet<int> others = currSet;
-                others.remove(sel.id);
-                if (others.isEmpty()) details = "Merged (no other ids)";
-                else {
-                    QStringList ids;
-                    for (int id : others) ids << QString::number(id);
-                    details = QString("Merged with worm(s) %1").arg(ids.join(", "));
-                }
-            } else if (!prevEmpty && currEmpty) {
-                // Split from previous merged group
-                eventType = "Split";
-                QSet<int> others = prevSet;
-                others.remove(sel.id);
-                if (others.isEmpty()) details = "Split (no other ids)";
-                else {
-                    QStringList ids;
-                    for (int id : others) ids << QString::number(id);
-                    details = QString("Split from worm(s) %1").arg(ids.join(", "));
-                }
-            } else {
-                // Both non-empty and different: detect additions/removals
-                QSet<int> added = currSet - prevSet;
-                QSet<int> removed = prevSet - currSet;
-                if (!added.isEmpty() && removed.isEmpty()) {
-                    eventType = "Merge";
-                    QSet<int> others = added;
-                    others.remove(sel.id);
-                    QStringList ids;
-                    for (int id : others) ids << QString::number(id);
-                    details = QString("Merged with worm(s) %1").arg(ids.join(", "));
-                } else if (added.isEmpty() && !removed.isEmpty()) {
-                    eventType = "Split";
-                    QSet<int> others = removed;
-                    others.remove(sel.id);
-                    QStringList ids;
-                    for (int id : others) ids << QString::number(id);
-                    details = QString("Split from worm(s) %1").arg(ids.join(", "));
-                } else {
-                    eventType = "Merge/Split";
-                    QStringList parts;
-                    if (!added.isEmpty()) {
-                        QStringList ids; for (int id : added) ids << QString::number(id);
-                        parts << QString("Added: %1").arg(ids.join(", "));
-                    }
-                    if (!removed.isEmpty()) {
-                        QStringList ids; for (int id : removed) ids << QString::number(id);
-                        parts << QString("Removed: %1").arg(ids.join(", "));
-                    }
-                    details = parts.join("; ");
-                }
-            }
-
-            QList<QStandardItem*> rowItems;
-            rowItems << new QStandardItem(QString::number(f));
-            rowItems << new QStandardItem(eventType);
-            rowItems << new QStandardItem(details);
-            m_mergeSplitModel->appendRow(rowItems);
-
-            prevGroup = currGroup;
-        }
-    });
 
     // Enable/disable delete button based on selection state
     auto updateDeleteState = [this]() {
@@ -644,23 +450,18 @@ void MainWindow::setupConnections() {
         updateDeleteState();
     });
 
-    // Table View Selection -> MiniLoader Overlays
+    // Table View Selection -> auto-center video on worm position if zoomed in
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection &selected, const QItemSelection &deselected) {
         Q_UNUSED(deselected)
 
-        if (selected.isEmpty()) {
-            // No selection - clear the mini loaders
-            if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) ui->miniLoaderOverlay->clearSelection();
-        } else {
-            // Get the first selected row and extract the worm ID
+        if (!selected.isEmpty()) {
             QModelIndexList selectedIndexes = selected.indexes();
             if (!selectedIndexes.isEmpty() && m_wormProxyModel) {
                 QModelIndex proxyIdx = selectedIndexes.first();
                 QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
                 if (srcIdx.isValid()) {
                     const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(srcIdx.row());
-                    if (ui->miniLoaderOverlay && ui->miniLoaderOverlay->showOverlays()) ui->miniLoaderOverlay->setSelectedWorm(selectedItem.id);
 
                     // Auto-center video on worm position if zoomed in
                     double currentZoom = ui->videoLoader->getZoomFactor();
@@ -827,18 +628,6 @@ void MainWindow::setupConnections() {
                 this, &MainWindow::onDebugCenterlineFinished);
     }
 
-    // Debug tab — Show-tip-candidates overlay toggle. Pure render-time switch;
-    // the underlying tip data is computed unconditionally on every centerline
-    // pass and stashed on each DetectedBlob, so toggling this only changes
-    // what's drawn, not what's computed.
-    if (auto* tipChk = ui->showTipCandidatesCheck) {
-        connect(tipChk, &QCheckBox::toggled, this, [this](bool checked) {
-            ui->videoLoader->setViewModeOption(
-                VideoLoader::ViewModeOption::TipCandidates, checked);
-            ui->videoLoader->update();
-        });
-    }
-
     // Annotation table selection
     // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
@@ -860,35 +649,6 @@ void MainWindow::setupConnections() {
         }
     }
     ui->videoLoader->setVisibleTrackIDs(initialItemIDs);
-    if (ui->miniLoaderOverlay) ui->miniLoaderOverlay->update();
-
-    // Connect MiniLoader visible worms signal to MainWindow so we can filter merge history live.
-    // Also connect the overlay instance if present so we receive visible updates from either widget.
-    // Always check ui->miniLoader presence since some UI permutations may not include it.
-    if (ui->miniLoader) {
-        // Primary miniLoader is display-only (zoom view). Per the new flow it should NOT be
-        // connected to visibility signals or used as the source of truth for visibility.
-        qDebug() << "MainWindow: primary miniLoader present but will NOT be connected to visibility signals (display-only).";
-    }
-    // If an overlay widget exists, connect its visibleWormsUpdated signal as well so we don't miss updates.
-    if (ui->miniLoaderOverlay) {
-        QMetaObject::Connection c2 = connect(ui->miniLoaderOverlay, &MiniLoader::visibleWormsUpdated,
-                this, &MainWindow::onMiniLoaderVisibleWormsUpdated);
-        qDebug() << "MainWindow: connect miniLoaderOverlay visibleWormsUpdated -> slot, overlay ptr=" << ui->miniLoaderOverlay
-                 << " connection valid:" << bool(c2);
-
-        // Mirror-to-MergeViewer functionality removed.
-        // Previously we forwarded MiniLoader overlay per-frame visibility maps to a MergeViewer widget.
-        // The MergeViewer has been removed from the UI and related forwarding logic is intentionally omitted.
-    }
-
-    // Start a short polling timer as a fallback in case signals are missed or paint() hasn't yet emitted.
-    // This keeps the mergeHistoryText in sync with miniLoader(s) reliably.
-    m_miniLoaderPollTimer = new QTimer(this);
-    connect(m_miniLoaderPollTimer, &QTimer::timeout, this, &MainWindow::onMiniLoaderPollTimeout);
-    m_miniLoaderPollTimer->setInterval(100); // 100 ms poll interval
-    m_miniLoaderPollTimer->start();
-    qDebug() << "MainWindow: started miniLoader poll timer (100ms)";
 
     // Debug control keyboard shortcut
     QShortcut* debugToggle = new QShortcut(QKeySequence("Ctrl+D"), this);
@@ -1112,11 +872,6 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
 
     const bool showOverlays = newModes.testFlag(VideoLoader::ViewModeOption::Blobs);
     if (ui->miniLoader) ui->miniLoader->setShowOverlays(showOverlays);
-    if (ui->miniLoaderOverlay) ui->miniLoaderOverlay->setShowOverlays(showOverlays);
-    if (ui->mlon2) ui->mlon2->setShowOverlays(showOverlays);
-    if (ui->mlon1) ui->mlon1->setShowOverlays(showOverlays);
-    if (ui->mlop1) ui->mlop1->setShowOverlays(showOverlays);
-    if (ui->mlop2) ui->mlop2->setShowOverlays(showOverlays);
 
     if (ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
         int currentFrame = ui->videoLoader->getCurrentFrameNumber();
@@ -1637,13 +1392,6 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         return;
     }
 
-    // Send one cropped frame to each of the five mini loaders instead of batching +/-2 frames to a single overlay.
-    // Mapping:
-    //   mlon2 -> currentFrameNumber - 2
-    //   mlon1 -> currentFrameNumber - 1
-    //   miniLoaderOverlay -> currentFrameNumber
-    //   mlop1 -> currentFrameNumber + 1
-    //   mlop2 -> currentFrameNumber + 2
     {
         int totalFrames = 0;
         if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
@@ -1694,58 +1442,6 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
             return std::make_tuple(cf, offset, size);
         };
 
-        // Always update the overlay (center frame)
-        if (ui->miniLoaderOverlay) {
-            QImage cf;
-            QPointF off;
-            QSizeF sz;
-            std::tie(cf, off, sz) = buildCroppedForFrame(currentFrameNumber);
-            ui->miniLoaderOverlay->updateWithCroppedFrame(currentFrameNumber, cf, off, sz, centerPoint);
-            YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << currentFrameNumber << "to widget miniLoaderOverlay"
-                     << "size:" << cf.size();
-        }
-
-        // Only update +/- frames when playback is not running.
-        if (!m_isVideoPlaying) {
-            int offsets[4] = { -2, -1, 1, 2 };
-            MiniLoader* widgetTargets[4] = {
-                (ui->mlon2) ? ui->mlon2 : nullptr,
-                (ui->mlon1) ? ui->mlon1 : nullptr,
-                (ui->mlop1) ? ui->mlop1 : nullptr,
-                (ui->mlop2) ? ui->mlop2 : nullptr
-            };
-
-            auto buildBlankForCrop = [&]() -> std::tuple<QImage, QPointF, QSizeF> {
-                QRect localCrop = cropRect;
-                if (localCrop.isEmpty()) localCrop = cropRect;
-                QImage cf(localCrop.size(), QImage::Format_RGB32);
-                cf.fill(Qt::black);
-                QPointF offset(localCrop.left() + 0.0, localCrop.top() + 0.0);
-                QSizeF size(localCrop.width(), localCrop.height());
-                return std::make_tuple(cf, offset, size);
-            };
-
-            for (int i = 0; i < 4; ++i) {
-                int targetFrame = currentFrameNumber + offsets[i];
-                MiniLoader* target = widgetTargets[i];
-                if (!target) continue;
-
-                QImage cf;
-                QPointF off;
-                QSizeF sz;
-                if (targetFrame < 0 || (totalFrames > 0 && targetFrame >= totalFrames)) {
-                    std::tie(cf, off, sz) = buildBlankForCrop();
-                } else {
-                    std::tie(cf, off, sz) = buildCroppedForFrame(targetFrame);
-                }
-
-                target->updateWithCroppedFrame(targetFrame, cf, off, sz, centerPoint);
-                YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent cropped frame" << targetFrame << "to widget"
-                         << (i==0?QString("mlon2"):(i==1?QString("mlon1"):(i==2?QString("mlop1"):QString("mlop2"))))
-                         << "size:" << cf.size();
-            }
-        }
-
         // Primary miniLoader (zoom-only) should receive the central frame for display consistency
         if (ui->miniLoader) {
             QImage cf_center;
@@ -1756,18 +1452,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
             YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
         }
 
-        // If we sent to an overlay, let it emit visibility signals as before. If no overlay, clear visible set.
-        if (ui->miniLoaderOverlay) {
-            // Allow overlay to compute visibility for its single frame and emit signals as needed.
-            onMiniLoaderVisibleWormsUpdated(ui->miniLoaderOverlay->getVisibleWormIds());
-        } else {
-            onMiniLoaderVisibleWormsUpdated(QList<int>()); // clear visible set so merge history shows all (or callers adapt)
-        }
     }
-
-    // The batching path has been replaced above. No additional fallback logic required here.
-    // All five mini loader widgets (mlon2, mlon1, miniLoaderOverlay, mlop1, mlop2) were handled.
-    // No-op placeholder to preserve function structure.
 }
 
 bool MainWindow::applyThresholdSettingsFromJsonFile(const QString& filePath) {
@@ -1828,7 +1513,6 @@ bool MainWindow::applyThresholdSettingsFromJsonFile(const QString& filePath) {
 void MainWindow::onPlaybackStateChanged(bool isPlaying, double currentSpeed) {
     Q_UNUSED(currentSpeed);
     m_isVideoPlaying = isPlaying;
-    setSideMiniLoadersPaused(isPlaying);
     if (isPlaying) {
         m_lastMiniLoaderFrame = -1;
     }
@@ -1863,77 +1547,12 @@ void MainWindow::resultsButtonClicked() {
     m_analysisDialog->activateWindow();
 }
 
-void MainWindow::setSideMiniLoadersPaused(bool paused) {
-    MiniLoader* targets[4] = {
-        ui->mlon2 ? ui->mlon2 : nullptr,
-        ui->mlon1 ? ui->mlon1 : nullptr,
-        ui->mlop1 ? ui->mlop1 : nullptr,
-        ui->mlop2 ? ui->mlop2 : nullptr
-    };
-
-    for (MiniLoader* target : targets) {
-        if (!target) continue;
-        target->setEnabled(!paused);
-
-        if (paused) {
-            QGraphicsOpacityEffect* effect = qobject_cast<QGraphicsOpacityEffect*>(target->graphicsEffect());
-            if (!effect) {
-                effect = new QGraphicsOpacityEffect(target);
-                target->setGraphicsEffect(effect);
-            }
-            effect->setOpacity(0.35);
-        } else if (target->graphicsEffect()) {
-            target->setGraphicsEffect(nullptr);
-        }
-    }
-}
-
 void MainWindow::frameSliderMoved(int value) {
     ui->videoLoader->seekToFrame(value, false);
     if (!ui->framePosition->hasFocus()) {
         ui->framePosition->setValue(value);
     }
     // Also update the mirrored spinbox if it's not being edited
-}
-
-// Slot: receive visible worm IDs from MiniLoader. Update cached set and rebuild merge history text.
-// Emitted frequently (on repaint), so keep this lightweight.
-void MainWindow::onMiniLoaderVisibleWormsUpdated(const QList<int>& visibleIds) {
-    // Log received visible IDs. Merge history text widget and MergeViewer were removed from the UI,
-    // so we no longer update them here. Keep the last-polled set updated so polling fallback remains usable.
-    YAWT_DEBUG(lcGuiMainWindow) << "onMiniLoaderVisibleWormsUpdated received visibleIds:" << visibleIds;
-
-    m_lastPolledVisibleIds.clear();
-    for (int id : visibleIds) m_lastPolledVisibleIds.insert(id);
-    // Note: any higher-level consumers that previously relied on MainWindow to forward these IDs
-    // should now connect directly to MiniLoader or the appropriate model/storage.
-}
-
-// Poll timer fallback handler: periodically query any MiniLoader instances for visible IDs and update
-// MainWindow state if the polled set changes. This complements the signal-based updates and prevents
-// missed updates due to paint/emit ordering differences.
-void MainWindow::onMiniLoaderPollTimeout() {
-    QSet<int> polledSet;
-    // Query primary miniLoader instance if present
-    if (ui->miniLoader) {
-        const QList<int> vis = ui->miniLoader->getVisibleWormIds();
-        for (int id : vis) polledSet.insert(id);
-    }
-    // Query overlay miniLoader instance if present
-    if (ui->miniLoaderOverlay) {
-        const QList<int> vis = ui->miniLoaderOverlay->getVisibleWormIds();
-        for (int id : vis) polledSet.insert(id);
-    }
-
-    // If polled set differs from the last polled set, invoke the visible-IDs handler to update UI.
-    if (polledSet != m_lastPolledVisibleIds) {
-        m_lastPolledVisibleIds = polledSet;
-        QList<int> list;
-        list.reserve(polledSet.size());
-        for (int id : polledSet) list.append(id);
-        YAWT_DEBUG(lcGuiMainWindow) << "onMiniLoaderPollTimeout polled visible IDs:" << list;
-        onMiniLoaderVisibleWormsUpdated(list);
-    }
 }
 
 // Helper: build the textual merge history block for a given frame using a provided visible set.
@@ -2327,7 +1946,6 @@ void MainWindow::onRerunCenterlineClicked()
     if (auto* sb = ui->snakeLambdaSpin)       params.lambda                   = sb->value();
     if (auto* sb = ui->snakeItersSpin)        params.iterations               = sb->value();
     if (auto* sb = ui->snakeStepSpin)         params.stepSize                 = sb->value();
-    if (auto* sb = ui->snakeOrientThreshSpin) params.orientationAngleThreshold= sb->value();
     if (auto* sb = ui->snakeNPointsSpin)      params.nPoints                   = sb->value();
 
     // Disable the button while running to prevent double-triggers.
@@ -2364,64 +1982,6 @@ void MainWindow::onDebugCenterlineFinished()
         ui->videoLoader->update();
     }
 
-    // Refresh the per-worm tip-baseline readout. Each row reports the worm's
-    // running curvature, width, and body-length distributions accumulated from
-    // clean-topology frames during this centerline pass, plus per-state frame
-    // counts (Phase C.2) showing how often each worm is in each topological
-    // state. A ✓ marks worms whose sample count is high enough for the
-    // discriminator to be useful.
-    if (auto* edit = ui->tipBaselineTextEdit) {
-        if (m_trackingDataStorage) {
-            const QMap<int, Centerline::TipFeatureBaseline> baselines =
-                m_trackingDataStorage->getAllTipBaselines();
-            if (baselines.isEmpty()) {
-                edit->setPlainText("No clean-topology frames found in this pass.");
-            } else {
-                // Tally per-worm topology-state counts by sweeping all stored
-                // blobs once. Cheaper than threading state counts through the
-                // worker's pass loop, and keeps the worker's job purely about
-                // computation.
-                QMap<int, std::array<int, 5>> stateCounts; // [Unknown, Clean, SelfCrossed, Merged, Lost]
-                const Tracking::AllWormTracks& tracks =
-                    m_trackingDataStorage->getAllTracks();
-                for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-                    const int wormId = it->first;
-                    auto& counts = stateCounts[wormId];
-                    counts.fill(0);
-                    for (const auto& tp : it->second) {
-                        const auto blobs =
-                            m_trackingDataStorage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
-                        if (!blobs.contains(wormId)) continue;
-                        const int idx = static_cast<int>(blobs[wormId].topologyState);
-                        if (idx >= 0 && idx < 5) ++counts[idx];
-                    }
-                }
-
-                QString report;
-                report += QStringLiteral(
-                    "ID  |κ| mean ± sd  (n)   width mean ± sd  (n)   length mean ± sd  (n)   Clean SCross Merg Lost  ok\n");
-                report += QStringLiteral(
-                    "─── ──────────────────── ──────────────────── ──────────────────── ───── ────── ──── ────  ──\n");
-                for (auto it = baselines.constBegin(); it != baselines.constEnd(); ++it) {
-                    const int wormId = it.key();
-                    const Centerline::TipFeatureBaseline& b = it.value();
-                    const auto& c = stateCounts.value(wormId, {0, 0, 0, 0, 0});
-                    report += QString::asprintf(
-                        "%-3d %5.3f ± %5.3f (%4d) %5.2f ± %4.2f (%4d) %6.1f ± %5.1f (%4d) %5d %6d %4d %4d  %s\n",
-                        wormId,
-                        b.meanAbsCurvature, b.curvatureStdDev(), b.curvatureSamples,
-                        b.meanWidth,        b.widthStdDev(),     b.widthSamples,
-                        b.meanBodyLength,   b.bodyLengthStdDev(), b.lengthSamples,
-                        c[static_cast<int>(Tracking::TopologyState::Clean)],
-                        c[static_cast<int>(Tracking::TopologyState::SelfCrossed)],
-                        c[static_cast<int>(Tracking::TopologyState::Merged)],
-                        c[static_cast<int>(Tracking::TopologyState::Lost)],
-                        b.isReliable() ? "✓" : "·");
-                }
-                edit->setPlainText(report);
-            }
-        }
-    }
 }
 
 void MainWindow::onExportProcessClicked()

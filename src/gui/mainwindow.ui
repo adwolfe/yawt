@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1197</width>
-    <height>986</height>
+    <width>1206</width>
+    <height>695</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -76,7 +76,7 @@
          <height>10</height>
         </size>
        </property>
-       <layout class="QVBoxLayout" name="verticalLayout_6">
+       <layout class="QVBoxLayout" name="verticalLayout_6" stretch="0,1,4,2">
         <property name="topMargin">
          <number>0</number>
         </property>
@@ -681,7 +681,7 @@ QToolButton#lastFrameButton {
         <property name="frameShadow">
          <enum>QFrame::Shadow::Raised</enum>
         </property>
-        <layout class="QVBoxLayout" name="verticalLayout_3" stretch="0,0,0,0,5,2">
+        <layout class="QVBoxLayout" name="verticalLayout_3" stretch="0,0,0,0,3,2">
          <property name="leftMargin">
           <number>0</number>
          </property>
@@ -845,8 +845,8 @@ QToolButton#lastFrameButton {
           <widget class="MiniLoader" name="miniLoader" native="true">
            <property name="minimumSize">
             <size>
-             <width>0</width>
-             <height>0</height>
+             <width>100</width>
+             <height>100</height>
             </size>
            </property>
           </widget>
@@ -1377,38 +1377,6 @@ QToolButton#lastFrameButton {
                  </widget>
                 </item>
                 <item row="5" column="0">
-                 <widget class="QLabel" name="labelOrientThresh">
-                  <property name="toolTip">
-                   <string>Right-hand-rule veto: if the total signed turning angle of both the current and previous centerline exceed this magnitude, and their signs disagree, the orientation is flipped. Set lower to enforce orientation earlier (even on gentle bends); set higher to only apply on tight coils. 0 = always enforce; &gt;π = effectively disabled.</string>
-                  </property>
-                  <property name="text">
-                   <string>Orient. threshold (rad)</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="5" column="1">
-                 <widget class="QDoubleSpinBox" name="snakeOrientThreshSpin">
-                  <property name="toolTip">
-                   <string>Right-hand-rule veto threshold in radians. 0.5 rad ≈ 29°. When both the current and previous frame's total signed turning angle exceed this value in magnitude but disagree in sign, the orientation is corrected. Near-zero values mean near-straight bodies (genuinely ambiguous).</string>
-                  </property>
-                  <property name="decimals">
-                   <number>3</number>
-                  </property>
-                  <property name="minimum">
-                   <double>0.000000000000000</double>
-                  </property>
-                  <property name="maximum">
-                   <double>3.142000000000000</double>
-                  </property>
-                  <property name="singleStep">
-                   <double>0.050000000000000</double>
-                  </property>
-                  <property name="value">
-                   <double>0.500000000000000</double>
-                  </property>
-                 </widget>
-                </item>
-                <item row="6" column="0">
                  <widget class="QLabel" name="labelNPoints">
                   <property name="toolTip">
                    <string>Number of evenly-spaced points resampled along the centerline. More points reduce kinking on highly curved bodies at the cost of slightly more computation. Minimum 5.</string>
@@ -1418,7 +1386,7 @@ QToolButton#lastFrameButton {
                   </property>
                  </widget>
                 </item>
-                <item row="6" column="1">
+                <item row="5" column="1">
                  <widget class="QSpinBox" name="snakeNPointsSpin">
                   <property name="toolTip">
                    <string>Number of resampled centerline points (5–200). Higher values reduce kinking artefacts on coiled or tightly curved worms.</string>
@@ -1484,109 +1452,6 @@ QToolButton#lastFrameButton {
                </property>
               </widget>
              </item>
-             <item>
-              <widget class="QCheckBox" name="showTipCandidatesCheck">
-               <property name="toolTip">
-                <string>Overlay per-frame candidate nose/tail points on each visible blob. Filled green circles = Zhang-Suen skeleton degree-1 endpoints. Hollow magenta squares = local maxima of outer-contour curvature. The downstream head/tail assignment step will consume these candidates instead of inheriting endpoints from the previous frame.</string>
-               </property>
-               <property name="text">
-                <string>Show tip candidates (debug overlay)</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QGroupBox" name="tipBaselineGroup">
-               <property name="toolTip">
-                <string>Per-worm running distributions of tip features, accumulated only from clean-topology frames (no ring, not merged, both tips skeleton-confirmed). Feeds the head/tail discriminator in disrupted frames. Refreshed at the end of each centerline pass.</string>
-               </property>
-               <property name="title">
-                <string>Tip baselines (clean frames)</string>
-               </property>
-               <property name="flat">
-                <bool>false</bool>
-               </property>
-               <layout class="QVBoxLayout" name="tipBaselineLayout">
-                <item>
-                 <widget class="QPlainTextEdit" name="tipBaselineTextEdit">
-                  <property name="font">
-                   <font>
-                    <family>Menlo</family>
-                    <pointsize>10</pointsize>
-                   </font>
-                  </property>
-                  <property name="readOnly">
-                   <bool>true</bool>
-                  </property>
-                  <property name="placeholderText">
-                   <string>Run Rerun Centerline to populate baselines.</string>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
-              </widget>
-             </item>
-             <item>
-              <spacer name="debugTabSpacer">
-               <property name="orientation">
-                <enum>Qt::Orientation::Vertical</enum>
-               </property>
-               <property name="sizeType">
-                <enum>QSizePolicy::Policy::Expanding</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>20</width>
-                 <height>40</height>
-                </size>
-               </property>
-              </spacer>
-             </item>
-             <item>
-              <layout class="QVBoxLayout" name="legacyCleanupLayout">
-               <item>
-                <layout class="QHBoxLayout" name="horizontalLayout_12">
-                 <property name="leftMargin">
-                  <number>20</number>
-                 </property>
-                 <property name="rightMargin">
-                  <number>20</number>
-                 </property>
-                 <item>
-                  <widget class="MiniLoader" name="mlon2" native="true"/>
-                 </item>
-                 <item>
-                  <widget class="MiniLoader" name="mlon1" native="true"/>
-                 </item>
-                 <item>
-                  <widget class="MiniLoader" name="miniLoaderOverlay" native="true">
-                   <property name="minimumSize">
-                    <size>
-                     <width>100</width>
-                     <height>100</height>
-                    </size>
-                   </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <widget class="MiniLoader" name="mlop1" native="true"/>
-                 </item>
-                 <item>
-                  <widget class="MiniLoader" name="mlop2" native="true"/>
-                 </item>
-                </layout>
-               </item>
-               <item>
-                <layout class="QHBoxLayout" name="horizontalLayout_14">
-                 <property name="topMargin">
-                  <number>0</number>
-                 </property>
-                 <item>
-                  <widget class="QTableView" name="mergeSplitTableView"/>
-                 </item>
-                </layout>
-               </item>
-              </layout>
-             </item>
             </layout>
            </widget>
           </widget>
@@ -1603,7 +1468,7 @@ QToolButton#lastFrameButton {
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1197</width>
+     <width>1206</width>
      <height>30</height>
     </rect>
    </property>
