@@ -11,114 +11,151 @@
 #include <algorithm>
 #include <cmath>
 
-static bool relabelTrackHeadTailByMotion(
+// Refine head/tail assignment by examining clean segments of the track.
+//
+// For each continuous run of Clean-topology frames long enough to establish a
+// reliable direction (>= fps * kWindowSeconds frames), the motion of the worm's
+// centroid is compared against the front-to-back axis of the centerline.  If
+// the back end is leading (score < 0), the centerline and head/tail indices are
+// reversed for every frame in that segment.
+//
+// maxReversalFraction: if more than this fraction of usable direction steps
+// within a segment point against the majority direction, the segment is treated
+// as ambiguous (direction reversal / turning event) and skipped.
+//
+// Returns the frame numbers whose centerlines were reversed.
+static QList<int> refineHeadTailByDirection(
     TrackingDataStorage* storage,
     QMutex* storageMutex,
     int wormId,
-    const std::vector<Tracking::WormTrackPoint>& sortedPoints)
+    const std::vector<Tracking::WormTrackPoint>& sortedPoints,
+    double fps,
+    float maxReversalFraction)
 {
-    if (!storage) {
-        return false;
-    }
+    QList<int> flippedFrames;
+    if (!storage) return flippedFrames;
 
-    struct MotionSample {
-        int frameNumber = -1;
+    static constexpr double kWindowSeconds = 5.0;
+    const int minFrames = std::max(3, static_cast<int>(fps * kWindowSeconds));
+
+    struct SegFrame {
+        int frameNumber;
         cv::Point2f centroid;
         cv::Point2f front;
         cv::Point2f back;
     };
 
-    std::vector<MotionSample> samples;
-    samples.reserve(sortedPoints.size());
-    for (const Tracking::WormTrackPoint& tp : sortedPoints) {
-        if (tp.quality == Tracking::TrackPointQuality::Lost) {
-            continue;
-        }
-
+    auto tryLoadClean = [&](const Tracking::WormTrackPoint& tp) -> std::optional<SegFrame> {
         QMap<int, Tracking::DetectedBlob> blobs;
         {
             QMutexLocker locker(storageMutex);
             blobs = storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
         }
-        if (!blobs.contains(wormId)) {
-            continue;
-        }
-
+        if (!blobs.contains(wormId)) return std::nullopt;
         const Tracking::DetectedBlob& blob = blobs[wormId];
-        if (!blob.isValid || blob.centerlinePoints.size() < 2) {
+        if (!blob.isValid || blob.centerlinePoints.size() < 2) return std::nullopt;
+        if (blob.topologyState != Tracking::TopologyState::Clean) return std::nullopt;
+        return SegFrame{tp.frameNumberOriginal, tp.position,
+                        blob.centerlinePoints.front(), blob.centerlinePoints.back()};
+    };
+
+    // Returns {netScore, minorityFraction} for a segment.
+    // netScore > 0 → front is head. minorityFraction is the fraction of usable
+    // steps that go against the majority — high values indicate a reversal.
+    struct SegmentStats { float score; float minorityFraction; };
+    auto analyzeSegment = [](const std::vector<SegFrame>& seg) -> SegmentStats {
+        float fwdSteps = 0.f, revSteps = 0.f;
+        for (size_t i = 1; i < seg.size(); ++i) {
+            const cv::Point2f motion = seg[i].centroid - seg[i - 1].centroid;
+            const float mLen = std::hypot(motion.x, motion.y);
+            if (mLen < 0.5f) continue;
+            const cv::Point2f axis = seg[i - 1].front - seg[i - 1].back;
+            const float aLen = std::hypot(axis.x, axis.y);
+            if (aLen < 2.f) continue;
+            const float align = (motion.x * axis.x + motion.y * axis.y) / (mLen * aLen);
+            if (align >= 0.f) fwdSteps += align;
+            else              revSteps += -align;
+        }
+        const float total = fwdSteps + revSteps;
+        const float minFrac = (total > 1e-6f)
+            ? std::min(fwdSteps, revSteps) / total
+            : 0.f;
+        return {fwdSteps - revSteps, minFrac};
+    };
+
+    auto flipSegment = [&](const std::vector<SegFrame>& seg) {
+        for (const SegFrame& sf : seg) {
+            QMap<int, Tracking::DetectedBlob> blobs;
+            {
+                QMutexLocker locker(storageMutex);
+                blobs = storage->getDetectedBlobsForFrame(sf.frameNumber);
+            }
+            if (!blobs.contains(wormId)) continue;
+            Tracking::DetectedBlob blob = blobs[wormId];
+            if (blob.centerlinePoints.size() >= 2)
+                std::reverse(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
+            std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+            {
+                QMutexLocker locker(storageMutex);
+                storage->setDetectedBlobForFrame(sf.frameNumber, wormId, blob);
+            }
+            flippedFrames.append(sf.frameNumber);
+        }
+    };
+
+    auto finalizeSegment = [&](const std::vector<SegFrame>& seg) {
+        if (static_cast<int>(seg.size()) < minFrames) return;
+
+        auto [score, minFrac] = analyzeSegment(seg);
+
+        // Skip this segment if there is a significant direction reversal within it.
+        if (minFrac > maxReversalFraction) {
+            YAWT_INFO(lcCoreCenterlineWorker)
+                << QStringLiteral("Worm %1 segment [%2–%3] (%4 frames): "
+                                  "skipped (reversal fraction=%5 > threshold=%6)")
+                       .arg(wormId)
+                       .arg(seg.front().frameNumber)
+                       .arg(seg.back().frameNumber)
+                       .arg(static_cast<int>(seg.size()))
+                       .arg(minFrac, 0, 'f', 3)
+                       .arg(maxReversalFraction, 0, 'f', 3);
+            return;
+        }
+
+        const bool needsFlip = score < 0.f;
+        if (needsFlip) flipSegment(seg);
+
+        YAWT_INFO(lcCoreCenterlineWorker)
+            << QStringLiteral("Worm %1 segment [%2–%3] (%4 frames): "
+                              "score=%5 reversalFrac=%6 flip=%7")
+                   .arg(wormId)
+                   .arg(seg.front().frameNumber)
+                   .arg(seg.back().frameNumber)
+                   .arg(static_cast<int>(seg.size()))
+                   .arg(score, 0, 'f', 3)
+                   .arg(minFrac, 0, 'f', 3)
+                   .arg(needsFlip ? "yes" : "no");
+    };
+
+    std::vector<SegFrame> currentSegment;
+
+    for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+        if (tp.quality == Tracking::TrackPointQuality::Lost) {
+            finalizeSegment(currentSegment);
+            currentSegment.clear();
             continue;
         }
-
-        MotionSample sample;
-        sample.frameNumber = tp.frameNumberOriginal;
-        sample.centroid = tp.position;
-        sample.front = blob.centerlinePoints.front();
-        sample.back = blob.centerlinePoints.back();
-        samples.push_back(sample);
-    }
-
-    float currentForwardEvidence = 0.f;
-    float reverseEvidence = 0.f;
-    int usableSteps = 0;
-    for (size_t i = 1; i < samples.size(); ++i) {
-        const cv::Point2f movement = samples[i].centroid - samples[i - 1].centroid;
-        const float movementLen = std::hypot(movement.x, movement.y);
-        if (movementLen < 0.5f) {
+        auto frame = tryLoadClean(tp);
+        if (!frame) {
+            finalizeSegment(currentSegment);
+            currentSegment.clear();
             continue;
         }
-
-        const cv::Point2f tailToHead = samples[i - 1].front - samples[i - 1].back;
-        const float axisLen = std::hypot(tailToHead.x, tailToHead.y);
-        if (axisLen < 2.f) {
-            continue;
-        }
-
-        const float alignment =
-            (movement.x * tailToHead.x + movement.y * tailToHead.y) /
-            (movementLen * axisLen);
-        if (alignment >= 0.f) {
-            currentForwardEvidence += alignment;
-        } else {
-            reverseEvidence += -alignment;
-        }
-        ++usableSteps;
+        currentSegment.push_back(*frame);
     }
+    finalizeSegment(currentSegment);
 
-    const float totalEvidence = currentForwardEvidence + reverseEvidence;
-    if (usableSteps < 3 || totalEvidence <= 1e-3f ||
-        reverseEvidence <= currentForwardEvidence ||
-        (reverseEvidence - currentForwardEvidence) < 0.05f * totalEvidence) {
-        return false;
-    }
-
-    for (const MotionSample& sample : samples) {
-        QMap<int, Tracking::DetectedBlob> blobs;
-        {
-            QMutexLocker locker(storageMutex);
-            blobs = storage->getDetectedBlobsForFrame(sample.frameNumber);
-        }
-        if (!blobs.contains(wormId)) {
-            continue;
-        }
-
-        Tracking::DetectedBlob blob = blobs[wormId];
-        if (blob.centerlinePoints.size() >= 2) {
-            std::reverse(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
-        }
-        std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
-        {
-            QMutexLocker locker(storageMutex);
-            storage->setDetectedBlobForFrame(sample.frameNumber, wormId, blob);
-        }
-    }
-
-    YAWT_INFO(lcCoreCenterlineWorker)
-        << QStringLiteral("Worm %1 final head/tail relabel: reverse=%2 forward=%3 steps=%4")
-               .arg(wormId)
-               .arg(reverseEvidence, 0, 'f', 2)
-               .arg(currentForwardEvidence, 0, 'f', 2)
-               .arg(usableSteps);
-    return true;
+    return flippedFrames;
 }
 
 // ── CenterlineWorker ────────────────────────────────────────────────────────
@@ -151,6 +188,16 @@ void CenterlineWorker::setSharedStorageMutex(const QSharedPointer<QMutex>& mutex
 void CenterlineWorker::setSkipMergedFrames(bool skip)
 {
     m_skipMergedFrames = skip;
+}
+
+void CenterlineWorker::setFps(double fps)
+{
+    m_fps = fps > 0.0 ? fps : 25.0;
+}
+
+void CenterlineWorker::setMaxReversalFraction(float fraction)
+{
+    m_maxReversalFraction = qBound(0.f, fraction, 1.f);
 }
 
 QMap<int, Tracking::DetectedBlob> CenterlineWorker::getDetectedBlobsForFrame(int frameNumber) const
@@ -398,8 +445,10 @@ void CenterlineWorker::doWork()
             }
         }
 
-        relabelTrackHeadTailByMotion(m_storage, m_sharedStorageMutex.data(),
-                                     wormId, sortedPoints);
+        const QList<int> swapped = refineHeadTailByDirection(
+            m_storage, m_sharedStorageMutex.data(),
+            wormId, sortedPoints, m_fps, m_maxReversalFraction);
+        emit headTailSwapEvent(wormId, swapped);
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);

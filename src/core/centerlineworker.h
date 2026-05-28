@@ -48,6 +48,11 @@ public:
     void setClearBaselinesAtStart(bool clearAtStart);
     void setSharedStorageMutex(const QSharedPointer<QMutex>& mutex);
     void setSkipMergedFrames(bool skip);
+    void setFps(double fps);
+    // Fraction of within-window steps allowed to point against the majority direction
+    // before the segment is considered ambiguous and skipped (0 = any reversal skips,
+    // 1 = never skip). Default 0.25.
+    void setMaxReversalFraction(float fraction);
 
 public slots:
     void doWork();
@@ -56,6 +61,9 @@ signals:
     void progress(int percentage);
     void finished();
     void failed(const QString& reason);
+    // Emitted once per worm after head/tail refinement; lists the frame numbers
+    // whose centerline was reversed relative to the processFrame assignment.
+    void headTailSwapEvent(int wormId, QList<int> swappedFrames);
 
 private:
     QMap<int, Tracking::DetectedBlob> getDetectedBlobsForFrame(int frameNumber) const;
@@ -72,6 +80,8 @@ private:
     QList<int> m_wormIds;
     bool m_clearBaselinesAtStart = true;
     bool m_skipMergedFrames = false;
+    double m_fps = 25.0;
+    float m_maxReversalFraction = 0.25f;
     QSharedPointer<QMutex> m_sharedStorageMutex;
 };
 

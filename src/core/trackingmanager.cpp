@@ -2325,6 +2325,117 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
     return videoSpecificPath;
 }
 
+// ── Head/tail swap xlsx export ─────────────────────────────────────────────
+// Minimal single-sheet xlsx helpers, parallel to the multi-sheet track workbook.
+
+static QByteArray buildSwapContentTypesXml()
+{
+    QByteArray d; QBuffer b(&d); b.open(QIODevice::WriteOnly);
+    QXmlStreamWriter x(&b);
+    x.writeStartDocument();
+    x.writeStartElement("Types");
+    x.writeDefaultNamespace(QString::fromLatin1(kContentTypesNs));
+    x.writeEmptyElement("Default"); x.writeAttribute("Extension","rels");
+    x.writeAttribute("ContentType","application/vnd.openxmlformats-package.relationships+xml");
+    x.writeEmptyElement("Default"); x.writeAttribute("Extension","xml");
+    x.writeAttribute("ContentType","application/xml");
+    x.writeEmptyElement("Override"); x.writeAttribute("PartName","/xl/workbook.xml");
+    x.writeAttribute("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml");
+    x.writeEmptyElement("Override"); x.writeAttribute("PartName","/xl/styles.xml");
+    x.writeAttribute("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml");
+    x.writeEmptyElement("Override"); x.writeAttribute("PartName","/xl/worksheets/sheet1.xml");
+    x.writeAttribute("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
+    x.writeEndElement(); x.writeEndDocument();
+    return d;
+}
+
+static QByteArray buildSwapWorkbookXml()
+{
+    QByteArray d; QBuffer b(&d); b.open(QIODevice::WriteOnly);
+    QXmlStreamWriter x(&b);
+    x.writeStartDocument();
+    x.writeStartElement("workbook");
+    x.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
+    x.writeNamespace(QString::fromLatin1(kOfficeDocumentRelsNs),"r");
+    x.writeStartElement("sheets");
+    x.writeEmptyElement("sheet"); x.writeAttribute("name","HeadTailSwaps");
+    x.writeAttribute("sheetId","1"); x.writeAttribute("r:id","rId1");
+    x.writeEndElement(); x.writeEndElement(); x.writeEndDocument();
+    return d;
+}
+
+static QByteArray buildSwapWorkbookRelsXml()
+{
+    QByteArray d; QBuffer b(&d); b.open(QIODevice::WriteOnly);
+    QXmlStreamWriter x(&b);
+    x.writeStartDocument();
+    x.writeStartElement("Relationships");
+    x.writeDefaultNamespace(QString::fromLatin1(kPackageRelsNs));
+    x.writeEmptyElement("Relationship"); x.writeAttribute("Id","rId1");
+    x.writeAttribute("Type","http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
+    x.writeAttribute("Target","worksheets/sheet1.xml");
+    x.writeEmptyElement("Relationship"); x.writeAttribute("Id","rId2");
+    x.writeAttribute("Type","http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles");
+    x.writeAttribute("Target","styles.xml");
+    x.writeEndElement(); x.writeEndDocument();
+    return d;
+}
+
+void TrackingManager::exportHeadTailSwapXlsx(
+    const QMap<int, QList<int>>& swapData, const QString& outputPath) const
+{
+    if (outputPath.isEmpty() || !m_storage) return;
+
+    // Collect the full frame range from all tracks.
+    int minFrame = INT_MAX, maxFrame = INT_MIN;
+    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
+    for (const auto& entry : tracks) {
+        for (const auto& tp : entry.second) {
+            minFrame = std::min(minFrame, tp.frameNumberOriginal);
+            maxFrame = std::max(maxFrame, tp.frameNumberOriginal);
+        }
+    }
+    if (minFrame > maxFrame) return;
+
+    // Sorted worm IDs (columns).
+    QList<int> wormIds = swapData.keys();
+    std::sort(wormIds.begin(), wormIds.end());
+
+    // Build a fast-lookup set of swapped frames per worm.
+    QMap<int, QSet<int>> swapSets;
+    for (int wid : wormIds)
+        for (int f : swapData[wid])
+            swapSets[wid].insert(f);
+
+    // Build sheet rows: header + one row per frame.
+    QList<WorkbookRow> rows;
+
+    WorkbookRow header;
+    header.append(stringCell("Frame"));
+    for (int wid : wormIds)
+        header.append(stringCell(QString("Worm %1").arg(wid)));
+    rows.append(header);
+
+    for (int f = minFrame; f <= maxFrame; ++f) {
+        WorkbookRow row;
+        row.append(numberCell(QString::number(f)));
+        for (int wid : wormIds)
+            row.append(swapSets.value(wid).contains(f)
+                ? stringCell("SWAP") : stringCell(""));
+        rows.append(row);
+    }
+
+    QList<ZipEntry> entries{
+        ZipEntry{"[Content_Types].xml",        buildSwapContentTypesXml()},
+        ZipEntry{"_rels/.rels",                buildRootRelsXml()},
+        ZipEntry{"xl/workbook.xml",            buildSwapWorkbookXml()},
+        ZipEntry{"xl/_rels/workbook.xml.rels", buildSwapWorkbookRelsXml()},
+        ZipEntry{"xl/styles.xml",              buildStylesXml()},
+        ZipEntry{"xl/worksheets/sheet1.xml",   buildWorksheetXml(rows)},
+    };
+    writeStoredZip(outputPath, entries);
+}
+
 QString TrackingManager::createProcessingOutputDirectory(const QString& videoSpecificDirectory) {
     if (videoSpecificDirectory.isEmpty()) {
         qWarning() << "TrackingManager: Invalid video-specific directory";
@@ -3104,6 +3215,11 @@ void TrackingManager::setSkipMergedFrames(bool skip)
     m_skipMergedFrames = skip;
 }
 
+void TrackingManager::setMaxReversalFraction(float fraction)
+{
+    m_maxReversalFraction = qBound(0.f, fraction, 1.f);
+}
+
 void TrackingManager::startCenterlineComputation() {
     if (!m_centerlineEnabled) {
         emit trackingStatusUpdate("Centerline computation disabled.");
@@ -3140,6 +3256,7 @@ void TrackingManager::startCenterlineComputation() {
     m_centerlineWorkersFinishedCount = 0;
     m_totalCenterlineWorkers = numThreads;
     m_centerlineStorageMutex = QSharedPointer<QMutex>::create();
+    m_headTailSwapData.clear();
 
     {
         QMutexLocker locker(m_centerlineStorageMutex.data());
@@ -3162,6 +3279,8 @@ void TrackingManager::startCenterlineComputation() {
         worker->setWormIds(wormBuckets.at(workerIndex));
         worker->setClearBaselinesAtStart(false);
         worker->setSkipMergedFrames(m_skipMergedFrames);
+        worker->setFps(m_videoFps);
+        worker->setMaxReversalFraction(m_maxReversalFraction);
         worker->setSharedStorageMutex(m_centerlineStorageMutex);
         worker->moveToThread(thread);
 
@@ -3170,6 +3289,10 @@ void TrackingManager::startCenterlineComputation() {
         m_centerlineWorkerProgress[workerIndex] = 0;
 
         connect(thread, &QThread::started, worker, &CenterlineWorker::doWork);
+        connect(worker, &CenterlineWorker::headTailSwapEvent, this,
+                [this](int wormId, QList<int> swappedFrames) {
+                    m_headTailSwapData[wormId] = swappedFrames;
+                });
         connect(worker, &CenterlineWorker::progress, this,
                 [this, workerIndex](int percentage) {
                     m_centerlineWorkerProgress[workerIndex] = percentage;
@@ -3207,6 +3330,20 @@ void TrackingManager::handleCenterlineFinished() {
     m_totalCenterlineWorkers = 0;
     emit trackingStatusUpdate("Centerline computation complete.");
     emit centerlineProgress(100);
+
+    // Export head/tail swap report alongside the other output files.
+    if (!m_headTailSwapData.isEmpty()) {
+        const QString dir = !m_processingOutputDirectory.isEmpty()
+            ? m_processingOutputDirectory
+            : m_videoSpecificDirectory;
+        if (!dir.isEmpty()) {
+            const QString baseName = QFileInfo(m_videoPath).completeBaseName();
+            const QString path = QDir(dir).filePath(baseName + "_headtail_swaps.xlsx");
+            exportHeadTailSwapXlsx(m_headTailSwapData, path);
+            emit trackingStatusUpdate("Head/tail swap report saved: " + path);
+        }
+    }
+
     emit centerlineFinished();
     QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
 }

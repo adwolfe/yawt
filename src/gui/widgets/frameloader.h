@@ -90,6 +90,7 @@ private:
     FrameCache* m_frameCache;
     QQueue<FrameLoadRequest> m_requestQueue;
     mutable QMutex m_queueMutex;
+    mutable QMutex m_captureMutex; // Protects m_videoCapture across threads
     QWaitCondition m_waitCondition;
     bool m_stopRequested;
     bool m_isProcessing;

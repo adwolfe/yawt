@@ -231,6 +231,7 @@ public:
     void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
     void setCenterlineEnabled(bool enabled);
     void setSkipMergedFrames(bool skip);
+    void setMaxReversalFraction(float fraction);
 
 public slots:
     /**
@@ -372,6 +373,7 @@ private:
     void updateOverallProgress();
     void checkForAllTrackersFinished();
     bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
+    void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData, const QString& outputPath) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
     size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
@@ -471,6 +473,8 @@ private:
     Centerline::CenterlineSnakeParams m_centerlineSnakeParams;
     bool m_centerlineEnabled = true;
     bool m_skipMergedFrames = false;
+    float m_maxReversalFraction = 0.25f;
+    QMap<int, QList<int>> m_headTailSwapData;
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures
