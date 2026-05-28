@@ -580,11 +580,7 @@ QMap<int, QList<QList<int>>> TrackingDataStorage::getAllMergeGroups() const {
  */
 void TrackingDataStorage::setDetectedBlobForFrame(int frameNumber, int wormId, const Tracking::DetectedBlob& blob) {
     if (frameNumber < 0) return;
-    Tracking::DetectedBlob storedBlob = blob;
-    if (storedBlob.isValid && storedBlob.centerlinePoints.empty() && !storedBlob.contourPoints.empty()) {
-        Tracking::populateCenterlineFromContour(storedBlob);
-    }
-    m_detectedBlobsByFrame[frameNumber].insert(wormId, storedBlob);
+    m_detectedBlobsByFrame[frameNumber].insert(wormId, blob);
 }
 
 QMap<int, Tracking::DetectedBlob> TrackingDataStorage::getDetectedBlobsForFrame(int frameNumber) const {

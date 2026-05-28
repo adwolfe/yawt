@@ -229,6 +229,8 @@ public:
      * or just at startup) for the values to be picked up by the worker.
      */
     void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
+    void setCenterlineEnabled(bool enabled);
+    void setSkipMergedFrames(bool skip);
 
 public slots:
     /**
@@ -467,6 +469,8 @@ private:
     // Active-contour parameters for ring/coiled-frame refinement. Configured via
     // setCenterlineSnakeParams(); applied to the worker right before doWork().
     Centerline::CenterlineSnakeParams m_centerlineSnakeParams;
+    bool m_centerlineEnabled = true;
+    bool m_skipMergedFrames = false;
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures

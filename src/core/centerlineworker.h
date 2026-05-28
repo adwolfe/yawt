@@ -17,13 +17,14 @@ struct CenterlineFrameDebug;
 
 /**
  * @class CenterlineWorker
- * @brief Background worker that populates centerline data for all non-merged track points.
+ * @brief Background worker that populates centerline data after tracking.
  *
  * Runs on a QThread after tracking completes. Iterates over all stored blobs, calls
  * populateCenterlineFromContour() for blobs that have contour data but no centerline,
  * and writes the result back to storage via setDetectedBlobForFrame().
  *
- * Skips frames where TrackPointQuality is Merged or Lost, as those have ambiguous blobs.
+ * Always skips Lost frames. Merged frames are skipped when setSkipMergedFrames(true)
+ * is enabled; otherwise they are processed with ambiguous-blob topology.
  *
  * For ring/coiled frames where a previous-frame centerline is available, runs the
  * active-contour ("snake") refinement using parameters set via setSnakeParams(). The
@@ -46,6 +47,7 @@ public:
     void setWormIds(const QList<int>& wormIds);
     void setClearBaselinesAtStart(bool clearAtStart);
     void setSharedStorageMutex(const QSharedPointer<QMutex>& mutex);
+    void setSkipMergedFrames(bool skip);
 
 public slots:
     void doWork();
@@ -69,6 +71,7 @@ private:
     Centerline::CenterlineSnakeParams m_snakeParams;
     QList<int> m_wormIds;
     bool m_clearBaselinesAtStart = true;
+    bool m_skipMergedFrames = false;
     QSharedPointer<QMutex> m_sharedStorageMutex;
 };
 

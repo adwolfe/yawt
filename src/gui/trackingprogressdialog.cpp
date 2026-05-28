@@ -84,6 +84,11 @@ TrackingProgressDialog::TrackingProgressDialog(QWidget *parent) :
     ui->overallProgressBar->setVisible(false);
     ui->statusLabel->setText("Ready to start tracking.");
     if(beginButton) beginButton->setEnabled(true);
+
+    // Enable/disable skipMergedFramesCheckBox based on computeCenterlineCheckBox state.
+    ui->skipMergedFramesCheckBox->setEnabled(ui->computeCenterlineCheckBox->isChecked());
+    connect(ui->computeCenterlineCheckBox, &QCheckBox::toggled,
+            ui->skipMergedFramesCheckBox, &QCheckBox::setEnabled);
 }
 
 TrackingProgressDialog::~TrackingProgressDialog() {
@@ -91,12 +96,20 @@ TrackingProgressDialog::~TrackingProgressDialog() {
 }
 
 bool TrackingProgressDialog::onlyTrackMissingChecked() const {
-    // Default to true if UI isn't ready.
     if (!ui) return true;
-    // Use the dialog widget's findChild to locate the checkbox by objectName.
     QCheckBox* cb = this->findChild<QCheckBox*>("onlyMissingCheckBox");
     if (!cb) return true;
     return cb->isChecked();
+}
+
+bool TrackingProgressDialog::computeCenterlineChecked() const {
+    if (!ui) return true;
+    return ui->computeCenterlineCheckBox->isChecked();
+}
+
+bool TrackingProgressDialog::skipMergedFramesChecked() const {
+    if (!ui) return false;
+    return ui->skipMergedFramesCheckBox->isChecked();
 }
 
 
@@ -234,7 +247,10 @@ void TrackingProgressDialog::updateOverallProgress(int percentage) {
 
 void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
     m_isTrackingRunning = false;
-    ui->statusLabel->setText("Tracking complete. Computing centerlines...");
+    const QString clMsg = computeCenterlineChecked()
+        ? "Tracking complete. Computing centerlines..."
+        : "Tracking complete. Skipping centerline computation.";
+    ui->statusLabel->setText(clMsg);
     ui->overallProgressBar->setValue(0);
     ui->overallProgressBar->setStyleSheet("");
     ui->overallProgressBar->setVisible(true);

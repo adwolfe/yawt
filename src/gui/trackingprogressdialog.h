@@ -38,6 +38,8 @@ public:
     // If true, callers should filter the provided worm list to include only items
     // that do not already have existing track data.
     bool onlyTrackMissingChecked() const;
+    bool computeCenterlineChecked() const;
+    bool skipMergedFramesChecked() const;
 
 public slots:
     void updateStatusMessage(const QString& message);

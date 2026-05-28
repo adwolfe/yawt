@@ -489,6 +489,12 @@ void AppController::onDialogBeginRequested()
     // defaults from the struct are used on a fresh controller before any user edit.
     m_manager->setCenterlineSnakeParams(m_snakeParams);
 
+    // Read centerline options from the dialog.
+    if (m_trackingDialog) {
+        m_manager->setCenterlineEnabled(m_trackingDialog->computeCenterlineChecked());
+        m_manager->setSkipMergedFrames(m_trackingDialog->skipMergedFramesChecked());
+    }
+
     // Start tracking via the manager using stored dialog parameters.
     emit trackingStarted();
     m_manager->startFullTrackingProcess(m_dialogVideoPath, m_dialogDataDirectory, m_dialogKeyFrame,

@@ -45,6 +45,7 @@ struct CenterlineFrameRequest {
     int pointIndex = -1;
     int step = 1;
     bool isKeyframeBootstrap = false;
+    bool skipIfMerged = false;  // When true, return early without computing centerline for merged frames.
 };
 
 struct CenterlineFrameResult {

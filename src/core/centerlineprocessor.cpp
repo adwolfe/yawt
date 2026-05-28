@@ -3119,14 +3119,6 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
     const std::vector<Tracking::WormTrackPoint>& points = *ctx.sortedPoints;
     const int i = req.pointIndex;
 
-    auto inMergeGroupAtFrame = [&](int frameNumber) -> bool {
-        const QList<QList<int>> groups = io.getMergeGroupsForFrame(frameNumber);
-        for (const QList<int>& g : groups) {
-            if (g.size() > 1 && g.contains(ctx.wormId)) return true;
-        }
-        return false;
-    };
-
     auto nearestCandidateIdx = [](const Tracking::DetectedBlob& b,
                                   const cv::Point2f& target) -> int {
         int bestIdx = -1;
@@ -3222,37 +3214,49 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
         return outPredictor.hasPrev || outPrevState.valid;
     };
 
-if (i < 0 || i >= static_cast<int>(points.size())) return result;
-const Tracking::WormTrackPoint& tp = points[i];
+    if (i < 0 || i >= static_cast<int>(points.size())) return result;
+    const Tracking::WormTrackPoint& tp = points[i];
 
-if (tp.quality == Tracking::TrackPointQuality::Lost) {
-    predictor = Centerline::HeadTailPredictor{};
-    prevState.valid = false;
-    return result;
-}
+    if (tp.quality == Tracking::TrackPointQuality::Lost) {
+        predictor = Centerline::HeadTailPredictor{};
+        prevState = CenterlineState{};
+        return result;
+    }
 
-QMap<int, Tracking::DetectedBlob> frameBlobs =
-    io.getDetectedBlobsForFrame(tp.frameNumberOriginal);
-if (!frameBlobs.contains(ctx.wormId)) return result;
-Tracking::DetectedBlob blob = frameBlobs[ctx.wormId];
-if (!blob.isValid || blob.contourPoints.empty()) return result;
-blob.hasCenterlineCutPoint = false;
+    QMap<int, Tracking::DetectedBlob> frameBlobs =
+        io.getDetectedBlobsForFrame(tp.frameNumberOriginal);
+    if (!frameBlobs.contains(ctx.wormId)) return result;
+    Tracking::DetectedBlob blob = frameBlobs[ctx.wormId];
+    if (!blob.isValid || blob.contourPoints.empty()) return result;
+    blob.hasCenterlineCutPoint = false;
 
-const bool inMerge = inMergeGroupAtFrame(tp.frameNumberOriginal);
-Centerline::HeadTailPredictor framePredictor = predictor;
-CenterlineState framePrevState = prevState;
-float frameRefLength = ctx.refLength;
-if (!req.isKeyframeBootstrap) {
-    float localRefLength = frameRefLength;
-    if (loadPreviousFrameContext(tp.frameNumberOriginal, req.step,
-                                 framePredictor,
-                                 framePrevState,
-                                 localRefLength)) {
-        if (localRefLength > 0.f) {
-            frameRefLength = localRefLength;
+    const bool inMerge = tp.quality == Tracking::TrackPointQuality::Merged;
+
+    if (inMerge && req.skipIfMerged) {
+        predictor = Centerline::HeadTailPredictor{};
+        prevState = CenterlineState{};
+        blob.centerlinePoints.clear();
+        blob.hasCenterlineCutPoint = false;
+        io.setDetectedBlobForFrame(tp.frameNumberOriginal, ctx.wormId, blob);
+        result.wroteBlob = true;
+        result.blob = blob;
+        return result; // result.processed = false; doWork bootstraps the next non-merged frame.
+    }
+
+    Centerline::HeadTailPredictor framePredictor = predictor;
+    CenterlineState framePrevState = prevState;
+    float frameRefLength = ctx.refLength;
+    if (!req.isKeyframeBootstrap) {
+        float localRefLength = frameRefLength;
+        if (loadPreviousFrameContext(tp.frameNumberOriginal, req.step,
+                                     framePredictor,
+                                     framePrevState,
+                                     localRefLength)) {
+            if (localRefLength > 0.f) {
+                frameRefLength = localRefLength;
+            }
         }
     }
-}
 
 // ── STEP 1: detect endpoints, write back tip data ───────────
 const Centerline::TipFeatureBaseline baseline =

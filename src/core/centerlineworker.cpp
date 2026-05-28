@@ -148,6 +148,11 @@ void CenterlineWorker::setSharedStorageMutex(const QSharedPointer<QMutex>& mutex
     m_sharedStorageMutex = mutex;
 }
 
+void CenterlineWorker::setSkipMergedFrames(bool skip)
+{
+    m_skipMergedFrames = skip;
+}
+
 QMap<int, Tracking::DetectedBlob> CenterlineWorker::getDetectedBlobsForFrame(int frameNumber) const
 {
     QMutexLocker locker(m_sharedStorageMutex.data());
@@ -350,32 +355,46 @@ void CenterlineWorker::doWork()
         };
 
         // ── Sweep 1 entry: process keyframe, then propagate outward ────
+        // skipIfMerged is passed on every request; processFrame uses the
+        // per-worm TrackPointQuality to decide whether a frame is merged.
+        // result.processed == false means the frame was skipped (merged or lost);
+        // the next frame is then treated as a fresh keyframe bootstrap.
         Centerline::CenterlineSweepState seedState;
-        Centerline::processFrame(context,
-                                 {keyframeIdx, 1, true},
-                                 seedState,
-                                 io);
+        bool seedWasSkipped = false;
+        {
+            Centerline::CenterlineFrameRequest req{keyframeIdx, 1, true};
+            req.skipIfMerged = m_skipMergedFrames;
+            auto r = Centerline::processFrame(context, req, seedState, io);
+            seedWasSkipped = !r.processed;
+            if (seedWasSkipped) seedState = Centerline::CenterlineSweepState{};
+        }
 
         // Forward pass.
         {
             Centerline::CenterlineSweepState sweepState = seedState;
+            bool prevWasSkipped = seedWasSkipped;
             for (int i = keyframeIdx + 1;
                  i < static_cast<int>(sortedPoints.size()); ++i) {
-                Centerline::processFrame(context,
-                                         {i, 1, false},
-                                         sweepState,
-                                         io);
+                const bool bootstrap = prevWasSkipped;
+                if (bootstrap) sweepState = Centerline::CenterlineSweepState{};
+                Centerline::CenterlineFrameRequest req{i, 1, bootstrap};
+                req.skipIfMerged = m_skipMergedFrames;
+                auto r = Centerline::processFrame(context, req, sweepState, io);
+                prevWasSkipped = !r.processed;
             }
         }
 
         // Backward pass.
         {
             Centerline::CenterlineSweepState sweepState = seedState;
+            bool prevWasSkipped = seedWasSkipped;
             for (int i = keyframeIdx - 1; i >= 0; --i) {
-                Centerline::processFrame(context,
-                                         {i, -1, false},
-                                         sweepState,
-                                         io);
+                const bool bootstrap = prevWasSkipped;
+                if (bootstrap) sweepState = Centerline::CenterlineSweepState{};
+                Centerline::CenterlineFrameRequest req{i, -1, bootstrap};
+                req.skipIfMerged = m_skipMergedFrames;
+                auto r = Centerline::processFrame(context, req, sweepState, io);
+                prevWasSkipped = !r.processed;
             }
         }
 

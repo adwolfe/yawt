@@ -97,17 +97,12 @@ QList<QPointF> extractOrderedCenterlinePoints(const DetectedBlob& blob)
         return centerlinePoints;
     }
 
-    DetectedBlob centerlineBlob = blob;
-    if (centerlineBlob.centerlinePoints.empty() && !centerlineBlob.contourPoints.empty()) {
-        populateCenterlineFromContour(centerlineBlob);
-    }
-
-    if (centerlineBlob.centerlinePoints.empty()) {
+    if (blob.centerlinePoints.empty()) {
         return centerlinePoints;
     }
 
-    centerlinePoints.reserve(static_cast<qsizetype>(centerlineBlob.centerlinePoints.size()));
-    for (const cv::Point2f& point : centerlineBlob.centerlinePoints) {
+    centerlinePoints.reserve(static_cast<qsizetype>(blob.centerlinePoints.size()));
+    for (const cv::Point2f& point : blob.centerlinePoints) {
         centerlinePoints.append(QPointF(point.x, point.y));
     }
 

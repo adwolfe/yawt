@@ -482,10 +482,6 @@ static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
                         }
                     }
                 }
-                if (db.isValid && db.centerlinePoints.empty() && !db.contourPoints.empty()) {
-                    Tracking::populateCenterlineFromContour(db);
-                }
-
                 db.hasCenterlineCutPoint = dbObj.value("hasCenterlineCutPoint").toBool(false);
                 if (db.hasCenterlineCutPoint &&
                     dbObj.contains("centerlineCutPoint") && dbObj["centerlineCutPoint"].isObject()) {
@@ -2258,13 +2254,8 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                         m_storage->getDetectedBlobsForFrame(point.frameNumberOriginal);
                     const auto blobIt = blobsForFrame.constFind(sourceItemId);
                     if (blobIt != blobsForFrame.constEnd()) {
-                        Tracking::DetectedBlob centerlineBlob = blobIt.value();
-                        if (centerlineBlob.isValid && centerlineBlob.centerlinePoints.empty() &&
-                            !centerlineBlob.contourPoints.empty()) {
-                            Tracking::populateCenterlineFromContour(centerlineBlob);
-                        }
                         centerlinePoints =
-                            Tracking::resampleCenterlinePoints(centerlineBlob.centerlinePoints, 10);
+                            Tracking::resampleCenterlinePoints(blobIt.value().centerlinePoints, 10);
                     }
 
                 }
@@ -3103,7 +3094,24 @@ void TrackingManager::setCenterlineSnakeParams(const Centerline::CenterlineSnake
     m_centerlineSnakeParams = params;
 }
 
+void TrackingManager::setCenterlineEnabled(bool enabled)
+{
+    m_centerlineEnabled = enabled;
+}
+
+void TrackingManager::setSkipMergedFrames(bool skip)
+{
+    m_skipMergedFrames = skip;
+}
+
 void TrackingManager::startCenterlineComputation() {
+    if (!m_centerlineEnabled) {
+        emit trackingStatusUpdate("Centerline computation disabled.");
+        emit centerlineProgress(100);
+        emit centerlineFinished();
+        return;
+    }
+
     if (!m_storage) {
         emit centerlineFinished();
         return;
@@ -3153,6 +3161,7 @@ void TrackingManager::startCenterlineComputation() {
         worker->setSnakeParams(m_centerlineSnakeParams);
         worker->setWormIds(wormBuckets.at(workerIndex));
         worker->setClearBaselinesAtStart(false);
+        worker->setSkipMergedFrames(m_skipMergedFrames);
         worker->setSharedStorageMutex(m_centerlineStorageMutex);
         worker->moveToThread(thread);
 
