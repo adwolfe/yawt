@@ -106,6 +106,16 @@ public slots:
     // Debug control slots
     void toggleTrackingDebug();
 
+    // Debug tab: reruns centerline computation with current snake spinbox values.
+    void onRerunCenterlineClicked();
+    // Debug tab: called when a rerun centerline pass makes progress.
+    void onDebugCenterlineProgress(int percentage);
+    // Debug tab: called when a rerun centerline pass finishes.
+    void onDebugCenterlineFinished();
+    // Debug tab: export per-stage diagnostic images + log for the currently
+    // selected worm at the current frame.
+    void onExportProcessClicked();
+
     // VideoLoader Interaction Mode Toggles (using QButtonGroup or individual slots)
     void panModeButtonClicked();
     void roiModeButtonClicked();
@@ -118,6 +128,7 @@ public slots:
     void onViewThresholdToggled(bool checked); // Connected to ui->showThreshButton's toggled()
     void onViewBlobsToggled(bool checked);     // Connected to a new ui->viewBlobsButton's toggled()
     void onViewTracksToggled(bool checked);    // Connected to a new ui->viewTracksButton's toggled()
+    void onViewSkeletonsToggled(bool checked); // Connected to ui->skeletonButton's toggled()
 
     // Thresholding Parameter Updates
     void updateThresholdAlgorithmSettings();

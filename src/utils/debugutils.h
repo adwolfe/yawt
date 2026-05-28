@@ -4,10 +4,10 @@
 #include <QDebug>
 
 /**
- * @brief Global debug utilities for controlling verbose debug output
+ * @brief Global debug utilities for controlling debug output
  * 
- * This utility provides a centralized way to control debug output across
- * different components, particularly for performance-sensitive tracking operations.
+ * This utility provides a centralized on/off switch for legacy debug output
+ * that has not yet moved to QLoggingCategory.
  */
 class DebugUtils {
 public:
@@ -16,12 +16,14 @@ public:
      * @return True if tracking debug is enabled
      */
     static bool isTrackingDebugEnabled();
+    static bool isDebugCaptureEnabled();
     
     /**
      * @brief Set the tracking debug state
      * @param enabled True to enable tracking debug messages
      */
     static void setTrackingDebugEnabled(bool enabled);
+    static void setDebugCaptureEnabled(bool enabled);
     
     /**
      * @brief Convenience macro for conditional tracking debug output
@@ -31,6 +33,7 @@ public:
     
 private:
     static bool s_trackingDebugEnabled;
+    static bool s_debugCaptureEnabled;
 };
 
 // Convenience macro for tracking debug messages

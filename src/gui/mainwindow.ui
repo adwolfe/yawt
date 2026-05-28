@@ -350,6 +350,25 @@
              </property>
             </widget>
            </item>
+           <item>
+            <widget class="QToolButton" name="skeletonButton">
+             <property name="toolTip">
+              <string>Show/Hide centerline</string>
+             </property>
+             <property name="statusTip">
+              <string>Show/hide skeletonized centerline overlay</string>
+             </property>
+             <property name="text">
+              <string>CL</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+             <property name="autoRaise">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
           </layout>
          </item>
          <item>
@@ -1149,50 +1168,247 @@ QToolButton#lastFrameButton {
            </widget>
            <widget class="QWidget" name="cleanupTab">
             <attribute name="title">
-             <string>Cleanup</string>
+             <string>Debug</string>
             </attribute>
-            <layout class="QVBoxLayout" name="verticalLayout_4" stretch="10,2">
+            <layout class="QVBoxLayout" name="debugTabLayout">
              <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_12">
-               <property name="leftMargin">
-                <number>20</number>
+              <widget class="QGroupBox" name="snakeDebugGroup">
+               <property name="title">
+                <string>Centerline Snake (Rings / Coils)</string>
                </property>
-               <property name="rightMargin">
-                <number>20</number>
+               <property name="checkable">
+                <bool>true</bool>
                </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+               <layout class="QFormLayout" name="snakeFormLayout">
+                <property name="labelAlignment">
+                 <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set>
+                </property>
+                <item row="0" column="0">
+                 <widget class="QLabel" name="labelAlpha">
+                  <property name="text"><string>Tension α</string></property>
+                  <property name="toolTip"><string>Resists stretching; smooths point spacing along the curve.</string></property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QDoubleSpinBox" name="snakeAlphaSpin">
+                  <property name="toolTip"><string>Resists stretching; smooths point spacing along the curve.</string></property>
+                  <property name="minimum"><double>0.000000</double></property>
+                  <property name="maximum"><double>5.000000</double></property>
+                  <property name="singleStep"><double>0.050000</double></property>
+                  <property name="decimals"><number>3</number></property>
+                  <property name="value"><double>0.100000</double></property>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="labelBeta">
+                  <property name="text"><string>Rigidity β</string></property>
+                  <property name="toolTip"><string>Resists bending / kinking.</string></property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QDoubleSpinBox" name="snakeBetaSpin">
+                  <property name="toolTip"><string>Resists bending / kinking.</string></property>
+                  <property name="minimum"><double>0.000000</double></property>
+                  <property name="maximum"><double>5.000000</double></property>
+                  <property name="singleStep"><double>0.050000</double></property>
+                  <property name="decimals"><number>3</number></property>
+                  <property name="value"><double>0.050000</double></property>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="labelLambda">
+                  <property name="text"><string>Image attraction λ</string></property>
+                  <property name="toolTip"><string>Pulls the curve toward the medial axis (ridge of the distance transform).</string></property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QDoubleSpinBox" name="snakeLambdaSpin">
+                  <property name="toolTip"><string>Pulls the curve toward the medial axis (ridge of the distance transform).</string></property>
+                  <property name="minimum"><double>0.000000</double></property>
+                  <property name="maximum"><double>10.000000</double></property>
+                  <property name="singleStep"><double>0.100000</double></property>
+                  <property name="decimals"><number>3</number></property>
+                  <property name="value"><double>1.000000</double></property>
+                 </widget>
+                </item>
+                <item row="3" column="0">
+                 <widget class="QLabel" name="labelIters">
+                  <property name="text"><string>Iterations</string></property>
+                  <property name="toolTip"><string>Number of explicit-Euler update steps per frame.</string></property>
+                 </widget>
+                </item>
+                <item row="3" column="1">
+                 <widget class="QSpinBox" name="snakeItersSpin">
+                  <property name="toolTip"><string>Number of explicit-Euler update steps per frame.</string></property>
+                  <property name="minimum"><number>5</number></property>
+                  <property name="maximum"><number>500</number></property>
+                  <property name="value"><number>60</number></property>
+                 </widget>
+                </item>
+                <item row="4" column="0">
+                 <widget class="QLabel" name="labelStep">
+                  <property name="text"><string>Step size τ</string></property>
+                  <property name="toolTip"><string>Per-iteration step size. Reduce if snake oscillates; increase for faster convergence.</string></property>
+                 </widget>
+                </item>
+                <item row="4" column="1">
+                 <widget class="QDoubleSpinBox" name="snakeStepSpin">
+                  <property name="toolTip"><string>Per-iteration step size. Reduce if snake oscillates; increase for faster convergence.</string></property>
+                  <property name="minimum"><double>0.010000</double></property>
+                  <property name="maximum"><double>2.000000</double></property>
+                  <property name="singleStep"><double>0.050000</double></property>
+                  <property name="decimals"><number>3</number></property>
+                  <property name="value"><double>0.500000</double></property>
+                 </widget>
+                </item>
+                <item row="5" column="0">
+                 <widget class="QLabel" name="labelOrientThresh">
+                  <property name="text"><string>Orient. threshold (rad)</string></property>
+                  <property name="toolTip"><string>Right-hand-rule veto: if the total signed turning angle of both the current and previous centerline exceed this magnitude, and their signs disagree, the orientation is flipped. Set lower to enforce orientation earlier (even on gentle bends); set higher to only apply on tight coils. 0 = always enforce; &gt;π = effectively disabled.</string></property>
+                 </widget>
+                </item>
+                <item row="5" column="1">
+                 <widget class="QDoubleSpinBox" name="snakeOrientThreshSpin">
+                  <property name="toolTip"><string>Right-hand-rule veto threshold in radians. 0.5 rad ≈ 29°. When both the current and previous frame's total signed turning angle exceed this value in magnitude but disagree in sign, the orientation is corrected. Near-zero values mean near-straight bodies (genuinely ambiguous).</string></property>
+                  <property name="minimum"><double>0.000000</double></property>
+                  <property name="maximum"><double>3.141593</double></property>
+                  <property name="singleStep"><double>0.050000</double></property>
+                  <property name="decimals"><number>3</number></property>
+                  <property name="value"><double>0.500000</double></property>
+                 </widget>
+                </item>
+                <item row="6" column="0">
+                 <widget class="QLabel" name="labelNPoints">
+                  <property name="text"><string>Points along line</string></property>
+                  <property name="toolTip"><string>Number of evenly-spaced points resampled along the centerline. More points reduce kinking on highly curved bodies at the cost of slightly more computation. Minimum 5.</string></property>
+                 </widget>
+                </item>
+                <item row="6" column="1">
+                 <widget class="QSpinBox" name="snakeNPointsSpin">
+                  <property name="toolTip"><string>Number of resampled centerline points (5–200). Higher values reduce kinking artefacts on coiled or tightly curved worms.</string></property>
+                  <property name="minimum"><number>5</number></property>
+                  <property name="maximum"><number>200</number></property>
+                  <property name="singleStep"><number>5</number></property>
+                  <property name="value"><number>20</number></property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="rerunButtonLayout">
                <item>
-                <widget class="MiniLoader" name="mlon2" native="true"/>
-               </item>
-               <item>
-                <widget class="MiniLoader" name="mlon1" native="true"/>
-               </item>
-               <item>
-                <widget class="MiniLoader" name="miniLoaderOverlay" native="true">
-                 <property name="minimumSize">
-                  <size>
-                   <width>100</width>
-                   <height>100</height>
-                  </size>
-                 </property>
+                <widget class="QPushButton" name="rerunCenterlineButton">
+                 <property name="text"><string>Rerun Centerline</string></property>
+                 <property name="toolTip"><string>Rerun the post-tracking centerline computation with the current snake parameters. Updates all frames in storage; the viewer will refresh immediately.</string></property>
                 </widget>
                </item>
                <item>
-                <widget class="MiniLoader" name="mlop1" native="true"/>
-               </item>
-               <item>
-                <widget class="MiniLoader" name="mlop2" native="true"/>
+                <widget class="QProgressBar" name="centerlineDebugProgressBar">
+                 <property name="value"><number>0</number></property>
+                 <property name="visible"><bool>false</bool></property>
+                </widget>
                </item>
               </layout>
              </item>
              <item>
-              <layout class="QHBoxLayout" name="horizontalLayout_14">
-               <property name="topMargin">
-                <number>0</number>
+              <widget class="QLabel" name="centerlineDebugStatusLabel">
+               <property name="text"><string></string></property>
+               <property name="wordWrap"><bool>true</bool></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="exportProcessButton">
+               <property name="text"><string>Export Process</string></property>
+               <property name="toolTip"><string>Export per-stage diagnostic images and a decision log for the currently selected worm on the current frame. Writes to &lt;dataDir&gt;/&lt;video&gt;/PROC_*/DEBUG/worm{id}_frame{n}/.</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QCheckBox" name="showTipCandidatesCheck">
+               <property name="text"><string>Show tip candidates (debug overlay)</string></property>
+               <property name="toolTip"><string>Overlay per-frame candidate nose/tail points on each visible blob. Filled green circles = Zhang-Suen skeleton degree-1 endpoints. Hollow magenta squares = local maxima of outer-contour curvature. The downstream head/tail assignment step will consume these candidates instead of inheriting endpoints from the previous frame.</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QGroupBox" name="tipBaselineGroup">
+               <property name="title"><string>Tip baselines (clean frames)</string></property>
+               <property name="toolTip"><string>Per-worm running distributions of tip features, accumulated only from clean-topology frames (no ring, not merged, both tips skeleton-confirmed). Feeds the head/tail discriminator in disrupted frames. Refreshed at the end of each centerline pass.</string></property>
+               <property name="flat"><bool>false</bool></property>
+               <layout class="QVBoxLayout" name="tipBaselineLayout">
+                <item>
+                 <widget class="QPlainTextEdit" name="tipBaselineTextEdit">
+                  <property name="readOnly"><bool>true</bool></property>
+                  <property name="maximumHeight"><number>180</number></property>
+                  <property name="placeholderText"><string>Run Rerun Centerline to populate baselines.</string></property>
+                  <property name="font">
+                   <font>
+                    <family>Menlo</family>
+                    <pointsize>10</pointsize>
+                   </font>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <spacer name="debugTabSpacer">
+               <property name="orientation">
+                <enum>Qt::Orientation::Vertical</enum>
                </property>
-               <item>
-                <widget class="QTableView" name="mergeSplitTableView"/>
-               </item>
-              </layout>
+               <property name="sizeType">
+                <enum>QSizePolicy::Policy::Expanding</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>20</width>
+                 <height>40</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <!-- Legacy widgets kept here so existing mainwindow.cpp code compiles unchanged.
+                   This container has zero height and is never shown. -->
+              <widget class="QWidget" name="legacyCleanupContainer">
+               <property name="visible">
+                <bool>false</bool>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>16777215</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <layout class="QVBoxLayout" name="legacyCleanupLayout">
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_12">
+                  <property name="leftMargin"><number>20</number></property>
+                  <property name="rightMargin"><number>20</number></property>
+                  <item><widget class="MiniLoader" name="mlon2" native="true"/></item>
+                  <item><widget class="MiniLoader" name="mlon1" native="true"/></item>
+                  <item>
+                   <widget class="MiniLoader" name="miniLoaderOverlay" native="true">
+                    <property name="minimumSize">
+                     <size><width>100</width><height>100</height></size>
+                    </property>
+                   </widget>
+                  </item>
+                  <item><widget class="MiniLoader" name="mlop1" native="true"/></item>
+                  <item><widget class="MiniLoader" name="mlop2" native="true"/></item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_14">
+                  <property name="topMargin"><number>0</number></property>
+                  <item><widget class="QTableView" name="mergeSplitTableView"/></item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
              </item>
             </layout>
            </widget>

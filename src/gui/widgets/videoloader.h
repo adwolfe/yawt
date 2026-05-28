@@ -111,10 +111,12 @@ public:
  * User can select one view mode at a time.
  */
     enum class ViewModeOption {
-        None      = 0x00,       // No active view overlays/modes
-        Threshold = 0x01,       // Show thresholded image as base
-        Blobs     = 0x02,       // Overlay blob information
-        Tracks    = 0x04        // Overlay track information
+        None          = 0x00,   // No active view overlays/modes
+        Threshold     = 0x01,   // Show thresholded image as base
+        Blobs         = 0x02,   // Overlay blob information
+        Tracks        = 0x04,   // Overlay track information
+        Skeletons     = 0x08,   // Overlay skeletonized centerlines
+        TipCandidates = 0x10    // Overlay candidate nose/tail (tip) points
         // You could add combined flags like:
         // AllOverlays = Blobs | Tracks,
         // FullDebug = Threshold | Blobs | Tracks

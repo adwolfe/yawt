@@ -84,6 +84,11 @@ TrackingProgressDialog::TrackingProgressDialog(QWidget *parent) :
     ui->overallProgressBar->setVisible(false);
     ui->statusLabel->setText("Ready to start tracking.");
     if(beginButton) beginButton->setEnabled(true);
+
+    // Enable/disable skipMergedFramesCheckBox based on computeCenterlineCheckBox state.
+    ui->skipMergedFramesCheckBox->setEnabled(ui->computeCenterlineCheckBox->isChecked());
+    connect(ui->computeCenterlineCheckBox, &QCheckBox::toggled,
+            ui->skipMergedFramesCheckBox, &QCheckBox::setEnabled);
 }
 
 TrackingProgressDialog::~TrackingProgressDialog() {
@@ -91,13 +96,22 @@ TrackingProgressDialog::~TrackingProgressDialog() {
 }
 
 bool TrackingProgressDialog::onlyTrackMissingChecked() const {
-    // Default to true if UI isn't ready.
     if (!ui) return true;
-    // Use the dialog widget's findChild to locate the checkbox by objectName.
     QCheckBox* cb = this->findChild<QCheckBox*>("onlyMissingCheckBox");
     if (!cb) return true;
     return cb->isChecked();
 }
+
+bool TrackingProgressDialog::computeCenterlineChecked() const {
+    if (!ui) return true;
+    return ui->computeCenterlineCheckBox->isChecked();
+}
+
+bool TrackingProgressDialog::skipMergedFramesChecked() const {
+    if (!ui) return false;
+    return ui->skipMergedFramesCheckBox->isChecked();
+}
+
 
 void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
                                                    int keyFrame,
@@ -233,13 +247,33 @@ void TrackingProgressDialog::updateOverallProgress(int percentage) {
 
 void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
     m_isTrackingRunning = false;
-    ui->statusLabel->setText("Tracking finished successfully!");
-    ui->overallProgressBar->setValue(100);
-    ui->overallProgressBar->setStyleSheet(""); // Reset stylesheet
+    const QString clMsg = computeCenterlineChecked()
+        ? "Tracking complete. Computing centerlines..."
+        : "Tracking complete. Skipping centerline computation.";
+    ui->statusLabel->setText(clMsg);
+    ui->overallProgressBar->setValue(0);
+    ui->overallProgressBar->setStyleSheet("");
+    ui->overallProgressBar->setVisible(true);
 
     QPushButton *beginButton = ui->buttonBox->button(QDialogButtonBox::Apply);
     if (!beginButton) beginButton = findChild<QPushButton*>("beginButton");
-    if (beginButton) beginButton->setEnabled(true); // Or change text to "View Results"
+    if (beginButton) beginButton->setEnabled(false);
+
+    QPushButton *cancelButton = ui->buttonBox->button(QDialogButtonBox::Cancel);
+    if (!cancelButton) cancelButton = findChild<QPushButton*>("cancelButton");
+    if (cancelButton) {
+        cancelButton->setText("Please wait...");
+        cancelButton->setEnabled(false);
+    }
+}
+
+void TrackingProgressDialog::onCenterlineProgress(int percentage) {
+    ui->overallProgressBar->setValue(percentage);
+}
+
+void TrackingProgressDialog::onCenterlineFinished() {
+    ui->statusLabel->setText("Tracking and centerline computation finished!");
+    ui->overallProgressBar->setValue(100);
 
     QPushButton *cancelButton = ui->buttonBox->button(QDialogButtonBox::Cancel);
     if (!cancelButton) cancelButton = findChild<QPushButton*>("cancelButton");
@@ -247,7 +281,7 @@ void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
         cancelButton->setText("Close");
         cancelButton->setEnabled(true);
         disconnect(cancelButton, &QPushButton::clicked, this, &TrackingProgressDialog::onCancelButtonClicked);
-        connect(cancelButton, &QPushButton::clicked, this, &TrackingProgressDialog::accept); // Close dialog
+        connect(cancelButton, &QPushButton::clicked, this, &TrackingProgressDialog::accept);
     }
 }
 

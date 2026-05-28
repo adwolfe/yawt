@@ -32,6 +32,8 @@
 #include "analysisdialog.h"
 #include "trackingprogressdialog.h"
 #include "../core/appcontroller.h"
+#include "../core/centerlineworker.h"
+#include "../debug/debugexporter.h"
 #include "trackingmanager.h"
 #include "trackingdatastorage.h"
 #include "version.h"
@@ -49,6 +51,7 @@
 #include <QIcon>
 #include <QMessageBox>
 #include <QDebug>
+#include <QApplication>
 #include <QDoubleSpinBox>
 #include <QButtonGroup> // For m_interactionModeButtonGroup
 #include <QSet>
@@ -84,6 +87,21 @@ MainWindow::MainWindow(QWidget *parent)
     ui->pointButton->setIcon(QIcon());
     ui->pointButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     ui->pointButton->setMinimumWidth(36);
+    ui->skeletonButton->setText("CL");
+    ui->skeletonButton->setToolTip("Show/Hide centerline");
+    ui->skeletonButton->setStatusTip("Show/hide skeletonized centerline overlay");
+    ui->skeletonButton->setCheckable(true);
+    ui->skeletonButton->setAutoRaise(true);
+    ui->skeletonButton->setIcon(QIcon());
+    ui->skeletonButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    ui->skeletonButton->setMinimumWidth(36);
+
+    if (ui->tabWidget && ui->cleanupTab) {
+        const int debugTabIndex = ui->tabWidget->indexOf(ui->cleanupTab);
+        if (debugTabIndex >= 0) {
+            ui->tabWidget->setTabVisible(debugTabIndex, DebugUtils::isDebugCaptureEnabled());
+        }
+    }
 
     // Initialize AppController which owns storage, manager and models.
     m_appController = new AppController(this);
@@ -417,6 +435,7 @@ void MainWindow::setupConnections() {
     // Add these connections once you have the buttons in your UI:
     connect(ui->viewBlobsButton, &QToolButton::toggled, this, &MainWindow::onViewBlobsToggled);
     connect(ui->viewTracksButton, &QToolButton::toggled, this, &MainWindow::onViewTracksToggled);
+    connect(ui->skeletonButton, &QToolButton::toggled, this, &MainWindow::onViewSkeletonsToggled);
 
 
     // Thresholding UI -> VideoLoader & MainWindow
@@ -785,6 +804,30 @@ void MainWindow::setupConnections() {
         connect(m_appController, &AppController::trackingFinished, this, &MainWindow::updateWormTimeline);
     }
 
+    // Debug tab — Rerun Centerline button
+    connect(ui->rerunCenterlineButton, &QPushButton::clicked,
+            this, &MainWindow::onRerunCenterlineClicked);
+    connect(ui->exportProcessButton, &QPushButton::clicked,
+            this, &MainWindow::onExportProcessClicked);
+    if (m_appController) {
+        connect(m_appController, &AppController::centerlineProgress,
+                this, &MainWindow::onDebugCenterlineProgress);
+        connect(m_appController, &AppController::centerlineFinished,
+                this, &MainWindow::onDebugCenterlineFinished);
+    }
+
+    // Debug tab — Show-tip-candidates overlay toggle. Pure render-time switch;
+    // the underlying tip data is computed unconditionally on every centerline
+    // pass and stashed on each DetectedBlob, so toggling this only changes
+    // what's drawn, not what's computed.
+    if (auto* tipChk = ui->showTipCandidatesCheck) {
+        connect(tipChk, &QCheckBox::toggled, this, [this](bool checked) {
+            ui->videoLoader->setViewModeOption(
+                VideoLoader::ViewModeOption::TipCandidates, checked);
+            ui->videoLoader->update();
+        });
+    }
+
     // Annotation table selection
     // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
@@ -1018,6 +1061,9 @@ void MainWindow::onViewTracksToggled(bool checked) {
     // Assuming you have a ui->viewTracksButton that is checkable
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, checked);
 }
+void MainWindow::onViewSkeletonsToggled(bool checked) {
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Skeletons, checked);
+}
 // Optional:
 // void MainWindow::onViewNoneClicked() {
 //     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, false);
@@ -1050,6 +1096,7 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
     // Assuming you have ui->viewBlobsButton and ui->viewTracksButton:
     ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
     ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
+    ui->skeletonButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Skeletons));
     YAWT_DEBUG(lcGuiMainWindow) << "View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
 
     const bool showOverlays = newModes.testFlag(VideoLoader::ViewModeOption::Blobs);
@@ -2227,9 +2274,206 @@ void MainWindow::performPostTrackingMemoryCleanup() {
 
 // --- Debug Control ---
 void MainWindow::toggleTrackingDebug() {
-    QString msg = "Logging verbosity is controlled via --verbosity=1..3 or --firehose at launch.";
+    QString msg = "Command-line logging uses --verbose; Debug tab capture uses --debug.";
     qDebug().noquote() << "MainWindow:" << msg;
     statusBar()->showMessage(msg, 4000);
+}
+
+// ── Debug tab: Rerun Centerline ───────────────────────────────────────────────
+
+void MainWindow::onRerunCenterlineClicked()
+{
+    if (!m_appController) return;
+
+    // Read current spinbox values from the Debug tab into a params struct.
+    Centerline::CenterlineSnakeParams params;
+    if (auto* g = ui->snakeDebugGroup) {
+        params.enabled = g->isChecked();
+    }
+    if (auto* sb = ui->snakeAlphaSpin)        params.alpha                    = sb->value();
+    if (auto* sb = ui->snakeBetaSpin)         params.beta                     = sb->value();
+    if (auto* sb = ui->snakeLambdaSpin)       params.lambda                   = sb->value();
+    if (auto* sb = ui->snakeItersSpin)        params.iterations               = sb->value();
+    if (auto* sb = ui->snakeStepSpin)         params.stepSize                 = sb->value();
+    if (auto* sb = ui->snakeOrientThreshSpin) params.orientationAngleThreshold= sb->value();
+    if (auto* sb = ui->snakeNPointsSpin)      params.nPoints                   = sb->value();
+
+    // Disable the button while running to prevent double-triggers.
+    ui->rerunCenterlineButton->setEnabled(false);
+    ui->centerlineDebugProgressBar->setValue(0);
+    ui->centerlineDebugProgressBar->setVisible(true);
+    ui->centerlineDebugStatusLabel->setText("Running centerline pass...");
+
+    // This stores the params on the controller and immediately starts a
+    // background CenterlineWorker pass. Results are written back to storage;
+    // the videoloader re-draws on its next paint event (triggered by the
+    // finished slot below).
+    m_appController->rerunCenterline(params);
+}
+
+void MainWindow::onDebugCenterlineProgress(int percentage)
+{
+    if (ui->centerlineDebugProgressBar->isVisible())
+        ui->centerlineDebugProgressBar->setValue(percentage);
+}
+
+void MainWindow::onDebugCenterlineFinished()
+{
+    ui->rerunCenterlineButton->setEnabled(true);
+    ui->centerlineDebugProgressBar->setVisible(false);
+    ui->centerlineDebugStatusLabel->setText("Done — viewer updated.");
+
+    // Force the videoloader to repaint so the new centerlines appear immediately
+    // on the current frame without requiring a frame seek.
+    if (ui->videoLoader) {
+        ui->videoLoader->update();
+    }
+
+    // Refresh the per-worm tip-baseline readout. Each row reports the worm's
+    // running curvature, width, and body-length distributions accumulated from
+    // clean-topology frames during this centerline pass, plus per-state frame
+    // counts (Phase C.2) showing how often each worm is in each topological
+    // state. A ✓ marks worms whose sample count is high enough for the
+    // discriminator to be useful.
+    if (auto* edit = ui->tipBaselineTextEdit) {
+        if (m_trackingDataStorage) {
+            const QMap<int, Centerline::TipFeatureBaseline> baselines =
+                m_trackingDataStorage->getAllTipBaselines();
+            if (baselines.isEmpty()) {
+                edit->setPlainText("No clean-topology frames found in this pass.");
+            } else {
+                // Tally per-worm topology-state counts by sweeping all stored
+                // blobs once. Cheaper than threading state counts through the
+                // worker's pass loop, and keeps the worker's job purely about
+                // computation.
+                QMap<int, std::array<int, 5>> stateCounts; // [Unknown, Clean, SelfCrossed, Merged, Lost]
+                const Tracking::AllWormTracks& tracks =
+                    m_trackingDataStorage->getAllTracks();
+                for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+                    const int wormId = it->first;
+                    auto& counts = stateCounts[wormId];
+                    counts.fill(0);
+                    for (const auto& tp : it->second) {
+                        const auto blobs =
+                            m_trackingDataStorage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                        if (!blobs.contains(wormId)) continue;
+                        const int idx = static_cast<int>(blobs[wormId].topologyState);
+                        if (idx >= 0 && idx < 5) ++counts[idx];
+                    }
+                }
+
+                QString report;
+                report += QStringLiteral(
+                    "ID  |κ| mean ± sd  (n)   width mean ± sd  (n)   length mean ± sd  (n)   Clean SCross Merg Lost  ok\n");
+                report += QStringLiteral(
+                    "─── ──────────────────── ──────────────────── ──────────────────── ───── ────── ──── ────  ──\n");
+                for (auto it = baselines.constBegin(); it != baselines.constEnd(); ++it) {
+                    const int wormId = it.key();
+                    const Centerline::TipFeatureBaseline& b = it.value();
+                    const auto& c = stateCounts.value(wormId, {0, 0, 0, 0, 0});
+                    report += QString::asprintf(
+                        "%-3d %5.3f ± %5.3f (%4d) %5.2f ± %4.2f (%4d) %6.1f ± %5.1f (%4d) %5d %6d %4d %4d  %s\n",
+                        wormId,
+                        b.meanAbsCurvature, b.curvatureStdDev(), b.curvatureSamples,
+                        b.meanWidth,        b.widthStdDev(),     b.widthSamples,
+                        b.meanBodyLength,   b.bodyLengthStdDev(), b.lengthSamples,
+                        c[static_cast<int>(Tracking::TopologyState::Clean)],
+                        c[static_cast<int>(Tracking::TopologyState::SelfCrossed)],
+                        c[static_cast<int>(Tracking::TopologyState::Merged)],
+                        c[static_cast<int>(Tracking::TopologyState::Lost)],
+                        b.isReliable() ? "✓" : "·");
+                }
+                edit->setPlainText(report);
+            }
+        }
+    }
+}
+
+void MainWindow::onExportProcessClicked()
+{
+    // Resolve the currently selected worm in the worm table.
+    int wormId = -1;
+    if (ui->wormTableView->selectionModel() && m_wormProxyModel && m_blobTableModel) {
+        const QModelIndexList sel =
+            ui->wormTableView->selectionModel()->selectedIndexes();
+        if (!sel.isEmpty()) {
+            const QModelIndex proxyIdx = m_wormProxyModel->index(sel.first().row(), 0);
+            const QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
+            if (srcIdx.isValid())
+                wormId = m_blobTableModel->getItem(srcIdx.row()).id;
+        }
+    }
+    if (wormId < 0) {
+        QMessageBox::information(this, "Export Process",
+            "Select a worm in the worm table first.");
+        return;
+    }
+
+    const int frame = ui->videoLoader ? ui->videoLoader->getCurrentFrameNumber() : -1;
+    if (frame < 0) {
+        QMessageBox::warning(this, "Export Process", "No current frame available.");
+        return;
+    }
+
+    const QString dataDir = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
+    if (dataDir.isEmpty()) {
+        QMessageBox::warning(this, "Export Process",
+            "No yawt data directory available. Load a video first.");
+        return;
+    }
+
+    const QString videoPath = ui->videoLoader ? ui->videoLoader->getCurrentVideoPath() : QString();
+    const QString videoBaseName = QFileInfo(videoPath).completeBaseName();
+    if (videoBaseName.isEmpty()) {
+        QMessageBox::warning(this, "Export Process",
+            "No current video name available.");
+        return;
+    }
+
+    const QString videoSpecificDir = QDir(dataDir).absoluteFilePath(videoBaseName);
+    QDir videoDir(videoSpecificDir);
+    const QStringList procDirs = videoDir.entryList(QStringList() << "PROC_*",
+                                                    QDir::Dirs | QDir::NoDotAndDotDot,
+                                                    QDir::Name);
+    if (procDirs.isEmpty()) {
+        QMessageBox::warning(this, "Export Process",
+            QString("No processing output directory found under:\n%1\n\nRun tracking first.")
+                .arg(videoSpecificDir));
+        return;
+    }
+
+    const QString processingDir = videoDir.absoluteFilePath(procDirs.constLast());
+    const QString outDir = QDir(processingDir).absoluteFilePath(
+        QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
+    if (!QDir().mkpath(outDir)) {
+        QMessageBox::warning(this, "Export Process",
+            QString("Could not create output directory:\n%1").arg(outDir));
+        return;
+    }
+
+    ui->exportProcessButton->setEnabled(false);
+    ui->centerlineDebugStatusLabel->setText(
+        QString("Exporting worm %1 frame %2...").arg(wormId).arg(frame));
+    QApplication::processEvents();
+
+    QString err;
+    const bool ok = Debug::DebugExporter::exportCenterlineFrame(
+        m_trackingDataStorage,
+        m_appController ? m_appController->debugDataStore() : nullptr,
+        wormId,
+        frame,
+        outDir,
+        &err);
+
+    ui->exportProcessButton->setEnabled(true);
+    if (ok) {
+        ui->centerlineDebugStatusLabel->setText(
+            QString("Exported to %1").arg(outDir));
+    } else {
+        ui->centerlineDebugStatusLabel->setText(QString("Export failed: %1").arg(err));
+        QMessageBox::warning(this, "Export Process",
+            QString("Export failed: %1").arg(err));
+    }
 }
 
 // Retracking UI and logic removed

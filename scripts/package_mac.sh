@@ -14,6 +14,7 @@ SKIP_BUILD=false
 USE_DEVELOPER_ID=false
 USE_MACDEPLOYQT=true
 MACDEPLOYQT_VERBOSE=2
+CREATE_ARCHIVE=true
 
 # Ensure common Homebrew paths are available when running non-interactive.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -54,6 +55,7 @@ Options:
   --developer-id       Sign with Apple Developer ID if available
   --no-macdeployqt     Skip macdeployqt (use manual Qt bundling)
   --mdqt-verbose N     macdeployqt verbosity (0-3, default: 2)
+  --no-archive         Do not create a timestamped zip archive
   -h, --help           Show this help
 EOF
 }
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         -n|--no-build) SKIP_BUILD=true; shift ;;
         --developer-id) USE_DEVELOPER_ID=true; shift ;;
         --no-macdeployqt) USE_MACDEPLOYQT=false; shift ;;
+        --no-archive) CREATE_ARCHIVE=false; shift ;;
         --mdqt-verbose)
             if [ $# -lt 2 ] || ! [[ "$2" =~ ^[0-3]$ ]]; then
                 print_error "--mdqt-verbose requires a value 0..3"
@@ -85,6 +88,7 @@ echo "Skip Build: $SKIP_BUILD"
 echo "Developer ID Signing: $USE_DEVELOPER_ID"
 echo "Use macdeployqt: $USE_MACDEPLOYQT"
 echo "macdeployqt verbosity: $MACDEPLOYQT_VERBOSE"
+echo "Create archive: $CREATE_ARCHIVE"
 echo
 
 if $CLEAN_BUILD; then
@@ -172,6 +176,12 @@ pushd "$BUILD_DIR" >/dev/null
 
 FRAMEWORKS_DIR="$APP_NAME.app/Contents/Frameworks"
 PLUGINS_DIR="$APP_NAME.app/Contents/PlugIns"
+if ! $USE_MACDEPLOYQT; then
+    print_info "Cleaning stale bundled Frameworks and PlugIns before manual deployment"
+    chmod -R u+w "$FRAMEWORKS_DIR" "$PLUGINS_DIR" 2>/dev/null || true
+    xattr -rc "$FRAMEWORKS_DIR" "$PLUGINS_DIR" 2>/dev/null || true
+    rm -rf "$FRAMEWORKS_DIR" "$PLUGINS_DIR"
+fi
 mkdir -p "$FRAMEWORKS_DIR" "$PLUGINS_DIR/platforms" "$PLUGINS_DIR/imageformats"
 
 if command -v qtpaths >/dev/null 2>&1; then
@@ -198,7 +208,11 @@ if ! $USE_MACDEPLOYQT; then
     for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
         if [ -d "$QT_LIB_PATH/$framework.framework" ]; then
             print_info "Copy framework: $framework.framework"
-            cp -R "$QT_LIB_PATH/$framework.framework" "$FRAMEWORKS_DIR/"
+            framework_source="$QT_LIB_PATH/$framework.framework"
+            if command -v realpath >/dev/null 2>&1; then
+                framework_source=$(realpath "$framework_source")
+            fi
+            cp -R "$framework_source" "$FRAMEWORKS_DIR/"
             chmod -R u+w "$FRAMEWORKS_DIR/$framework.framework"
             rm -rf "$FRAMEWORKS_DIR/$framework.framework/Versions/A/Headers" 2>/dev/null || true
             rm -rf "$FRAMEWORKS_DIR/$framework.framework/Headers" 2>/dev/null || true
@@ -273,6 +287,27 @@ if [ -n "$RPATH_OPENCV_LIBS" ]; then
     done
 fi
 
+BUNDLED_PATH_OPENCV_LIBS=$(otool -L "$APP_NAME.app/Contents/MacOS/$APP_NAME" | awk '{print $1}' | grep '^@executable_path/../Frameworks/libopencv_.*\.dylib$' || true)
+if [ -n "$BUNDLED_PATH_OPENCV_LIBS" ]; then
+    print_info "Refreshing OpenCV libraries already referenced through bundled paths"
+    for bundled_dep in $BUNDLED_PATH_OPENCV_LIBS; do
+        dep_name=$(basename "$bundled_dep")
+        dep_source=""
+        if [ -n "$OPENCV_LIB_DIR" ] && [ -f "$OPENCV_LIB_DIR/$dep_name" ]; then
+            dep_source="$OPENCV_LIB_DIR/$dep_name"
+        elif [ -f "$HOMEBREW_PREFIX/lib/$dep_name" ]; then
+            dep_source="$HOMEBREW_PREFIX/lib/$dep_name"
+        fi
+        if [ -n "$dep_source" ] && [ ! -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+            cp "$dep_source" "$FRAMEWORKS_DIR/"
+            chmod u+w "$FRAMEWORKS_DIR/$dep_name"
+            print_info "Copied bundled-path OpenCV lib: $dep_name"
+        elif [ ! -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+            print_warning "Could not refresh bundled-path OpenCV dependency: $dep_name"
+        fi
+    done
+fi
+
 CHANGED=true
 PASS=0
 while $CHANGED && [ $PASS -lt 5 ]; do
@@ -288,7 +323,11 @@ while $CHANGED && [ $PASS -lt 5 ]; do
                 fw_dir=$(echo "$dep" | sed -E 's#(Qt[^/]*\.framework)/.*#\1#')
                 fw_name=$(basename "$fw_dir")
                 if [ ! -d "$FRAMEWORKS_DIR/$fw_name" ] && [ -d "$QT_LIB_PATH/$fw_name" ]; then
-                    cp -R "$QT_LIB_PATH/$fw_name" "$FRAMEWORKS_DIR/"
+                    framework_source="$QT_LIB_PATH/$fw_name"
+                    if command -v realpath >/dev/null 2>&1; then
+                        framework_source=$(realpath "$framework_source")
+                    fi
+                    cp -R "$framework_source" "$FRAMEWORKS_DIR/"
                     chmod -R u+w "$FRAMEWORKS_DIR/$fw_name"
                     rm -rf "$FRAMEWORKS_DIR/$fw_name/Versions/A/Headers" "$FRAMEWORKS_DIR/$fw_name/Headers" 2>/dev/null || true
                     CHANGED=true
@@ -324,6 +363,104 @@ fix_lib_path() {
     fi
 }
 
+rewrite_dependency_to_bundle() {
+    local dep_path="$1"
+    local target="$2"
+
+    [ -f "$target" ] && [ -w "$target" ] || return
+
+    if [[ "$dep_path" == @rpath/Qt*.framework/Versions/*/* ]]; then
+        local framework_name framework_binary
+        framework_name=$(echo "$dep_path" | sed -E 's#@rpath/(Qt[^/]+)\.framework/Versions/[^/]+/.*#\1#')
+        framework_binary="$FRAMEWORKS_DIR/$framework_name.framework/Versions/A/$framework_name"
+        if [ -f "$framework_binary" ]; then
+            install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$framework_name.framework/Versions/A/$framework_name" "$target" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    if [[ "$dep_path" == @executable_path/../Frameworks/Qt* ]] && [[ "$dep_path" != *".framework/"* ]]; then
+        local framework_name framework_binary
+        framework_name=$(basename "$dep_path")
+        framework_binary="$FRAMEWORKS_DIR/$framework_name.framework/Versions/A/$framework_name"
+        if [ -f "$framework_binary" ]; then
+            install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$framework_name.framework/Versions/A/$framework_name" "$target" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    if [[ "$dep_path" == @rpath/* ]]; then
+        local dep_name
+        dep_name=$(basename "$dep_path")
+        if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+            install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$dep_name" "$target" 2>/dev/null || true
+        fi
+        return
+    fi
+
+    [[ "$dep_path" == /* ]] || return 0
+
+    local framework_path
+    for framework_path in "$FRAMEWORKS_DIR"/*.framework; do
+        [ -d "$framework_path" ] || continue
+        local framework_name framework_binary
+        framework_name=$(basename "$framework_path" .framework)
+        framework_binary="$FRAMEWORKS_DIR/$framework_name.framework/Versions/A/$framework_name"
+        if [[ "$dep_path" == *"/$framework_name.framework/"* ]] && [ -f "$framework_binary" ]; then
+            install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$framework_name.framework/Versions/A/$framework_name" "$target" 2>/dev/null || true
+            return
+        fi
+    done
+
+    local dep_name
+    dep_name=$(basename "$dep_path")
+    if [ -f "$FRAMEWORKS_DIR/$dep_name" ]; then
+        install_name_tool -change "$dep_path" "@executable_path/../Frameworks/$dep_name" "$target" 2>/dev/null || true
+    fi
+
+    return 0
+}
+
+remove_top_level_qt_binaries() {
+    local framework_name
+    for framework_name in QtCore QtGui QtWidgets QtSvg QtDBus; do
+        rm -f "$FRAMEWORKS_DIR/$framework_name"
+    done
+}
+
+patch_target_to_bundled_deps() {
+    local target="$1"
+    [ -f "$target" ] || return
+
+    local deps dep_path
+    deps=$(otool -L "$target" 2>/dev/null | awk 'NR > 1 {print $1}' || true)
+    for dep_path in $deps; do
+        rewrite_dependency_to_bundle "$dep_path" "$target"
+    done
+
+    return 0
+}
+
+verify_no_external_qt_links() {
+    local offenders=""
+    local target refs
+    for target in "$APP_NAME.app/Contents/MacOS/$APP_NAME" "$FRAMEWORKS_DIR"/*.dylib "$FRAMEWORKS_DIR"/*.framework/Versions/A/* "$PLUGINS_DIR"/*/*.dylib; do
+        [ -f "$target" ] || continue
+        refs=$(otool -L "$target" 2>/dev/null | awk 'NR > 1 {print $1}' | grep -E '((/opt/homebrew|/usr/local).*/Qt[^/]*\.framework|@executable_path/\.\./Frameworks/Qt[^/]+$)' || true)
+        if [ -n "$refs" ]; then
+            offenders="${offenders}${target}\n${refs}\n"
+        fi
+    done
+
+    if [ -n "$offenders" ]; then
+        print_error "Bundled app still references external Homebrew Qt frameworks"
+        printf "%b" "$offenders"
+        exit 1
+    fi
+
+    return 0
+}
+
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 print_info "Patching executable link paths"
 for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
@@ -351,6 +488,17 @@ for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     if [ -f "$FRAMEWORKS_DIR/$framework.framework/Versions/A/$framework" ]; then
         install_name_tool -id "@executable_path/../Frameworks/$framework.framework/Versions/A/$framework" \
             "$FRAMEWORKS_DIR/$framework.framework/Versions/A/$framework" 2>/dev/null || true
+    fi
+done
+
+print_info "Setting install ids for all bundled framework binaries"
+for framework_path in "$FRAMEWORKS_DIR"/*.framework; do
+    [ -d "$framework_path" ] || continue
+    framework_name=$(basename "$framework_path" .framework)
+    framework_binary="$FRAMEWORKS_DIR/$framework_name.framework/Versions/A/$framework_name"
+    if [ -f "$framework_binary" ]; then
+        install_name_tool -id "@executable_path/../Frameworks/$framework_name.framework/Versions/A/$framework_name" \
+            "$framework_binary" 2>/dev/null || true
     fi
 done
 
@@ -427,6 +575,15 @@ for plugin in "$PLUGINS_DIR"/*/*.dylib; do
 done
 fix_end_ts=$(date +%s)
 print_info "Completed library path fixes in $((fix_end_ts - fix_start_ts))s"
+
+print_step "Verifying Bundled Qt Links"
+print_info "Rewriting any remaining absolute or @rpath dependency references"
+for target in "$APP_NAME.app/Contents/MacOS/$APP_NAME" "$FRAMEWORKS_DIR"/*.dylib "$FRAMEWORKS_DIR"/*.framework/Versions/A/* "$PLUGINS_DIR"/*/*.dylib; do
+    [ -f "$target" ] || continue
+    patch_target_to_bundled_deps "$target"
+done
+remove_top_level_qt_binaries
+verify_no_external_qt_links
 
 print_step "Signing"
 print_info "Removing extended attributes from app bundle"
@@ -518,12 +675,16 @@ print_step "Packaging"
 xattr -rc "$APP_NAME.app" 2>/dev/null || true
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 ARCHIVE_NAME="$APP_NAME-macos-$TIMESTAMP.zip"
-if command -v ditto >/dev/null 2>&1; then
-    # Preserve symlinks and bundle metadata so signatures remain valid after transfer.
-    run_timed "archive app (ditto)" ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "$ARCHIVE_NAME"
+if $CREATE_ARCHIVE; then
+    if command -v ditto >/dev/null 2>&1; then
+        # Preserve symlinks and bundle metadata so signatures remain valid after transfer.
+        run_timed "archive app (ditto)" ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "$ARCHIVE_NAME"
+    else
+        # Fallback: preserve symlinks if ditto is unavailable.
+        run_timed "archive app (zip fallback)" zip -yr "$ARCHIVE_NAME" "$APP_NAME.app" >/dev/null
+    fi
 else
-    # Fallback: preserve symlinks if ditto is unavailable.
-    run_timed "archive app (zip fallback)" zip -yr "$ARCHIVE_NAME" "$APP_NAME.app" >/dev/null
+    print_info "Archive creation skipped"
 fi
 
 if [ -n "$ENTITLEMENTS_FILE" ]; then
@@ -532,6 +693,8 @@ fi
 
 print_success "Done"
 echo "App bundle: $PWD/$APP_NAME.app"
-echo "Archive: $PWD/$ARCHIVE_NAME"
+if $CREATE_ARCHIVE; then
+    echo "Archive: $PWD/$ARCHIVE_NAME"
+fi
 
 popd >/dev/null

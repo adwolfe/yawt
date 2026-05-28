@@ -130,6 +130,8 @@ void FrameCache::updateAccessTime(int frameNumber) {
 
 // Define a click tolerance for selecting track points (in widget pixels)
 const qreal TRACK_POINT_CLICK_TOLERANCE = 5.0;
+const qreal TRACK_LINE_WIDTH = 2.0;
+const qreal CENTERLINE_LINE_WIDTH = 4.0;
 
 VideoLoader::VideoLoader(QWidget* parent)
     : QWidget(parent),
@@ -635,7 +637,8 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
             m_trackColors[item.id] = item.color;
         }
     }
-    if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
+    if (m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
+        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Items to display updated. Count:" << m_itemsToDisplay.size();
@@ -644,7 +647,9 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
 void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
     // For backward compatibility - in the future we'll get tracks directly from storage
     m_allTracksToDisplay = tracks;
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs (as blobs now use track data)
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
+        m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
+        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Tracks set for display. Count:" << m_allTracksToDisplay.size();
@@ -653,7 +658,9 @@ void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
 void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
     if (m_visibleTrackIDs == visibleTrackIDs) return;
     m_visibleTrackIDs = visibleTrackIDs;
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
+        m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
+        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Visible track IDs updated. Count:" << m_visibleTrackIDs.size();
@@ -663,7 +670,9 @@ void VideoLoader::clearDisplayedTracks() {
     m_allTracksToDisplay.clear();
     m_visibleTrackIDs.clear();
     // m_trackColors is cleared on new video load.
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) || m_activeViewModes.testFlag(ViewModeOption::Blobs)) { // Repaint if viewing tracks OR blobs
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
+        m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
+        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: All displayed tracks (data) cleared.";
@@ -983,6 +992,166 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
     drawPersistentPointItems();
 
+    if (m_activeViewModes.testFlag(ViewModeOption::Skeletons) && m_storage && currentFrameIdx >= 0) {
+        const QMap<int, Tracking::DetectedBlob> blobs = m_storage->getDetectedBlobsForFrame(currentFrameIdx);
+        QSet<int> skeletonIds = m_visibleTrackIDs;
+        if (skeletonIds.isEmpty()) {
+            for (auto it = blobs.constBegin(); it != blobs.constEnd(); ++it) {
+                skeletonIds.insert(it.key());
+            }
+        }
+
+        for (int wormId : std::as_const(skeletonIds)) {
+            const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+            if (!item || !item->visible) {
+                continue;
+            }
+
+            const Tracking::DetectedBlob blob = blobs.value(wormId);
+            if (!blob.isValid || blob.contourPoints.empty()) {
+                continue;
+            }
+
+            const QList<QPointF> centerlinePoints =
+                Tracking::extractResampledCenterlinePoints(blob, 10);
+            if (centerlinePoints.isEmpty()) {
+                continue;
+            }
+
+            QPolygonF centerlinePolyline;
+            centerlinePolyline.reserve(centerlinePoints.size());
+            for (int pointIndex = 0; pointIndex < centerlinePoints.size(); ++pointIndex) {
+                const QPointF widgetPoint = mapPointFromVideo(centerlinePoints.at(pointIndex));
+                if (widgetPoint.x() < 0) {
+                    continue;
+                }
+                centerlinePolyline.append(widgetPoint);
+            }
+
+            if (centerlinePolyline.size() < 2) {
+                continue;
+            }
+
+            const QColor centerlineColor = getTrackColor(wormId);
+            QPen centerlinePen(centerlineColor, CENTERLINE_LINE_WIDTH);
+            centerlinePen.setCosmetic(true);
+            centerlinePen.setCapStyle(Qt::RoundCap);
+            centerlinePen.setJoinStyle(Qt::RoundJoin);
+            painter.setPen(centerlinePen);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolyline(centerlinePolyline);
+
+            // Mark nose (front), tail (back) and centerline-centroid (middle).
+            // Different fills make head/tail orientation legible at a glance and
+            // the centroid distinguishes the centerline-derived center from the
+            // blob centroid (which can be inside the hole of a coiled worm).
+            const qreal endpointRadius = CENTERLINE_LINE_WIDTH * 1.4;
+            const qreal centroidRadius = CENTERLINE_LINE_WIDTH * 1.1;
+            const QPointF nosePoint = centerlinePolyline.first();
+            const QPointF tailPoint = centerlinePolyline.last();
+            const QPointF midPoint  = centerlinePolyline.at(centerlinePolyline.size() / 2);
+
+            QPen dotPen(Qt::black, 1.0);
+            dotPen.setCosmetic(true);
+            painter.setPen(dotPen);
+
+            painter.setBrush(QColor(0, 200, 255));   // cyan = nose
+            painter.drawEllipse(nosePoint, endpointRadius, endpointRadius);
+            painter.setBrush(QColor(255, 80, 80));   // red  = tail
+            painter.drawEllipse(tailPoint, endpointRadius, endpointRadius);
+            painter.setBrush(QColor(255, 255, 0));   // yellow = centerline-centroid
+            painter.drawEllipse(midPoint, centroidRadius, centroidRadius);
+
+            if (blob.hasCenterlineCutPoint) {
+                const QPointF cutPoint = mapPointFromVideo(
+                    QPointF(blob.centerlineCutPoint.x, blob.centerlineCutPoint.y));
+                if (cutPoint.x() >= 0) {
+                    const qreal cutRadius = CENTERLINE_LINE_WIDTH * 1.25;
+                    painter.setPen(QPen(Qt::black, 1.0));
+                    painter.setBrush(QColor(255, 0, 255));
+                    painter.drawRect(QRectF(cutPoint.x() - cutRadius,
+                                            cutPoint.y() - cutRadius,
+                                            cutRadius * 2.0,
+                                            cutRadius * 2.0));
+                }
+            }
+        }
+    }
+
+    // ── Tip-candidate overlay ────────────────────────────────────────────────
+    // Phase-B preprocessing dots: nose/tail candidates produced per-frame from
+    // the blob's geometry alone (no temporal state). Skeleton-derived
+    // candidates render as filled circles; curvature-peak candidates as
+    // hollow squares — so it's visually obvious which detector surfaced each
+    // tip during debugging.
+    if (m_activeViewModes.testFlag(ViewModeOption::TipCandidates) && m_storage && currentFrameIdx >= 0) {
+        const QMap<int, Tracking::DetectedBlob> tipBlobs = m_storage->getDetectedBlobsForFrame(currentFrameIdx);
+        QSet<int> tipIds = m_visibleTrackIDs;
+        if (tipIds.isEmpty()) {
+            for (auto it = tipBlobs.constBegin(); it != tipBlobs.constEnd(); ++it) {
+                tipIds.insert(it.key());
+            }
+        }
+
+        for (int wormId : std::as_const(tipIds)) {
+            const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+            if (!item || !item->visible) continue;
+
+            const Tracking::DetectedBlob blob = tipBlobs.value(wormId);
+            if (!blob.isValid || blob.tipCandidates.empty()) continue;
+
+            const qreal dotRadius  = CENTERLINE_LINE_WIDTH * 1.05;
+            const qreal ringRadius = CENTERLINE_LINE_WIDTH * 1.95;
+            QPen edgePen(Qt::black, 1.2);
+            edgePen.setCosmetic(true);
+
+            // Phase B: candidate dots (one per tipCandidate).
+            for (const Tracking::TipCandidate& tc : blob.tipCandidates) {
+                const QPointF pt = mapPointFromVideo(QPointF(tc.point.x, tc.point.y));
+                if (pt.x() < 0) continue;
+
+                painter.setPen(edgePen);
+                if (tc.source == Tracking::TipCandidate::Source::SkeletonEndpoint) {
+                    // Filled green circle — skeleton degree-1 endpoint.
+                    painter.setBrush(QColor(60, 220, 80));
+                    painter.drawEllipse(pt, dotRadius, dotRadius);
+                } else if (tc.source == Tracking::TipCandidate::Source::CurvaturePeak) {
+                    // Hollow magenta square — curvature peak.
+                    painter.setBrush(Qt::NoBrush);
+                    QPen peakPen(QColor(220, 60, 220), 1.6);
+                    peakPen.setCosmetic(true);
+                    painter.setPen(peakPen);
+                    painter.drawRect(QRectF(pt.x() - dotRadius, pt.y() - dotRadius,
+                                            dotRadius * 2.0, dotRadius * 2.0));
+                } else {
+                    // Hollow orange square — D-3 hypothesized hidden tip.
+                    painter.setBrush(Qt::NoBrush);
+                    QPen hypPen(QColor(255, 165, 0), 1.6);
+                    hypPen.setCosmetic(true);
+                    painter.setPen(hypPen);
+                    painter.drawRect(QRectF(pt.x() - dotRadius, pt.y() - dotRadius,
+                                            dotRadius * 2.0, dotRadius * 2.0));
+                }
+            }
+
+            // Phase C.1: head/tail assignment overlay. Drawn over the
+            // candidate dots so the assignment is visually obvious without
+            // hiding which detector surfaced each tip.
+            auto drawRoleRing = [&](int idx, const QColor& color) {
+                if (idx < 0 || idx >= static_cast<int>(blob.tipCandidates.size())) return;
+                const cv::Point2f& cv = blob.tipCandidates[idx].point;
+                const QPointF pt = mapPointFromVideo(QPointF(cv.x, cv.y));
+                if (pt.x() < 0) return;
+                QPen ringPen(color, 2.0);
+                ringPen.setCosmetic(true);
+                painter.setPen(ringPen);
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(pt, ringRadius, ringRadius);
+            };
+            drawRoleRing(blob.assignedHeadTipIdx, QColor(0, 200, 255));  // cyan = head
+            drawRoleRing(blob.assignedTailTipIdx, QColor(255, 80, 80));  // red  = tail
+        }
+    }
 
     // Draw Tracks if ViewMode is Tracks
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
@@ -1017,7 +1186,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             // If getTrackColor returns opaque, set alpha here:
             // trackColorWithAlpha.setAlphaF(0.5); // Example: 50% opacity for lines
 
-            QPen trackPen(trackColorWithAlpha, 2); // Pen width of 2
+            QPen trackPen(trackColorWithAlpha, TRACK_LINE_WIDTH);
             painter.setPen(trackPen);
 
             bool firstPoint = true;

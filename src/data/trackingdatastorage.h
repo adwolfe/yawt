@@ -13,6 +13,7 @@
 #include <vector>
 #include <limits>
 #include "trackingcommon.h"
+#include "../core/centerlinetypes.h"
 
 /**
  * Central storage for all tracking data (single source of truth).
@@ -343,6 +344,38 @@ public:
      */
     QMap<int, QList<QList<int>>> getAllMergeGroups() const;
 
+    // --- Per-worm tip-feature baselines (Phase A) ---
+    /**
+     * @brief Record a tip-feature sample (curvature magnitude + width) on the
+     *        per-worm baseline. Should only be invoked from clean-topology
+     *        frames (no ring, not merged, both tips skeleton-confirmed).
+     */
+    void recordTipFeatureSample(int wormId, float curvatureMagnitude, float width);
+
+    /**
+     * @brief Record a body-length sample (arc length of the refined centerline)
+     *        on the per-worm baseline.
+     */
+    void recordBodyLengthSample(int wormId, float length);
+
+    /**
+     * @brief Retrieve the running baseline for a worm. Returns a default-
+     *        constructed baseline (all zeros, no samples) if none exists.
+     */
+    Centerline::TipFeatureBaseline getTipBaseline(int wormId) const;
+
+    /**
+     * @brief Retrieve the full baseline map, keyed by worm ID. Useful for the
+     *        Debug-tab readout that lists every worm.
+     */
+    QMap<int, Centerline::TipFeatureBaseline> getAllTipBaselines() const;
+
+    /**
+     * @brief Discard all accumulated baselines. Called at the start of each
+     *        centerline pass so a rerun begins from a clean slate.
+     */
+    void clearAllTipBaselines();
+
 signals:
     /**
      * @brief Emitted when an item is added
@@ -444,6 +477,11 @@ private:
 
     // Per-frame per-worm detected blob storage: frameNumber -> (wormId -> DetectedBlob)
     QMap<int, QMap<int, Tracking::DetectedBlob>> m_detectedBlobsByFrame;
+
+    // Per-worm tip-feature baseline (Welford running stats over clean frames).
+    // Populated by recordTipFeatureSample / recordBodyLengthSample, consumed
+    // by the head/tail discriminator in Phase C.
+    QMap<int, Centerline::TipFeatureBaseline> m_tipBaselines;
     
     // Helper methods
     QColor getNextColor();                                 // Get next color from palette

@@ -39,11 +39,13 @@
 #include <QObject>
 #include <QList>
 #include <QMap>
+#include "centerlinetypes.h"
 #include <QString>
 #include <QRectF>
 #include <QThread>
 #include <QSet>
 #include <QMutex>
+#include <QSharedPointer>
 #include <QDateTime>
 #include <QPointer>
 #include <QDir>
@@ -59,6 +61,7 @@
 #include "processing/videoprocessor.h" // For VideoProcessor type, not direct instantiation here
 #include "wormtracker.h"    // For WormTracker type and enums
 #include "../data/trackingdatastorage.h" // Central data storage
+#include "centerlineworker.h"
 
 // Constants for matching physical blobs on a frame
 // PHYSICAL_BLOB_IOU_THRESHOLD:
@@ -96,7 +99,8 @@ struct FrameSpecificPhysicalBlob {
     QRectF currentBoundingBox;
     cv::Point2f currentCentroid;            // Centroid of currentBoundingBox
     double currentArea;
-    std::vector<cv::Point> contourPoints;   // Raw contour points in video coordinates (used for merge/split logic)
+    std::vector<cv::Point> contourPoints;                   // Outer contour points in video coordinates
+    std::vector<std::vector<cv::Point>> holeContourPoints;  // Inner hole contours (coiled/ring blobs)
     QSet<int> participatingWormTrackerIDs;  // Conceptual IDs of WormTrackers in this blob on this frame
     int frameNumber;                        // The frame this blob exists on
     int selectedByWormTrackerId;            // Which WT has selected this blob as their target (-1 = unselected)
@@ -110,6 +114,7 @@ struct FrameSpecificPhysicalBlob {
 
 // Forward declarations
 class TrackingDataStorage;
+namespace Debug { class DebugDataStore; }
 
 /**
  * @class VideoSaverWorker
@@ -181,6 +186,9 @@ public:
      * @param parent Optional QObject parent.
      */
     explicit TrackingManager(TrackingDataStorage* storage, QObject* parent = nullptr);
+    explicit TrackingManager(TrackingDataStorage* storage,
+                             Debug::DebugDataStore* debugStore,
+                             QObject* parent = nullptr);
     /**
      * @brief Destructor. Ensures cleanup of worker threads and transient state.
      */
@@ -213,6 +221,18 @@ public:
 
     void setPixelSizePixelsPerUm(double value);
 
+    /**
+     * @brief Set the active-contour parameters used by CenterlineWorker for ring/coiled
+     *        frames during the post-tracking centerline phase.
+     *
+     * Must be called before startCenterlineComputation() (i.e. before tracking finishes
+     * or just at startup) for the values to be picked up by the worker.
+     */
+    void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
+    void setCenterlineEnabled(bool enabled);
+    void setSkipMergedFrames(bool skip);
+    void setMaxReversalFraction(float fraction);
+
 public slots:
     /**
      * @brief Start a full multi-worm tracking run.
@@ -242,6 +262,7 @@ public slots:
      * Safe to call after cancel/fail or before a new run; idempotent.
      */
     void cleanupThreadsAndObjects(); // Made public slot so it can be called via QMetaObject::invokeMethod
+    void startCenterlineComputation(); // Launch post-tracking centerline worker via QMetaObject::invokeMethod
 
 private slots:
     // Video processing slots
@@ -271,6 +292,10 @@ private slots:
     void handleVideoSavingComplete(const QString& savedVideoPath);
     void handleVideoSavingError(const QString& errorMessage);
 
+    // Centerline computation slots
+    void handleCenterlineFinished();
+    void handleCenterlineFailed(const QString& reason);
+
 signals:
     /**
      * @brief Aggregate percent progress (0–100) across video processing and all trackers.
@@ -299,7 +324,16 @@ signals:
      * @brief Emitted when user/system cancellation completes.
      */
     void trackingCancelled();
-    
+
+    /**
+     * @brief Percent complete (0–100) for the post-tracking centerline computation phase.
+     */
+    void centerlineProgress(int percentage);
+    /**
+     * @brief Emitted when post-tracking centerline computation finishes.
+     */
+    void centerlineFinished();
+
     /**
      * @brief Send processed frames to the background video-saver worker thread.
      * @param reversedFrames Backward-direction frames (reverse order for output concatenation).
@@ -339,6 +373,8 @@ private:
     void updateOverallProgress();
     void checkForAllTrackersFinished();
     bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
+    void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData, const QString& outputPath) const;
+    void exportProcessingSummary(const QString& outputPath) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
     size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
@@ -346,6 +382,8 @@ private:
     
     // Video saving functionality
     void startVideoSaving(); // Start background video saving process
+
+    // (startCenterlineComputation is declared as a public slot above)
     
     // JSON storage methods
     QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
@@ -397,6 +435,7 @@ private:
     QMap<WormTracker*, int> m_individualTrackerProgress; // WormTracker instance -> progress %
     Tracking::AllWormTracks m_finalTracks; // Final consolidated tracks
     TrackingDataStorage* m_storage;        // Pointer to central data storage
+    Debug::DebugDataStore* m_debugStore = nullptr; // Pointer to process diagnostic storage
 
     // --- Data structures for frame-atomic merge/split logic ---
     // m_frameMergeRecords:
@@ -421,6 +460,24 @@ private:
     // Video saving members
     QPointer<QThread> m_videoSaverThread; // Background worker thread for thresholded video saving (optional)
     QString m_savedVideoPath; // Path where the thresholded video will be saved
+
+    // Centerline computation members (post-tracking background phase)
+    QList<QPointer<QThread>> m_centerlineThreads;
+    QList<QPointer<CenterlineWorker>> m_centerlineWorkers;
+    QMap<int, int> m_centerlineWorkerProgress;
+    int m_centerlineWorkersFinishedCount = 0;
+    int m_totalCenterlineWorkers = 0;
+    QSharedPointer<QMutex> m_centerlineStorageMutex;
+
+    // Active-contour parameters for ring/coiled-frame refinement. Configured via
+    // setCenterlineSnakeParams(); applied to the worker right before doWork().
+    Centerline::CenterlineSnakeParams m_centerlineSnakeParams;
+    bool m_centerlineEnabled = true;
+    bool m_skipMergedFrames = false;
+    float m_maxReversalFraction = 0.25f;
+    QMap<int, QList<int>> m_headTailSwapData;     // net (XOR) swaps per worm
+    QMap<int, QList<int>> m_dirHeadTailSwapData;  // direction-pass swaps per worm
+    QMap<int, QList<int>> m_geoHeadTailSwapData;  // geometry-pass swaps per worm
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures

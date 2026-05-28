@@ -18,6 +18,7 @@
 #include <QObject>
 #include <QString>
 #include <QRectF>
+#include "centerlinetypes.h"
 #include <vector>
 
 #include "../data/trackingcommon.h" // for Tracking::DetectedBlob, Tracking::AllWormTracks, Thresholding::ThresholdSettings, InitialWormInfo
@@ -30,6 +31,7 @@ class BlobTableModel;
 class AnnotationTableModel;
 class TrackingProgressDialog;
 class QWidget;
+namespace Debug { class DebugDataStore; }
 
 /**
  * AppController
@@ -71,6 +73,7 @@ public:
     BlobTableModel* blobTableModel() const;
     AnnotationTableModel* annotationTableModel() const;
     TrackingDataStorage* trackingDataStorage() const;
+    Debug::DebugDataStore* debugDataStore() const;
 
     // Model-manipulation commands (can be invoked from UI)
     Q_INVOKABLE void addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame);
@@ -141,6 +144,29 @@ public:
                                         const QString& dataDirectory,
                                         QWidget* parent = nullptr);
 
+    /**
+     * @brief Update the active-contour parameters used for ring/coiled centerline refinement.
+     *
+     * These params are stored persistently on the controller and used both:
+     *   (a) when a new tracking run is started via the dialog, and
+     *   (b) when an on-demand rerun is triggered from the Debug tab.
+     *
+     * Safe to call at any time (not just before tracking).
+     */
+    void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
+
+    /**
+     * @brief Re-run the post-tracking centerline computation with the given params.
+     *
+     * Stores the params (equivalent to calling setCenterlineSnakeParams first) and
+     * immediately launches a background CenterlineWorker pass over whatever blobs are
+     * currently in storage. Progress and completion are emitted via centerlineProgress /
+     * centerlineFinished — connect those signals in the caller to update the UI.
+     *
+     * No-op when no tracking data is in storage or when a centerline pass is already running.
+     */
+    Q_INVOKABLE void rerunCenterline(const Centerline::CenterlineSnakeParams& params);
+
 signals:
     /**
      * @brief Emitted after tracks are persisted in TrackingDataStorage.
@@ -168,6 +194,11 @@ signals:
     void trackingCancelled();
     /** @} */
 
+    /** Percent progress (0–100) for the post-tracking centerline computation phase. */
+    void centerlineProgress(int percentage);
+    /** Emitted when post-tracking centerline computation completes. */
+    void centerlineFinished();
+
     /** Generic status message stream for detailed updates (can be verbose). */
     void trackingStatusMessage(const QString& message);
 
@@ -179,6 +210,8 @@ private slots:
     void onTrackingManagerFinishedSuccessfully(const QString& outputPath);
     void onTrackingManagerFailed(const QString& reason);
     void onTrackingManagerCancelled();
+    void onTrackingManagerCenterlineProgress(int percentage);
+    void onTrackingManagerCenterlineFinished();
 
     // Slots to receive dialog requests (when controller owns the dialog)
     void onDialogBeginRequested();
@@ -209,6 +242,7 @@ private:
     // - If constructed by AppController, these are children of this and auto-destroyed.
     // - If an external TrackingDataStorage is injected via ctor, m_storage is non-owned.
     TrackingDataStorage* m_storage = nullptr;         // owned unless injected
+    Debug::DebugDataStore* m_debugStore = nullptr;    // owned
     TrackingManager* m_manager = nullptr;             // owned
     BlobTableModel* m_blobModel = nullptr;            // owned
     AnnotationTableModel* m_annotationModel = nullptr;// owned
@@ -220,6 +254,10 @@ private:
     bool m_dialogOnlyTrackMissing = true;
     int m_dialogTotalFrames = 0;
     QString m_dialogDataDirectory;
+
+    // Active-contour params stored persistently. Updated by the Debug tab via
+    // setCenterlineSnakeParams(); used for both new tracking runs and on-demand reruns.
+    Centerline::CenterlineSnakeParams m_snakeParams;
 
     // Controller-owned tracking progress dialog (created on demand, parented to provided 'parent' widget)
     TrackingProgressDialog* m_trackingDialog = nullptr;

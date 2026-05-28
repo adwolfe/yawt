@@ -63,6 +63,35 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="centerlineGroupBox">
+     <property name="title">
+      <string>Centerline Options</string>
+     </property>
+     <layout class="QVBoxLayout" name="centerlineGroupBoxLayout">
+      <item>
+       <widget class="QCheckBox" name="computeCenterlineCheckBox">
+        <property name="text">
+         <string>Compute centerlines</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="skipMergedFramesCheckBox">
+        <property name="text">
+         <string>Skip merged frames (no pose for merged frames)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="statusLabel">
      <property name="text">
       <string>Status: Ready</string>

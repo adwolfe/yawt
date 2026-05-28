@@ -8,6 +8,7 @@
 #include <QMetaEnum>
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
+#include <cmath>  // For std::sqrt (TipFeatureBaseline accessors)
 #include <QColor> // Added for TrackedItem color
 #include <QString> // For typeToString and stringToType
 #include <map>     // For AllWormTracks
@@ -157,6 +158,66 @@ Q_ENUM_NS(TrackerState)
 
 
 /**
+ * @brief A candidate "tip" point (probable nose or tail) on a blob's geometry.
+ *
+ * Produced as a pure preprocessing pass over each blob (no temporal state, no
+ * scoring against previous frames). The downstream head/tail assignment step
+ * consumes these candidates plus per-worm baselines + motion history.
+ *
+ * Two complementary sources:
+ *   - SkeletonEndpoint: a degree-1 node of the Zhang-Suen skeleton, mapped to
+ *     the nearest outer-contour point. Reliable on clean topology (typically
+ *     yields exactly 2 endpoints); often yields 1 on coiled-with-protrusion
+ *     blobs and 0 on closed-ring blobs.
+ *   - CurvaturePeak: a local maximum of |signed curvature| along the outer
+ *     contour. Surfaces real tips even when the skeleton is degenerate (rings,
+ *     merged blobs), at the cost of more false positives (tight body kinks).
+ *
+ * Candidates from both sources are merged and deduplicated by planar distance.
+ */
+struct TipCandidate {
+    cv::Point2f point;                 // Position on outer contour, in video coordinates
+    float       curvature = 0.f;       // Signed local curvature (1/px); +ve = bulging outward
+    float       width     = 0.f;       // Local perpendicular mask thickness (px), ~5px inward from tip
+    enum class Source : uint8_t {
+        SkeletonEndpoint,
+        CurvaturePeak,
+        HypothesizedHidden   // D-3: inferred tip when the other end is occluded
+    };
+    Source source = Source::SkeletonEndpoint;
+};
+
+/**
+ * @brief Per-frame topology classification for a worm's blob.
+ *
+ * Independent of (but adjacent to) TrackPointQuality, which captures the
+ * tracker's *confidence*. TopologyState captures the *geometric* state of
+ * the worm's blob: clean topology with both tips visible, self-crossed
+ * (ring or hidden tip), shared with another worm (merged), or unavailable.
+ *
+ * Set by detectEndpoints() once per blob per pass; consumed by the
+ * centerline-refinement dispatch to pick D-1/D-2/D-3/D-4 branches.
+ */
+enum class TopologyState : uint8_t {
+    Unknown,        // Default, before classification.
+    Clean,          // No ring, sole occupant of its blob, both tips skeleton-confirmed.
+    SelfCrossed,    // Ring topology OR fewer than two skeleton tips visible.
+    Merged,         // Shares its blob with one or more other worms.
+    Lost            // No valid blob this frame.
+};
+
+inline QString topologyStateToString(TopologyState s) {
+    switch (s) {
+    case TopologyState::Clean:       return QStringLiteral("Clean");
+    case TopologyState::SelfCrossed: return QStringLiteral("SelfCrossed");
+    case TopologyState::Merged:      return QStringLiteral("Merged");
+    case TopologyState::Lost:        return QStringLiteral("Lost");
+    case TopologyState::Unknown:
+    default:                         return QStringLiteral("Unknown");
+    }
+}
+
+/**
      * @brief Structure to hold information about a detected blob during tracking.
      */
 
@@ -165,12 +226,29 @@ struct DetectedBlob {
     QRectF boundingBox;                   // Bounding box of the blob in video coordinates
     double area = 0.0;                    // Area of the blob
     double convexHullArea = 0.0;          // Area of the convex hull (blob area without holes)
-    std::vector<cv::Point> contourPoints; // Raw contour points (in video coordinates)
+    std::vector<cv::Point> contourPoints;                   // Outer contour points (in video coordinates)
+    std::vector<std::vector<cv::Point>> holeContourPoints;  // Inner hole contours (ring topology from coiled worm)
+    std::vector<cv::Point2f> centerlinePoints;              // Ordered centerline points from one body end to the other
+    cv::Point2f centerlineCutPoint;                         // Debug/overlay point where a ring mask was cut open
+    bool hasCenterlineCutPoint = false;                     // True when centerlineCutPoint is meaningful
+    std::vector<TipCandidate> tipCandidates;                // Per-frame nose/tail candidates (Phase B preprocessing)
+    int assignedHeadTipIdx = -1;                            // Index into tipCandidates of the assigned head, or -1
+    int assignedTailTipIdx = -1;                            // Index into tipCandidates of the assigned tail, or -1
+    TopologyState topologyState = TopologyState::Unknown;   // Per-frame geometric classification (Phase C.2)
     bool isValid = false;                 // Flag indicating if this blob data is valid
     bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
 
     // Default constructor
-    DetectedBlob() : area(0.0), convexHullArea(0.0), isValid(false), touchesROIboundary(false) {}
+    DetectedBlob()
+        : area(0.0),
+          convexHullArea(0.0),
+          centerlineCutPoint(0.f, 0.f),
+          hasCenterlineCutPoint(false),
+          assignedHeadTipIdx(-1),
+          assignedTailTipIdx(-1),
+          topologyState(TopologyState::Unknown),
+          isValid(false),
+          touchesROIboundary(false) {}
 };
 
 enum class TrackPointQuality {
@@ -245,6 +323,57 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                                                double maxArea,
                                                double minAspectRatio,
                                                double maxAspectRatio);
+
+/**
+ * @brief Compute and store an ordered centerline for a detected blob from its contour.
+ * The resulting polyline runs from one skeleton endpoint to the other and is stored in
+ * DetectedBlob::centerlinePoints. Returns true when a usable centerline was found.
+ */
+bool populateCenterlineFromContour(DetectedBlob& blob);
+
+/**
+ * @brief Compute a centerline after cutting a ring blob mask open.
+ * @param blob Detected blob with ring topology. Updated with the best ordered centerline.
+ * @param cutStart First endpoint of the cut line in video coordinates.
+ * @param cutEnd Second endpoint of the cut line in video coordinates.
+ * @param cutThickness Thickness of the erased cut line in pixels.
+ * @return True when a usable centerline was found after applying the cut.
+ */
+bool populateCenterlineFromContourWithCut(DetectedBlob& blob,
+                                          const cv::Point2f& cutStart,
+                                          const cv::Point2f& cutEnd,
+                                          int cutThickness = 3);
+
+/**
+ * @brief Extract an ordered skeleton centerline from a detected worm blob.
+ * @param blob Detected blob with contour points in video coordinates.
+ * @return Ordered centerline points in video coordinates. Empty if no valid skeleton can be extracted.
+ */
+QList<QPointF> extractOrderedCenterlinePoints(const DetectedBlob& blob);
+
+/**
+ * @brief Resample an ordered centerline to a fixed number of evenly spaced points.
+ * @param points Ordered source centerline points.
+ * @param pointCount Number of points to return.
+ * @return Exactly pointCount points when input is non-empty; empty if input is empty or pointCount <= 0.
+ */
+QList<QPointF> resampleCenterlinePoints(const QList<QPointF>& points, int pointCount);
+
+/**
+ * @brief Resample an ordered centerline to a fixed number of evenly spaced points.
+ * @param points Ordered source centerline points.
+ * @param pointCount Number of points to return.
+ * @return Exactly pointCount points when input is non-empty; empty if input is empty or pointCount <= 0.
+ */
+QList<QPointF> resampleCenterlinePoints(const std::vector<cv::Point2f>& points, int pointCount);
+
+/**
+ * @brief Extract and resample a detected blob centerline.
+ * @param blob Detected blob with contour points in video coordinates.
+ * @param pointCount Number of centerline points to return.
+ * @return Fixed-count centerline points when extraction succeeds; otherwise empty.
+ */
+QList<QPointF> extractResampledCenterlinePoints(const DetectedBlob& blob, int pointCount = 10);
 
 } // namespace TrackingHelper
 

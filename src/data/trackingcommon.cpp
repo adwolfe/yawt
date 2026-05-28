@@ -1,11 +1,183 @@
 
 #include "trackingcommon.h" // Lowercase include
+#include "../core/centerlineprocessor.h"
 #include <QtMath>       // For qSqrt, qPow
 #include <QDebug>       // For qWarning/qDebug
 #include "../utils/loggingcategories.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 
 namespace Tracking {
+
+namespace {
+
+constexpr int kCenterlinePaddingPixels = 2;
+
+
+
+} // namespace
+
+// ── Single-pass endpoint detector ───────────────────────────────────────────
+//
+// Used by the centerline pipeline (centerlineworker doWork). Builds the
+// skeleton once, then derives every downstream quantity from it.
+//
+// Design notes:
+//
+// * Curvature math + width probe are kept stable so baseline samples stay
+//   commensurable across frames.
+//
+// * Mask construction reuses buildCenterlineMask, including the MORPH_CLOSE
+//   applied for ring blobs.
+//
+// * Endpoint pruning preserves the longest-path pair when more than two
+//   degree-1 nodes are present (skeleton noise spurs). Never drops below two
+//   if two existed; never drops the only one if only one exists.
+//
+// * Each surviving skeleton endpoint is "extended" to the strongest curvature
+//   peak within DT(endpoint) * 1.5 pixels (search radius scales with local
+//   body thickness). Strongest, not nearest — picking the nearest peak snaps
+//   onto body kinks for tightly-coiled worms.
+
+bool populateCenterlineFromContour(DetectedBlob& blob)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3) {
+        return false;
+    }
+
+    cv::Mat mask;
+    cv::Rect localBounds = Centerline::buildCenterlineMask(blob, mask);
+    if (mask.empty()) return false;
+
+    blob.centerlinePoints = Centerline::extractCenterlineFromMask(
+        mask,
+        cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
+
+    return blob.centerlinePoints.size() >= 2;
+}
+
+bool populateCenterlineFromContourWithCut(DetectedBlob& blob,
+                                          const cv::Point2f& cutStart,
+                                          const cv::Point2f& cutEnd,
+                                          int cutThickness)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3 || blob.holeContourPoints.empty()) {
+        return false;
+    }
+
+    cv::Mat mask;
+    cv::Rect localBounds = Centerline::buildCenterlineMask(blob, mask);
+    if (mask.empty()) return false;
+
+    const cv::Point localStart(qRound(cutStart.x - localBounds.x),
+                               qRound(cutStart.y - localBounds.y));
+    const cv::Point localEnd(qRound(cutEnd.x - localBounds.x),
+                             qRound(cutEnd.y - localBounds.y));
+    const int thickness = std::max(1, cutThickness);
+    cv::line(mask, localStart, localEnd, cv::Scalar(0), thickness, cv::LINE_8);
+
+    blob.centerlinePoints = Centerline::extractCenterlineFromMask(
+        mask,
+        cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
+
+    return blob.centerlinePoints.size() >= 2;
+}
+
+QList<QPointF> extractOrderedCenterlinePoints(const DetectedBlob& blob)
+{
+    QList<QPointF> centerlinePoints;
+    if (!blob.isValid) {
+        return centerlinePoints;
+    }
+
+    if (blob.centerlinePoints.empty()) {
+        return centerlinePoints;
+    }
+
+    centerlinePoints.reserve(static_cast<qsizetype>(blob.centerlinePoints.size()));
+    for (const cv::Point2f& point : blob.centerlinePoints) {
+        centerlinePoints.append(QPointF(point.x, point.y));
+    }
+
+    return centerlinePoints;
+}
+
+QList<QPointF> resampleCenterlinePoints(const QList<QPointF>& points, int pointCount)
+{
+    QList<QPointF> sampledPoints;
+    if (points.isEmpty() || pointCount <= 0) {
+        return sampledPoints;
+    }
+
+    sampledPoints.reserve(pointCount);
+    if (points.size() == 1 || pointCount == 1) {
+        for (int i = 0; i < pointCount; ++i) {
+            sampledPoints.append(points.first());
+        }
+        return sampledPoints;
+    }
+
+    std::vector<double> cumulativeDistance(static_cast<size_t>(points.size()), 0.0);
+    for (int i = 1; i < points.size(); ++i) {
+        const QPointF delta = points.at(i) - points.at(i - 1);
+        cumulativeDistance[static_cast<size_t>(i)] =
+            cumulativeDistance[static_cast<size_t>(i - 1)] + std::hypot(delta.x(), delta.y());
+    }
+
+    const double totalLength = cumulativeDistance.back();
+    if (qFuzzyIsNull(totalLength)) {
+        for (int i = 0; i < pointCount; ++i) {
+            sampledPoints.append(points.first());
+        }
+        return sampledPoints;
+    }
+
+    int segmentIndex = 1;
+    for (int sampleIndex = 0; sampleIndex < pointCount; ++sampleIndex) {
+        const double targetDistance =
+            totalLength * static_cast<double>(sampleIndex) / static_cast<double>(pointCount - 1);
+
+        while (segmentIndex < points.size() - 1 &&
+               cumulativeDistance[static_cast<size_t>(segmentIndex)] < targetDistance) {
+            ++segmentIndex;
+        }
+
+        const double previousDistance = cumulativeDistance[static_cast<size_t>(segmentIndex - 1)];
+        const double nextDistance = cumulativeDistance[static_cast<size_t>(segmentIndex)];
+        const double segmentLength = nextDistance - previousDistance;
+        const double t = qFuzzyIsNull(segmentLength)
+                             ? 0.0
+                             : (targetDistance - previousDistance) / segmentLength;
+
+        const QPointF a = points.at(segmentIndex - 1);
+        const QPointF b = points.at(segmentIndex);
+        sampledPoints.append(a + (b - a) * t);
+    }
+
+    return sampledPoints;
+}
+
+QList<QPointF> resampleCenterlinePoints(const std::vector<cv::Point2f>& points, int pointCount)
+{
+    QList<QPointF> convertedPoints;
+    convertedPoints.reserve(static_cast<qsizetype>(points.size()));
+    for (const cv::Point2f& point : points) {
+        convertedPoints.append(QPointF(point.x, point.y));
+    }
+    return resampleCenterlinePoints(convertedPoints, pointCount);
+}
+
+QList<QPointF> extractResampledCenterlinePoints(const DetectedBlob& blob, int pointCount)
+{
+    return resampleCenterlinePoints(extractOrderedCenterlinePoints(blob), pointCount);
+}
 
 // Uses thresholded mat to find the nearest blob to a click and selects it.
 DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
@@ -122,6 +294,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
             result.area = cv::contourArea(bestContour); // Already calculated, but store it
             result.contourPoints = bestContour; // These points are relative to binaryImage origin
             result.isValid = true;
+            populateCenterlineFromContour(result);
             // touchesROIboundary is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
         }
         YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Selected contour idx:"
@@ -176,17 +349,33 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
 
     cv::Mat roiImage = binaryImage(actualRoiCv); // Extract the sub-image for contour finding
     std::vector<std::vector<cv::Point>> contoursInSubImage;
-    // Find contours within the sub-image (roiImage). Coordinates will be relative to roiImage.
-    cv::findContours(roiImage.clone(), contoursInSubImage, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    std::vector<cv::Vec4i> hierarchy;
+    // RETR_CCOMP gives a 2-level hierarchy (outer contours + their holes).
+    // This lets us subtract hole areas from outer contour areas, so a coiled worm
+    // whose thresholded shape is a ring is measured by actual pixel area rather than
+    // the much-larger disk area that RETR_EXTERNAL + contourArea would produce.
+    cv::findContours(roiImage.clone(), contoursInSubImage, hierarchy, cv::RETR_CCOMP, cv::CHAIN_APPROX_SIMPLE);
 
-    for (const auto& contourInSub : contoursInSubImage) {
-        double area = cv::contourArea(contourInSub);
-        
-        // Calculate convex hull area (area without holes)
+    for (size_t i = 0; i < contoursInSubImage.size(); ++i) {
+        // Only process outer contours (parent index == -1 in RETR_CCOMP)
+        if (hierarchy[i][3] != -1) continue;
+
+        const auto& contourInSub = contoursInSubImage[i];
+        double outerArea = cv::contourArea(contourInSub);
+
+        // Subtract areas of direct-child hole contours to get true foreground pixel area.
+        // This handles the ring topology produced by a self-touching coiled worm.
+        double holeArea = 0.0;
+        for (int childIdx = hierarchy[i][2]; childIdx != -1; childIdx = hierarchy[childIdx][0]) {
+            holeArea += cv::contourArea(contoursInSubImage[childIdx]);
+        }
+        double area = outerArea - holeArea;
+
+        // Calculate convex hull area using the outer boundary
         std::vector<cv::Point> hull;
         cv::convexHull(contourInSub, hull);
         double hullArea = cv::contourArea(hull);
-        
+
         if (area < minArea || area > maxArea) {
             continue; // Filter by area
         }
@@ -228,10 +417,20 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                                       brInSub.width,
                                       brInSub.height);
 
-            // Offset contour points to be in full frame coordinates
+            // Offset outer contour points to full frame coordinates
             blob.contourPoints.reserve(contourInSub.size());
             for(const cv::Point& ptInSub : contourInSub) {
                 blob.contourPoints.push_back(cv::Point(ptInSub.x + actualRoiCv.x, ptInSub.y + actualRoiCv.y));
+            }
+
+            // Offset hole contour points to full frame coordinates
+            for (int childIdx = hierarchy[i][2]; childIdx != -1; childIdx = hierarchy[childIdx][0]) {
+                std::vector<cv::Point> holeInFullFrame;
+                holeInFullFrame.reserve(contoursInSubImage[childIdx].size());
+                for (const cv::Point& ptInSub : contoursInSubImage[childIdx]) {
+                    holeInFullFrame.push_back(cv::Point(ptInSub.x + actualRoiCv.x, ptInSub.y + actualRoiCv.y));
+                }
+                blob.holeContourPoints.push_back(std::move(holeInFullFrame));
             }
 
             // --- Set touchesROIboundary flag ---
@@ -251,6 +450,7 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             // For example, if any point in contourInSub has x=0, y=0, x=actualRoiCv.width-1, or y=actualRoiCv.height-1.
             // However, the bounding box check is simpler and often what's implied.
 
+            populateCenterlineFromContour(blob);
             plausibleBlobs.append(blob);
         }
     }

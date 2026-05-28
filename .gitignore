@@ -1,6 +1,6 @@
 # This file is used to ignore files which are generated
 # ----------------------------------------------------------------------------
-
+.claude/
 *~
 *.autosave
 *.a
@@ -82,3 +82,4 @@ CMakeLists.txt.user*
 .uic/
 /build*/
 .env/
+src/core/centerlineworker-bak.cpp

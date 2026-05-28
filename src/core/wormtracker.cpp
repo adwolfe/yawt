@@ -177,9 +177,17 @@ Tracking::DetectedBlob WormTracker::findPersistingComponent(
 
     std::vector<std::vector<cv::Point>> prevContoursVec = {previousFrameAnchorBlob.contourPoints};
     cv::drawContours(prevBlobMask, prevContoursVec, 0, cv::Scalar(255), cv::FILLED);
+    for (const auto& hole : previousFrameAnchorBlob.holeContourPoints) {
+        std::vector<std::vector<cv::Point>> holeVec = {hole};
+        cv::drawContours(prevBlobMask, holeVec, 0, cv::Scalar(0), cv::FILLED);
+    }
 
     std::vector<std::vector<cv::Point>> currContoursVec = {currentFrameFullBlob.contourPoints};
     cv::drawContours(currBlobMask, currContoursVec, 0, cv::Scalar(255), cv::FILLED);
+    for (const auto& hole : currentFrameFullBlob.holeContourPoints) {
+        std::vector<std::vector<cv::Point>> holeVec = {hole};
+        cv::drawContours(currBlobMask, holeVec, 0, cv::Scalar(0), cv::FILLED);
+    }
 
     cv::Mat newGrowthMask, oldOverlapMask, prevBlobMaskNot;
     cv::bitwise_not(prevBlobMask, prevBlobMaskNot);
@@ -792,9 +800,23 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
         emit stateChanged(m_wormId, m_currentState);
     }
 
-    // Update position tracking
-    m_lastKnownPosition = cv::Point2f(static_cast<float>(blobForAnchor.centroid.x()),
-                                     static_cast<float>(blobForAnchor.centroid.y()));
+    // Update position tracking — for ring-shaped (coiled) blobs, snap to the nearest
+    // outer contour point rather than the geometric centroid, which falls in the hole.
+    cv::Point2f newPosition(static_cast<float>(blobForAnchor.centroid.x()),
+                            static_cast<float>(blobForAnchor.centroid.y()));
+    if (!blobForAnchor.holeContourPoints.empty() && !blobForAnchor.contourPoints.empty()) {
+        double minDistSq = std::numeric_limits<double>::max();
+        for (const cv::Point& pt : blobForAnchor.contourPoints) {
+            double dx = pt.x - m_lastKnownPosition.x;
+            double dy = pt.y - m_lastKnownPosition.y;
+            double dSq = dx*dx + dy*dy;
+            if (dSq < minDistSq) {
+                minDistSq = dSq;
+                newPosition = cv::Point2f(static_cast<float>(pt.x), static_cast<float>(pt.y));
+            }
+        }
+    }
+    m_lastKnownPosition = newPosition;
 
     // Verify frame size is valid
     if (frameSize.width <= 0 || frameSize.height <= 0) {

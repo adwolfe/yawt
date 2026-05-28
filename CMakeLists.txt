@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-project(yawt LANGUAGES CXX VERSION 0.9.6)
+project(yawt LANGUAGES CXX VERSION 0.9.7)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,6 +63,9 @@ set(SOURCES
     # Core tracking
     src/core/trackingmanager.cpp
     src/core/wormtracker.cpp
+    src/core/centerlineworker.cpp
+    src/core/centerlineprocessor.cpp
+    src/core/centerlinegeometry.cpp
     src/core/appcontroller.cpp
 
     # Core processing
@@ -73,6 +76,10 @@ set(SOURCES
     src/data/trackingdatastorage.cpp
     src/data/trackingcommon.cpp
     src/data/wormobject.cpp
+
+    # Debug
+    src/debug/debugdatastore.cpp
+    src/debug/debugexporter.cpp
 
     # Utils
     src/utils/debugutils.cpp
@@ -107,6 +114,10 @@ set(HEADERS
     # Core
     src/core/trackingmanager.h
     src/core/wormtracker.h
+    src/core/centerlinetypes.h
+    src/core/centerlineworker.h
+    src/core/centerlineprocessor.h
+    src/core/centerlinegeometry.h
     src/core/appcontroller.h
 
     # Core processing
@@ -117,6 +128,11 @@ set(HEADERS
     src/data/trackingdatastorage.h
     src/data/trackingcommon.h
     src/data/wormobject.h
+
+    # Debug
+    src/debug/debugrecords.h
+    src/debug/debugdatastore.h
+    src/debug/debugexporter.h
 
     # Utils
     src/utils/debugutils.h
@@ -179,9 +195,9 @@ install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 # Custom deployment target for macOS app bundle
 if(APPLE)
     add_custom_target(deploy
-        COMMAND ${CMAKE_SOURCE_DIR}/scripts/deploy_simple_working.sh
+        COMMAND ${CMAKE_SOURCE_DIR}/scripts/package_mac.sh -n --no-archive --no-macdeployqt
         DEPENDS ${PROJECT_NAME}
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Deploying macOS app bundle with all dependencies"
     )
 

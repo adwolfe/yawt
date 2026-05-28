@@ -17,13 +17,21 @@ FrameLoader::FrameLoader(QObject* parent)
 
 FrameLoader::~FrameLoader() {
     stop();
+    QMutexLocker captureLocker(&m_captureMutex);
     if (m_videoCapture.isOpened()) {
         m_videoCapture.release();
     }
 }
 
 void FrameLoader::setVideoPath(const QString& path) {
-    QMutexLocker locker(&m_queueMutex);
+    QMutexLocker queueLocker(&m_queueMutex);
+    m_requestQueue.clear();
+    queueLocker.unlock();
+
+    // Hold m_captureMutex for the entire release+open to prevent loadFrame()
+    // from accessing m_videoCapture concurrently (it may be called from the
+    // worker thread with m_queueMutex already released).
+    QMutexLocker captureLocker(&m_captureMutex);
 
     if (m_videoCapture.isOpened()) {
         m_videoCapture.release();
@@ -156,6 +164,8 @@ void FrameLoader::processRequests() {
 }
 
 void FrameLoader::loadFrame(int frameNumber) {
+    QMutexLocker captureLocker(&m_captureMutex);
+
     if (!m_videoCapture.isOpened() || frameNumber < 0) {
         emit frameLoadError(frameNumber, "Video not opened or invalid frame number");
         return;
@@ -169,8 +179,7 @@ void FrameLoader::loadFrame(int frameNumber) {
 
         cv::Mat frame;
         if (m_videoCapture.read(frame) && !frame.empty()) {
-            // If a shared frame cache has been provided, insert the newly loaded
-            // frame from this worker thread. FrameCache::insertFrame is thread-safe.
+            captureLocker.unlock(); // Release before potentially expensive cache/signal work
             if (m_frameCache) {
                 m_frameCache->insertFrame(frameNumber, frame);
             }

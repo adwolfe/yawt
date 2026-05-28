@@ -30,6 +30,7 @@
 
 #include "trackingmanager.h"
 #include "../data/trackingdatastorage.h"
+#include "../debug/debugdatastore.h"
 #include "../models/blobtablemodel.h"
 #include "../models/annotationtablemodel.h"
 #include "../gui/trackingprogressdialog.h"
@@ -60,7 +61,10 @@ AppController::AppController(TrackingDataStorage* storage, QObject* parent)
     if (!m_blobModel) m_blobModel = new BlobTableModel(m_storage, this);
     if (!m_annotationModel) m_annotationModel = new AnnotationTableModel(m_storage, this);
     if (!m_manager) {
-        m_manager = new TrackingManager(m_storage, this);
+        if (!m_debugStore) {
+            m_debugStore = new Debug::DebugDataStore();
+        }
+        m_manager = new TrackingManager(m_storage, m_debugStore, this);
     }
     connectTrackingManagerSignals();
 }
@@ -69,6 +73,7 @@ AppController::~AppController()
 {
     // QObject parent-child will delete owned children (m_manager, m_blobModel, m_annotationModel, m_storage if created with 'this' parent).
     // If m_storage was provided by caller, we do not delete it here (it may not be parented to us).
+    delete m_debugStore;
     YAWT_DEBUG(lcCoreAppController) << "AppController destroyed";
 }
 
@@ -78,10 +83,13 @@ void AppController::initWithNewStorage()
     if (!m_storage) {
         m_storage = new TrackingDataStorage(this);
     }
+    if (!m_debugStore) {
+        m_debugStore = new Debug::DebugDataStore();
+    }
 
     // Create TrackingManager with storage; TrackingManager expects a storage pointer
     if (!m_manager) {
-        m_manager = new TrackingManager(m_storage, this);
+        m_manager = new TrackingManager(m_storage, m_debugStore, this);
     }
 
     // Create application models that adapt the storage to views
@@ -111,6 +119,11 @@ void AppController::connectTrackingManagerSignals()
     connect(m_manager, &TrackingManager::trackingCancelled,
             this, &AppController::onTrackingManagerCancelled);
 
+    connect(m_manager, &TrackingManager::centerlineProgress,
+            this, &AppController::onTrackingManagerCenterlineProgress);
+    connect(m_manager, &TrackingManager::centerlineFinished,
+            this, &AppController::onTrackingManagerCenterlineFinished);
+
     // All tracks updated: handle storage and re-emit
     connect(m_manager, &TrackingManager::allTracksUpdated,
             this, &AppController::onTrackingManagerAllTracksUpdated);
@@ -129,6 +142,11 @@ AnnotationTableModel* AppController::annotationTableModel() const
 TrackingDataStorage* AppController::trackingDataStorage() const
 {
     return m_storage;
+}
+
+Debug::DebugDataStore* AppController::debugDataStore() const
+{
+    return m_debugStore;
 }
 
 void AppController::addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame)
@@ -296,6 +314,16 @@ void AppController::onTrackingManagerCancelled()
     emit trackingCancelled();
 }
 
+void AppController::onTrackingManagerCenterlineProgress(int percentage)
+{
+    emit centerlineProgress(percentage);
+}
+
+void AppController::onTrackingManagerCenterlineFinished()
+{
+    emit centerlineFinished();
+}
+
 // Build vector<InitialWormInfo> from BlobTableModel, optionally filtering out items that already have tracks.
 std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel(bool onlyTrackMissing) const
 {
@@ -412,6 +440,8 @@ void AppController::showTrackingDialog(const QString& videoPath,
         connect(this, &AppController::trackingFinished, m_trackingDialog, &TrackingProgressDialog::onTrackingSuccessfullyFinished);
         connect(this, &AppController::trackingFailed, m_trackingDialog, &TrackingProgressDialog::onTrackingFailed);
         connect(this, &AppController::trackingCancelled, m_trackingDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
+        connect(this, &AppController::centerlineProgress, m_trackingDialog, &TrackingProgressDialog::onCenterlineProgress);
+        connect(this, &AppController::centerlineFinished, m_trackingDialog, &TrackingProgressDialog::onCenterlineFinished);
     }
 
     // Provide the dialog with accurate context using the parameters passed in and model/storage counts.
@@ -454,12 +484,42 @@ void AppController::onDialogBeginRequested()
         return;
     }
 
+    // Forward the stored snake params (edited via the Debug tab) to the manager.
+    // m_snakeParams holds whatever was last set via setCenterlineSnakeParams();
+    // defaults from the struct are used on a fresh controller before any user edit.
+    m_manager->setCenterlineSnakeParams(m_snakeParams);
+
+    // Read centerline options from the dialog.
+    if (m_trackingDialog) {
+        m_manager->setCenterlineEnabled(m_trackingDialog->computeCenterlineChecked());
+        m_manager->setSkipMergedFrames(m_trackingDialog->skipMergedFramesChecked());
+    }
+
     // Start tracking via the manager using stored dialog parameters.
     emit trackingStarted();
     m_manager->startFullTrackingProcess(m_dialogVideoPath, m_dialogDataDirectory, m_dialogKeyFrame,
                                         initialWorms, m_dialogSettings, m_dialogTotalFrames);
 
     // Leave the dialog open — progress/status signals from the manager will be forwarded to it.
+}
+
+void AppController::setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params)
+{
+    m_snakeParams = params;
+    if (m_manager) {
+        m_manager->setCenterlineSnakeParams(params);
+    }
+}
+
+void AppController::rerunCenterline(const Centerline::CenterlineSnakeParams& params)
+{
+    if (!m_manager) {
+        YAWT_WARN(lcCoreAppController) << "rerunCenterline: no TrackingManager available";
+        return;
+    }
+    m_snakeParams = params;
+    m_manager->setCenterlineSnakeParams(params);
+    m_manager->startCenterlineComputation();
 }
 
 void AppController::onDialogCancelRequested()
