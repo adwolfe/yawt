@@ -1513,6 +1513,27 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
     if (ui->wormTimeline) {
         ui->wormTimeline->setCurrentFrame(currentFrameNumber);
     }
+
+    if (ui->focusCheckBox->isChecked() && m_trackingDataStorage) {
+        QModelIndexList selectedIndexes = ui->wormTableView->selectionModel()->selectedIndexes();
+        if (!selectedIndexes.isEmpty() && m_wormProxyModel) {
+            QModelIndex srcIdx = m_wormProxyModel->mapToSource(selectedIndexes.first());
+            if (srcIdx.isValid()) {
+                const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(srcIdx.row());
+                QPointF wormPosition;
+                QRectF wormRoi;
+                bool found = m_trackingDataStorage->getWormDataForFrame(selectedItem.id, currentFrameNumber, wormPosition, wormRoi);
+                if (!found)
+                    found = m_trackingDataStorage->getLastKnownPositionBefore(selectedItem.id, currentFrameNumber, wormPosition, wormRoi);
+                if (!found && !selectedItem.initialCentroid.isNull()) {
+                    wormPosition = selectedItem.initialCentroid;
+                    found = true;
+                }
+                if (found && wormPosition.x() >= 0 && wormPosition.y() >= 0)
+                    ui->videoLoader->centerOnVideoPoint(wormPosition);
+            }
+        }
+    }
 }
 
 void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& currentFrame) {
