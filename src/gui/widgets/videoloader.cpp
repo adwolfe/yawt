@@ -162,7 +162,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_frameLoaderThread(nullptr),
     m_lastPreloadCenter(-1),
     m_pendingSeekFrame(-1),
-    m_cacheStreamNextFrame(-1) {
+    m_cacheStreamNextFrame(-1),
+    m_trackDisplayMode(TrackDisplayMode::Centroid) {
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
@@ -647,6 +648,7 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
 void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
     // For backward compatibility - in the future we'll get tracks directly from storage
     m_allTracksToDisplay = tracks;
+    rebuildCenterlineMidpointCache();
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
         m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
@@ -669,6 +671,7 @@ void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
 void VideoLoader::clearDisplayedTracks() {
     m_allTracksToDisplay.clear();
     m_visibleTrackIDs.clear();
+    m_centerlineMidpointCache.clear();
     // m_trackColors is cleared on new video load.
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
@@ -676,6 +679,32 @@ void VideoLoader::clearDisplayedTracks() {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: All displayed tracks (data) cleared.";
+}
+
+void VideoLoader::setTrackDisplayMode(TrackDisplayMode mode) {
+    if (m_trackDisplayMode == mode) return;
+    m_trackDisplayMode = mode;
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks))
+        update();
+}
+
+void VideoLoader::rebuildCenterlineMidpointCache() {
+    m_centerlineMidpointCache.clear();
+    if (!m_storage) return;
+    for (const auto& [wormId, trackPoints] : m_allTracksToDisplay) {
+        QMap<int, QPointF>& wormCache = m_centerlineMidpointCache[wormId];
+        for (const auto& pt : trackPoints) {
+            if (pt.quality == Tracking::TrackPointQuality::Lost) continue;
+            const QMap<int, Tracking::DetectedBlob> blobs =
+                m_storage->getDetectedBlobsForFrame(pt.frameNumberOriginal);
+            auto it = blobs.constFind(wormId);
+            if (it != blobs.constEnd() && it->isValid && !it->centerlinePoints.empty()) {
+                const auto& clPts = it->centerlinePoints;
+                const cv::Point2f& mid = clPts[clPts.size() / 2];
+                wormCache[pt.frameNumberOriginal] = QPointF(mid.x, mid.y);
+            }
+        }
+    }
 }
 
 /* Per-item color update slot removed.

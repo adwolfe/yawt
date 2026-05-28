@@ -124,6 +124,11 @@ public:
     Q_DECLARE_FLAGS(ViewModeOptions, ViewModeOption) // Creates ViewModeOptions, which is QFlags<ViewModeOption>
     Q_FLAG(ViewModeOptions) // Makes ViewModeOptions usable in Qt's property system, if needed
 
+    enum class TrackDisplayMode {
+        Centroid,           // Draw track using blob centroid positions (default)
+        CenterlineMidpoint  // Draw track using centerline midpoint positions
+    };
+
     // --- Public Methods ---
     void setTrackingDataStorage(TrackingDataStorage* storage);
     bool isVideoLoaded() const;
@@ -224,6 +229,7 @@ public slots:
     void setVisibleTrackIDs(const QSet<int>& visibleTrackIDs);
 
     void clearDisplayedTracks(); // Clears m_allTracksToDisplay and m_visibleTrackIDs
+    void setTrackDisplayMode(TrackDisplayMode mode);
 
     // Slot for per-item Worm Color Updates removed.
     // Consumers should use the bulk `itemsChanged(const QList<TableItems::ClickedItem>&)` signal
@@ -293,6 +299,7 @@ private:
     void emitThresholdParametersChanged();
     QColor getTrackColor(int trackId) const; // Used for drawing tracks
     QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
+    void rebuildCenterlineMidpointCache();
 
     // Frame caching and loading helpers
     bool getCachedFrame(int frameNumber, cv::Mat& outFrame);
@@ -343,6 +350,8 @@ private:
     QSet<int> m_visibleTrackIDs;         // IDs of tracks that should be currently rendered
     mutable QMap<int, QColor> m_trackColors; // Cache for track/item colors
     TrackingDataStorage* m_storage;      // Pointer to central data storage
+    TrackDisplayMode m_trackDisplayMode; // Whether to draw centroid or centerline midpoint tracks
+    QMap<int, QMap<int, QPointF>> m_centerlineMidpointCache; // wormId -> frameNum -> midpoint
 
     // --- Zoom & Pan Members ---
     double m_zoomFactor;
