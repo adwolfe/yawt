@@ -4,6 +4,7 @@
 #include "../data/trackingcommon.h"
 
 #include <QMap>
+#include <QString>
 #include <cmath>
 #include <vector>
 
@@ -96,6 +97,48 @@ struct TipCapDebug {
 };
 
 /**
+ * @brief Per-skeleton-endpoint audit trail for detectEndpoints().
+ *
+ * This records the exact handoff from a degree-1 skeleton node to contour snap,
+ * curvature-peak search, optional peak rejection, and final TrueTip output.
+ * It is debug/export data only; centerline decisions still consume TrueTip.
+ */
+struct EndpointCandidateDebug {
+    int rawEndpointOrder = -1;
+    int prunedEndpointOrder = -1;
+    int graphIndex = -1;
+    int graphDegree = 0;
+
+    cv::Point2f skeletonLocal = {0.f, 0.f};
+    cv::Point2f skeletonWorld = {0.f, 0.f};
+    cv::Point2f outwardDir = {0.f, 0.f};
+    float dtAtEndpoint = 0.f;
+    float maxForward = 0.f;
+    float maxSide = 0.f;
+
+    int snapContourIdx = -1;
+    cv::Point2f snapWorld = {0.f, 0.f};
+    float snapCurvature = 0.f;
+
+    int reachablePeakCount = 0;
+    int bestPeakContourIdx = -1;
+    float bestPeakScore = 0.f;
+    cv::Point2f bestPeakWorld = {-1.f, -1.f};
+    float bestPeakCurvature = 0.f;
+    float bestPeakDistanceFromSnap = 0.f;
+    float maxPeakShift = 0.f;
+    bool peakAccepted = false;
+    QString peakRejectReason;
+
+    int finalTipIdx = -1;
+    cv::Point2f finalTipWorld = {-1.f, -1.f};
+    bool finalExtended = false;
+    float finalCurvature = 0.f;
+    float finalWidth = 0.f;
+    bool finalHasBilateral = false;
+};
+
+/**
  * @brief Combined output of `detectEndpoints()`.
  *
  * Bundles the skeleton graph, distance transform, true tips, topology
@@ -111,8 +154,10 @@ struct EndpointResult {
     SkeletonGraph        skeleton;
     cv::Mat              distTransform;        // CV_32F, local coords
     cv::Rect             localBounds;          // origin offset (LOCAL->WORLD)
+    std::vector<int> rawSkeletonEndpointIndices;
     std::vector<TrueTip>     tips;             // 0-2 entries (post-prune)
     std::vector<TipCapDebug> tipCapDebug;      // parallel to tips[], bilateral debug
+    std::vector<EndpointCandidateDebug> endpointCandidateDebug;
     std::vector<cv::Point2f> contourPoints;    // WORLD coords, for curvature debug
     std::vector<float> contourCurvatures;      // Signed curvature, aligned with contourPoints
     std::vector<int> contourCurvaturePeaks;    // Indices into contourPoints

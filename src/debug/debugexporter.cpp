@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -576,12 +577,28 @@ static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
                    cv::Scalar(255, 255, 0), cv::FILLED);
     }
 
-    for (const cv::Point2f& world : record.skeletonEndpointPoints) {
-        cv::circle(canvas, worldToCanvas(world, bounds), 6,
-                   cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+    for (int i = 0; i < static_cast<int>(record.rawSkeletonEndpointPoints.size()); ++i) {
+        const cv::Point p = worldToCanvas(record.rawSkeletonEndpointPoints[i], bounds);
+        cv::line(canvas, p + cv::Point(-4, -4), p + cv::Point(4, 4),
+                 cv::Scalar(255, 80, 255), 1, cv::LINE_AA);
+        cv::line(canvas, p + cv::Point(-4, 4), p + cv::Point(4, -4),
+                 cv::Scalar(255, 80, 255), 1, cv::LINE_AA);
     }
 
-    drawTitle(canvas, QStringLiteral("01 skeleton  degree-1 endpoints=%1")
+    for (int i = 0; i < static_cast<int>(record.skeletonEndpointPoints.size()); ++i) {
+        const cv::Point p = worldToCanvas(record.skeletonEndpointPoints[i], bounds);
+        cv::circle(canvas, p, 6,
+                   cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+        QString label = QStringLiteral("ep%1").arg(i);
+        if (i < static_cast<int>(record.prunedSkeletonEndpointGraphIndices.size())) {
+            label += QStringLiteral(" g%1").arg(record.prunedSkeletonEndpointGraphIndices[i]);
+        }
+        drawText(canvas, label, p + cv::Point(7, -5), cv::Scalar(0, 255, 255));
+    }
+
+    drawTitle(canvas, QStringLiteral("01 skeleton  pixels=%1 raw endpoints=%2 pruned=%3")
+              .arg(record.skeletonPixels.size())
+              .arg(record.rawSkeletonEndpointPoints.size())
               .arg(record.skeletonEndpointPoints.size()));
     drawCoordinateEdges(canvas, bounds);
     writeStageImage(canvas, outputDir, QStringLiteral("01_skeleton.png"));
@@ -1154,6 +1171,106 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     log << "lengthSamples=" << record.baselineBefore.lengthSamples
         << " meanBodyLength=" << record.baselineBefore.meanBodyLength
         << " bodyLengthStdDev=" << record.baselineBefore.bodyLengthStdDev() << "\n";
+    log << "\n--- Skeleton / detectEndpoints audit ---\n";
+    log << "localBounds: x=" << record.endpointLocalBounds.x
+        << " y=" << record.endpointLocalBounds.y
+        << " w=" << record.endpointLocalBounds.width
+        << " h=" << record.endpointLocalBounds.height << "\n";
+    log << "skeletonPixels=" << record.skeletonPixels.size()
+        << " rawDegree1Endpoints=" << record.rawSkeletonEndpointPoints.size()
+        << " prunedDegree1Endpoints=" << record.skeletonEndpointPoints.size() << "\n";
+    log << "raw endpoint graph indices:";
+    for (int idx : record.rawSkeletonEndpointGraphIndices) {
+        log << " " << idx;
+    }
+    log << "\n";
+    for (int i = 0; i < static_cast<int>(record.rawSkeletonEndpointPoints.size()); ++i) {
+        log << "  rawEndpoint" << i;
+        if (i < static_cast<int>(record.rawSkeletonEndpointGraphIndices.size())) {
+            log << " graphIdx=" << record.rawSkeletonEndpointGraphIndices[i];
+        }
+        log << " world=" << pointString(record.rawSkeletonEndpointPoints[i]) << "\n";
+    }
+    log << "pruned endpoint graph indices:";
+    for (int idx : record.prunedSkeletonEndpointGraphIndices) {
+        log << " " << idx;
+    }
+    log << "\n";
+    for (int i = 0; i < static_cast<int>(record.skeletonEndpointPoints.size()); ++i) {
+        log << "  prunedEndpoint" << i;
+        if (i < static_cast<int>(record.prunedSkeletonEndpointGraphIndices.size())) {
+            log << " graphIdx=" << record.prunedSkeletonEndpointGraphIndices[i];
+        }
+        log << " world=" << pointString(record.skeletonEndpointPoints[i]) << "\n";
+    }
+    if (!record.distanceTransform.empty()) {
+        float dtMin = std::numeric_limits<float>::max();
+        float dtMax = 0.f;
+        float dtSum = 0.f;
+        int dtPositiveCount = 0;
+        for (float v : record.distanceTransform.values) {
+            if (!std::isfinite(v) || v <= 0.f) {
+                continue;
+            }
+            dtMin = std::min(dtMin, v);
+            dtMax = std::max(dtMax, v);
+            dtSum += v;
+            ++dtPositiveCount;
+        }
+        log << "distanceTransform: rows=" << record.distanceTransform.rows
+            << " cols=" << record.distanceTransform.cols
+            << " positivePixels=" << dtPositiveCount
+            << " minPositive=" << (dtPositiveCount > 0 ? dtMin : 0.f)
+            << " max=" << dtMax
+            << " meanPositive=" << (dtPositiveCount > 0 ? dtSum / dtPositiveCount : 0.f)
+            << "\n";
+    }
+    log << "contourCurvature: contourPoints=" << record.contourCurvaturePoints.size()
+        << " peakCount=" << record.contourCurvaturePeaks.size() << "\n";
+    for (int pi = 0; pi < static_cast<int>(record.contourCurvaturePeaks.size()); ++pi) {
+        const int idx = record.contourCurvaturePeaks[pi];
+        if (idx < 0 || idx >= static_cast<int>(record.contourCurvaturePoints.size()) ||
+            idx >= static_cast<int>(record.contourCurvatures.size())) {
+            continue;
+        }
+        log << "  peak" << pi
+            << " contourIdx=" << idx
+            << " world=" << pointString(record.contourCurvaturePoints[idx])
+            << " curvature=" << record.contourCurvatures[idx] << "\n";
+    }
+    log << "endpointCandidateDebug entries=" << record.endpointCandidateDebug.size() << "\n";
+    for (const Centerline::EndpointCandidateDebug& ep : record.endpointCandidateDebug) {
+        log << "  endpoint rawOrder=" << ep.rawEndpointOrder
+            << " prunedOrder=" << ep.prunedEndpointOrder
+            << " graphIdx=" << ep.graphIndex
+            << " graphDegree=" << ep.graphDegree << "\n";
+        log << "    skeletonLocal=" << pointString(ep.skeletonLocal)
+            << " skeletonWorld=" << pointString(ep.skeletonWorld)
+            << " outwardDir=(" << ep.outwardDir.x << "," << ep.outwardDir.y << ")"
+            << " dtAtEndpoint=" << ep.dtAtEndpoint
+            << " searchForward=" << ep.maxForward
+            << " searchSide=" << ep.maxSide << "\n";
+        log << "    contourSnap idx=" << ep.snapContourIdx
+            << " world=" << pointString(ep.snapWorld)
+            << " curvature=" << ep.snapCurvature << "\n";
+        log << "    curvatureSearch reachablePeaks=" << ep.reachablePeakCount
+            << " bestPeakIdx=" << ep.bestPeakContourIdx
+            << " bestPeakScore=" << ep.bestPeakScore
+            << " accepted=" << (ep.peakAccepted ? "Y" : "N")
+            << " reason=" << ep.peakRejectReason << "\n";
+        if (ep.bestPeakContourIdx >= 0) {
+            log << "    bestPeak world=" << pointString(ep.bestPeakWorld)
+                << " curvature=" << ep.bestPeakCurvature
+                << " distFromSnap=" << ep.bestPeakDistanceFromSnap
+                << " maxPeakShift=" << ep.maxPeakShift << "\n";
+        }
+        log << "    finalTip idx=" << ep.finalTipIdx
+            << " world=" << pointString(ep.finalTipWorld)
+            << " source=" << (ep.finalExtended ? "curvaturePeak" : "skeletonSnap")
+            << " curvature=" << ep.finalCurvature
+            << " width=" << ep.finalWidth
+            << " bilateral=" << (ep.finalHasBilateral ? "Y" : "N") << "\n";
+    }
     log << "\n--- Centerline decisions ---\n";
     log << "refLength=" << record.refLength
         << " previousCrossSum=" << record.previousTurningAngle << "\n";

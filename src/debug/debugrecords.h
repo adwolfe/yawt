@@ -99,11 +99,15 @@ struct CenterlineFrameDebug {
 
     cv::Rect endpointLocalBounds;
     std::vector<cv::Point2f> skeletonPixels;
+    std::vector<cv::Point2f> rawSkeletonEndpointPoints;
+    std::vector<int> rawSkeletonEndpointGraphIndices;
+    std::vector<int> prunedSkeletonEndpointGraphIndices;
     std::vector<cv::Point2f> skeletonEndpointPoints;
     DistanceTransformDebug distanceTransform;
     std::vector<cv::Point2f> contourCurvaturePoints;
     std::vector<float> contourCurvatures;
     std::vector<int> contourCurvaturePeaks;
+    std::vector<Centerline::EndpointCandidateDebug> endpointCandidateDebug;
 
     // Bilateral cap-midpoint debug — one entry per tip (parallel to tipCandidates).
     // Populated whenever the new bilateral path ran (Clean frames primarily).

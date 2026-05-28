@@ -54,6 +54,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         return r;
     }
     std::vector<int> rawEndpoints = r.skeleton.endpointIndices;
+    r.rawSkeletonEndpointIndices = rawEndpoints;
 
     // (c) ── Prune to ≤ 2 endpoints (longest-path pair) ─────────────────────
     int rawEndpointCount = static_cast<int>(rawEndpoints.size());
@@ -207,6 +208,14 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         return dir * (1.f / norm);
     };
 
+    auto endpointSearchLimits = [](float dtAtEp, float& maxForward, float& maxSide) {
+        // Degree-1 skeleton endpoints are already close to the contour cap.
+        // Keep this local so a tightly curled endpoint cannot search across
+        // the body and snap onto the other tip's cap.
+        maxForward = std::clamp(1.25f + 2.0f * dtAtEp, 3.0f, 7.0f);
+        maxSide = std::clamp(1.0f + 1.5f * dtAtEp, 2.5f, 5.0f);
+    };
+
     auto projectedEndpointContourIdx = [&](const cv::Point2f& epLocalF,
                                            const cv::Point2f& outwardDir,
                                            float dtAtEp) -> int {
@@ -214,12 +223,14 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             return nearestContourIdx(epLocalF);
         }
 
-        const float maxForward = std::clamp(6.f + 4.f * dtAtEp, 8.f, 18.f);
-        const float maxSide = std::clamp(2.f + 2.5f * dtAtEp, 4.f, 10.f);
+        float maxForward = 0.f;
+        float maxSide = 0.f;
+        endpointSearchLimits(dtAtEp, maxForward, maxSide);
         int bestIdx = -1;
         float bestScore = -std::numeric_limits<float>::max();
         for (int i = 0; i < nContour; ++i) {
             const cv::Point2f rel = contourLocal[i] - epLocalF;
+            const float dist = std::hypot(rel.x, rel.y);
             const float forward = rel.x * outwardDir.x + rel.y * outwardDir.y;
             if (forward < -1.f || forward > maxForward) {
                 continue;
@@ -231,7 +242,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             }
 
             const float curvatureBonus = 2.f * std::abs(curvature[i]);
-            const float score = forward - 0.25f * side + curvatureBonus;
+            const float score = 0.5f * forward - 0.75f * dist - 0.25f * side + curvatureBonus;
             if (score > bestScore) {
                 bestScore = score;
                 bestIdx = i;
@@ -242,6 +253,33 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
     };
 
     // (e) ── Extend each skeleton endpoint to the strongest reachable peak ──
+    auto rawEndpointOrderForGraphIndex = [&](int graphIdx) -> int {
+        for (int order = 0; order < static_cast<int>(rawEndpoints.size()); ++order) {
+            if (rawEndpoints[order] == graphIdx) {
+                return order;
+            }
+        }
+        return -1;
+    };
+
+    int prunedEndpointOrder = 0;
+    std::vector<int> usedPeakIndices;
+    std::vector<cv::Point2f> usedFinalTipPoints;
+    auto peakAlreadyUsed = [&](int peakIdx) -> bool {
+        return std::find(usedPeakIndices.begin(), usedPeakIndices.end(), peakIdx) !=
+               usedPeakIndices.end();
+    };
+    auto finalPointAlreadyUsed = [&](const cv::Point2f& point) -> bool {
+        constexpr float kMinDistinctTipDistance = 1.5f;
+        for (const cv::Point2f& used : usedFinalTipPoints) {
+            const cv::Point2f delta = point - used;
+            if (std::hypot(delta.x, delta.y) < kMinDistinctTipDistance) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     for (int epIdx : r.skeleton.endpointIndices) {
         const cv::Point& epLocal = r.skeleton.points[epIdx];
         const cv::Point2f epLocalF(static_cast<float>(epLocal.x),
@@ -251,6 +289,23 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
 
         const float dtAtEp = r.distTransform.at<float>(epLocal.y, epLocal.x);
         const cv::Point2f outwardDir = endpointOutwardDirection(epIdx);
+        float maxForward = 0.f;
+        float maxSide = 0.f;
+        endpointSearchLimits(dtAtEp, maxForward, maxSide);
+
+        EndpointCandidateDebug endpointDbg;
+        endpointDbg.rawEndpointOrder = rawEndpointOrderForGraphIndex(epIdx);
+        endpointDbg.prunedEndpointOrder = prunedEndpointOrder++;
+        endpointDbg.graphIndex = epIdx;
+        endpointDbg.graphDegree =
+            (epIdx >= 0 && epIdx < static_cast<int>(r.skeleton.adjacency.size()))
+                ? static_cast<int>(r.skeleton.adjacency[epIdx].size()) : 0;
+        endpointDbg.skeletonLocal = epLocalF;
+        endpointDbg.skeletonWorld = epWorld;
+        endpointDbg.outwardDir = outwardDir;
+        endpointDbg.dtAtEndpoint = dtAtEp;
+        endpointDbg.maxForward = maxForward;
+        endpointDbg.maxSide = maxSide;
 
         // Skeleton endpoint projected outward to the cap contour. A nearest
         // contour snap often lands on the side of a rounded tip instead of at
@@ -263,19 +318,25 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             snapWorld = cv::Point2f(snapLocal.x + originOffset.x,
                                     snapLocal.y + originOffset.y);
         }
+        endpointDbg.snapContourIdx = snapIdx;
+        endpointDbg.snapWorld = snapWorld;
+        endpointDbg.snapCurvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
 
         // Find a strong curvature peak in the local end-cap region defined by
         // the skeleton endpoint and its outward direction. This avoids making
         // curvature depend on a possibly side-biased contour snap.
-        const float maxForward = std::clamp(6.f + 4.f * dtAtEp, 8.f, 18.f);
-        const float maxSide = std::clamp(2.f + 2.5f * dtAtEp, 4.f, 10.f);
         int bestPeak = -1;
         float bestScore = -std::numeric_limits<float>::max();
+        int reachablePeakCount = 0;
         for (int peakIdx : curvaturePeakIdx) {
+            if (peakAlreadyUsed(peakIdx)) {
+                continue;
+            }
             const cv::Point2f& peakLocal = contourLocal[peakIdx];
             const cv::Point2f rel = peakLocal - epLocalF;
+            const float dist = std::hypot(rel.x, rel.y);
             float forward = 0.f;
-            float side = std::sqrt(rel.x * rel.x + rel.y * rel.y);
+            float side = dist;
             if (std::hypot(outwardDir.x, outwardDir.y) >= 1e-3f) {
                 forward = rel.x * outwardDir.x + rel.y * outwardDir.y;
                 const float cross = rel.x * outwardDir.y - rel.y * outwardDir.x;
@@ -284,19 +345,54 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             if (forward < -1.f || forward > maxForward || side > maxSide) {
                 continue;
             }
+            ++reachablePeakCount;
 
-            const float score = forward - 0.25f * side + 4.f * std::abs(curvature[peakIdx]);
+            const float score = 0.5f * forward - 0.5f * dist -
+                                0.25f * side + 4.f * std::abs(curvature[peakIdx]);
             if (score > bestScore) {
                 bestScore = score;
                 bestPeak = peakIdx;
             }
         }
+        endpointDbg.reachablePeakCount = reachablePeakCount;
+        endpointDbg.bestPeakContourIdx = bestPeak;
+        endpointDbg.bestPeakScore = bestPeak >= 0 ? bestScore : 0.f;
 
+        const int preShiftBestPeak = bestPeak;
         if (bestPeak >= 0) {
             const cv::Point2f peakDelta = contourLocal[bestPeak] - snapLocal;
             const float peakDist = std::hypot(peakDelta.x, peakDelta.y);
             const float maxPeakShift = std::clamp(1.0f + 0.75f * dtAtEp, 2.0f, 4.0f);
+            endpointDbg.bestPeakWorld =
+                cv::Point2f(contourLocal[bestPeak].x + originOffset.x,
+                            contourLocal[bestPeak].y + originOffset.y);
+            endpointDbg.bestPeakCurvature = curvature[bestPeak];
+            endpointDbg.bestPeakDistanceFromSnap = peakDist;
+            endpointDbg.maxPeakShift = maxPeakShift;
             if (peakDist > maxPeakShift) {
+                bestPeak = -1;
+                endpointDbg.peakRejectReason =
+                    QStringLiteral("peak rejected: distance from contour snap %1 > maxPeakShift %2")
+                        .arg(peakDist, 0, 'f', 3)
+                        .arg(maxPeakShift, 0, 'f', 3);
+            }
+        }
+        if (preShiftBestPeak < 0) {
+            endpointDbg.peakRejectReason = reachablePeakCount == 0
+                ? QStringLiteral("no curvature peak inside endpoint search window")
+                : QStringLiteral("no curvature peak selected");
+        } else if (bestPeak >= 0) {
+            endpointDbg.peakAccepted = true;
+            endpointDbg.peakRejectReason = QStringLiteral("accepted");
+        }
+
+        if (bestPeak >= 0) {
+            const cv::Point2f peakWorld(contourLocal[bestPeak].x + originOffset.x,
+                                        contourLocal[bestPeak].y + originOffset.y);
+            if (finalPointAlreadyUsed(peakWorld)) {
+                endpointDbg.peakAccepted = false;
+                endpointDbg.peakRejectReason =
+                    QStringLiteral("peak rejected: final tip would duplicate a previous endpoint");
                 bestPeak = -1;
             }
         }
@@ -439,6 +535,17 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                             t.extended  = false;
                         }
                         r.tips.push_back(t);
+                        endpointDbg.finalTipIdx = static_cast<int>(r.tips.size()) - 1;
+                        endpointDbg.finalTipWorld = t.point;
+                        endpointDbg.finalExtended = t.extended;
+                        endpointDbg.finalCurvature = t.curvature;
+                        endpointDbg.finalWidth = t.width;
+                        endpointDbg.finalHasBilateral = t.hasBilateral;
+                        r.endpointCandidateDebug.push_back(endpointDbg);
+                        if (t.extended) {
+                            usedPeakIndices.push_back(bestPeak);
+                        }
+                        usedFinalTipPoints.push_back(t.point);
                         r.tipCapDebug.push_back(capDbg);
                         continue; // skip the fallback TrueTip construction below
                     }
@@ -472,6 +579,17 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             t.extended  = false;
         }
         r.tips.push_back(t);
+        endpointDbg.finalTipIdx = static_cast<int>(r.tips.size()) - 1;
+        endpointDbg.finalTipWorld = t.point;
+        endpointDbg.finalExtended = t.extended;
+        endpointDbg.finalCurvature = t.curvature;
+        endpointDbg.finalWidth = t.width;
+        endpointDbg.finalHasBilateral = t.hasBilateral;
+        r.endpointCandidateDebug.push_back(endpointDbg);
+        if (t.extended) {
+            usedPeakIndices.push_back(bestPeak);
+        }
+        usedFinalTipPoints.push_back(t.point);
     }
 
     // (f) ── Topology classification ───────────────────────────────────────
@@ -2786,10 +2904,14 @@ static void captureEndpointDebug(const Centerline::EndpointResult& er,
 {
     record.endpointLocalBounds = er.localBounds;
     record.skeletonPixels.clear();
+    record.rawSkeletonEndpointPoints.clear();
+    record.rawSkeletonEndpointGraphIndices = er.rawSkeletonEndpointIndices;
+    record.prunedSkeletonEndpointGraphIndices = er.skeleton.endpointIndices;
     record.skeletonEndpointPoints.clear();
     record.contourCurvaturePoints = er.contourPoints;
     record.contourCurvatures = er.contourCurvatures;
     record.contourCurvaturePeaks = er.contourCurvaturePeaks;
+    record.endpointCandidateDebug = er.endpointCandidateDebug;
 
     const cv::Point2f origin(static_cast<float>(er.localBounds.x),
                              static_cast<float>(er.localBounds.y));
@@ -2805,6 +2927,16 @@ static void captureEndpointDebug(const Centerline::EndpointResult& er,
                                 static_cast<float>(y) + origin.y));
             }
         }
+    }
+
+    for (int idx : er.rawSkeletonEndpointIndices) {
+        if (idx < 0 || idx >= static_cast<int>(er.skeleton.points.size())) {
+            continue;
+        }
+        const cv::Point& point = er.skeleton.points[idx];
+        record.rawSkeletonEndpointPoints.push_back(
+            cv::Point2f(static_cast<float>(point.x) + origin.x,
+                        static_cast<float>(point.y) + origin.y));
     }
 
     for (int idx : er.skeleton.endpointIndices) {
