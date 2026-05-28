@@ -3344,6 +3344,25 @@ auto runSkeletonArcDispatch =
             debugRecord.hiddenTipMaskDiffSelectedArea = predicted.selectedMaskDiffArea;
             if (predicted.hasTarget) {
                 targetPos = predicted.target;
+                // If the mask cue is closer to the *known* tip than to the hidden
+                // tip's last position, the mask change is happening at the wrong end
+                // (e.g. the visible tip is growing while the hidden one vanishes into
+                // a junction with no local mask delta). In that case the mask cue is
+                // misleading: discard it and fall back to the velocity-only estimate.
+                if (predicted.hasMaskCue) {
+                    const float distMaskToKnown  = ptDist(predicted.maskCue, knownPos);
+                    const float distMaskToHidden = ptDist(predicted.maskCue, last);
+                    if (distMaskToKnown < distMaskToHidden) {
+                        targetPos = predicted.velocityTarget;
+                        cv::Point2f snapped;
+                        if (nearestMaskPoint(dispBlob, targetPos, snapped))
+                            targetPos = snapped;
+                        debugRecord.decisions << QStringLiteral(
+                            "D-3 mask cue closer to known tip (%1 < %2); ignoring mask, using velocity target")
+                                .arg(distMaskToKnown, 0, 'f', 1)
+                                .arg(distMaskToHidden, 0, 'f', 1);
+                    }
+                }
                 debugRecord.hiddenTipTarget = targetPos;
                 debugRecord.decisions << QStringLiteral("D-3 predicted hidden target at (%1,%2)")
                                              .arg(targetPos.x, 0, 'f', 2)
