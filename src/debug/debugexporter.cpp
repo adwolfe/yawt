@@ -1285,6 +1285,8 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
             << " hiddenToPred=" << pointDistance(record.hiddenTipFinal, record.hiddenTipTarget) << "\n";
         log << "hiddenTipMaskDiffArea=" << record.hiddenTipMaskDiffArea
             << " selected=" << record.hiddenTipMaskDiffSelectedArea << "\n";
+        if (record.hiddenTipJunction.x >= 0.f)
+            log << "hiddenTipJunction=" << pointString(record.hiddenTipJunction) << "\n";
     }
     if (record.d3RouteDebugAvailable) {
         log << "d3RouteStart=" << pointString(record.d3RouteStart)

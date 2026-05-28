@@ -3412,25 +3412,66 @@ auto runSkeletonArcDispatch =
             debugRecord.hiddenTipMaskDiffSelectedArea = predicted.selectedMaskDiffArea;
             if (predicted.hasTarget) {
                 targetPos = predicted.target;
-                // If the mask cue is closer to the *known* tip than to the hidden
-                // tip's last position, the mask change is happening at the wrong end
-                // (e.g. the visible tip is growing while the hidden one vanishes into
-                // a junction with no local mask delta). In that case the mask cue is
-                // misleading: discard it and fall back to the velocity-only estimate.
-                if (predicted.hasMaskCue) {
+
+                // Find the self-crossing junction for additional mask-discard heuristics.
+                cv::Point2f junctionPos(-1.f, -1.f);
+                {
+                    const JunctionSelection jsel = selectLoopAwareJunction(
+                        dispEr.skeleton, srcNode, predicted.velocityTarget,
+                        dispOrigin, frameRefLength);
+                    if (jsel.valid && !jsel.fallbackUsed) {
+                        const cv::Point& jp = dispEr.skeleton.points[jsel.junctionIdx];
+                        junctionPos = cv::Point2f(
+                            static_cast<float>(jp.x) + dispOrigin.x,
+                            static_cast<float>(jp.y) + dispOrigin.y);
+                    }
+                }
+                debugRecord.hiddenTipJunction = junctionPos;
+
+                bool maskAccepted = predicted.hasMaskCue;
+                if (maskAccepted) {
+                    // Heuristic 1: mask closer to the known tip than to the hidden-tip
+                    // last position → mask activity is at the wrong end, discard it.
                     const float distMaskToKnown  = ptDist(predicted.maskCue, knownPos);
                     const float distMaskToHidden = ptDist(predicted.maskCue, last);
                     if (distMaskToKnown < distMaskToHidden) {
-                        targetPos = predicted.velocityTarget;
-                        cv::Point2f snapped;
-                        if (nearestMaskPoint(dispBlob, targetPos, snapped))
-                            targetPos = snapped;
+                        maskAccepted = false;
                         debugRecord.decisions << QStringLiteral(
-                            "D-3 mask cue closer to known tip (%1 < %2); ignoring mask, using velocity target")
+                            "D-3 mask cue closer to known tip (%1 < %2); ignoring mask")
                                 .arg(distMaskToKnown, 0, 'f', 1)
                                 .arg(distMaskToHidden, 0, 'f', 1);
                     }
+                    // Heuristic 2: velocity guess is significantly closer to the junction
+                    // than the mask → mask is far from where the tip is heading, discard it.
+                    if (maskAccepted && junctionPos.x >= 0.f) {
+                        const float distVelToJunction  = ptDist(predicted.velocityTarget, junctionPos);
+                        const float distMaskToJunction = ptDist(predicted.maskCue, junctionPos);
+                        constexpr float kJunctionProximityFactor = 1.5f;
+                        if (distVelToJunction * kJunctionProximityFactor < distMaskToJunction) {
+                            maskAccepted = false;
+                            debugRecord.decisions << QStringLiteral(
+                                "D-3 velocity guess closer to junction than mask (%1 vs %2); ignoring mask")
+                                    .arg(distVelToJunction, 0, 'f', 1)
+                                    .arg(distMaskToJunction, 0, 'f', 1);
+                        }
+                    }
                 }
+
+                if (!maskAccepted) {
+                    // No reliable mask cue: blend velocity (75%) with junction (25%).
+                    // Fall back to pure velocity if no valid junction was found.
+                    if (junctionPos.x >= 0.f) {
+                        constexpr float kVelWeight = 0.75f;
+                        targetPos = kVelWeight * predicted.velocityTarget
+                                    + (1.f - kVelWeight) * junctionPos;
+                    } else {
+                        targetPos = predicted.velocityTarget;
+                    }
+                    cv::Point2f snapped;
+                    if (nearestMaskPoint(dispBlob, targetPos, snapped))
+                        targetPos = snapped;
+                }
+
                 debugRecord.hiddenTipTarget = targetPos;
                 debugRecord.decisions << QStringLiteral("D-3 predicted hidden target at (%1,%2)")
                                              .arg(targetPos.x, 0, 'f', 2)

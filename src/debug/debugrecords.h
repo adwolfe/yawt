@@ -90,6 +90,7 @@ struct CenterlineFrameDebug {
     cv::Point2f predictedCenter = {0.f, 0.f};
     cv::Point2f hiddenTipTarget = {-1.f, -1.f};
     cv::Point2f hiddenTipFinal = {-1.f, -1.f};
+    cv::Point2f hiddenTipJunction = {-1.f, -1.f};
     int hiddenTipMaskDiffArea = 0;
     int hiddenTipMaskDiffSelectedArea = 0;
 
