@@ -1218,6 +1218,13 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             QPen trackPen(trackColorWithAlpha, TRACK_LINE_WIDTH);
             painter.setPen(trackPen);
 
+            const QMap<int, QPointF>* clCache = nullptr;
+            if (m_trackDisplayMode == TrackDisplayMode::CenterlineMidpoint) {
+                auto cit = m_centerlineMidpointCache.constFind(trackId);
+                if (cit != m_centerlineMidpointCache.constEnd())
+                    clCache = &(*cit);
+            }
+
             bool firstPoint = true;
             for (const Tracking::WormTrackPoint& pt : trackPoints) {
                 // Skip lost tracking points - they create gaps in the track display
@@ -1225,7 +1232,16 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     continue;
                 }
 
-                QPointF currentPointVideo(pt.position.x, pt.position.y);
+                QPointF currentPointVideo;
+                if (clCache) {
+                    auto fit = clCache->constFind(pt.frameNumberOriginal);
+                    currentPointVideo = (fit != clCache->constEnd())
+                        ? *fit
+                        : QPointF(pt.position.x, pt.position.y);
+                } else {
+                    currentPointVideo = QPointF(pt.position.x, pt.position.y);
+                }
+
                 QPointF currentPointWidget = mapPointFromVideo(currentPointVideo);
                 if (currentPointWidget.x() < 0) continue; // Skip points not visible on screen
 

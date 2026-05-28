@@ -57,6 +57,7 @@
 #include <QSet>
 #include <QGraphicsOpacityEffect>
 #include <QAction>
+#include <QActionGroup>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -419,6 +420,32 @@ void MainWindow::setupConnections() {
     // Add these connections once you have the buttons in your UI:
     connect(ui->viewBlobsButton, &QToolButton::toggled, this, &MainWindow::onViewBlobsToggled);
     connect(ui->viewTracksButton, &QToolButton::toggled, this, &MainWindow::onViewTracksToggled);
+
+    // Long-press menu on viewTracksButton to choose track display mode
+    {
+        QMenu* trackMenu = new QMenu(ui->viewTracksButton);
+        QActionGroup* trackModeGroup = new QActionGroup(trackMenu);
+        trackModeGroup->setExclusive(true);
+
+        QAction* centroidAction = trackMenu->addAction("Centroid track");
+        centroidAction->setCheckable(true);
+        centroidAction->setChecked(true);
+        trackModeGroup->addAction(centroidAction);
+
+        QAction* clMidAction = trackMenu->addAction("Centerline midpoint track");
+        clMidAction->setCheckable(true);
+        trackModeGroup->addAction(clMidAction);
+
+        ui->viewTracksButton->setMenu(trackMenu);
+        ui->viewTracksButton->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(centroidAction, &QAction::triggered, this, [this]() {
+            ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::Centroid);
+        });
+        connect(clMidAction, &QAction::triggered, this, [this]() {
+            ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::CenterlineMidpoint);
+        });
+    }
     connect(ui->skeletonButton, &QToolButton::toggled, this, &MainWindow::onViewSkeletonsToggled);
 
 
