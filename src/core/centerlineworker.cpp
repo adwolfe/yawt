@@ -764,10 +764,12 @@ void CenterlineWorker::doWork()
         const QList<int> dirSwapped = refineHeadTailByDirection(
             m_storage, m_sharedStorageMutex.data(),
             wormId, sortedPoints, m_fps, m_maxReversalFraction);
+        emit headTailDirectionSwapEvent(wormId, dirSwapped);
 
         const QList<int> geoSwapped = refineHeadTailByGeometry(
             m_storage, m_sharedStorageMutex.data(),
             wormId, sortedPoints, m_fps);
+        emit headTailGeometrySwapEvent(wormId, geoSwapped);
 
         // XOR: a frame flipped by both passes cancels out (net no change).
         QSet<int> netSet;

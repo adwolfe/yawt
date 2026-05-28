@@ -374,6 +374,7 @@ private:
     void checkForAllTrackersFinished();
     bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData, const QString& outputPath) const;
+    void exportProcessingSummary(const QString& outputPath) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
     size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
@@ -474,7 +475,9 @@ private:
     bool m_centerlineEnabled = true;
     bool m_skipMergedFrames = false;
     float m_maxReversalFraction = 0.25f;
-    QMap<int, QList<int>> m_headTailSwapData;
+    QMap<int, QList<int>> m_headTailSwapData;     // net (XOR) swaps per worm
+    QMap<int, QList<int>> m_dirHeadTailSwapData;  // direction-pass swaps per worm
+    QMap<int, QList<int>> m_geoHeadTailSwapData;  // geometry-pass swaps per worm
 
     // General utilities
     QMutex m_dataMutex; // Protects shared data structures

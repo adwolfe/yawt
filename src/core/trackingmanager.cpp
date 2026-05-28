@@ -2381,6 +2381,202 @@ static QByteArray buildSwapWorkbookRelsXml()
     return d;
 }
 
+void TrackingManager::exportProcessingSummary(const QString& outputPath) const
+{
+    if (outputPath.isEmpty() || !m_storage) return;
+
+    QFile file(outputPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "ProcessingSummary: could not write" << outputPath;
+        return;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+
+    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
+
+    // Overall frame range
+    int minFrame = INT_MAX, maxFrame = INT_MIN;
+    for (const auto& entry : tracks) {
+        for (const auto& tp : entry.second) {
+            minFrame = std::min(minFrame, tp.frameNumberOriginal);
+            maxFrame = std::max(maxFrame, tp.frameNumberOriginal);
+        }
+    }
+
+    // Sorted worm IDs
+    QList<int> sortedWormIds;
+    for (const auto& entry : tracks) sortedWormIds.append(entry.first);
+    std::sort(sortedWormIds.begin(), sortedWormIds.end());
+
+    // Padding helpers
+    auto lpad = [](const QString& s, int w) {
+        return s.rightJustified(w);
+    };
+    auto pct = [](int n, int total) -> QString {
+        if (total <= 0) return QStringLiteral("  0.0%");
+        return QString("%1%").arg(100.0 * n / total, 5, 'f', 1);
+    };
+
+    // ── Header ──────────────────────────────────────────────────────────────
+    const QString rule = QString(62, '=');
+    const QString dash  = QString(62, '-');
+    out << rule << "\n";
+    out << "  YAWT Processing Summary\n";
+    out << rule << "\n";
+    out << QString("Generated:        %1\n")
+               .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    out << QString("Video:            %1\n").arg(QFileInfo(m_videoPath).fileName());
+    out << QString("FPS:              %1\n").arg(m_videoFps, 0, 'f', 2);
+    if (minFrame <= maxFrame) {
+        out << QString("Frame range:      %1 \xe2\x80\x93 %2  (%3 frames)\n")
+                   .arg(minFrame).arg(maxFrame).arg(maxFrame - minFrame + 1);
+    }
+    out << QString("Worms tracked:    %1\n").arg(sortedWormIds.size());
+    out << "\n";
+    out << "Settings\n";
+    out << QString("  Centerline computation:  %1\n")
+               .arg(m_centerlineEnabled ? "enabled" : "disabled");
+    out << QString("  Skip merged frames:      %1\n")
+               .arg(m_skipMergedFrames ? "yes" : "no");
+    out << QString("  Max reversal fraction:   %1\n")
+               .arg(m_maxReversalFraction, 0, 'f', 2);
+    out << "\n";
+
+    // ── Per-worm sections ────────────────────────────────────────────────────
+    for (int wormId : sortedWormIds) {
+        const auto& rawPoints = tracks.at(wormId);
+        if (rawPoints.empty()) continue;
+
+        // Sort by frame number
+        std::vector<Tracking::WormTrackPoint> pts = rawPoints;
+        std::sort(pts.begin(), pts.end(),
+                  [](const Tracking::WormTrackPoint& a,
+                     const Tracking::WormTrackPoint& b) {
+                      return a.frameNumberOriginal < b.frameNumberOriginal;
+                  });
+
+        const int total = static_cast<int>(pts.size());
+        const int wFirst = pts.front().frameNumberOriginal;
+        const int wLast  = pts.back().frameNumberOriginal;
+
+        // Per-point stats
+        int nSingle = 0, nSplit = 0, nMerged = 0, nLost = 0;
+        int nCLcomputed = 0, nCLskipped = 0;
+        int nCleanTopo = 0, nSCTopo = 0;
+        int mergeRunCount = 0, mergeRunMaxLen = 0;
+        int mergeRunCurrent = 0;
+        bool inMergeRun = false;
+
+        for (const Tracking::WormTrackPoint& tp : pts) {
+            using Q = Tracking::TrackPointQuality;
+            const bool isMerged = (tp.quality == Q::Merged);
+            const bool isLost   = (tp.quality == Q::Lost);
+
+            switch (tp.quality) {
+            case Q::Single: ++nSingle; break;
+            case Q::Split:  ++nSplit;  break;
+            case Q::Merged: ++nMerged; break;
+            case Q::Lost:   ++nLost;   break;
+            }
+
+            // Merge run detection
+            if (isMerged) {
+                ++mergeRunCurrent;
+                if (!inMergeRun) { ++mergeRunCount; inMergeRun = true; }
+            } else {
+                if (inMergeRun) {
+                    mergeRunMaxLen = std::max(mergeRunMaxLen, mergeRunCurrent);
+                    mergeRunCurrent = 0;
+                }
+                inMergeRun = false;
+            }
+
+            // Centerline and topology — read the blob for accuracy
+            if (isLost) {
+                ++nCLskipped;
+            } else {
+                QMap<int, Tracking::DetectedBlob> blobs =
+                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                if (blobs.contains(wormId)) {
+                    const Tracking::DetectedBlob& blob = blobs[wormId];
+                    if (blob.isValid && blob.centerlinePoints.size() >= 2) {
+                        ++nCLcomputed;
+                    } else {
+                        ++nCLskipped;
+                    }
+                    using T = Tracking::TopologyState;
+                    if (blob.topologyState == T::Clean)       ++nCleanTopo;
+                    if (blob.topologyState == T::SelfCrossed) ++nSCTopo;
+                } else {
+                    ++nCLskipped;
+                }
+            }
+        }
+        // Flush last merge run
+        if (inMergeRun) mergeRunMaxLen = std::max(mergeRunMaxLen, mergeRunCurrent);
+
+        // Head/tail swap counts
+        const int dirSwaps = m_dirHeadTailSwapData.value(wormId).size();
+        const int geoSwaps = m_geoHeadTailSwapData.value(wormId).size();
+        const int netSwaps = m_headTailSwapData.value(wormId).size();
+
+        out << dash << "\n";
+        out << QString("WORM %1\n").arg(wormId);
+        out << dash << "\n";
+        out << QString("Track range:   frames %1 \xe2\x80\x93 %2  (%3 track points)\n")
+                   .arg(wFirst).arg(wLast).arg(total);
+        out << "\n";
+
+        // Frame quality
+        out << "Frame quality (from tracker)\n";
+        out << QString("  Single:      %1  (%2)\n").arg(lpad(QString::number(nSingle), 6)).arg(pct(nSingle, total));
+        out << QString("  Split:       %1  (%2)\n").arg(lpad(QString::number(nSplit),  6)).arg(pct(nSplit,  total));
+        out << QString("  Merged:      %1  (%2)\n").arg(lpad(QString::number(nMerged), 6)).arg(pct(nMerged, total));
+        out << QString("  Lost:        %1  (%2)\n").arg(lpad(QString::number(nLost),   6)).arg(pct(nLost,   total));
+        out << "\n";
+
+        // Topology (only meaningful for processed frames)
+        const int nTopoTotal = nCleanTopo + nSCTopo;
+        out << "Centerline topology (processed frames only)\n";
+        out << QString("  Clean:       %1  (%2)\n").arg(lpad(QString::number(nCleanTopo), 6)).arg(pct(nCleanTopo, nTopoTotal));
+        out << QString("  Self-crossed:%1  (%2)\n").arg(lpad(QString::number(nSCTopo),    6)).arg(pct(nSCTopo,    nTopoTotal));
+        out << "\n";
+
+        // Centerline frames
+        out << "Centerline frames\n";
+        out << QString("  Computed:    %1\n").arg(lpad(QString::number(nCLcomputed), 6));
+        out << QString("  Skipped:     %1\n").arg(lpad(QString::number(nCLskipped),  6));
+        out << "\n";
+
+        // Merge events
+        out << "Merge events\n";
+        out << QString("  Merged frames:   %1\n").arg(lpad(QString::number(nMerged), 6));
+        out << QString("  Merge runs:      %1\n").arg(lpad(QString::number(mergeRunCount), 6));
+        if (mergeRunCount > 0) {
+            const double avgLen = static_cast<double>(nMerged) / mergeRunCount;
+            out << QString("  Avg run length:  %1 frames  (%2 s)\n")
+                       .arg(avgLen, 6, 'f', 1)
+                       .arg(avgLen / m_videoFps, 0, 'f', 1);
+            out << QString("  Longest run:     %1 frames  (%2 s)\n")
+                       .arg(lpad(QString::number(mergeRunMaxLen), 6))
+                       .arg(mergeRunMaxLen / m_videoFps, 0, 'f', 1);
+        }
+        out << "\n";
+
+        // Head/tail refinement
+        out << "Head/tail refinement\n";
+        out << QString("  Direction-based swapped frames:  %1\n").arg(lpad(QString::number(dirSwaps), 6));
+        out << QString("  Geometry-based swapped frames:   %1\n").arg(lpad(QString::number(geoSwaps), 6));
+        out << QString("  Net swapped frames (XOR):        %1\n").arg(lpad(QString::number(netSwaps), 6));
+        out << "\n";
+    }
+
+    out << rule << "\n";
+    out << "End of Processing Summary\n";
+    out << rule << "\n";
+}
+
 void TrackingManager::exportHeadTailSwapXlsx(
     const QMap<int, QList<int>>& swapData, const QString& outputPath) const
 {
@@ -3257,6 +3453,8 @@ void TrackingManager::startCenterlineComputation() {
     m_totalCenterlineWorkers = numThreads;
     m_centerlineStorageMutex = QSharedPointer<QMutex>::create();
     m_headTailSwapData.clear();
+    m_dirHeadTailSwapData.clear();
+    m_geoHeadTailSwapData.clear();
 
     {
         QMutexLocker locker(m_centerlineStorageMutex.data());
@@ -3289,6 +3487,14 @@ void TrackingManager::startCenterlineComputation() {
         m_centerlineWorkerProgress[workerIndex] = 0;
 
         connect(thread, &QThread::started, worker, &CenterlineWorker::doWork);
+        connect(worker, &CenterlineWorker::headTailDirectionSwapEvent, this,
+                [this](int wormId, QList<int> swappedFrames) {
+                    m_dirHeadTailSwapData[wormId] = swappedFrames;
+                });
+        connect(worker, &CenterlineWorker::headTailGeometrySwapEvent, this,
+                [this](int wormId, QList<int> swappedFrames) {
+                    m_geoHeadTailSwapData[wormId] = swappedFrames;
+                });
         connect(worker, &CenterlineWorker::headTailSwapEvent, this,
                 [this](int wormId, QList<int> swappedFrames) {
                     m_headTailSwapData[wormId] = swappedFrames;
@@ -3331,17 +3537,23 @@ void TrackingManager::handleCenterlineFinished() {
     emit trackingStatusUpdate("Centerline computation complete.");
     emit centerlineProgress(100);
 
+    const QString dir = !m_processingOutputDirectory.isEmpty()
+        ? m_processingOutputDirectory
+        : m_videoSpecificDirectory;
+    const QString baseName = QFileInfo(m_videoPath).completeBaseName();
+
     // Export head/tail swap report alongside the other output files.
-    if (!m_headTailSwapData.isEmpty()) {
-        const QString dir = !m_processingOutputDirectory.isEmpty()
-            ? m_processingOutputDirectory
-            : m_videoSpecificDirectory;
-        if (!dir.isEmpty()) {
-            const QString baseName = QFileInfo(m_videoPath).completeBaseName();
-            const QString path = QDir(dir).filePath(baseName + "_headtail_swaps.xlsx");
-            exportHeadTailSwapXlsx(m_headTailSwapData, path);
-            emit trackingStatusUpdate("Head/tail swap report saved: " + path);
-        }
+    if (!m_headTailSwapData.isEmpty() && !dir.isEmpty()) {
+        const QString path = QDir(dir).filePath(baseName + "_headtail_swaps.xlsx");
+        exportHeadTailSwapXlsx(m_headTailSwapData, path);
+        emit trackingStatusUpdate("Head/tail swap report saved: " + path);
+    }
+
+    // Export human-readable processing summary.
+    if (!dir.isEmpty()) {
+        const QString summaryPath = QDir(dir).filePath(baseName + "_ProcessingSummary.txt");
+        exportProcessingSummary(summaryPath);
+        emit trackingStatusUpdate("Processing summary saved: " + summaryPath);
     }
 
     emit centerlineFinished();
