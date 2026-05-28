@@ -3411,6 +3411,11 @@ void TrackingManager::setSkipMergedFrames(bool skip)
     m_skipMergedFrames = skip;
 }
 
+void TrackingManager::setSmoothCenterline(bool smooth)
+{
+    m_smoothCenterline = smooth;
+}
+
 void TrackingManager::setMaxReversalFraction(float fraction)
 {
     m_maxReversalFraction = qBound(0.f, fraction, 1.f);
@@ -3477,6 +3482,7 @@ void TrackingManager::startCenterlineComputation() {
         worker->setWormIds(wormBuckets.at(workerIndex));
         worker->setClearBaselinesAtStart(false);
         worker->setSkipMergedFrames(m_skipMergedFrames);
+        worker->setSmoothCenterline(m_smoothCenterline);
         worker->setFps(m_videoFps);
         worker->setMaxReversalFraction(m_maxReversalFraction);
         worker->setSharedStorageMutex(m_centerlineStorageMutex);

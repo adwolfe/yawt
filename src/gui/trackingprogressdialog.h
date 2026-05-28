@@ -40,6 +40,7 @@ public:
     bool onlyTrackMissingChecked() const;
     bool computeCenterlineChecked() const;
     bool skipMergedFramesChecked() const;
+    bool smoothCenterlineChecked() const;
 
 public slots:
     void updateStatusMessage(const QString& message);

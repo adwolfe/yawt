@@ -53,6 +53,11 @@ public:
     // before the segment is considered ambiguous and skipped (0 = any reversal skips,
     // 1 = never skip). Default 0.25.
     void setMaxReversalFraction(float fraction);
+    // When enabled, applies a Savitzky-Golay (degree-2) filter across frames to
+    // smooth head/tail tip positions, then re-relaxes each affected centerline.
+    // halfWindow is the number of frames on each side of the kernel (default 3 → 7-frame window).
+    void setSmoothCenterline(bool smooth);
+    void setSgHalfWindow(int halfWindow);
 
 public slots:
     void doWork();
@@ -86,6 +91,8 @@ private:
     bool m_skipMergedFrames = false;
     double m_fps = 25.0;
     float m_maxReversalFraction = 0.25f;
+    bool m_smoothCenterline = true;
+    int m_sgHalfWindow = 3;
     QSharedPointer<QMutex> m_sharedStorageMutex;
 };
 

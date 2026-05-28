@@ -570,6 +570,7 @@ void AppController::onDialogBeginRequested()
     if (m_trackingDialog) {
         m_manager->setCenterlineEnabled(m_trackingDialog->computeCenterlineChecked());
         m_manager->setSkipMergedFrames(m_trackingDialog->skipMergedFramesChecked());
+        m_manager->setSmoothCenterline(m_trackingDialog->smoothCenterlineChecked());
     }
 
     // Start tracking via the manager using stored dialog parameters.

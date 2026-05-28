@@ -2355,9 +2355,12 @@ void MainWindow::onDebugCenterlineFinished()
     ui->centerlineDebugProgressBar->setVisible(false);
     ui->centerlineDebugStatusLabel->setText("Done — viewer updated.");
 
-    // Force the videoloader to repaint so the new centerlines appear immediately
-    // on the current frame without requiring a frame seek.
-    if (ui->videoLoader) {
+    // Rebuild the centerline midpoint cache from the freshly computed blobs, then
+    // repaint. Without this, the cache built at tracking-finish time contains only
+    // the preliminary centerlines from the tracking phase, not the refined ones.
+    if (ui->videoLoader && m_trackingDataStorage) {
+        ui->videoLoader->setTracksToDisplay(m_trackingDataStorage->getAllTracks());
+    } else if (ui->videoLoader) {
         ui->videoLoader->update();
     }
 

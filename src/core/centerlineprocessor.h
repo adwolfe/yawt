@@ -74,6 +74,15 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
                                    CenterlineSweepState& state,
                                    CenterlineFrameIo& io);
 
+// Re-run the snake on `blob` using the positions stored in
+// blob.tipCandidates[assignedHeadTipIdx/TailIdx] as pinned endpoints.
+// Updates blob.centerlinePoints in place.
+// Returns false if prerequisites are not met (no contour, no existing centerline,
+// no valid tip assignments, or topology is not Clean).
+bool relaxCenterlineToSmoothedTips(Tracking::DetectedBlob& blob,
+                                   int nPoints,
+                                   const CenterlineSnakeParams& params);
+
 } // namespace Centerline
 
 #endif // CENTERLINEPROCESSOR_H

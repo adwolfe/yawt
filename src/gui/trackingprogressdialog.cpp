@@ -85,10 +85,15 @@ TrackingProgressDialog::TrackingProgressDialog(QWidget *parent) :
     ui->statusLabel->setText("Ready to start tracking.");
     if(beginButton) beginButton->setEnabled(true);
 
-    // Enable/disable skipMergedFramesCheckBox based on computeCenterlineCheckBox state.
-    ui->skipMergedFramesCheckBox->setEnabled(ui->computeCenterlineCheckBox->isChecked());
+    // Enable/disable centerline sub-options based on computeCenterlineCheckBox state.
+    auto updateCenterlineSubOptions = [this]() {
+        const bool on = ui->computeCenterlineCheckBox->isChecked();
+        ui->skipMergedFramesCheckBox->setEnabled(on);
+        ui->smoothCenterlineCheckBox->setEnabled(on);
+    };
+    updateCenterlineSubOptions();
     connect(ui->computeCenterlineCheckBox, &QCheckBox::toggled,
-            ui->skipMergedFramesCheckBox, &QCheckBox::setEnabled);
+            this, [updateCenterlineSubOptions](bool) { updateCenterlineSubOptions(); });
 }
 
 TrackingProgressDialog::~TrackingProgressDialog() {
@@ -110,6 +115,11 @@ bool TrackingProgressDialog::computeCenterlineChecked() const {
 bool TrackingProgressDialog::skipMergedFramesChecked() const {
     if (!ui) return false;
     return ui->skipMergedFramesCheckBox->isChecked();
+}
+
+bool TrackingProgressDialog::smoothCenterlineChecked() const {
+    if (!ui) return true;
+    return ui->smoothCenterlineCheckBox->isChecked();
 }
 
 

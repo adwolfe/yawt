@@ -516,6 +516,16 @@ void CenterlineWorker::setMaxReversalFraction(float fraction)
     m_maxReversalFraction = qBound(0.f, fraction, 1.f);
 }
 
+void CenterlineWorker::setSmoothCenterline(bool smooth)
+{
+    m_smoothCenterline = smooth;
+}
+
+void CenterlineWorker::setSgHalfWindow(int halfWindow)
+{
+    m_sgHalfWindow = std::max(1, halfWindow);
+}
+
 QMap<int, Tracking::DetectedBlob> CenterlineWorker::getDetectedBlobsForFrame(int frameNumber) const
 {
     QMutexLocker locker(m_sharedStorageMutex.data());
@@ -582,6 +592,119 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
 //                       fallback → populateCenterlineFromContour (D-4).
 //             Step 3: resample to nPoints.
 //             Step 4: snake refinement (Clean only); right-hand-rule veto.
+// Degree-2 Savitzky-Golay smoothing over a 1-D float sequence.
+// Half-window h means we look h frames on each side; boundary frames are left unchanged.
+// Formula: c[k] = 3h(h+1) - 1 - 5k^2,  norm = (2h-1)(2h+1)(2h+3)/3
+static std::vector<float> savitzkyGolay(const std::vector<float>& y, int h)
+{
+    const int n = static_cast<int>(y.size());
+    if (n < 2 * h + 1 || h < 1) return y;
+
+    const double norm = (2.0 * h - 1) * (2.0 * h + 1) * (2.0 * h + 3) / 3.0;
+    std::vector<float> out(y);
+    for (int i = h; i < n - h; ++i) {
+        double sum = 0.0;
+        for (int k = -h; k <= h; ++k)
+            sum += (3.0 * h * (h + 1) - 1.0 - 5.0 * k * k) * y[i + k];
+        out[i] = static_cast<float>(sum / norm);
+    }
+    return out;
+}
+
+// Apply S-G smoothing to tip positions and re-relax the centerline for one worm.
+// sortedPoints must be in frame order and already written to storage.
+static void smoothTipsAndRelaxCenterlines(
+    TrackingDataStorage* storage,
+    QMutex* storageMutex,
+    int wormId,
+    const std::vector<Tracking::WormTrackPoint>& sortedPoints,
+    int sgHalfWindow,
+    int nPts,
+    const Centerline::CenterlineSnakeParams& snakeParams)
+{
+    // Gather per-frame tip info for frames with valid, clean-topology blobs.
+    struct FrameEntry {
+        int frame;
+        cv::Point2f head;
+        cv::Point2f tail;
+    };
+    // Split into consecutive runs of valid frames; merged/lost breaks a run.
+    // We process each run independently so S-G never bridges a gap.
+    std::vector<std::vector<FrameEntry>> runs;
+    std::vector<FrameEntry> current;
+
+    for (const auto& tp : sortedPoints) {
+        if (tp.quality == Tracking::TrackPointQuality::Merged ||
+            tp.quality == Tracking::TrackPointQuality::Lost) {
+            if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
+            continue;
+        }
+        QMap<int, Tracking::DetectedBlob> frameBlobs;
+        {
+            QMutexLocker lk(storageMutex);
+            frameBlobs = storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+        }
+        if (!frameBlobs.contains(wormId)) {
+            if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
+            continue;
+        }
+        const Tracking::DetectedBlob& blob = frameBlobs[wormId];
+        if (blob.topologyState != Tracking::TopologyState::Clean) {
+            if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
+            continue;
+        }
+        const int hIdx = blob.assignedHeadTipIdx;
+        const int tIdx = blob.assignedTailTipIdx;
+        if (hIdx < 0 || tIdx < 0 ||
+            hIdx >= static_cast<int>(blob.tipCandidates.size()) ||
+            tIdx >= static_cast<int>(blob.tipCandidates.size())) {
+            if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
+            continue;
+        }
+        current.push_back({tp.frameNumberOriginal,
+                           blob.tipCandidates[hIdx].point,
+                           blob.tipCandidates[tIdx].point});
+    }
+    if (!current.empty()) runs.push_back(std::move(current));
+
+    for (auto& run : runs) {
+        const int sz = static_cast<int>(run.size());
+        if (sz < 2 * sgHalfWindow + 1) continue;
+
+        // Build per-coordinate time series.
+        std::vector<float> hx(sz), hy(sz), tx(sz), ty(sz);
+        for (int i = 0; i < sz; ++i) {
+            hx[i] = run[i].head.x;  hy[i] = run[i].head.y;
+            tx[i] = run[i].tail.x;  ty[i] = run[i].tail.y;
+        }
+        const auto shx = savitzkyGolay(hx, sgHalfWindow);
+        const auto shy = savitzkyGolay(hy, sgHalfWindow);
+        const auto stx = savitzkyGolay(tx, sgHalfWindow);
+        const auto sty = savitzkyGolay(ty, sgHalfWindow);
+
+        for (int i = 0; i < sz; ++i) {
+            const cv::Point2f newHead(shx[i], shy[i]);
+            const cv::Point2f newTail(stx[i], sty[i]);
+            if (newHead == run[i].head && newTail == run[i].tail) continue;
+
+            QMap<int, Tracking::DetectedBlob> frameBlobs;
+            {
+                QMutexLocker lk(storageMutex);
+                frameBlobs = storage->getDetectedBlobsForFrame(run[i].frame);
+            }
+            if (!frameBlobs.contains(wormId)) continue;
+            Tracking::DetectedBlob blob = frameBlobs[wormId];
+
+            blob.tipCandidates[blob.assignedHeadTipIdx].point = newHead;
+            blob.tipCandidates[blob.assignedTailTipIdx].point = newTail;
+            Centerline::relaxCenterlineToSmoothedTips(blob, nPts, snakeParams);
+
+            QMutexLocker lk(storageMutex);
+            storage->setDetectedBlobForFrame(run[i].frame, wormId, blob);
+        }
+    }
+}
+
 //             Step 5: predictor update for next frame.
 void CenterlineWorker::doWork()
 {
@@ -779,6 +902,13 @@ void CenterlineWorker::doWork()
             else netSet.insert(f);
         }
         emit headTailSwapEvent(wormId, QList<int>(netSet.begin(), netSet.end()));
+
+        if (m_smoothCenterline) {
+            smoothTipsAndRelaxCenterlines(
+                m_storage, m_sharedStorageMutex.data(),
+                wormId, sortedPoints,
+                m_sgHalfWindow, nPts, m_snakeParams);
+        }
 
         ++processedWorms;
         emit progress(processedWorms * 100 / totalWorms);

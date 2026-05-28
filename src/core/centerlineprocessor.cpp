@@ -4112,4 +4112,37 @@ prevState.turningAngle = flipped ? -curTurning : curTurning;
 
 }
 
+bool relaxCenterlineToSmoothedTips(Tracking::DetectedBlob& blob,
+                                   int nPoints,
+                                   const CenterlineSnakeParams& params)
+{
+    if (blob.contourPoints.empty()) return false;
+    if (blob.centerlinePoints.empty()) return false;
+    if (blob.topologyState != Tracking::TopologyState::Clean) return false;
+
+    const int hIdx = blob.assignedHeadTipIdx;
+    const int tIdx = blob.assignedTailTipIdx;
+    if (hIdx < 0 || tIdx < 0) return false;
+    if (hIdx >= static_cast<int>(blob.tipCandidates.size())) return false;
+    if (tIdx >= static_cast<int>(blob.tipCandidates.size())) return false;
+
+    cv::Mat mask;
+    cv::Rect bounds;
+    if (!buildSnakeMask(blob, mask, bounds)) return false;
+
+    const cv::Point2f pinH = blob.tipCandidates[hIdx].point;
+    const cv::Point2f pinT = blob.tipCandidates[tIdx].point;
+
+    std::vector<cv::Point2f> centerline(blob.centerlinePoints.begin(),
+                                        blob.centerlinePoints.end());
+    cv::Point2f overlapCenter(0.f, 0.f);
+    bool hasOverlap = false;
+    if (!refineSnakeCore(blob, mask, bounds, centerline, pinH, pinT,
+                         nPoints, params, overlapCenter, hasOverlap))
+        return false;
+
+    blob.centerlinePoints.assign(centerline.begin(), centerline.end());
+    return true;
+}
+
 } // namespace Centerline

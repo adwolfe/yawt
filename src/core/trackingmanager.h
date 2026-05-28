@@ -231,6 +231,7 @@ public:
     void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
     void setCenterlineEnabled(bool enabled);
     void setSkipMergedFrames(bool skip);
+    void setSmoothCenterline(bool smooth);
     void setMaxReversalFraction(float fraction);
 
 public slots:
@@ -474,6 +475,7 @@ private:
     Centerline::CenterlineSnakeParams m_centerlineSnakeParams;
     bool m_centerlineEnabled = true;
     bool m_skipMergedFrames = false;
+    bool m_smoothCenterline = true;
     float m_maxReversalFraction = 0.25f;
     QMap<int, QList<int>> m_headTailSwapData;     // net (XOR) swaps per worm
     QMap<int, QList<int>> m_dirHeadTailSwapData;  // direction-pass swaps per worm
