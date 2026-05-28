@@ -1363,9 +1363,15 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     log << "stored topologyState     = " << Tracking::topologyStateToString(blob.topologyState) << "\n";
     log << "stored head/tail tipIdx  = " << blob.assignedHeadTipIdx
         << " / " << blob.assignedTailTipIdx << "\n";
+    const bool haveHead = blob.assignedHeadTipIdx >= 0 &&
+                          blob.assignedHeadTipIdx < static_cast<int>(blob.tipCandidates.size());
+    const bool haveTail = blob.assignedTailTipIdx >= 0 &&
+                          blob.assignedTailTipIdx < static_cast<int>(blob.tipCandidates.size());
+    if (haveHead)
+        log << "stored head tip = " << pointString(blob.tipCandidates[blob.assignedHeadTipIdx].point) << "\n";
+    if (haveTail)
+        log << "stored tail tip = " << pointString(blob.tipCandidates[blob.assignedTailTipIdx].point) << "\n";
     if (blob.centerlinePoints.size() >= 2) {
-        log << "stored head world = " << pointString(blob.centerlinePoints.front()) << "\n";
-        log << "stored tail world = " << pointString(blob.centerlinePoints.back()) << "\n";
         std::vector<cv::Point2f> stored(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
         log << "stored arcLength = " << polylineLength(stored) << "\n";
     }
