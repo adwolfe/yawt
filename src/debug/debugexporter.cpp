@@ -604,6 +604,60 @@ static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
     writeStageImage(canvas, outputDir, QStringLiteral("01_skeleton.png"));
 }
 
+static void writeJunctionClustersStage(const Tracking::DetectedBlob& blob,
+                                       const Debug::CenterlineFrameDebug& record,
+                                       const cv::Rect& bounds,
+                                       const QString& outputDir)
+{
+    if (!record.d3RouteDebugAvailable || record.d3JunctionClusterNodes.empty())
+        return;
+
+    cv::Mat canvas = makeBaseCanvas(blob, bounds);
+    drawContoursOverlay(canvas, blob, bounds);
+
+    // Draw skeleton pixels as dim yellow dots.
+    for (const cv::Point2f& world : record.skeletonPixels) {
+        cv::circle(canvas, worldToCanvas(world, bounds), 1,
+                   cv::Scalar(160, 160, 0), cv::FILLED);
+    }
+
+    const cv::Scalar kUnselected(0, 128, 255);  // orange — non-selected clusters
+    const cv::Scalar kSelected(0, 220, 0);       // green  — selected cluster nodes
+    const cv::Scalar kCentroid(0, 255, 255);     // yellow — centroid (junctionIdx)
+
+    for (int ci = 0; ci < static_cast<int>(record.d3JunctionClusterNodes.size()); ++ci) {
+        const bool sel = (ci == record.d3SelectedJunctionCluster);
+        const cv::Scalar& nodeColor = sel ? kSelected : kUnselected;
+        const std::vector<cv::Point2f>& nodes = record.d3JunctionClusterNodes[ci];
+        for (const cv::Point2f& world : nodes) {
+            const cv::Point cp = worldToCanvas(world, bounds);
+            cv::circle(canvas, cp, sel ? 4 : 3, nodeColor, cv::FILLED);
+            cv::circle(canvas, cp, sel ? 4 : 3, nodeColor, 1, cv::LINE_AA);
+        }
+        // Label the cluster at its first node.
+        if (!nodes.empty()) {
+            const cv::Point lp = worldToCanvas(nodes.front(), bounds) + cv::Point(5, -4);
+            drawSmallText(canvas, QStringLiteral("c%1").arg(ci), lp, nodeColor);
+        }
+    }
+
+    // Highlight the selected centroid node.
+    if (validPoint(record.d3RouteJunction)) {
+        const cv::Point cp = worldToCanvas(record.d3RouteJunction, bounds);
+        cv::drawMarker(canvas, cp, kCentroid, cv::MARKER_CROSS, 10, 2, cv::LINE_AA);
+        cv::circle(canvas, cp, 6, kCentroid, 1, cv::LINE_AA);
+        drawText(canvas, QStringLiteral("centroid"), cp + cv::Point(8, -6), kCentroid);
+    }
+
+    const int nClusters = static_cast<int>(record.d3JunctionClusterNodes.size());
+    drawTitle(canvas, QStringLiteral("01b junction clusters  total=%1 selected=%2 fallback=%3")
+              .arg(nClusters)
+              .arg(record.d3SelectedJunctionCluster)
+              .arg(record.d3JunctionFallbackUsed ? "Y" : "N"));
+    drawCoordinateEdges(canvas, bounds);
+    writeStageImage(canvas, outputDir, QStringLiteral("01b_junctions.png"));
+}
+
 static void drawSkeletonPixels(cv::Mat& canvas,
                                const Debug::CenterlineFrameDebug& record,
                                const cv::Rect& bounds,
@@ -1086,6 +1140,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     }
 
     writeSkeletonStage(blob, record, bounds, outputDir);
+    writeJunctionClustersStage(blob, record, bounds, outputDir);
     writeDistanceTransformStage(record, bounds, outputDir);
     writeContourCurvatureStage(blob, record, bounds, outputDir);
     writeTipStage(blob, record, bounds, outputDir);

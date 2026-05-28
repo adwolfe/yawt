@@ -128,6 +128,8 @@ struct CenterlineFrameDebug {
     bool d3JunctionFallbackUsed = false;
     cv::Point2f d3RouteStart = {-1.f, -1.f};
     cv::Point2f d3RouteJunction = {-1.f, -1.f};
+    // World-coord node positions for every junction cluster (index = cluster id).
+    std::vector<std::vector<cv::Point2f>> d3JunctionClusterNodes;
     cv::Point2f d3RouteCenter = {-1.f, -1.f};
     cv::Point2f d3RouteEnd = {-1.f, -1.f};
     std::vector<std::vector<cv::Point2f>> d3CandidatePaths;

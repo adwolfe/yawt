@@ -1730,6 +1730,7 @@ struct JunctionSelection {
     int incomingIdx = -1;
     std::vector<int> trunk;
     JunctionCluster cluster;
+    std::vector<JunctionCluster> allClusters;
     QStringList diagnostics;
 };
 
@@ -2214,6 +2215,7 @@ static JunctionSelection selectLoopAwareJunction(const Centerline::SkeletonGraph
     JunctionSelection selection;
     const std::vector<JunctionCluster> clusters = findJunctionClusters(graph);
     selection.clusterCount = static_cast<int>(clusters.size());
+    selection.allClusters = clusters;
 
     const float minTrunkLen = refLength > 0.f ? std::max(3.f, 0.10f * refLength) : 3.f;
     float bestScore = std::numeric_limits<float>::max();
@@ -2299,36 +2301,9 @@ static JunctionSelection selectLoopAwareJunction(const Centerline::SkeletonGraph
     }
 
     if (selection.valid) {
-        // For multi-node clusters, the trunk terminus is whichever cluster node
-        // happens to be nearest to the source — often not the geometric center
-        // of the physical crossing. Use the centroid of all cluster nodes instead
-        // so the reported junction point sits at the middle of the crossing.
-        if (selection.cluster.nodes.size() > 1) {
-            float cx = 0.f, cy = 0.f;
-            for (int node : selection.cluster.nodes) {
-                cx += static_cast<float>(graph.points[node].x);
-                cy += static_cast<float>(graph.points[node].y);
-            }
-            cx /= static_cast<float>(selection.cluster.nodes.size());
-            cy /= static_cast<float>(selection.cluster.nodes.size());
-            int centroidNode = selection.junctionIdx;
-            float bestD2 = std::numeric_limits<float>::max();
-            for (int node : selection.cluster.nodes) {
-                const float dx = static_cast<float>(graph.points[node].x) - cx;
-                const float dy = static_cast<float>(graph.points[node].y) - cy;
-                const float d2 = dx * dx + dy * dy;
-                if (d2 < bestD2) { bestD2 = d2; centroidNode = node; }
-            }
-            if (centroidNode != selection.junctionIdx) {
-                selection.diagnostics << QStringLiteral(
-                    "junction centroid adjusted from (%1,%2) to (%3,%4)")
-                        .arg(graph.points[selection.junctionIdx].x)
-                        .arg(graph.points[selection.junctionIdx].y)
-                        .arg(graph.points[centroidNode].x)
-                        .arg(graph.points[centroidNode].y);
-                selection.junctionIdx = centroidNode;
-            }
-        }
+        // junctionIdx = trunk.back() — the cluster node where the path from the
+        // known tip enters the cluster. This is the natural anchor point for arc
+        // dispatch since it sits on the incoming route.
         selection.diagnostics << QStringLiteral("selected loop-valid cluster %1 returningLoops=%2 bestLoop=%3")
                                      .arg(selection.selectedCluster)
                                      .arg(bestLoopCount)
@@ -2498,6 +2473,58 @@ static std::vector<int> traceSkeletonBranchFromCluster(const Centerline::Skeleto
     return path;
 }
 
+// Trace a skeleton branch from startNode through firstStepNode by greedy
+// dot-product continuation, with no cluster-membership stop condition.
+// preVisited marks nodes that must not be revisited (e.g. the incoming trunk).
+static std::vector<int> traceSkeletonBranchFree(
+    const Centerline::SkeletonGraph& graph,
+    int startNode,
+    int firstStepNode,
+    const std::vector<char>& preVisited)
+{
+    std::vector<int> path;
+    const int n = static_cast<int>(graph.points.size());
+    if (startNode < 0 || firstStepNode < 0 || startNode >= n || firstStepNode >= n)
+        return path;
+
+    std::vector<char> visited = preVisited;
+    path.push_back(startNode);
+    path.push_back(firstStepNode);
+    visited[static_cast<size_t>(startNode)]     = 1;
+    visited[static_cast<size_t>(firstStepNode)] = 1;
+
+    int prev = startNode;
+    int cur  = firstStepNode;
+    while (true) {
+        std::vector<int> cands;
+        for (int nb : graph.adjacency[cur]) {
+            if (!visited[static_cast<size_t>(nb)]) cands.push_back(nb);
+        }
+        if (cands.empty()) break;
+
+        const cv::Point& pp = graph.points[prev];
+        const cv::Point& cp = graph.points[cur];
+        const cv::Point2f inVec(static_cast<float>(cp.x - pp.x),
+                                static_cast<float>(cp.y - pp.y));
+        const float inNorm = std::max(1e-6f, std::hypot(inVec.x, inVec.y));
+        int best = cands.front();
+        float bestDot = -std::numeric_limits<float>::max();
+        for (int nb : cands) {
+            const cv::Point& np = graph.points[nb];
+            const cv::Point2f outVec(static_cast<float>(np.x - cp.x),
+                                     static_cast<float>(np.y - cp.y));
+            const float outNorm = std::max(1e-6f, std::hypot(outVec.x, outVec.y));
+            const float dot = (inVec.x * outVec.x + inVec.y * outVec.y) / (inNorm * outNorm);
+            if (dot > bestDot) { bestDot = dot; best = nb; }
+        }
+        prev = cur;
+        cur  = best;
+        path.push_back(cur);
+        visited[static_cast<size_t>(cur)] = 1;
+    }
+    return path;
+}
+
 struct D3RouteDebug {
     bool available = false;
     bool startIsHead = false;
@@ -2510,6 +2537,9 @@ struct D3RouteDebug {
     cv::Point2f center = {-1.f, -1.f};
     cv::Point2f end = {-1.f, -1.f};
     std::vector<std::vector<cv::Point2f>> candidatePaths;
+    // World-coordinate positions for every node in every junction cluster.
+    // Parallel to selectedJunctionCluster (same id).
+    std::vector<std::vector<cv::Point2f>> allJunctionClusterNodes;
     QStringList junctionDiagnostics;
 };
 
@@ -2549,7 +2579,6 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
     const int junctionIdx = junction.junctionIdx;
     const int incomingIdx = junction.incomingIdx;
     const std::vector<int>& trunk = junction.trunk;
-    const std::vector<JunctionPort> ports = clusterPorts(graph, junction.cluster);
 
     if (diagnostics) {
         diagnostics->append(QStringLiteral("D-3 junction clusters=%1 selected=%2 fallback=%3")
@@ -2576,6 +2605,17 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
         routeDebug->end = predictedHidden;
         routeDebug->candidatePaths.clear();
         routeDebug->junctionDiagnostics = junction.diagnostics;
+        routeDebug->allJunctionClusterNodes.clear();
+        for (const JunctionCluster& cl : junction.allClusters) {
+            std::vector<cv::Point2f> worldNodes;
+            worldNodes.reserve(cl.nodes.size());
+            for (int node : cl.nodes) {
+                worldNodes.emplace_back(
+                    static_cast<float>(graph.points[node].x) + originOffset.x,
+                    static_cast<float>(graph.points[node].y) + originOffset.y);
+            }
+            routeDebug->allJunctionClusterNodes.push_back(std::move(worldNodes));
+        }
     }
 
     struct BranchCandidate {
@@ -2591,18 +2631,39 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
         bool centerImplausible = false;
     };
 
+    // Cluster-aware path length: segments where both endpoints are inside the
+    // selected junction cluster count at 50% to avoid over-penalising branches
+    // that pass through a thick cluster region on their way out.
+    const auto clusterAwarePathLength = [&](const std::vector<int>& nodes) -> float {
+        constexpr float kClusterSegWeight = 0.5f;
+        float len = 0.f;
+        for (int i = 1; i < static_cast<int>(nodes.size()); ++i) {
+            const cv::Point& a = graph.points[nodes[i - 1]];
+            const cv::Point& b = graph.points[nodes[i]];
+            const int dx = b.x - a.x, dy = b.y - a.y;
+            const float seg = (dx != 0 && dy != 0) ? std::sqrt(2.f) : 1.f;
+            const bool inCluster =
+                junction.cluster.contains[static_cast<size_t>(nodes[i - 1])] &&
+                junction.cluster.contains[static_cast<size_t>(nodes[i])];
+            len += inCluster ? kClusterSegWeight * seg : seg;
+        }
+        return len;
+    };
+
+    // Pre-mark trunk nodes as visited so branch traces don't backtrack.
+    std::vector<char> trunkVisited(static_cast<size_t>(graph.points.size()), 0);
+    for (int node : trunk) trunkVisited[static_cast<size_t>(node)] = 1;
+
+    // Explore one branch per non-incoming neighbour of junctionIdx.
+    // Using direct neighbours (rather than cluster ports) means we correctly
+    // explore arms that are absorbed into a large cluster and have no port.
     std::vector<BranchCandidate> candidates;
-    for (const JunctionPort& port : ports) {
-        if (port.outsideNode == incomingIdx) continue;
+    for (int nb : graph.adjacency[junctionIdx]) {
+        if (nb == incomingIdx) continue;
         BranchCandidate c;
-        std::vector<int> internalPath =
-            clusterInternalPath(graph, junction.cluster, junctionIdx, port.clusterNode);
-        std::vector<int> branchPath =
-            traceSkeletonBranchFromCluster(graph, junction.cluster,
-                                           port.clusterNode, port.outsideNode);
-        if (internalPath.empty() || branchPath.size() < 2) continue;
-        c.nodes = internalPath;
-        c.nodes.insert(c.nodes.end(), branchPath.begin() + 1, branchPath.end());
+        std::vector<int> branch = traceSkeletonBranchFree(graph, junctionIdx, nb, trunkVisited);
+        if (branch.size() < 2) continue;
+        c.nodes = branch;  // branch[0] == junctionIdx
         if (c.nodes.size() < 2) continue;
 
         std::vector<float> cumulative(c.nodes.size(), 0.f);
@@ -2666,7 +2727,7 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
                 }
             }
         }
-        c.pathLen = nodePathLength(graph, c.fullNodes);
+        c.pathLen = clusterAwarePathLength(c.fullNodes);
         if (hasPredictedCenter && c.fullNodes.size() >= 2) {
             const float halfLen = 0.5f * c.pathLen;
             float walked = 0.f;
@@ -3608,6 +3669,7 @@ auto runSkeletonArcDispatch =
                 debugRecord.d3RouteEnd = routeDebug.end;
                 debugRecord.d3CandidatePaths = routeDebug.candidatePaths;
                 debugRecord.d3JunctionDiagnostics = routeDebug.junctionDiagnostics;
+                debugRecord.d3JunctionClusterNodes = routeDebug.allJunctionClusterNodes;
             }
             return ok;
         }()) {
