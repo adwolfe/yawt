@@ -463,6 +463,11 @@ verify_no_external_qt_links() {
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_NAME.app/Contents/MacOS/$APP_NAME" 2>/dev/null || true
 print_info "Patching executable link paths"
+EXECUTABLE_PATH="$APP_NAME.app/Contents/MacOS/$APP_NAME"
+EXECUTABLE_DEPS=$(otool -L "$EXECUTABLE_PATH" 2>/dev/null | awk 'NR > 1 {print $1}' || true)
+for dep_path in $EXECUTABLE_DEPS; do
+    rewrite_dependency_to_bundle "$dep_path" "$EXECUTABLE_PATH"
+done
 for framework in QtCore QtGui QtWidgets QtSvg QtDBus; do
     old_path="$QT_LIB_PATH/$framework.framework/Versions/A/$framework"
     new_path="@executable_path/../Frameworks/$framework.framework/Versions/A/$framework"
