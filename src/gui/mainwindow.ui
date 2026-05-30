@@ -160,7 +160,20 @@
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="rightLayout" stretch="5,2">
+     <widget class="QTabWidget" name="mainTabWidget">
+      <property name="currentIndex">
+       <number>1</number>
+      </property>
+      <widget class="QWidget" name="captureTab">
+       <attribute name="title">
+        <string>Capture</string>
+       </attribute>
+      </widget>
+      <widget class="QWidget" name="processingTab">
+       <attribute name="title">
+        <string>Processing</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="rightLayout" stretch="5,2">
       <item>
        <widget class="QFrame" name="trackingFrame">
         <property name="frameShape">
@@ -1488,6 +1501,13 @@ QToolButton#lastFrameButton {
        </widget>
       </item>
      </layout>
+      </widget>
+      <widget class="QWidget" name="analysisTab">
+       <attribute name="title">
+        <string>Analysis</string>
+       </attribute>
+      </widget>
+     </widget>
     </item>
    </layout>
   </widget>

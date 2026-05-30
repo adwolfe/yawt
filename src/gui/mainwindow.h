@@ -21,6 +21,7 @@ class ItemTypeFilterProxyModel;
 class TrackingDataStorage;
 class AppController; // Application controller (owns core non-UI components)
 class AnalysisDialog;
+class CapturePanel;
 
 // Include VideoLoader header for enums and QFlags type
 #include "widgets/videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
@@ -232,6 +233,7 @@ private:
     TrackingDataStorage *m_trackingDataStorage;
 
     QPointer<AnalysisDialog> m_analysisDialog;
+    CapturePanel* m_capturePanel = nullptr;
 
     /** Button group for interaction modes (Pan, ROI, Crop, EditBlobs, EditTracks). Owned by MainWindow. */
     QButtonGroup *m_interactionModeButtonGroup;

@@ -38,6 +38,7 @@
 #include "trackingdatastorage.h"
 #include "version.h"
 #include "wormtimeline.h"
+#include "capturepanel.h"
 #include "../utils/thresholdingutils.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -80,6 +81,16 @@ MainWindow::MainWindow(QWidget *parent)
     , roiFactorSpinBoxD(1.5) // Initialize ROI factor to default value 1.5
 {
     ui->setupUi(this);
+
+    // Capture tab: embed CapturePanel and keep its output dir in sync with the project folder.
+    {
+        m_capturePanel = new CapturePanel(ui->captureTab);
+        auto* captureLayout = new QVBoxLayout(ui->captureTab);
+        captureLayout->setContentsMargins(0, 0, 0, 0);
+        captureLayout->addWidget(m_capturePanel);
+        connect(ui->dirSelected, &QLineEdit::textChanged,
+                m_capturePanel, &CapturePanel::setOutputDirectory);
+    }
 
     if (ui->tabWidget && ui->debugTab) {
         const int debugTabIndex = ui->tabWidget->indexOf(ui->debugTab);

@@ -33,6 +33,17 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
 # Prefer standard OpenCV discovery; allow overriding via -DOpenCV_DIR
 find_package(OpenCV REQUIRED)
 
+# Optional: Basler Pylon SDK
+# Install the SDK from https://www.baslerweb.com/en/downloads/software-downloads/
+# Point CMake at it with:
+#   cmake -Dpylon_DIR=/Library/Frameworks/pylon.framework/Versions/Current/lib/cmake/pylon ..
+find_package(pylon QUIET)
+if(pylon_FOUND)
+    message(STATUS "Pylon SDK found — Basler camera support enabled")
+else()
+    message(STATUS "Pylon SDK not found — Basler camera support disabled")
+endif()
+
 # List of sources (updated to reflect new organization under src/)
 set(SOURCES
     main.cpp
@@ -56,6 +67,12 @@ set(SOURCES
     src/gui/widgets/videofiletreeview.cpp
     src/gui/widgets/frameloader.cpp
     src/gui/widgets/videoloader.cpp
+    src/gui/widgets/liveview.cpp
+    src/gui/widgets/opencvcamerasource.cpp
+    src/gui/widgets/pyloncamerasource.cpp
+    src/gui/widgets/cameraenumerator.cpp
+    src/gui/widgets/captureworker.cpp
+    src/gui/widgets/capturepanel.cpp
 
     src/gui/delegates/colordelegate.cpp
     src/gui/delegates/itemtypedelegate.cpp
@@ -107,6 +124,13 @@ set(HEADERS
     src/gui/widgets/videofiletreeview.h
     src/gui/widgets/frameloader.h
     src/gui/widgets/videoloader.h
+    src/gui/widgets/liveview.h
+    src/gui/widgets/icamerasource.h
+    src/gui/widgets/opencvcamerasource.h
+    src/gui/widgets/pyloncamerasource.h
+    src/gui/widgets/cameraenumerator.h
+    src/gui/widgets/captureworker.h
+    src/gui/widgets/capturepanel.h
 
     src/gui/delegates/colordelegate.h
     src/gui/delegates/itemtypedelegate.h
@@ -180,6 +204,12 @@ target_link_libraries(${PROJECT_NAME}
     Qt6::Svg
     ${OpenCV_LIBS}
 )
+
+# Link Pylon if found
+if(pylon_FOUND)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE YAWT_HAS_PYLON)
+    target_link_libraries(${PROJECT_NAME} pylon::pylon)
+endif()
 
 # Generate version header into the build directory
 configure_file(
