@@ -573,6 +573,39 @@ double tipToTipDistance(const QList<QPointF>& points)
     return std::hypot(delta.x(), delta.y());
 }
 
+double centerlineCurvature(const QList<QPointF>& points)
+{
+    if (points.size() < 3) {
+        return -1.0;
+    }
+
+    double arcLength = 0.0;
+    for (int i = 1; i < points.size(); ++i) {
+        const QPointF segment = points.at(i) - points.at(i - 1);
+        arcLength += std::hypot(segment.x(), segment.y());
+    }
+    if (arcLength <= 1e-6) {
+        return -1.0;
+    }
+
+    double totalAbsAngle = 0.0;
+    for (int i = 1; i + 1 < points.size(); ++i) {
+        const QPointF a = points.at(i) - points.at(i - 1);
+        const QPointF b = points.at(i + 1) - points.at(i);
+        const double lenA = std::hypot(a.x(), a.y());
+        const double lenB = std::hypot(b.x(), b.y());
+        if (lenA <= 1e-6 || lenB <= 1e-6) {
+            continue;
+        }
+
+        const double cross = a.x() * b.y() - a.y() * b.x();
+        const double dot = a.x() * b.x() + a.y() * b.y();
+        totalAbsAngle += std::abs(std::atan2(cross, dot));
+    }
+
+    return totalAbsAngle / arcLength;
+}
+
 WorkbookCell nanCell()
 {
     return stringCell(QStringLiteral("NaN"));
@@ -2234,7 +2267,9 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         stringCell("WormID"),
         stringCell("SourceItemID"),
         stringCell("Frame"),
-        stringCell("TipToTipDistance")
+        stringCell("TipToTipDistance"),
+        stringCell("CenterlineCurvature"),
+        stringCell("SignedVelocityPxPerSec")
     };
     for (int pointIndex = 1; pointIndex <= 10; ++pointIndex) {
         centerlineHeader.append(stringCell(QString("Point%1X").arg(pointIndex)));
@@ -2252,34 +2287,178 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                           return lhs.frameNumberOriginal < rhs.frameNumberOriginal;
                       });
 
-            for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+            struct CenterlineExportRecord {
+                int frameNumber = 0;
+                cv::Point2f centroid{0.f, 0.f};
+                bool hasCentroid = false;
                 QList<QPointF> centerlinePoints;
+                QPointF smoothedCentroid;
+                QPointF smoothedHead;
+                QPointF smoothedTail;
+                bool hasSmoothedCentroid = false;
+                bool hasSmoothedBodyAxis = false;
+                double signedVelocityPxPerSec = 0.0;
+                bool hasSignedVelocity = false;
+            };
+
+            QVector<CenterlineExportRecord> exportRecords;
+            exportRecords.reserve(static_cast<int>(sortedTrackPoints.size()));
+
+            for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+                CenterlineExportRecord record;
+                record.frameNumber = point.frameNumberOriginal;
+                record.centroid = point.position;
+                record.hasCentroid =
+                    point.quality == Tracking::TrackPointQuality::Single ||
+                    point.quality == Tracking::TrackPointQuality::Split;
+
                 if (point.quality == Tracking::TrackPointQuality::Single ||
                     point.quality == Tracking::TrackPointQuality::Split) {
                     const QMap<int, Tracking::DetectedBlob> blobsForFrame =
                         m_storage->getDetectedBlobsForFrame(point.frameNumberOriginal);
                     const auto blobIt = blobsForFrame.constFind(sourceItemId);
                     if (blobIt != blobsForFrame.constEnd()) {
-                        centerlinePoints =
+                        record.centerlinePoints =
                             Tracking::resampleCenterlinePoints(blobIt.value().centerlinePoints, 10);
                     }
-
                 }
 
+                exportRecords.append(record);
+            }
+
+            constexpr int kSmoothingRadiusFrames = 2;
+            for (int i = 0; i < exportRecords.size(); ++i) {
+                QPointF centroidSum(0.0, 0.0);
+                QPointF headSum(0.0, 0.0);
+                QPointF tailSum(0.0, 0.0);
+                int centroidCount = 0;
+                int bodyAxisCount = 0;
+
+                const int first = std::max(0, i - kSmoothingRadiusFrames);
+                const int last = std::min(static_cast<int>(exportRecords.size()) - 1,
+                                          i + kSmoothingRadiusFrames);
+                for (int j = first; j <= last; ++j) {
+                    const CenterlineExportRecord& neighbor = exportRecords.at(j);
+                    if (neighbor.hasCentroid) {
+                        centroidSum += QPointF(neighbor.centroid.x, neighbor.centroid.y);
+                        ++centroidCount;
+                    }
+
+                    if (neighbor.centerlinePoints.size() >= 2) {
+                        headSum += neighbor.centerlinePoints.first();
+                        tailSum += neighbor.centerlinePoints.last();
+                        ++bodyAxisCount;
+                    }
+                }
+
+                CenterlineExportRecord& record = exportRecords[i];
+                if (centroidCount > 0) {
+                    record.smoothedCentroid = centroidSum / static_cast<double>(centroidCount);
+                    record.hasSmoothedCentroid = true;
+                }
+                if (bodyAxisCount > 0) {
+                    record.smoothedHead = headSum / static_cast<double>(bodyAxisCount);
+                    record.smoothedTail = tailSum / static_cast<double>(bodyAxisCount);
+                    const QPointF axis = record.smoothedHead - record.smoothedTail;
+                    record.hasSmoothedBodyAxis = std::hypot(axis.x(), axis.y()) > 1e-6;
+                }
+            }
+
+            if (m_videoFps > 0.0) {
+                for (int i = 0; i < exportRecords.size(); ++i) {
+                    CenterlineExportRecord& record = exportRecords[i];
+                    if (!record.hasSmoothedCentroid || !record.hasSmoothedBodyAxis) {
+                        continue;
+                    }
+
+                    int prevIndex = -1;
+                    int nextIndex = -1;
+                    for (int j = i - 1; j >= 0; --j) {
+                        if (exportRecords.at(j).hasSmoothedCentroid) {
+                            prevIndex = j;
+                            break;
+                        }
+                    }
+                    for (int j = i + 1; j < exportRecords.size(); ++j) {
+                        if (exportRecords.at(j).hasSmoothedCentroid) {
+                            nextIndex = j;
+                            break;
+                        }
+                    }
+
+                    QPointF velocity(0.0, 0.0);
+                    bool hasVelocityVector = false;
+                    if (prevIndex >= 0 && nextIndex >= 0) {
+                        const CenterlineExportRecord& prev = exportRecords.at(prevIndex);
+                        const CenterlineExportRecord& next = exportRecords.at(nextIndex);
+                        const double dt = static_cast<double>(next.frameNumber - prev.frameNumber) / m_videoFps;
+                        if (dt > 1e-6) {
+                            velocity = (next.smoothedCentroid - prev.smoothedCentroid) / dt;
+                            hasVelocityVector = true;
+                        }
+                    } else if (prevIndex >= 0) {
+                        const CenterlineExportRecord& prev = exportRecords.at(prevIndex);
+                        const double dt = static_cast<double>(record.frameNumber - prev.frameNumber) / m_videoFps;
+                        if (dt > 1e-6) {
+                            velocity = (record.smoothedCentroid - prev.smoothedCentroid) / dt;
+                            hasVelocityVector = true;
+                        }
+                    } else if (nextIndex >= 0) {
+                        const CenterlineExportRecord& next = exportRecords.at(nextIndex);
+                        const double dt = static_cast<double>(next.frameNumber - record.frameNumber) / m_videoFps;
+                        if (dt > 1e-6) {
+                            velocity = (next.smoothedCentroid - record.smoothedCentroid) / dt;
+                            hasVelocityVector = true;
+                        }
+                    }
+
+                    if (!hasVelocityVector) {
+                        continue;
+                    }
+
+                    const QPointF axis = record.smoothedHead - record.smoothedTail;
+                    const double axisLength = std::hypot(axis.x(), axis.y());
+                    if (axisLength <= 1e-6) {
+                        continue;
+                    }
+
+                    const QPointF unitAxis = axis / axisLength;
+                    record.signedVelocityPxPerSec =
+                        velocity.x() * unitAxis.x() + velocity.y() * unitAxis.y();
+                    record.hasSignedVelocity = true;
+                }
+            }
+
+            for (const CenterlineExportRecord& record : exportRecords) {
                 WorkbookRow centerlineRow{
                     numberCell(QString::number(exportWormId)),
                     numberCell(QString::number(sourceItemId)),
-                    numberCell(QString::number(point.frameNumberOriginal))
+                    numberCell(QString::number(record.frameNumber))
                 };
-                const double distance = tipToTipDistance(centerlinePoints);
+
+                const double distance = tipToTipDistance(record.centerlinePoints);
                 if (distance >= 0.0) {
                     centerlineRow.append(numberCell(QString::number(distance, 'f', 4)));
                 } else {
                     centerlineRow.append(nanCell());
                 }
+
+                const double curvature = centerlineCurvature(record.centerlinePoints);
+                if (curvature >= 0.0) {
+                    centerlineRow.append(numberCell(QString::number(curvature, 'f', 6)));
+                } else {
+                    centerlineRow.append(nanCell());
+                }
+
+                if (record.hasSignedVelocity) {
+                    centerlineRow.append(numberCell(QString::number(record.signedVelocityPxPerSec, 'f', 4)));
+                } else {
+                    centerlineRow.append(nanCell());
+                }
+
                 for (int pointIndex = 0; pointIndex < 10; ++pointIndex) {
-                    if (pointIndex < centerlinePoints.size()) {
-                        const QPointF& centerlinePoint = centerlinePoints.at(pointIndex);
+                    if (pointIndex < record.centerlinePoints.size()) {
+                        const QPointF& centerlinePoint = record.centerlinePoints.at(pointIndex);
                         centerlineRow.append(numberCell(QString::number(centerlinePoint.x(), 'f', 4)));
                         centerlineRow.append(numberCell(QString::number(centerlinePoint.y(), 'f', 4)));
                     } else {
