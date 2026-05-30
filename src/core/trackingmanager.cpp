@@ -573,6 +573,11 @@ double tipToTipDistance(const QList<QPointF>& points)
     return std::hypot(delta.x(), delta.y());
 }
 
+WorkbookCell nanCell()
+{
+    return stringCell(QStringLiteral("NaN"));
+}
+
 QByteArray buildWorksheetXml(const QList<WorkbookRow>& rows)
 {
     QByteArray xmlData;
@@ -2249,7 +2254,8 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
 
             for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
                 QList<QPointF> centerlinePoints;
-                if (point.quality != Tracking::TrackPointQuality::Lost) {
+                if (point.quality == Tracking::TrackPointQuality::Single ||
+                    point.quality == Tracking::TrackPointQuality::Split) {
                     const QMap<int, Tracking::DetectedBlob> blobsForFrame =
                         m_storage->getDetectedBlobsForFrame(point.frameNumberOriginal);
                     const auto blobIt = blobsForFrame.constFind(sourceItemId);
@@ -2269,7 +2275,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                 if (distance >= 0.0) {
                     centerlineRow.append(numberCell(QString::number(distance, 'f', 4)));
                 } else {
-                    centerlineRow.append(stringCell(""));
+                    centerlineRow.append(nanCell());
                 }
                 for (int pointIndex = 0; pointIndex < 10; ++pointIndex) {
                     if (pointIndex < centerlinePoints.size()) {
@@ -2277,8 +2283,8 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                         centerlineRow.append(numberCell(QString::number(centerlinePoint.x(), 'f', 4)));
                         centerlineRow.append(numberCell(QString::number(centerlinePoint.y(), 'f', 4)));
                     } else {
-                        centerlineRow.append(stringCell(""));
-                        centerlineRow.append(stringCell(""));
+                        centerlineRow.append(nanCell());
+                        centerlineRow.append(nanCell());
                     }
                 }
                 centerlineRows.append(centerlineRow);
@@ -3560,6 +3566,15 @@ void TrackingManager::handleCenterlineFinished() {
         const QString summaryPath = QDir(dir).filePath(baseName + "_ProcessingSummary.txt");
         exportProcessingSummary(summaryPath);
         emit trackingStatusUpdate("Processing summary saved: " + summaryPath);
+    }
+
+    if (!dir.isEmpty() && !m_finalTracks.empty()) {
+        const QString workbookPath = QDir(dir).filePath(baseName + "_tracks.xlsx");
+        if (outputTracksToWorkbook(m_finalTracks, workbookPath)) {
+            emit trackingStatusUpdate("Tracks workbook updated with centerlines: " + workbookPath);
+        } else {
+            emit trackingStatusUpdate("Warning: Failed to update tracks workbook with centerlines: " + workbookPath);
+        }
     }
 
     emit centerlineFinished();
