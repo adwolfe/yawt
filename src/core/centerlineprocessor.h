@@ -34,6 +34,9 @@ struct CenterlineFrameContext {
     float refLength = 0.f;
     CenterlineSnakeParams snakeParams;
     bool captureDebug = false;
+    bool hasManualHeadTailSeed = false;
+    cv::Point2f manualHeadPoint = cv::Point2f(0.f, 0.f);
+    cv::Point2f manualTailPoint = cv::Point2f(0.f, 0.f);
 };
 
 struct CenterlineSweepState {

@@ -1014,6 +1014,24 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     painter.drawEllipse(centroidWidget, 3, 3);
                     painter.setBrush(Qt::NoBrush);
                 }
+
+                if (item.hasHeadTailSeed) {
+                    const QPointF headWidget = mapPointFromVideo(item.initialHeadPoint);
+                    const QPointF tailWidget = mapPointFromVideo(item.initialTailPoint);
+                    if (headWidget.x() >= 0) {
+                        painter.setPen(QPen(QColor(0, 220, 255), 2));
+                        painter.setBrush(QColor(0, 220, 255));
+                        painter.drawEllipse(headWidget, 4, 4);
+                        painter.drawText(headWidget + QPointF(5, -5), "H");
+                    }
+                    if (tailWidget.x() >= 0) {
+                        painter.setPen(QPen(QColor(255, 80, 80), 2));
+                        painter.setBrush(QColor(255, 80, 80));
+                        painter.drawEllipse(tailWidget, 4, 4);
+                        painter.drawText(tailWidget + QPointF(5, -5), "T");
+                    }
+                    painter.setBrush(Qt::NoBrush);
+                }
             }
         }
     }
@@ -1296,16 +1314,14 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                     Tracking::DetectedBlob blobData = Tracking::findClickedBlob(m_thresholdedFrame_mono, clickVideoPoint);
                     if (blobData.isValid) {
                         YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Blob clicked for addition. Centroid:" << blobData.centroid;
-                        emit blobClickedForAddition(blobData);
+                        emit blobClickedForAddition(blobData, clickVideoPoint);
                         handled = true;
                     } else {
                         YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: No valid blob found at click point:" << clickVideoPoint;
                     }
                 }
-            } else if (!m_activeViewModes.testFlag(ViewModeOption::Threshold)) {
-                YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: EditBlobs mode active, but Threshold view is not. Blob selection might be inaccurate or disabled.";
             } else {
-                YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: Cannot select blob, thresholded image is not available (and it should be if Threshold view is on).";
+                YAWT_INFO(lcGuiVideoLoader) << "VideoLoader: Cannot select blob; internal thresholded frame is not available.";
             }
 
             if (!handled) {

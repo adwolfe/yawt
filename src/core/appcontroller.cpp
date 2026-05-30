@@ -350,6 +350,9 @@ std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel
         info.id = it.id;
         info.initialRoi = it.initialBoundingBox;
         info.color = it.color;
+        info.initialHeadPoint = it.initialHeadPoint;
+        info.initialTailPoint = it.initialTailPoint;
+        info.hasHeadTailSeed = it.hasHeadTailSeed;
         result.push_back(info);
     }
 

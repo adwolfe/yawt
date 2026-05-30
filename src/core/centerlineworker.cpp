@@ -762,8 +762,9 @@ void CenterlineWorker::doWork()
 
         // Per-worm keyframe (the user-clicked frame).
         int keyframe = -1;
-        if (const TableItems::ClickedItem* item = m_storage->getItem(wormId))
-            keyframe = item->frameOfSelection;
+        const TableItems::ClickedItem* seedItem = m_storage->getItem(wormId);
+        if (seedItem)
+            keyframe = seedItem->frameOfSelection;
 
         // ── Sweep 0 — body length learning ──────────────────────────────
         // Read-only: skeleton on a TEMPORARY blob copy so storage stays
@@ -815,6 +816,15 @@ void CenterlineWorker::doWork()
         context.refLength = refLength;
         context.snakeParams = m_snakeParams;
         context.captureDebug = m_debugStore && DebugUtils::isDebugCaptureEnabled();
+        if (seedItem && seedItem->hasHeadTailSeed) {
+            context.hasManualHeadTailSeed = true;
+            context.manualHeadPoint = cv::Point2f(
+                static_cast<float>(seedItem->initialHeadPoint.x()),
+                static_cast<float>(seedItem->initialHeadPoint.y()));
+            context.manualTailPoint = cv::Point2f(
+                static_cast<float>(seedItem->initialTailPoint.x()),
+                static_cast<float>(seedItem->initialTailPoint.y()));
+        }
 
         Centerline::CenterlineFrameIo io;
         io.getDetectedBlobsForFrame = [this](int frameNumber) {

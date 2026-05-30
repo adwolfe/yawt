@@ -3983,6 +3983,36 @@ if (static_cast<int>(centerline.size()) != ctx.nPts)
     centerline = resample(centerline, ctx.nPts);
 debugRecord.resampledCenterline = centerline;
 
+auto applyManualHeadTailSeed = [&]() {
+    if (!req.isKeyframeBootstrap || !ctx.hasManualHeadTailSeed ||
+        centerline.size() < 2) {
+        return;
+    }
+
+    const float keepCost =
+        ptDist(centerline.front(), ctx.manualHeadPoint) +
+        ptDist(centerline.back(), ctx.manualTailPoint);
+    const float reverseCost =
+        ptDist(centerline.back(), ctx.manualHeadPoint) +
+        ptDist(centerline.front(), ctx.manualTailPoint);
+    if (reverseCost < keepCost) {
+        std::reverse(centerline.begin(), centerline.end());
+        std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+        debugRecord.decisions << QStringLiteral("manual head/tail seed flipped keyframe centerline");
+    }
+
+    if (!blob.tipCandidates.empty()) {
+        const int headIdx = nearestCandidateIdx(blob, ctx.manualHeadPoint);
+        int tailIdx = nearestCandidateIdx(blob, ctx.manualTailPoint);
+        if (tailIdx == headIdx) tailIdx = -1;
+        blob.assignedHeadTipIdx = headIdx;
+        blob.assignedTailTipIdx = tailIdx;
+    }
+    debugRecord.decisions << QStringLiteral("manual head/tail seed anchored keyframe orientation");
+};
+
+applyManualHeadTailSeed();
+
 if (cleanWithTwoTips) {
     io.recordBodyLengthSample(ctx.wormId, arcLen(centerline));
 }
@@ -4013,6 +4043,8 @@ if (er.topology == Tracking::TopologyState::Clean) {
         debugRecord.decisions << QStringLiteral("snake refinement ran on clean topology frame");
     }
 }
+
+applyManualHeadTailSeed();
 
 // Right-hand-rule orientation veto. The consecutive-segment
 // cross-sum negates when traversal direction is reversed; worms

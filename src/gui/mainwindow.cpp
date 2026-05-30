@@ -61,6 +61,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLineF>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -810,10 +811,6 @@ void MainWindow::cropModeButtonClicked() {
 }
 void MainWindow::editBlobsModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditBlobs);
-    // Ensure threshold view is active for blob editing if it's a prerequisite
-    if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Threshold)) {
-        ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Threshold, true);
-    }
     if (!ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Blobs)) {
         ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
     }
@@ -821,9 +818,9 @@ void MainWindow::editBlobsModeButtonClicked() {
         // Provide mode-specific feedback
     QString modeMessage;
     if (m_hasCompletedTracking) {
-        modeMessage = "Blob Edit Mode: Click on blobs to add Fix markers";
+        modeMessage = "Blob Edit Mode: on the original image, click the worm head, then its tail";
     } else {
-        modeMessage = "Blob Edit Mode: Click on blobs to add Worms for tracking";
+        modeMessage = "Blob Edit Mode: on the original image, click each worm's head first, then its tail";
     }
     statusBar()->showMessage(modeMessage, 5000);
 }
@@ -864,6 +861,10 @@ void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode
     if (newMode != VideoLoader::InteractionMode::Point) {
         m_startEndSelectionActive = false;
         m_nextStartEndPointType = TableItems::ItemType::StartPoint;
+    }
+    if (newMode != VideoLoader::InteractionMode::EditBlobs) {
+        m_hasPendingHeadClick = false;
+        m_pendingHeadFrame = -1;
     }
 
     // This will be handled by QButtonGroup if buttons are added to it correctly
@@ -962,24 +963,61 @@ void MainWindow::setBackgroundAssumption(int index) {
 }
 
 // --- Blob Handling ---
-void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData) {
+void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData, const QPointF& clickPointVideoCoords) {
     if (!ui->videoLoader->isVideoLoaded()) return;
     int currentFrame = ui->videoLoader->getCurrentFrameNumber();
 
-    // Determine item type based on tracking state
+    const auto sameSeedBlob = [](const Tracking::DetectedBlob& first,
+                                 const Tracking::DetectedBlob& second) {
+        if (!first.isValid || !second.isValid) {
+            return false;
+        }
+
+        const QRectF expandedFirst = first.boundingBox.adjusted(-4.0, -4.0, 4.0, 4.0);
+        if (expandedFirst.intersects(second.boundingBox)) {
+            return true;
+        }
+
+        const double maxSide = qMax(first.boundingBox.width(), first.boundingBox.height());
+        return QLineF(first.centroid, second.centroid).length() <= qMax(12.0, maxSide);
+    };
+
+    if (!m_hasPendingHeadClick || m_pendingHeadFrame != currentFrame) {
+        m_pendingHeadBlob = blobData;
+        m_pendingHeadPoint = clickPointVideoCoords;
+        m_pendingHeadFrame = currentFrame;
+        m_hasPendingHeadClick = true;
+        statusBar()->showMessage("Head selected. Now click the tail of the same worm.", 5000);
+        return;
+    }
+
+    if (!sameSeedBlob(m_pendingHeadBlob, blobData)) {
+        m_pendingHeadBlob = blobData;
+        m_pendingHeadPoint = clickPointVideoCoords;
+        m_pendingHeadFrame = currentFrame;
+        statusBar()->showMessage("That tail click looked like a different worm. Restarted: head selected; now click its tail.", 7000);
+        return;
+    }
+
     // Legacy behavior previously turned newly added items into 'Fix' blobs after tracking completed.
     // That behavior is disabled: always add items as regular Worm blobs.
-    TableItems::ItemType itemType = TableItems::ItemType::Worm;
+    const TableItems::ItemType itemType = TableItems::ItemType::Worm;
+    const int newId = m_trackingDataStorage
+        ? m_trackingDataStorage->addItem(m_pendingHeadBlob.centroid,
+                                         m_pendingHeadBlob.boundingBox,
+                                         currentFrame,
+                                         itemType)
+        : -1;
+    const bool added = newId > 0;
 
-    // Now adding through the data storage via the model
-    bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, itemType);
+    if (added && m_trackingDataStorage) {
+        m_trackingDataStorage->setItemHeadTailSeed(newId, m_pendingHeadPoint, clickPointVideoCoords);
 
-    if (added) {
         // Enable the delete button since we now have an item
         ui->deleteButton->setEnabled(true);
 
         // Select the newly added row
-        int lastRow = m_blobTableModel->rowCount() - 1;
+        int lastRow = m_trackingDataStorage->getIndexFromId(newId);
         if (m_wormProxyModel) {
             QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
             QModelIndex proxyIndex = m_wormProxyModel->mapFromSource(srcIndex);
@@ -995,11 +1033,14 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
         // Provide user feedback based on blob type
         QString feedbackMessage;
         // Always report as a Worm blob since auto-Fix behavior is disabled
-        feedbackMessage = QString("Added Worm blob at frame %1").arg(currentFrame);
+        feedbackMessage = QString("Added Worm %1 with head/tail seed at frame %2").arg(newId).arg(currentFrame);
         statusBar()->showMessage(feedbackMessage, 3000);
 
     // No retrack combo functionality in this build
     }
+
+    m_hasPendingHeadClick = false;
+    m_pendingHeadFrame = -1;
 }
 
 void MainWindow::handleRoiDefined(const QRectF& roi) {

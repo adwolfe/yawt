@@ -68,10 +68,13 @@ struct ClickedItem {
     QColor color;                   // Color for worm ROI and track
     ItemType type;                  // Type of the item
     QPointF initialCentroid;        // Centroid in video coordinates at selection
+    QPointF initialHeadPoint;       // User-clicked head point on the selection frame
+    QPointF initialTailPoint;       // User-clicked tail point on the selection frame
     QRectF initialBoundingBox;      // Bounding box in video coordinates at selection. THIS WILL BECOME THE STANDARDIZED ROI.
     QRectF originalClickedBoundingBox; // The actual bounding box of the blob when it was clicked. Used for metrics.
     int frameOfSelection;           // Frame number where this item was selected
     bool visible = true;            // Whether this item's track/ROI should be displayed
+    bool hasHeadTailSeed = false;   // True when initialHeadPoint/initialTailPoint were supplied by the user
     // Add other relevant data as needed
 };
 
@@ -284,6 +287,9 @@ struct InitialWormInfo {
     int id;
     QRectF initialRoi; // ROI on the keyframe in video coordinates
     QColor color;      // Color associated with this worm
+    QPointF initialHeadPoint;
+    QPointF initialTailPoint;
+    bool hasHeadTailSeed = false;
 };
 
 

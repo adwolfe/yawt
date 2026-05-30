@@ -259,7 +259,7 @@ signals:
      * suggesting it should be added to the BlobTableModel.
      * @param blobData The data of the clicked blob (centroid, bounding box in video coordinates).
      */
-    void blobClickedForAddition(const Tracking::DetectedBlob& blobData);
+    void blobClickedForAddition(const Tracking::DetectedBlob& blobData, const QPointF& clickPointVideoCoords);
 
     void trackPointClicked(int wormId, int frameNumber, QPointF videoPoint); // For interaction in EditTracks mode
 

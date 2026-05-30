@@ -123,6 +123,14 @@ public:
      * @param type The new type
      */
     void setItemType(int itemId, TableItems::ItemType type);
+
+    /**
+     * @brief Store the user-clicked head/tail seed for an initial worm item.
+     * @param itemId The ID of the item
+     * @param headPoint User-clicked head point in video coordinates
+     * @param tailPoint User-clicked tail point in video coordinates
+     */
+    void setItemHeadTailSeed(int itemId, const QPointF& headPoint, const QPointF& tailPoint);
     
     /**
      * @brief Set the ROI size multiplier for calculating ROI size

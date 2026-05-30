@@ -83,6 +83,9 @@ int TrackingDataStorage::addItem(const QPointF& centroid, const QRectF& bounding
     
     newItem.type = type;
     newItem.initialCentroid = centroid;
+    newItem.initialHeadPoint = QPointF();
+    newItem.initialTailPoint = QPointF();
+    newItem.hasHeadTailSeed = false;
     newItem.originalClickedBoundingBox = boundingBox;
     newItem.frameOfSelection = frameNumber;
     newItem.visible = true;
@@ -215,6 +218,19 @@ void TrackingDataStorage::setItemType(int itemId, TableItems::ItemType type) {
     }
 }
 
+void TrackingDataStorage::setItemHeadTailSeed(int itemId, const QPointF& headPoint, const QPointF& tailPoint) {
+    int index = getIndexFromId(itemId);
+    if (index < 0) {
+        return;
+    }
+
+    m_items[index].initialHeadPoint = headPoint;
+    m_items[index].initialTailPoint = tailPoint;
+    m_items[index].hasHeadTailSeed = true;
+    emit itemChanged(itemId);
+    emit itemsChanged(m_items);
+}
+
 void TrackingDataStorage::setRoiSizeMultiplier(double multiplier) {
     if (!qFuzzyCompare(m_roiSizeMultiplier, multiplier)) {
         m_roiSizeMultiplier = multiplier;
@@ -341,6 +357,15 @@ static bool parseItemFromJsonObject(const QJsonObject& obj, TableItems::ClickedI
     if (obj.contains("initialCentroid") && obj["initialCentroid"].isObject()) {
         QJsonObject c = obj["initialCentroid"].toObject();
         item.initialCentroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
+    }
+    item.hasHeadTailSeed = obj.value("hasHeadTailSeed").toBool(false);
+    if (obj.contains("initialHeadPoint") && obj["initialHeadPoint"].isObject()) {
+        QJsonObject h = obj["initialHeadPoint"].toObject();
+        item.initialHeadPoint = QPointF(h.value("x").toDouble(), h.value("y").toDouble());
+    }
+    if (obj.contains("initialTailPoint") && obj["initialTailPoint"].isObject()) {
+        QJsonObject t = obj["initialTailPoint"].toObject();
+        item.initialTailPoint = QPointF(t.value("x").toDouble(), t.value("y").toDouble());
     }
     if (obj.contains("initialBoundingBox") && obj["initialBoundingBox"].isObject()) {
         QJsonObject b = obj["initialBoundingBox"].toObject();

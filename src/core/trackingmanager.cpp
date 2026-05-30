@@ -2789,6 +2789,19 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
         centroidObj["y"] = item.initialCentroid.y();
         itemObj["initialCentroid"] = centroidObj;
 
+        itemObj["hasHeadTailSeed"] = item.hasHeadTailSeed;
+        if (item.hasHeadTailSeed) {
+            QJsonObject headObj;
+            headObj["x"] = item.initialHeadPoint.x();
+            headObj["y"] = item.initialHeadPoint.y();
+            itemObj["initialHeadPoint"] = headObj;
+
+            QJsonObject tailObj;
+            tailObj["x"] = item.initialTailPoint.x();
+            tailObj["y"] = item.initialTailPoint.y();
+            itemObj["initialTailPoint"] = tailObj;
+        }
+
         QJsonObject bboxObj;
         bboxObj["x"] = item.initialBoundingBox.x();
         bboxObj["y"] = item.initialBoundingBox.y();
@@ -2903,6 +2916,19 @@ bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
         centroidObj["x"] = item.initialCentroid.x();
         centroidObj["y"] = item.initialCentroid.y();
         itemObj["initialCentroid"] = centroidObj;
+
+        itemObj["hasHeadTailSeed"] = item.hasHeadTailSeed;
+        if (item.hasHeadTailSeed) {
+            QJsonObject headObj;
+            headObj["x"] = item.initialHeadPoint.x();
+            headObj["y"] = item.initialHeadPoint.y();
+            itemObj["initialHeadPoint"] = headObj;
+
+            QJsonObject tailObj;
+            tailObj["x"] = item.initialTailPoint.x();
+            tailObj["y"] = item.initialTailPoint.y();
+            itemObj["initialTailPoint"] = tailObj;
+        }
 
         QJsonObject bboxObj;
         bboxObj["x"] = item.initialBoundingBox.x();
@@ -3056,6 +3082,19 @@ QJsonObject TrackingManager::initialWormInfoToJson(const Tracking::InitialWormIn
     roiObj["width"] = worm.initialRoi.width();
     roiObj["height"] = worm.initialRoi.height();
     obj["initialRoi"] = roiObj;
+
+    obj["hasHeadTailSeed"] = worm.hasHeadTailSeed;
+    if (worm.hasHeadTailSeed) {
+        QJsonObject headObj;
+        headObj["x"] = worm.initialHeadPoint.x();
+        headObj["y"] = worm.initialHeadPoint.y();
+        obj["initialHeadPoint"] = headObj;
+
+        QJsonObject tailObj;
+        tailObj["x"] = worm.initialTailPoint.x();
+        tailObj["y"] = worm.initialTailPoint.y();
+        obj["initialTailPoint"] = tailObj;
+    }
 
     return obj;
 }
