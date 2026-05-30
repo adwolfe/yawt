@@ -78,6 +78,7 @@ public:
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
 /**
  * Slots: UI event handlers and high-level entry points.

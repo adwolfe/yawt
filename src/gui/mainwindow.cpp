@@ -117,6 +117,10 @@ MainWindow::MainWindow(QWidget *parent)
         // Camera scanning is intentionally manual — the probe briefly opens camera
         // handles which triggers macOS's privacy sound even when muted. The user
         // initiates it explicitly via the Scan button.
+
+        // Double-clicking the output path field opens the same folder dialog as
+        // selectDirButton, keeping both fields in sync.
+        ui->captureOutputPathEdit->installEventFilter(this);
     }
 
     if (ui->tabWidget && ui->debugTab) {
@@ -359,6 +363,16 @@ void MainWindow::showEvent(QShowEvent* event) {
     QTimer::singleShot(0, this, &MainWindow::resizeTableColumns);
     // And one more after all Qt internal events are processed
     QTimer::singleShot(300, this, &MainWindow::resizeTableColumns);
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    if (obj == ui->captureOutputPathEdit
+        && event->type() == QEvent::MouseButtonDblClick) {
+        chooseWorkingDirectory();
+        return true; // consumed
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 void MainWindow::setupConnections() {
