@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1206</width>
-    <height>695</height>
+    <height>735</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -162,339 +162,657 @@
     <item>
      <widget class="QTabWidget" name="mainTabWidget">
       <property name="currentIndex">
-       <number>1</number>
+       <number>0</number>
       </property>
       <widget class="QWidget" name="captureTab">
        <attribute name="title">
         <string>Capture</string>
        </attribute>
+       <layout class="QVBoxLayout" name="captureTabLayout" stretch="1,0">
+        <property name="spacing">
+         <number>4</number>
+        </property>
+        <property name="leftMargin">
+         <number>4</number>
+        </property>
+        <property name="topMargin">
+         <number>4</number>
+        </property>
+        <property name="rightMargin">
+         <number>4</number>
+        </property>
+        <property name="bottomMargin">
+         <number>4</number>
+        </property>
+        <item>
+         <widget class="LiveView" name="captureVideoView" native="true"/>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="captureBottomLayout" stretch="2,1">
+          <item>
+           <widget class="QGroupBox" name="captureCameraGroup">
+            <property name="title">
+             <string>Camera</string>
+            </property>
+            <layout class="QVBoxLayout" name="captureCameraVLayout">
+             <property name="spacing">
+              <number>4</number>
+             </property>
+             <item>
+              <layout class="QHBoxLayout" name="captureCameraRow1">
+               <item>
+                <widget class="QLabel" name="captureCameraLabel">
+                 <property name="text">
+                  <string>Camera:</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QComboBox" name="captureCameraCombo">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="captureScanButton">
+                 <property name="toolTip">
+                  <string>Re-scan for connected cameras</string>
+                 </property>
+                 <property name="text">
+                  <string>Scan</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="captureCameraRow2">
+               <item>
+                <widget class="QLabel" name="captureResolutionLabel">
+                 <property name="text">
+                  <string>Resolution:</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QComboBox" name="captureResolutionCombo"/>
+               </item>
+               <item>
+                <spacer name="captureConnectSpacer">
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QPushButton" name="captureConnectButton">
+                 <property name="text">
+                  <string>Connect</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="captureDisconnectButton">
+                 <property name="text">
+                  <string>Disconnect</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="captureCameraRow3">
+               <item>
+                <widget class="QPushButton" name="captureRecordButton">
+                 <property name="text">
+                  <string>Record</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="captureOutputLabel">
+                 <property name="text">
+                  <string>Output:</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLineEdit" name="captureOutputPathEdit">
+                 <property name="readOnly">
+                  <bool>true</bool>
+                 </property>
+                 <property name="placeholderText">
+                  <string>(project folder not set)</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="captureRoiBar">
+               <item>
+                <widget class="QPushButton" name="captureDrawRoiButton">
+                 <property name="toolTip">
+                  <string>Click and drag in the view to define a capture ROI</string>
+                 </property>
+                 <property name="text">
+                  <string>Draw ROI</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="captureClearRoiButton">
+                 <property name="text">
+                  <string>Clear ROI</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="captureRoiLabel">
+                 <property name="styleSheet">
+                  <string notr="true">color: #c8a800; font-size: 11px;</string>
+                 </property>
+                 <property name="text">
+                  <string/>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="captureRoiSpacer">
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Horizontal</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>40</width>
+                   <height>20</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <widget class="QLabel" name="captureStatusLabel">
+               <property name="styleSheet">
+                <string notr="true">color: gray; font-size: 11px;</string>
+               </property>
+               <property name="text">
+                <string/>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="captureSettingsGroup">
+            <property name="title">
+             <string>Camera Settings</string>
+            </property>
+            <layout class="QFormLayout" name="captureSettingsForm">
+             <property name="labelAlignment">
+              <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+             </property>
+             <property name="horizontalSpacing">
+              <number>4</number>
+             </property>
+             <property name="verticalSpacing">
+              <number>4</number>
+             </property>
+             <item row="1" column="0">
+              <widget class="QLabel" name="captureExposureLabel">
+               <property name="text">
+                <string>Exposure:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <layout class="QHBoxLayout" name="captureExposureRow">
+               <item>
+                <widget class="QDoubleSpinBox" name="captureExposureSpin">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="decimals">
+                  <number>1</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="captureExposureAutoCheck">
+                 <property name="text">
+                  <string>Auto</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="captureGainLabel">
+               <property name="text">
+                <string>Gain:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <layout class="QHBoxLayout" name="captureGainRow">
+               <item>
+                <widget class="QDoubleSpinBox" name="captureGainSpin">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="decimals">
+                  <number>1</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="captureGainAutoCheck">
+                 <property name="text">
+                  <string>Auto</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="captureGammaLabel">
+               <property name="text">
+                <string>Gamma:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="captureGammaSpin">
+               <property name="decimals">
+                <number>2</number>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="0">
+              <widget class="QLabel" name="captureFpsLabel">
+               <property name="text">
+                <string>FPS:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="captureFpsSpin">
+               <property name="decimals">
+                <number>1</number>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="1">
+              <widget class="QDoubleSpinBox" name="captureBrightnessSpin">
+               <property name="decimals">
+                <number>1</number>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="0">
+              <widget class="QLabel" name="captureBrightnessLabel">
+               <property name="text">
+                <string>Brightness:</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
       </widget>
       <widget class="QWidget" name="processingTab">
        <attribute name="title">
         <string>Processing</string>
        </attribute>
        <layout class="QHBoxLayout" name="rightLayout" stretch="5,2">
-      <item>
-       <widget class="QFrame" name="trackingFrame">
-        <property name="frameShape">
-         <enum>QFrame::Shape::StyledPanel</enum>
-        </property>
-        <property name="frameShadow">
-         <enum>QFrame::Shadow::Plain</enum>
-        </property>
-        <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1,0,0,0">
-         <item>
-          <layout class="QHBoxLayout" name="horizontalLayout">
-           <property name="spacing">
-            <number>2</number>
-           </property>
+        <item>
+         <widget class="QFrame" name="trackingFrame">
+          <property name="frameShape">
+           <enum>QFrame::Shape::StyledPanel</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Shadow::Plain</enum>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout" stretch="0,1,0,0,0">
            <item>
-            <widget class="QToolButton" name="panModeButton">
-             <property name="enabled">
-              <bool>true</bool>
-             </property>
-             <property name="toolTip">
-              <string>Pan/Drag</string>
-             </property>
-             <property name="statusTip">
-              <string>Pan, drag, and zoom</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/pan.svg</normaloff>:/resources/pan.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-             <property name="autoRaise">
-              <bool>false</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="pointButton">
-             <property name="toolTip">
-              <string>Click once for start and once for end. Can be changed later</string>
-             </property>
-             <property name="statusTip">
-              <string>Select start/end points</string>
-             </property>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/points.svg</normaloff>:/resources/points.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-             <property name="autoRaise">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="roiModeButton">
-             <property name="enabled">
-              <bool>true</bool>
-             </property>
-             <property name="toolTip">
-              <string>Draw ROI</string>
-             </property>
-             <property name="statusTip">
-              <string>Draw ROI</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/roi.svg</normaloff>:/resources/roi.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-             <property name="autoRaise">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="cropModeButton">
-             <property name="statusTip">
-              <string>Crop to ROI</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="selectionModeButton">
-             <property name="toolTip">
-              <string>Detect worms by clicking on blobs in threshold mode. </string>
-             </property>
-             <property name="statusTip">
-              <string>Detect worms</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="resultsButton">
-             <property name="enabled">
-              <bool>true</bool>
-             </property>
-             <property name="toolTip">
-              <string>Show/Hide Tracks</string>
-             </property>
-             <property name="statusTip">
-              <string>Show/hide Results</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset theme="QIcon::ThemeIcon::DialogError"/>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <spacer name="horizontalSpacer">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>40</width>
-               <height>20</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
-           <item>
-            <widget class="QToolButton" name="viewThreshButton">
-             <property name="toolTip">
-              <string>Show the current threshold based on settings. </string>
-             </property>
-             <property name="statusTip">
-              <string>Show/Hide threshold</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/thresh_alt.svg</normaloff>:/resources/thresh_alt.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="viewBlobsButton">
-             <property name="toolTip">
-              <string>Show the calculated blobs for worms, if available</string>
-             </property>
-             <property name="statusTip">
-              <string>Show/Hide blobs</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/poke_alt2.svg</normaloff>:/resources/poke_alt2.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="viewTracksButton">
-             <property name="toolTip">
-              <string>Shows the calculated tracks if available. Hold down to select track type.</string>
-             </property>
-             <property name="statusTip">
-              <string>Show/hide track data</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="skeletonButton">
-             <property name="toolTip">
-              <string>Show the calculated centerline information, if available. </string>
-             </property>
-             <property name="statusTip">
-              <string>Show/hide skeletonized centerline</string>
-             </property>
-             <property name="text">
-              <string/>
-             </property>
-             <property name="icon">
-              <iconset resource="../../resources.qrc">
-               <normaloff>:/resources/centerline.svg</normaloff>:/resources/centerline.svg</iconset>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-             <property name="autoRaise">
-              <bool>false</bool>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </item>
-         <item>
-          <widget class="VideoLoader" name="videoLoader" native="true"/>
-         </item>
-         <item>
-          <layout class="QHBoxLayout" name="horizontalLayout_7">
-           <property name="spacing">
-            <number>-1</number>
-           </property>
-           <property name="bottomMargin">
-            <number>0</number>
-           </property>
-           <item>
-            <widget class="QComboBox" name="comboPlaybackSpeed">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>0</height>
-              </size>
-             </property>
-             <property name="maximumSize">
-              <size>
-               <width>80</width>
-               <height>16777215</height>
-              </size>
+            <layout class="QHBoxLayout" name="horizontalLayout">
+             <property name="spacing">
+              <number>2</number>
              </property>
              <item>
-              <property name="text">
-               <string>0.5x</string>
-              </property>
+              <widget class="QToolButton" name="panModeButton">
+               <property name="enabled">
+                <bool>true</bool>
+               </property>
+               <property name="toolTip">
+                <string>Pan/Drag</string>
+               </property>
+               <property name="statusTip">
+                <string>Pan, drag, and zoom</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/pan.svg</normaloff>:/resources/pan.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+               <property name="autoRaise">
+                <bool>false</bool>
+               </property>
+              </widget>
              </item>
              <item>
-              <property name="text">
-               <string>1.0x</string>
-              </property>
+              <widget class="QToolButton" name="pointButton">
+               <property name="toolTip">
+                <string>Click once for start and once for end. Can be changed later</string>
+               </property>
+               <property name="statusTip">
+                <string>Select start/end points</string>
+               </property>
+               <property name="text">
+                <string/>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/points.svg</normaloff>:/resources/points.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+               <property name="autoRaise">
+                <bool>true</bool>
+               </property>
+              </widget>
              </item>
              <item>
-              <property name="text">
-               <string>2.5x</string>
-              </property>
+              <widget class="QToolButton" name="roiModeButton">
+               <property name="enabled">
+                <bool>true</bool>
+               </property>
+               <property name="toolTip">
+                <string>Draw ROI</string>
+               </property>
+               <property name="statusTip">
+                <string>Draw ROI</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/roi.svg</normaloff>:/resources/roi.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+               <property name="autoRaise">
+                <bool>true</bool>
+               </property>
+              </widget>
              </item>
              <item>
-              <property name="text">
-               <string>5.0x</string>
-              </property>
+              <widget class="QToolButton" name="cropModeButton">
+               <property name="statusTip">
+                <string>Crop to ROI</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/crop.svg</normaloff>:/resources/crop.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
              </item>
              <item>
-              <property name="text">
-               <string>10.0x</string>
-              </property>
+              <widget class="QToolButton" name="selectionModeButton">
+               <property name="toolTip">
+                <string>Detect worms by clicking on blobs in threshold mode. </string>
+               </property>
+               <property name="statusTip">
+                <string>Detect worms</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/poke_alt.svg</normaloff>:/resources/poke_alt.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
              </item>
-            </widget>
+             <item>
+              <widget class="QToolButton" name="resultsButton">
+               <property name="enabled">
+                <bool>true</bool>
+               </property>
+               <property name="toolTip">
+                <string>Show/Hide Tracks</string>
+               </property>
+               <property name="statusTip">
+                <string>Show/hide Results</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset theme="QIcon::ThemeIcon::DialogError"/>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QToolButton" name="viewThreshButton">
+               <property name="toolTip">
+                <string>Show the current threshold based on settings. </string>
+               </property>
+               <property name="statusTip">
+                <string>Show/Hide threshold</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/thresh_alt.svg</normaloff>:/resources/thresh_alt.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QToolButton" name="viewBlobsButton">
+               <property name="toolTip">
+                <string>Show the calculated blobs for worms, if available</string>
+               </property>
+               <property name="statusTip">
+                <string>Show/Hide blobs</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/poke_alt2.svg</normaloff>:/resources/poke_alt2.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QToolButton" name="viewTracksButton">
+               <property name="toolTip">
+                <string>Shows the calculated tracks if available. Hold down to select track type.</string>
+               </property>
+               <property name="statusTip">
+                <string>Show/hide track data</string>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/trax_alt.svg</normaloff>:/resources/trax_alt.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QToolButton" name="skeletonButton">
+               <property name="toolTip">
+                <string>Show the calculated centerline information, if available. </string>
+               </property>
+               <property name="statusTip">
+                <string>Show/hide skeletonized centerline</string>
+               </property>
+               <property name="text">
+                <string/>
+               </property>
+               <property name="icon">
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/centerline.svg</normaloff>:/resources/centerline.svg</iconset>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+               <property name="autoRaise">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
            </item>
            <item>
-            <spacer name="horizontalSpacer_2">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>40</width>
-               <height>20</height>
-              </size>
-             </property>
-            </spacer>
+            <widget class="VideoLoader" name="videoLoader" native="true"/>
            </item>
            <item>
-            <widget class="QToolButton" name="firstFrameButton">
-             <property name="styleSheet">
-              <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+            <layout class="QHBoxLayout" name="horizontalLayout_7">
+             <property name="spacing">
+              <number>-1</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QComboBox" name="comboPlaybackSpeed">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>80</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <item>
+                <property name="text">
+                 <string>0.5x</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>1.0x</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>2.5x</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>5.0x</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>10.0x</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_2">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QToolButton" name="firstFrameButton">
+               <property name="styleSheet">
+                <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#firstFrameButton {
     /* Make it round */
     border-radius: 12px; /* Half of the button's size (e.g., 50px / 2) */
@@ -514,19 +832,19 @@ QToolButton#firstFrameButton {
     icon-size: 18px 18px; /* Adjust as needed */
 }
 </string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset theme="QIcon::ThemeIcon::MediaSkipBackward"/>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="playPauseButton">
-             <property name="styleSheet">
-              <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset theme="QIcon::ThemeIcon::MediaSkipBackward"/>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QToolButton" name="playPauseButton">
+               <property name="styleSheet">
+                <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#playPauseButton {
     /* Make it round */
     border-radius: 18px; /* Half of the button's size (e.g., 50px / 2) */
@@ -572,25 +890,25 @@ QToolButton#playPauseButton:checked:hover {
                                       stop: 0 #e8e8e8, stop: 1 #d8d8d8); /* Different hover look when checked */
      border-color: #666;
 }</string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
-             </property>
-             <property name="shortcut">
-              <string>Space</string>
-             </property>
-             <property name="checkable">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QToolButton" name="lastFrameButton">
-             <property name="styleSheet">
-              <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset theme="QIcon::ThemeIcon::MediaPlaybackStart"/>
+               </property>
+               <property name="shortcut">
+                <string>Space</string>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QToolButton" name="lastFrameButton">
+               <property name="styleSheet">
+                <string notr="true">/* Style for our specific Play/Pause button. Give it an object name in C++ */
 QToolButton#lastFrameButton {
     /* Make it round */
     border-radius: 12px; /* Half of the button's size (e.g., 50px / 2) */
@@ -610,428 +928,147 @@ QToolButton#lastFrameButton {
     icon-size: 18px 18px; /* Adjust as needed */
 }
 </string>
-             </property>
-             <property name="text">
-              <string>...</string>
-             </property>
-             <property name="icon">
-              <iconset theme="QIcon::ThemeIcon::MediaSkipForward"/>
-             </property>
-            </widget>
+               </property>
+               <property name="text">
+                <string>...</string>
+               </property>
+               <property name="icon">
+                <iconset theme="QIcon::ThemeIcon::MediaSkipForward"/>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="horizontalSpacer_3">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QSpinBox" name="framePosition">
+               <property name="minimumSize">
+                <size>
+                 <width>60</width>
+                 <height>0</height>
+                </size>
+               </property>
+              </widget>
+             </item>
+            </layout>
            </item>
            <item>
-            <spacer name="horizontalSpacer_3">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
+            <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1">
+             <property name="spacing">
+              <number>10</number>
              </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>40</width>
-               <height>20</height>
-              </size>
-             </property>
-            </spacer>
+             <item>
+              <widget class="QSlider" name="frameSlider">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="tickPosition">
+                <enum>QSlider::TickPosition::NoTicks</enum>
+               </property>
+              </widget>
+             </item>
+            </layout>
            </item>
            <item>
-            <widget class="QSpinBox" name="framePosition">
-             <property name="minimumSize">
-              <size>
-               <width>60</width>
-               <height>0</height>
-              </size>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </item>
-         <item>
-          <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1">
-           <property name="spacing">
-            <number>10</number>
-           </property>
-           <item>
-            <widget class="QSlider" name="frameSlider">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-             <property name="tickPosition">
-              <enum>QSlider::TickPosition::NoTicks</enum>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </item>
-         <item>
-          <widget class="WormTimeline" name="wormTimeline" native="true">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>10</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>200</height>
-            </size>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item>
-       <widget class="QFrame" name="frame_2">
-        <property name="minimumSize">
-         <size>
-          <width>20</width>
-          <height>0</height>
-         </size>
-        </property>
-        <property name="frameShape">
-         <enum>QFrame::Shape::NoFrame</enum>
-        </property>
-        <property name="frameShadow">
-         <enum>QFrame::Shadow::Raised</enum>
-        </property>
-        <layout class="QVBoxLayout" name="verticalLayout_3" stretch="0,0,0,0,3,2">
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QLabel" name="label_6">
-           <property name="font">
-            <font>
-             <bold>true</bold>
-            </font>
-           </property>
-           <property name="text">
-            <string>Video Information</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="videoNameLabel">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="text">
-            <string>(pick a video...)</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <layout class="QHBoxLayout" name="horizontalLayout_8">
-           <property name="bottomMargin">
-            <number>0</number>
-           </property>
-           <item>
-            <widget class="QLabel" name="label_7">
-             <property name="font">
-              <font>
-               <bold>false</bold>
-              </font>
-             </property>
-             <property name="text">
-              <string>Capture rate:</string>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QLabel" name="fpsLabel">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="font">
-              <font>
-               <italic>false</italic>
-               <bold>false</bold>
-               <underline>false</underline>
-              </font>
-             </property>
-             <property name="text">
-              <string>0 fps</string>
-             </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <spacer name="horizontalSpacer_4">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>40</width>
-               <height>20</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
-          </layout>
-         </item>
-         <item>
-          <layout class="QHBoxLayout" name="horizontalLayout_9">
-           <property name="bottomMargin">
-            <number>0</number>
-           </property>
-           <item>
-            <widget class="QLabel" name="label_8">
-             <property name="enabled">
-              <bool>true</bool>
-             </property>
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
+            <widget class="WormTimeline" name="wormTimeline" native="true">
              <property name="minimumSize">
               <size>
                <width>0</width>
-               <height>0</height>
+               <height>10</height>
               </size>
              </property>
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>200</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="frame_2">
+          <property name="minimumSize">
+           <size>
+            <width>20</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="frameShape">
+           <enum>QFrame::Shape::NoFrame</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Shadow::Raised</enum>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_3" stretch="0,0,0,0,3,2">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>0</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>0</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="label_6">
+             <property name="font">
+              <font>
+               <bold>true</bold>
+              </font>
+             </property>
              <property name="text">
-              <string>Pixel size:</string>
+              <string>Video Information</string>
              </property>
             </widget>
            </item>
            <item>
-            <widget class="QDoubleSpinBox" name="pixelSizeSpinBoxD">
-             <property name="enabled">
-              <bool>true</bool>
-             </property>
+            <widget class="QLabel" name="videoNameLabel">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+              <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
                <horstretch>0</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
              </property>
-             <property name="minimumSize">
-              <size>
-               <width>25</width>
-               <height>0</height>
-              </size>
-             </property>
-             <property name="alignment">
-              <set>Qt::AlignmentFlag::AlignCenter</set>
-             </property>
-             <property name="suffix">
-              <string> pixels/um</string>
+             <property name="text">
+              <string>(pick a video...)</string>
              </property>
             </widget>
            </item>
            <item>
-            <spacer name="horizontalSpacer_5">
-             <property name="orientation">
-              <enum>Qt::Orientation::Horizontal</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>40</width>
-               <height>20</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
-          </layout>
-         </item>
-         <item>
-          <widget class="MiniLoader" name="miniLoader" native="true">
-           <property name="minimumSize">
-            <size>
-             <width>100</width>
-             <height>100</height>
-            </size>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QTabWidget" name="tabWidget">
-           <property name="tabPosition">
-            <enum>QTabWidget::TabPosition::North</enum>
-           </property>
-           <property name="tabShape">
-            <enum>QTabWidget::TabShape::Rounded</enum>
-           </property>
-           <property name="currentIndex">
-            <number>0</number>
-           </property>
-           <widget class="QFrame" name="frame">
-            <property name="frameShape">
-             <enum>QFrame::Shape::NoFrame</enum>
-            </property>
-            <property name="frameShadow">
-             <enum>QFrame::Shadow::Sunken</enum>
-            </property>
-            <attribute name="title">
-             <string>Tracking</string>
-            </attribute>
-            <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
-             <property name="leftMargin">
-              <number>6</number>
-             </property>
-             <property name="topMargin">
-              <number>6</number>
-             </property>
-             <property name="rightMargin">
-              <number>6</number>
-             </property>
+            <layout class="QHBoxLayout" name="horizontalLayout_8">
              <property name="bottomMargin">
-              <number>6</number>
-             </property>
-             <property name="spacing">
               <number>0</number>
              </property>
-             <item row="9" column="0" colspan="2">
-              <widget class="QCheckBox" name="blurCheck">
+             <item>
+              <widget class="QLabel" name="label_7">
+               <property name="font">
+                <font>
+                 <bold>false</bold>
+                </font>
+               </property>
                <property name="text">
-                <string>Enable blur</string>
+                <string>Capture rate:</string>
                </property>
               </widget>
              </item>
-             <item row="13" column="0" colspan="3">
-              <layout class="QHBoxLayout" name="horizontalLayout_5">
-               <property name="spacing">
-                <number>20</number>
-               </property>
-               <item>
-                <widget class="QRadioButton" name="globalRadio">
-                 <property name="text">
-                  <string>Global</string>
-                 </property>
-                 <property name="checked">
-                  <bool>true</bool>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QRadioButton" name="adaptiveRadio">
-                 <property name="text">
-                  <string>Adaptive</string>
-                 </property>
-                 <property name="checked">
-                  <bool>false</bool>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-             <item row="17" column="0" colspan="3">
-              <widget class="QGroupBox" name="adaptiveGroupBox">
-               <property name="title">
-                <string>Adaptive parameters</string>
-               </property>
-               <layout class="QGridLayout" name="gridLayout_3">
-                <property name="leftMargin">
-                 <number>0</number>
-                </property>
-                <property name="topMargin">
-                 <number>0</number>
-                </property>
-                <property name="rightMargin">
-                 <number>0</number>
-                </property>
-                <property name="bottomMargin">
-                 <number>0</number>
-                </property>
-                <property name="spacing">
-                 <number>5</number>
-                </property>
-                <item row="2" column="0">
-                 <widget class="QLabel" name="label_4">
-                  <property name="text">
-                   <string>Tuning</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="3" column="0" colspan="2">
-                 <widget class="Line" name="line_2">
-                  <property name="orientation">
-                   <enum>Qt::Orientation::Horizontal</enum>
-                  </property>
-                 </widget>
-                </item>
-                <item row="2" column="1">
-                 <widget class="QDoubleSpinBox" name="tuningDoubleSpin">
-                  <property name="minimum">
-                   <double>-20.000000000000000</double>
-                  </property>
-                  <property name="maximum">
-                   <double>20.000000000000000</double>
-                  </property>
-                  <property name="singleStep">
-                   <double>0.500000000000000</double>
-                  </property>
-                 </widget>
-                </item>
-                <item row="1" column="1">
-                 <widget class="QSpinBox" name="blockSizeSpin">
-                  <property name="minimum">
-                   <number>3</number>
-                  </property>
-                  <property name="singleStep">
-                   <number>2</number>
-                  </property>
-                 </widget>
-                </item>
-                <item row="1" column="0">
-                 <widget class="QLabel" name="label_3">
-                  <property name="text">
-                   <string>Block Size</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="1">
-                 <widget class="QComboBox" name="adaptiveTypeCombo">
-                  <property name="minimumSize">
-                   <size>
-                    <width>100</width>
-                    <height>0</height>
-                   </size>
-                  </property>
-                  <item>
-                   <property name="text">
-                    <string>Gaussian</string>
-                   </property>
-                  </item>
-                  <item>
-                   <property name="text">
-                    <string>Mean</string>
-                   </property>
-                  </item>
-                 </widget>
-                </item>
-                <item row="0" column="0">
-                 <widget class="QLabel" name="label_2">
-                  <property name="text">
-                   <string>Type:</string>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
-              </widget>
-             </item>
-             <item row="3" column="0">
-              <widget class="QLabel" name="labelThresholding">
+             <item>
+              <widget class="QLabel" name="fpsLabel">
                <property name="sizePolicy">
                 <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
                  <horstretch>0</horstretch>
@@ -1040,467 +1077,748 @@ QToolButton#lastFrameButton {
                </property>
                <property name="font">
                 <font>
-                 <bold>true</bold>
+                 <italic>false</italic>
+                 <bold>false</bold>
+                 <underline>false</underline>
                 </font>
                </property>
                <property name="text">
-                <string>Thresholding:</string>
+                <string>0 fps</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
                </property>
               </widget>
              </item>
-             <item row="12" column="0" colspan="3">
-              <widget class="Line" name="line">
+             <item>
+              <spacer name="horizontalSpacer_4">
                <property name="orientation">
                 <enum>Qt::Orientation::Horizontal</enum>
                </property>
-              </widget>
-             </item>
-             <item row="5" column="0">
-              <widget class="QLabel" name="label_9">
-               <property name="text">
-                <string>ROI Factor:</string>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
                </property>
-              </widget>
+              </spacer>
              </item>
-             <item row="8" column="2">
-              <widget class="QComboBox" name="bgCombo">
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_9">
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="label_8">
+               <property name="enabled">
+                <bool>true</bool>
+               </property>
                <property name="sizePolicy">
-                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
                  <horstretch>0</horstretch>
                  <verstretch>0</verstretch>
                 </sizepolicy>
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>50</width>
+                 <width>0</width>
                  <height>0</height>
                 </size>
                </property>
-               <property name="currentIndex">
-                <number>0</number>
-               </property>
-               <item>
-                <property name="text">
-                 <string>Light</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Dark</string>
-                </property>
-               </item>
-              </widget>
-             </item>
-             <item row="16" column="0" colspan="3">
-              <widget class="QGroupBox" name="globalGroupBox">
-               <property name="title">
-                <string>Global parameters</string>
-               </property>
-               <property name="flat">
-                <bool>false</bool>
-               </property>
-               <property name="checkable">
-                <bool>false</bool>
-               </property>
-               <layout class="QGridLayout" name="gridLayout_2">
-                <property name="leftMargin">
-                 <number>0</number>
-                </property>
-                <property name="topMargin">
-                 <number>0</number>
-                </property>
-                <property name="rightMargin">
-                 <number>0</number>
-                </property>
-                <property name="bottomMargin">
-                 <number>0</number>
-                </property>
-                <property name="spacing">
-                 <number>5</number>
-                </property>
-                <item row="1" column="0" colspan="2">
-                 <widget class="QSlider" name="globalThreshSlider">
-                  <property name="enabled">
-                   <bool>true</bool>
-                  </property>
-                  <property name="maximum">
-                   <number>255</number>
-                  </property>
-                  <property name="value">
-                   <number>90</number>
-                  </property>
-                  <property name="orientation">
-                   <enum>Qt::Orientation::Horizontal</enum>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="0">
-                 <widget class="QSpinBox" name="globalThreshValueSpin">
-                  <property name="enabled">
-                   <bool>true</bool>
-                  </property>
-                  <property name="maximum">
-                   <number>255</number>
-                  </property>
-                  <property name="value">
-                   <number>90</number>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="1">
-                 <widget class="QCheckBox" name="globalThreshAutoCheck">
-                  <property name="text">
-                   <string>Automatic</string>
-                  </property>
-                  <property name="checked">
-                   <bool>false</bool>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
-              </widget>
-             </item>
-             <item row="9" column="2">
-              <widget class="QSpinBox" name="blurKernelSpin">
-               <property name="minimum">
-                <number>3</number>
-               </property>
-               <property name="singleStep">
-                <number>2</number>
+               <property name="text">
+                <string>Pixel size:</string>
                </property>
               </widget>
              </item>
-             <item row="5" column="2">
-              <widget class="QDoubleSpinBox" name="roiFactorSpinBoxD">
-               <property name="singleStep">
-                <double>0.050000000000000</double>
+             <item>
+              <widget class="QDoubleSpinBox" name="pixelSizeSpinBoxD">
+               <property name="enabled">
+                <bool>true</bool>
                </property>
-               <property name="value">
-                <double>1.500000000000000</double>
-               </property>
-              </widget>
-             </item>
-             <item row="8" column="0">
-              <widget class="QLabel" name="label">
                <property name="sizePolicy">
-                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                  <horstretch>0</horstretch>
                  <verstretch>0</verstretch>
                 </sizepolicy>
                </property>
-               <property name="text">
-                <string>Background:</string>
+               <property name="minimumSize">
+                <size>
+                 <width>25</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+               <property name="suffix">
+                <string> pixels/um</string>
                </property>
               </widget>
              </item>
-             <item row="18" column="0" colspan="3">
-              <widget class="QPushButton" name="trackingDialogButton">
-               <property name="text">
-                <string>Begin Tracking</string>
-               </property>
-              </widget>
-             </item>
-             <item row="11" column="0">
-              <spacer name="verticalSpacer">
+             <item>
+              <spacer name="horizontalSpacer_5">
                <property name="orientation">
-                <enum>Qt::Orientation::Vertical</enum>
+                <enum>Qt::Orientation::Horizontal</enum>
                </property>
                <property name="sizeHint" stdset="0">
                 <size>
-                 <width>20</width>
-                 <height>40</height>
+                 <width>40</width>
+                 <height>20</height>
                 </size>
                </property>
               </spacer>
              </item>
             </layout>
-           </widget>
-           <widget class="QWidget" name="centerlinesTab">
-            <attribute name="title">
-             <string>Centerlines</string>
-            </attribute>
-            <layout class="QVBoxLayout" name="centerlinesTabLayout">
-             <item>
-              <widget class="QGroupBox" name="snakeDebugGroup">
-               <property name="title">
-                <string>Centerline Snake (Rings / Coils)</string>
+           </item>
+           <item>
+            <widget class="MiniLoader" name="miniLoader" native="true">
+             <property name="minimumSize">
+              <size>
+               <width>100</width>
+               <height>100</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QTabWidget" name="tabWidget">
+             <property name="tabPosition">
+              <enum>QTabWidget::TabPosition::North</enum>
+             </property>
+             <property name="tabShape">
+              <enum>QTabWidget::TabShape::Rounded</enum>
+             </property>
+             <property name="currentIndex">
+              <number>0</number>
+             </property>
+             <widget class="QFrame" name="frame">
+              <property name="frameShape">
+               <enum>QFrame::Shape::NoFrame</enum>
+              </property>
+              <property name="frameShadow">
+               <enum>QFrame::Shadow::Sunken</enum>
+              </property>
+              <attribute name="title">
+               <string>Tracking</string>
+              </attribute>
+              <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+               <property name="leftMargin">
+                <number>6</number>
                </property>
-               <property name="checkable">
-                <bool>true</bool>
+               <property name="topMargin">
+                <number>6</number>
                </property>
-               <property name="checked">
-                <bool>true</bool>
+               <property name="rightMargin">
+                <number>6</number>
                </property>
-               <layout class="QFormLayout" name="snakeFormLayout">
-                <property name="labelAlignment">
-                 <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
-                </property>
-                <item row="0" column="0">
-                 <widget class="QLabel" name="labelAlpha">
-                  <property name="toolTip">
-                   <string>Resists stretching; smooths point spacing along the curve.</string>
-                  </property>
-                  <property name="text">
-                   <string>Tension α</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="1">
-                 <widget class="QDoubleSpinBox" name="snakeAlphaSpin">
-                  <property name="toolTip">
-                   <string>Resists stretching; smooths point spacing along the curve.</string>
-                  </property>
-                  <property name="decimals">
-                   <number>3</number>
-                  </property>
-                  <property name="minimum">
-                   <double>0.000000000000000</double>
-                  </property>
-                  <property name="maximum">
-                   <double>5.000000000000000</double>
-                  </property>
-                  <property name="singleStep">
-                   <double>0.050000000000000</double>
-                  </property>
-                  <property name="value">
-                   <double>0.100000000000000</double>
-                  </property>
-                 </widget>
-                </item>
-                <item row="1" column="0">
-                 <widget class="QLabel" name="labelBeta">
-                  <property name="toolTip">
-                   <string>Resists bending / kinking.</string>
-                  </property>
-                  <property name="text">
-                   <string>Rigidity β</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="1" column="1">
-                 <widget class="QDoubleSpinBox" name="snakeBetaSpin">
-                  <property name="toolTip">
-                   <string>Resists bending / kinking.</string>
-                  </property>
-                  <property name="decimals">
-                   <number>3</number>
-                  </property>
-                  <property name="minimum">
-                   <double>0.000000000000000</double>
-                  </property>
-                  <property name="maximum">
-                   <double>5.000000000000000</double>
-                  </property>
-                  <property name="singleStep">
-                   <double>0.050000000000000</double>
-                  </property>
-                  <property name="value">
-                   <double>0.050000000000000</double>
-                  </property>
-                 </widget>
-                </item>
-                <item row="2" column="0">
-                 <widget class="QLabel" name="labelLambda">
-                  <property name="toolTip">
-                   <string>Pulls the curve toward the medial axis (ridge of the distance transform).</string>
-                  </property>
-                  <property name="text">
-                   <string>Image attraction λ</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="2" column="1">
-                 <widget class="QDoubleSpinBox" name="snakeLambdaSpin">
-                  <property name="toolTip">
-                   <string>Pulls the curve toward the medial axis (ridge of the distance transform).</string>
-                  </property>
-                  <property name="decimals">
-                   <number>3</number>
-                  </property>
-                  <property name="minimum">
-                   <double>0.000000000000000</double>
-                  </property>
-                  <property name="maximum">
-                   <double>10.000000000000000</double>
-                  </property>
-                  <property name="singleStep">
-                   <double>0.100000000000000</double>
-                  </property>
-                  <property name="value">
-                   <double>1.000000000000000</double>
-                  </property>
-                 </widget>
-                </item>
-                <item row="3" column="0">
-                 <widget class="QLabel" name="labelIters">
-                  <property name="toolTip">
-                   <string>Number of explicit-Euler update steps per frame.</string>
-                  </property>
-                  <property name="text">
-                   <string>Iterations</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="3" column="1">
-                 <widget class="QSpinBox" name="snakeItersSpin">
-                  <property name="toolTip">
-                   <string>Number of explicit-Euler update steps per frame.</string>
-                  </property>
-                  <property name="minimum">
-                   <number>5</number>
-                  </property>
-                  <property name="maximum">
-                   <number>500</number>
-                  </property>
-                  <property name="value">
-                   <number>60</number>
-                  </property>
-                 </widget>
-                </item>
-                <item row="4" column="0">
-                 <widget class="QLabel" name="labelStep">
-                  <property name="toolTip">
-                   <string>Per-iteration step size. Reduce if snake oscillates; increase for faster convergence.</string>
-                  </property>
-                  <property name="text">
-                   <string>Step size τ</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="4" column="1">
-                 <widget class="QDoubleSpinBox" name="snakeStepSpin">
-                  <property name="toolTip">
-                   <string>Per-iteration step size. Reduce if snake oscillates; increase for faster convergence.</string>
-                  </property>
-                  <property name="decimals">
-                   <number>3</number>
-                  </property>
-                  <property name="minimum">
-                   <double>0.010000000000000</double>
-                  </property>
-                  <property name="maximum">
-                   <double>2.000000000000000</double>
-                  </property>
-                  <property name="singleStep">
-                   <double>0.050000000000000</double>
-                  </property>
-                  <property name="value">
-                   <double>0.500000000000000</double>
-                  </property>
-                 </widget>
-                </item>
-                <item row="5" column="0">
-                 <widget class="QLabel" name="labelNPoints">
-                  <property name="toolTip">
-                   <string>Number of evenly-spaced points resampled along the centerline. More points reduce kinking on highly curved bodies at the cost of slightly more computation. Minimum 5.</string>
-                  </property>
-                  <property name="text">
-                   <string>Points along line</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="5" column="1">
-                 <widget class="QSpinBox" name="snakeNPointsSpin">
-                  <property name="toolTip">
-                   <string>Number of resampled centerline points (5–200). Higher values reduce kinking artefacts on coiled or tightly curved worms.</string>
-                  </property>
-                  <property name="minimum">
-                   <number>5</number>
-                  </property>
-                  <property name="maximum">
-                   <number>200</number>
-                  </property>
-                  <property name="singleStep">
-                   <number>5</number>
-                  </property>
-                  <property name="value">
-                   <number>20</number>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
-              </widget>
-             </item>
-             <item>
-              <layout class="QHBoxLayout" name="rerunButtonLayout">
-               <item>
-                <widget class="QPushButton" name="rerunCenterlineButton">
-                 <property name="toolTip">
-                  <string>Rerun the post-tracking centerline computation with the current snake parameters. Updates all frames in storage; the viewer will refresh immediately.</string>
-                 </property>
+               <property name="bottomMargin">
+                <number>6</number>
+               </property>
+               <property name="spacing">
+                <number>0</number>
+               </property>
+               <item row="9" column="0" colspan="2">
+                <widget class="QCheckBox" name="blurCheck">
                  <property name="text">
-                  <string>Rerun Centerline</string>
+                  <string>Enable blur</string>
                  </property>
                 </widget>
                </item>
-               <item>
-                <widget class="QProgressBar" name="centerlineDebugProgressBar">
-                 <property name="visible">
+               <item row="13" column="0" colspan="3">
+                <layout class="QHBoxLayout" name="horizontalLayout_5">
+                 <property name="spacing">
+                  <number>20</number>
+                 </property>
+                 <item>
+                  <widget class="QRadioButton" name="globalRadio">
+                   <property name="text">
+                    <string>Global</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QRadioButton" name="adaptiveRadio">
+                   <property name="text">
+                    <string>Adaptive</string>
+                   </property>
+                   <property name="checked">
+                    <bool>false</bool>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </item>
+               <item row="17" column="0" colspan="3">
+                <widget class="QGroupBox" name="adaptiveGroupBox">
+                 <property name="title">
+                  <string>Adaptive parameters</string>
+                 </property>
+                 <layout class="QGridLayout" name="gridLayout_3">
+                  <property name="leftMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="topMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="rightMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="bottomMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="spacing">
+                   <number>5</number>
+                  </property>
+                  <item row="2" column="0">
+                   <widget class="QLabel" name="label_4">
+                    <property name="text">
+                     <string>Tuning</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="0" colspan="2">
+                   <widget class="Line" name="line_2">
+                    <property name="orientation">
+                     <enum>Qt::Orientation::Horizontal</enum>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="2" column="1">
+                   <widget class="QDoubleSpinBox" name="tuningDoubleSpin">
+                    <property name="minimum">
+                     <double>-20.000000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>20.000000000000000</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>0.500000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="1" column="1">
+                   <widget class="QSpinBox" name="blockSizeSpin">
+                    <property name="minimum">
+                     <number>3</number>
+                    </property>
+                    <property name="singleStep">
+                     <number>2</number>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="1" column="0">
+                   <widget class="QLabel" name="label_3">
+                    <property name="text">
+                     <string>Block Size</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="0" column="1">
+                   <widget class="QComboBox" name="adaptiveTypeCombo">
+                    <property name="minimumSize">
+                     <size>
+                      <width>100</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                    <item>
+                     <property name="text">
+                      <string>Gaussian</string>
+                     </property>
+                    </item>
+                    <item>
+                     <property name="text">
+                      <string>Mean</string>
+                     </property>
+                    </item>
+                   </widget>
+                  </item>
+                  <item row="0" column="0">
+                   <widget class="QLabel" name="label_2">
+                    <property name="text">
+                     <string>Type:</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
+               <item row="3" column="0">
+                <widget class="QLabel" name="labelThresholding">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="font">
+                  <font>
+                   <bold>true</bold>
+                  </font>
+                 </property>
+                 <property name="text">
+                  <string>Thresholding:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="12" column="0" colspan="3">
+                <widget class="Line" name="line">
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Horizontal</enum>
+                 </property>
+                </widget>
+               </item>
+               <item row="5" column="0">
+                <widget class="QLabel" name="label_9">
+                 <property name="text">
+                  <string>ROI Factor:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="8" column="2">
+                <widget class="QComboBox" name="bgCombo">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="minimumSize">
+                  <size>
+                   <width>50</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="currentIndex">
+                  <number>0</number>
+                 </property>
+                 <item>
+                  <property name="text">
+                   <string>Light</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>Dark</string>
+                  </property>
+                 </item>
+                </widget>
+               </item>
+               <item row="16" column="0" colspan="3">
+                <widget class="QGroupBox" name="globalGroupBox">
+                 <property name="title">
+                  <string>Global parameters</string>
+                 </property>
+                 <property name="flat">
                   <bool>false</bool>
                  </property>
+                 <property name="checkable">
+                  <bool>false</bool>
+                 </property>
+                 <layout class="QGridLayout" name="gridLayout_2">
+                  <property name="leftMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="topMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="rightMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="bottomMargin">
+                   <number>0</number>
+                  </property>
+                  <property name="spacing">
+                   <number>5</number>
+                  </property>
+                  <item row="1" column="0" colspan="2">
+                   <widget class="QSlider" name="globalThreshSlider">
+                    <property name="enabled">
+                     <bool>true</bool>
+                    </property>
+                    <property name="maximum">
+                     <number>255</number>
+                    </property>
+                    <property name="value">
+                     <number>90</number>
+                    </property>
+                    <property name="orientation">
+                     <enum>Qt::Orientation::Horizontal</enum>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="0" column="0">
+                   <widget class="QSpinBox" name="globalThreshValueSpin">
+                    <property name="enabled">
+                     <bool>true</bool>
+                    </property>
+                    <property name="maximum">
+                     <number>255</number>
+                    </property>
+                    <property name="value">
+                     <number>90</number>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="0" column="1">
+                   <widget class="QCheckBox" name="globalThreshAutoCheck">
+                    <property name="text">
+                     <string>Automatic</string>
+                    </property>
+                    <property name="checked">
+                     <bool>false</bool>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
+               <item row="9" column="2">
+                <widget class="QSpinBox" name="blurKernelSpin">
+                 <property name="minimum">
+                  <number>3</number>
+                 </property>
+                 <property name="singleStep">
+                  <number>2</number>
+                 </property>
+                </widget>
+               </item>
+               <item row="5" column="2">
+                <widget class="QDoubleSpinBox" name="roiFactorSpinBoxD">
+                 <property name="singleStep">
+                  <double>0.050000000000000</double>
+                 </property>
                  <property name="value">
-                  <number>0</number>
+                  <double>1.500000000000000</double>
+                 </property>
+                </widget>
+               </item>
+               <item row="8" column="0">
+                <widget class="QLabel" name="label">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="text">
+                  <string>Background:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="18" column="0" colspan="3">
+                <widget class="QPushButton" name="trackingDialogButton">
+                 <property name="text">
+                  <string>Begin Tracking</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="11" column="0">
+                <spacer name="verticalSpacer">
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>40</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </widget>
+             <widget class="QWidget" name="centerlinesTab">
+              <attribute name="title">
+               <string>Centerlines</string>
+              </attribute>
+              <layout class="QVBoxLayout" name="centerlinesTabLayout">
+               <item>
+                <widget class="QGroupBox" name="snakeDebugGroup">
+                 <property name="title">
+                  <string>Centerline Snake (Rings / Coils)</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                 <property name="checked">
+                  <bool>true</bool>
+                 </property>
+                 <layout class="QFormLayout" name="snakeFormLayout">
+                  <property name="labelAlignment">
+                   <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+                  </property>
+                  <item row="0" column="0">
+                   <widget class="QLabel" name="labelAlpha">
+                    <property name="toolTip">
+                     <string>Resists stretching; smooths point spacing along the curve.</string>
+                    </property>
+                    <property name="text">
+                     <string>Tension α</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="0" column="1">
+                   <widget class="QDoubleSpinBox" name="snakeAlphaSpin">
+                    <property name="toolTip">
+                     <string>Resists stretching; smooths point spacing along the curve.</string>
+                    </property>
+                    <property name="decimals">
+                     <number>3</number>
+                    </property>
+                    <property name="minimum">
+                     <double>0.000000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>5.000000000000000</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>0.050000000000000</double>
+                    </property>
+                    <property name="value">
+                     <double>0.100000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="1" column="0">
+                   <widget class="QLabel" name="labelBeta">
+                    <property name="toolTip">
+                     <string>Resists bending / kinking.</string>
+                    </property>
+                    <property name="text">
+                     <string>Rigidity β</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="1" column="1">
+                   <widget class="QDoubleSpinBox" name="snakeBetaSpin">
+                    <property name="toolTip">
+                     <string>Resists bending / kinking.</string>
+                    </property>
+                    <property name="decimals">
+                     <number>3</number>
+                    </property>
+                    <property name="minimum">
+                     <double>0.000000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>5.000000000000000</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>0.050000000000000</double>
+                    </property>
+                    <property name="value">
+                     <double>0.050000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="2" column="0">
+                   <widget class="QLabel" name="labelLambda">
+                    <property name="toolTip">
+                     <string>Pulls the curve toward the medial axis (ridge of the distance transform).</string>
+                    </property>
+                    <property name="text">
+                     <string>Image attraction λ</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="2" column="1">
+                   <widget class="QDoubleSpinBox" name="snakeLambdaSpin">
+                    <property name="toolTip">
+                     <string>Pulls the curve toward the medial axis (ridge of the distance transform).</string>
+                    </property>
+                    <property name="decimals">
+                     <number>3</number>
+                    </property>
+                    <property name="minimum">
+                     <double>0.000000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>10.000000000000000</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>0.100000000000000</double>
+                    </property>
+                    <property name="value">
+                     <double>1.000000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="0">
+                   <widget class="QLabel" name="labelIters">
+                    <property name="toolTip">
+                     <string>Number of explicit-Euler update steps per frame.</string>
+                    </property>
+                    <property name="text">
+                     <string>Iterations</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="3" column="1">
+                   <widget class="QSpinBox" name="snakeItersSpin">
+                    <property name="toolTip">
+                     <string>Number of explicit-Euler update steps per frame.</string>
+                    </property>
+                    <property name="minimum">
+                     <number>5</number>
+                    </property>
+                    <property name="maximum">
+                     <number>500</number>
+                    </property>
+                    <property name="value">
+                     <number>60</number>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="0">
+                   <widget class="QLabel" name="labelStep">
+                    <property name="toolTip">
+                     <string>Per-iteration step size. Reduce if snake oscillates; increase for faster convergence.</string>
+                    </property>
+                    <property name="text">
+                     <string>Step size τ</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="4" column="1">
+                   <widget class="QDoubleSpinBox" name="snakeStepSpin">
+                    <property name="toolTip">
+                     <string>Per-iteration step size. Reduce if snake oscillates; increase for faster convergence.</string>
+                    </property>
+                    <property name="decimals">
+                     <number>3</number>
+                    </property>
+                    <property name="minimum">
+                     <double>0.010000000000000</double>
+                    </property>
+                    <property name="maximum">
+                     <double>2.000000000000000</double>
+                    </property>
+                    <property name="singleStep">
+                     <double>0.050000000000000</double>
+                    </property>
+                    <property name="value">
+                     <double>0.500000000000000</double>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="5" column="0">
+                   <widget class="QLabel" name="labelNPoints">
+                    <property name="toolTip">
+                     <string>Number of evenly-spaced points resampled along the centerline. More points reduce kinking on highly curved bodies at the cost of slightly more computation. Minimum 5.</string>
+                    </property>
+                    <property name="text">
+                     <string>Points along line</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item row="5" column="1">
+                   <widget class="QSpinBox" name="snakeNPointsSpin">
+                    <property name="toolTip">
+                     <string>Number of resampled centerline points (5–200). Higher values reduce kinking artefacts on coiled or tightly curved worms.</string>
+                    </property>
+                    <property name="minimum">
+                     <number>5</number>
+                    </property>
+                    <property name="maximum">
+                     <number>200</number>
+                    </property>
+                    <property name="singleStep">
+                     <number>5</number>
+                    </property>
+                    <property name="value">
+                     <number>20</number>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
+               <item>
+                <layout class="QHBoxLayout" name="rerunButtonLayout">
+                 <item>
+                  <widget class="QPushButton" name="rerunCenterlineButton">
+                   <property name="toolTip">
+                    <string>Rerun the post-tracking centerline computation with the current snake parameters. Updates all frames in storage; the viewer will refresh immediately.</string>
+                   </property>
+                   <property name="text">
+                    <string>Rerun Centerline</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QProgressBar" name="centerlineDebugProgressBar">
+                   <property name="visible">
+                    <bool>false</bool>
+                   </property>
+                   <property name="value">
+                    <number>0</number>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </item>
+               <item>
+                <widget class="QLabel" name="centerlineDebugStatusLabel">
+                 <property name="text">
+                  <string/>
+                 </property>
+                 <property name="wordWrap">
+                  <bool>true</bool>
                  </property>
                 </widget>
                </item>
               </layout>
-             </item>
-             <item>
-              <widget class="QLabel" name="centerlineDebugStatusLabel">
-               <property name="text">
-                <string/>
-               </property>
-               <property name="wordWrap">
-                <bool>true</bool>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-           <widget class="QWidget" name="debugTab">
-            <attribute name="title">
-             <string>Debug</string>
-            </attribute>
-            <layout class="QVBoxLayout" name="debugTabLayout">
-             <item>
-              <widget class="QTableWidget" name="debugImageTable">
-               <property name="selectionBehavior">
-                <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
-               </property>
-               <property name="selectionMode">
-                <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
-               </property>
-               <property name="editTriggers">
-                <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
-               </property>
-               <property name="alternatingRowColors">
-                <bool>true</bool>
-               </property>
-               <column>
-                <property name="text">
-                 <string>Stage</string>
-                </property>
-               </column>
-              </widget>
-             </item>
-             <item>
-              <widget class="QPushButton" name="exportProcessButton">
-               <property name="toolTip">
-                <string>Export per-stage diagnostic images and a decision log for the currently selected worm on the current frame. Writes to &lt;dataDir&gt;/&lt;video&gt;/PROC_*/DEBUG/worm{id}_frame{n}/.</string>
-               </property>
-               <property name="text">
-                <string>Export Process</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-     </layout>
+             </widget>
+             <widget class="QWidget" name="debugTab">
+              <attribute name="title">
+               <string>Debug</string>
+              </attribute>
+              <layout class="QVBoxLayout" name="debugTabLayout">
+               <item>
+                <widget class="QTableWidget" name="debugImageTable">
+                 <property name="editTriggers">
+                  <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
+                 </property>
+                 <property name="alternatingRowColors">
+                  <bool>true</bool>
+                 </property>
+                 <property name="selectionMode">
+                  <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
+                 </property>
+                 <property name="selectionBehavior">
+                  <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+                 </property>
+                 <column>
+                  <property name="text">
+                   <string>Stage</string>
+                  </property>
+                 </column>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="exportProcessButton">
+                 <property name="toolTip">
+                  <string>Export per-stage diagnostic images and a decision log for the currently selected worm on the current frame. Writes to &lt;dataDir&gt;/&lt;video&gt;/PROC_*/DEBUG/worm{id}_frame{n}/.</string>
+                 </property>
+                 <property name="text">
+                  <string>Export Process</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+       </layout>
       </widget>
       <widget class="QWidget" name="analysisTab">
        <attribute name="title">
@@ -1517,7 +1835,7 @@ QToolButton#lastFrameButton {
      <x>0</x>
      <y>0</y>
      <width>1206</width>
-     <height>30</height>
+     <height>33</height>
     </rect>
    </property>
   </widget>
@@ -1545,6 +1863,11 @@ QToolButton#lastFrameButton {
    <class>WormTimeline</class>
    <extends>QWidget</extends>
    <header>wormtimeline.h</header>
+  </customwidget>
+  <customwidget>
+   <class>LiveView</class>
+   <extends>QWidget</extends>
+   <header>liveview.h</header>
   </customwidget>
  </customwidgets>
  <resources>

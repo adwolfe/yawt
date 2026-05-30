@@ -2,7 +2,7 @@
 #define CAPTUREPANEL_H
 
 #include "icamerasource.h"
-#include <QWidget>
+#include <QObject>
 #include <QThread>
 #include <QString>
 #include <QList>
@@ -15,17 +15,65 @@ class QLabel;
 class QLineEdit;
 class QDoubleSpinBox;
 class QCheckBox;
-class QGroupBox;
 
-class CapturePanel : public QWidget
+/**
+ * CapturePanel — controller for the Capture tab.
+ *
+ * Not a widget itself; wires together the widgets defined in mainwindow.ui
+ * with CaptureWorker (which lives on its own thread).
+ *
+ * Usage:
+ *   m_capturePanel = new CapturePanel(this);
+ *   m_capturePanel->setup({ ui->captureVideoView, ui->captureCameraCombo, ... });
+ */
+class CapturePanel : public QObject
 {
     Q_OBJECT
 public:
-    explicit CapturePanel(QWidget* parent = nullptr);
+    /** All UI widget pointers sourced from mainwindow.ui. */
+    struct Widgets {
+        // View
+        LiveView*       liveView          = nullptr;
+        // ROI toolbar
+        QPushButton*    drawRoiButton     = nullptr;
+        QPushButton*    clearRoiButton    = nullptr;
+        QLabel*         roiLabel          = nullptr;
+        // Camera controls
+        QComboBox*      cameraCombo       = nullptr;
+        QPushButton*    scanButton        = nullptr;
+        QComboBox*      resolutionCombo   = nullptr;
+        QPushButton*    connectButton     = nullptr;
+        QPushButton*    disconnectButton  = nullptr;
+        QPushButton*    recordButton      = nullptr;
+        QLineEdit*      outputPathEdit    = nullptr;
+        QLabel*         statusLabel       = nullptr;
+        // Camera settings
+        QDoubleSpinBox* exposureSpin      = nullptr;
+        QCheckBox*      exposureAutoCheck = nullptr;
+        QLabel*         exposureLabel     = nullptr;
+        QDoubleSpinBox* gainSpin          = nullptr;
+        QCheckBox*      gainAutoCheck     = nullptr;
+        QLabel*         gainLabel         = nullptr;
+        QDoubleSpinBox* gammaSpin         = nullptr;
+        QLabel*         gammaLabel        = nullptr;
+        QDoubleSpinBox* fpsSpin           = nullptr;
+        QLabel*         fpsLabel          = nullptr;
+        QDoubleSpinBox* brightnessSpin    = nullptr;
+        QLabel*         brightnessLabel   = nullptr;
+    };
+
+    explicit CapturePanel(QObject* parent = nullptr);
     ~CapturePanel() override;
+
+    /** Wire the controller to the UI widgets and start the worker thread.
+     *  Call once, after setupUi(). */
+    void setup(const Widgets& w);
 
 public slots:
     void setOutputDirectory(const QString& dir);
+    /** Probe for available cameras. Safe to call any time; triggers the macOS
+     *  camera privacy sound so should not be called at application startup. */
+    void scanCameras();
 
 private slots:
     void onScanClicked();
@@ -38,7 +86,6 @@ private slots:
     void onRecordingStarted(const QString& path);
     void onRecordingStopped(int frameCount);
 
-    // Parameter changes → worker
     void onExposureChanged(double value);
     void onExposureAutoToggled(bool checked);
     void onGainChanged(double value);
@@ -47,56 +94,28 @@ private slots:
     void onFpsChanged(double value);
     void onBrightnessChanged(double value);
 
-    // ROI
     void onDrawRoiToggled(bool checked);
     void onClearRoiClicked();
     void onRoiDefined(QRectF roi);
     void onRoiCleared();
 
 private:
-    void buildUi();
     void setConnectedState(bool connected);
     void applyParamInfo(QDoubleSpinBox* spin, QCheckBox* autoBox,
                         QLabel* label, const ParamInfo& info);
     QString makeOutputPath() const;
 
-    // Widgets
-    LiveView*        m_liveView          = nullptr;
-    CaptureWorker*   m_worker            = nullptr;
-    QThread*         m_workerThread      = nullptr;
+    // Worker
+    CaptureWorker* m_worker       = nullptr;
+    QThread*       m_workerThread = nullptr;
 
-    QComboBox*       m_cameraCombo       = nullptr;
-    QComboBox*       m_resolutionCombo   = nullptr;
-    QPushButton*     m_scanButton        = nullptr;
-    QPushButton*     m_connectButton     = nullptr;
-    QPushButton*     m_disconnectButton  = nullptr;
-    QPushButton*     m_recordButton      = nullptr;
-    QLineEdit*       m_outputPathEdit    = nullptr;
-    QLabel*          m_statusLabel       = nullptr;
-
-    // Camera parameter controls
-    QGroupBox*       m_paramsGroup       = nullptr;
-    QDoubleSpinBox*  m_exposureSpin      = nullptr;
-    QCheckBox*       m_exposureAutoCheck = nullptr;
-    QLabel*          m_exposureLabel     = nullptr;
-    QDoubleSpinBox*  m_gainSpin          = nullptr;
-    QCheckBox*       m_gainAutoCheck     = nullptr;
-    QLabel*          m_gainLabel         = nullptr;
-    QDoubleSpinBox*  m_gammaSpin         = nullptr;
-    QLabel*          m_gammaLabel        = nullptr;
-    QDoubleSpinBox*  m_fpsSpin           = nullptr;
-    QLabel*          m_fpsLabel          = nullptr;
-    QDoubleSpinBox*  m_brightnessSpin    = nullptr;
-    QLabel*          m_brightnessLabel   = nullptr;
-
-    // ROI
-    QPushButton*     m_drawRoiButton     = nullptr;
-    QPushButton*     m_clearRoiButton    = nullptr;
-    QLabel*          m_roiLabel          = nullptr;
+    // Cached widget pointers (non-owning)
+    Widgets w;
 
     QList<CameraInfo> m_cameras;
     QString           m_outputDirectory;
-    bool              m_connected = false;
+    bool              m_connected  = false;
+    bool              m_recording  = false;
 };
 
 #endif // CAPTUREPANEL_H

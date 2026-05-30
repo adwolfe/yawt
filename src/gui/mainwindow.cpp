@@ -82,14 +82,41 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Capture tab: embed CapturePanel and keep its output dir in sync with the project folder.
+    // Capture tab: wire the QObject controller to the widgets defined in mainwindow.ui.
     {
-        m_capturePanel = new CapturePanel(ui->captureTab);
-        auto* captureLayout = new QVBoxLayout(ui->captureTab);
-        captureLayout->setContentsMargins(0, 0, 0, 0);
-        captureLayout->addWidget(m_capturePanel);
+        m_capturePanel = new CapturePanel(this);
+        CapturePanel::Widgets cw;
+        cw.liveView          = ui->captureVideoView;
+        cw.drawRoiButton     = ui->captureDrawRoiButton;
+        cw.clearRoiButton    = ui->captureClearRoiButton;
+        cw.roiLabel          = ui->captureRoiLabel;
+        cw.cameraCombo       = ui->captureCameraCombo;
+        cw.scanButton        = ui->captureScanButton;
+        cw.resolutionCombo   = ui->captureResolutionCombo;
+        cw.connectButton     = ui->captureConnectButton;
+        cw.disconnectButton  = ui->captureDisconnectButton;
+        cw.recordButton      = ui->captureRecordButton;
+        cw.outputPathEdit    = ui->captureOutputPathEdit;
+        cw.statusLabel       = ui->captureStatusLabel;
+        cw.exposureSpin      = ui->captureExposureSpin;
+        cw.exposureAutoCheck = ui->captureExposureAutoCheck;
+        cw.exposureLabel     = ui->captureExposureLabel;
+        cw.gainSpin          = ui->captureGainSpin;
+        cw.gainAutoCheck     = ui->captureGainAutoCheck;
+        cw.gainLabel         = ui->captureGainLabel;
+        cw.gammaSpin         = ui->captureGammaSpin;
+        cw.gammaLabel        = ui->captureGammaLabel;
+        cw.fpsSpin           = ui->captureFpsSpin;
+        cw.fpsLabel          = ui->captureFpsLabel;
+        cw.brightnessSpin    = ui->captureBrightnessSpin;
+        cw.brightnessLabel   = ui->captureBrightnessLabel;
+        m_capturePanel->setup(cw);
         connect(ui->dirSelected, &QLineEdit::textChanged,
                 m_capturePanel, &CapturePanel::setOutputDirectory);
+
+        // Camera scanning is intentionally manual — the probe briefly opens camera
+        // handles which triggers macOS's privacy sound even when muted. The user
+        // initiates it explicitly via the Scan button.
     }
 
     if (ui->tabWidget && ui->debugTab) {

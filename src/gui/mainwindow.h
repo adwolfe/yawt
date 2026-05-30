@@ -233,7 +233,7 @@ private:
     TrackingDataStorage *m_trackingDataStorage;
 
     QPointer<AnalysisDialog> m_analysisDialog;
-    CapturePanel* m_capturePanel = nullptr;
+    CapturePanel* m_capturePanel = nullptr;  // QObject controller, not a widget
 
     /** Button group for interaction modes (Pan, ROI, Crop, EditBlobs, EditTracks). Owned by MainWindow. */
     QButtonGroup *m_interactionModeButtonGroup;
