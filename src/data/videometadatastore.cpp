@@ -32,6 +32,18 @@ QString VideoMetadataStore::metadataPath(const QString& dataDir,
     return QDir(dataDir).filePath(videoBaseName + "_metadata.json");
 }
 
+// ---------------------------------------------------------------------------
+// Internal helper: unit string → conversion factor to µm
+// ---------------------------------------------------------------------------
+static double unitToUmFactor(const QString& unit)
+{
+    if (unit == "mm")   return 1000.0;
+    if (unit == "cm")   return 10000.0;
+    if (unit == "inch") return 25400.0;
+    if (unit == "µm")   return 1.0;
+    return 0.0; // unknown
+}
+
 bool VideoMetadataStore::saveScale(const QString& dataDir,
                                     const QString& videoBaseName,
                                     const ScaleCalibration& cal)
@@ -50,7 +62,12 @@ bool VideoMetadataStore::saveScale(const QString& dataDir,
     scale["timestamp"]      = cal.timestamp.isValid()
                                 ? cal.timestamp.toString(Qt::ISODate)
                                 : QDateTime::currentDateTime().toString(Qt::ISODate);
-    root["scale"] = scale;
+    root["scaleCalibration"] = scale;
+
+    // Also write the canonical spatial resolution (µm/pixel) for easy reloading.
+    const double factor = unitToUmFactor(cal.unit);
+    if (factor > 0 && cal.pixelsPerUnit > 0)
+        root["umPerPixel"] = factor / cal.pixelsPerUnit;
 
     if (!writeRoot(path, root)) {
         qWarning() << "[VideoMetadataStore] Could not write" << path;
@@ -58,6 +75,41 @@ bool VideoMetadataStore::saveScale(const QString& dataDir,
     }
     qDebug() << "[VideoMetadataStore] Saved scale to" << path;
     return true;
+}
+
+bool VideoMetadataStore::saveUmPerPixel(const QString& dataDir,
+                                         const QString& videoBaseName,
+                                         double umPerPixel)
+{
+    const QString path = metadataPath(dataDir, videoBaseName);
+    QJsonObject root = readRoot(path);
+    root["version"]    = 1;
+    root["umPerPixel"] = umPerPixel;
+    if (!writeRoot(path, root)) {
+        qWarning() << "[VideoMetadataStore] Could not write" << path;
+        return false;
+    }
+    return true;
+}
+
+bool VideoMetadataStore::loadUmPerPixel(const QString& dataDir,
+                                         const QString& videoBaseName,
+                                         double& umPerPixel)
+{
+    const QString path = metadataPath(dataDir, videoBaseName);
+    QJsonObject root = readRoot(path);
+    if (root.isEmpty()) return false;
+    // Current field name
+    if (root.contains("umPerPixel")) {
+        double v = root.value("umPerPixel").toDouble(0.0);
+        if (v > 0) { umPerPixel = v; return true; }
+    }
+    // Legacy field (pixels/µm, written before the unit flip) — invert on load.
+    if (root.contains("pixelSizeUm")) {
+        double ppu = root.value("pixelSizeUm").toDouble(0.0);
+        if (ppu > 0) { umPerPixel = 1.0 / ppu; return true; }
+    }
+    return false;
 }
 
 bool VideoMetadataStore::loadScale(const QString& dataDir,
@@ -68,7 +120,7 @@ bool VideoMetadataStore::loadScale(const QString& dataDir,
     QJsonObject root = readRoot(path);
     if (root.isEmpty()) return false;
 
-    QJsonObject scale = root.value("scale").toObject();
+    QJsonObject scale = root.value("scaleCalibration").toObject();
     if (scale.isEmpty()) return false;
 
     double ppu = scale.value("pixelsPerUnit").toDouble(0.0);

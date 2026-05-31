@@ -40,6 +40,7 @@
 #include "version.h"
 #include "wormtimeline.h"
 #include "capturepanel.h"
+#include "../data/videometadatastore.h"
 #include "../utils/thresholdingutils.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -117,16 +118,17 @@ MainWindow::MainWindow(QWidget *parent)
         connect(ui->dirSelected, &QLineEdit::textChanged,
                 m_capturePanel, &CapturePanel::setOutputDirectory);
 
-        // Convert the scale result to pixels/µm and push it into the spinbox.
+        // Convert the scale result to µm/pixel and push it into the spinbox.
+        // The existing valueChanged→AppController connection handles the rest.
         connect(m_capturePanel, &CapturePanel::pixelScaleSet,
                 this, [this](double pixelsPerUnit, const QString& unit) {
-            double pixelsPerUm = 0.0;
-            if      (unit == "mm")   pixelsPerUm = pixelsPerUnit / 1000.0;
-            else if (unit == "µm")   pixelsPerUm = pixelsPerUnit;
-            else if (unit == "cm")   pixelsPerUm = pixelsPerUnit / 10000.0;
-            else if (unit == "inch") pixelsPerUm = pixelsPerUnit / 25400.0;
-            if (pixelsPerUm > 0)
-                ui->pixelSizeSpinBoxD->setValue(pixelsPerUm);
+            double umFactor = 0.0;  // converts user unit → µm
+            if      (unit == "mm")   umFactor = 1000.0;
+            else if (unit == "µm")   umFactor = 1.0;
+            else if (unit == "cm")   umFactor = 10000.0;
+            else if (unit == "inch") umFactor = 25400.0;
+            if (umFactor > 0 && pixelsPerUnit > 0)
+                ui->pixelSizeSpinBoxD->setValue(umFactor / pixelsPerUnit);
         });
 
         // Camera scanning is intentionally manual — the probe briefly opens camera
@@ -425,12 +427,27 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     return QMainWindow::eventFilter(obj, event);
 }
 
+void MainWindow::onPixelSizeSpinEditingFinished()
+{
+    if (m_currentVideoDataDir.isEmpty() || m_currentVideoBaseName.isEmpty()) return;
+    const double umPerPixel = ui->pixelSizeSpinBoxD->value();
+    VideoMetadataStore::saveUmPerPixel(
+        m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel);
+}
+
 void MainWindow::setupConnections() {
     // Connect ROI factor spinbox to BlobTableModel
     connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
+    // Spinbox now shows µm/pixel; AppController still takes pixels/µm — invert at boundary.
     connect(ui->pixelSizeSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            m_appController, &AppController::setPixelSizePixelsPerUm);
+            this, [this](double umPerPixel) {
+                const double pixelsPerUm = (umPerPixel > 0.0) ? 1.0 / umPerPixel : 0.0;
+                m_appController->setPixelSizePixelsPerUm(pixelsPerUm);
+            });
+    // Save to video metadata JSON when the user manually finishes editing the spinbox.
+    connect(ui->pixelSizeSpinBoxD, &QDoubleSpinBox::editingFinished,
+            this, &MainWindow::onPixelSizeSpinEditingFinished);
 
     // File/Directory
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
@@ -1400,6 +1417,22 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
     ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
     updateWormTimeline();
+
+    // Load pixel size from this video's metadata JSON (or reset to 0 if absent).
+    // VideoLoader has already created the data directory before emitting videoLoaded.
+    m_currentVideoDataDir  = ui->videoLoader->getDataDirectory();
+    m_currentVideoBaseName = QFileInfo(filePath).baseName();
+    {
+        QSignalBlocker blocker(ui->pixelSizeSpinBoxD);
+        double umPerPixel = 0.0;
+        if (!m_currentVideoDataDir.isEmpty()
+            && VideoMetadataStore::loadUmPerPixel(
+                   m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel)) {
+            ui->pixelSizeSpinBoxD->setValue(umPerPixel);
+        } else {
+            ui->pixelSizeSpinBoxD->setValue(0.0);
+        }
+    }
 
     if (m_analysisDialog)
         m_analysisDialog->setVideoFps(m_videoFps);

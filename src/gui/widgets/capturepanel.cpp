@@ -313,6 +313,14 @@ void CapturePanel::onRecordingStarted(const QString& path)
     w.outputPathEdit->setText(path);
     w.statusLabel->setText(QString("● Recording → %1").arg(path));
     w.statusLabel->setStyleSheet("color: red; font-size: 11px;");
+
+    // Stamp this video's metadata JSON with the current calibration so it loads
+    // automatically when the file is later opened in the Processing tab.
+    if (m_currentUmPerPixel > 0 && !m_outputDirectory.isEmpty()) {
+        const QString dataDir  = QDir(m_outputDirectory).filePath("yawt");
+        const QString baseName = QFileInfo(path).baseName();
+        VideoMetadataStore::saveUmPerPixel(dataDir, baseName, m_currentUmPerPixel);
+    }
 }
 
 void CapturePanel::onRecordingStopped(int frameCount)
@@ -436,15 +444,24 @@ void CapturePanel::onScaleMeasured(double pixelLength)
 
     const double pixelsPerUnit = pixelLength / m_scalePhysicalValue;
 
-    // Show result in toolbar label
-    w.scaleLabel->setText(
-        QString("Scale: %1 px/%2")
-            .arg(pixelsPerUnit, 0, 'f', 2)
-            .arg(m_scaleUnit));
+    // Convert to canonical pixels/µm for storage and the spinbox signal.
+    auto unitToUmFactor = [](const QString& u) -> double {
+        if (u == "mm")   return 1000.0;
+        if (u == "cm")   return 10000.0;
+        if (u == "inch") return 25400.0;
+        if (u == "µm")   return 1.0;
+        return 0.0;
+    };
+    const double factor = unitToUmFactor(m_scaleUnit);
+    m_currentUmPerPixel = (factor > 0 && pixelsPerUnit > 0) ? factor / pixelsPerUnit : 0.0;
 
-    // Persist to JSON if we have a project folder
+    // Show result in toolbar label (µm/pixel convention, matching the spinbox)
+    w.scaleLabel->setText(
+        QString("Scale: %1 µm/px")
+            .arg(m_currentUmPerPixel, 0, 'f', 2));
+
+    // Save camera-level calibration file to the project yawt folder
     if (!m_outputDirectory.isEmpty()) {
-        // dataDir = <projectFolder>/yawt  (mirrors VideoLoader convention)
         const QString dataDir = QDir(m_outputDirectory).filePath("yawt");
         VideoMetadataStore::ScaleCalibration cal;
         cal.pixelsPerUnit  = pixelsPerUnit;
@@ -453,6 +470,9 @@ void CapturePanel::onScaleMeasured(double pixelLength)
         cal.pixelLength    = pixelLength;
         cal.timestamp      = QDateTime::currentDateTime();
         VideoMetadataStore::saveScale(dataDir, "capture_calibration", cal);
+        // Also write the canonical µm/pixel for this project-level calibration file.
+        if (m_currentUmPerPixel > 0)
+            VideoMetadataStore::saveUmPerPixel(dataDir, "capture_calibration", m_currentUmPerPixel);
     }
 
     emit pixelScaleSet(pixelsPerUnit, m_scaleUnit);

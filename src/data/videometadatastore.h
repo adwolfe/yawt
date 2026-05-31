@@ -45,7 +45,8 @@ public:
                                 const QString& videoBaseName);
 
     /** Save (or update) the scale section of the metadata file. Other sections
-     *  in an existing file are preserved. Returns true on success. */
+     *  in an existing file are preserved. Also writes the top-level pixelSizeUm
+     *  field derived from the calibration. Returns true on success. */
     static bool saveScale(const QString& dataDir,
                           const QString& videoBaseName,
                           const ScaleCalibration& cal);
@@ -55,4 +56,16 @@ public:
     static bool loadScale(const QString& dataDir,
                           const QString& videoBaseName,
                           ScaleCalibration& cal);
+
+    /** Save the spatial resolution as µm/pixel. Preserves all other metadata sections.
+     *  This is the canonical display unit — the inverse of pixels/µm. */
+    static bool saveUmPerPixel(const QString& dataDir,
+                               const QString& videoBaseName,
+                               double umPerPixel);
+
+    /** Load the spatial resolution (µm/pixel). Returns false if not found;
+     *  @p umPerPixel is left untouched in that case. */
+    static bool loadUmPerPixel(const QString& dataDir,
+                               const QString& videoBaseName,
+                               double& umPerPixel);
 };

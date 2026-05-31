@@ -184,6 +184,9 @@ public slots:
 private:
     void setupConnections();
     void initializeUIStates();
+    /** Called when the user finishes manually editing the pixel-size spinbox.
+     *  Persists the new value to the current video's metadata JSON. */
+    void onPixelSizeSpinEditingFinished();
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
     void updateWormTimeline();
@@ -238,6 +241,10 @@ private:
     QPointer<AnalysisDialog> m_analysisDialog;
     AnalysisPanel* m_analysisPanel = nullptr;
     CapturePanel* m_capturePanel = nullptr;  // QObject controller, not a widget
+
+    // Tracks the currently-loaded video so pixel-size edits can be saved to JSON.
+    QString m_currentVideoDataDir;
+    QString m_currentVideoBaseName;
 
     // Tab-switch state: saved worm ID selection before entering Analysis tab
     int  m_savedAnalysisWormId = -1;

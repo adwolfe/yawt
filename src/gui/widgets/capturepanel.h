@@ -128,9 +128,10 @@ private:
     bool              m_connected  = false;
     bool              m_recording  = false;
 
-    // Scale calibration state (pending measurement)
+    // Scale calibration state
     double  m_scalePhysicalValue = 1.0;
     QString m_scaleUnit;
+    double  m_currentUmPerPixel = 0.0;  // 0 = no calibration set yet
 };
 
 #endif // CAPTUREPANEL_H

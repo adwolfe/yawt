@@ -1170,8 +1170,11 @@ QToolButton#lastFrameButton {
                <property name="alignment">
                 <set>Qt::AlignmentFlag::AlignCenter</set>
                </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
                <property name="suffix">
-                <string> pixels/um</string>
+                <string> µm/pixel</string>
                </property>
               </widget>
              </item>
