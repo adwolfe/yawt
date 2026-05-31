@@ -111,9 +111,23 @@ MainWindow::MainWindow(QWidget *parent)
         cw.fpsLabel          = ui->captureFpsLabel;
         cw.brightnessSpin    = ui->captureBrightnessSpin;
         cw.brightnessLabel   = ui->captureBrightnessLabel;
+        cw.setScaleButton    = ui->setScaleButton;
+        cw.scaleLabel        = ui->captureScaleLabel;
         m_capturePanel->setup(cw);
         connect(ui->dirSelected, &QLineEdit::textChanged,
                 m_capturePanel, &CapturePanel::setOutputDirectory);
+
+        // Convert the scale result to pixels/µm and push it into the spinbox.
+        connect(m_capturePanel, &CapturePanel::pixelScaleSet,
+                this, [this](double pixelsPerUnit, const QString& unit) {
+            double pixelsPerUm = 0.0;
+            if      (unit == "mm")   pixelsPerUm = pixelsPerUnit / 1000.0;
+            else if (unit == "µm")   pixelsPerUm = pixelsPerUnit;
+            else if (unit == "cm")   pixelsPerUm = pixelsPerUnit / 10000.0;
+            else if (unit == "inch") pixelsPerUm = pixelsPerUnit / 25400.0;
+            if (pixelsPerUm > 0)
+                ui->pixelSizeSpinBoxD->setValue(pixelsPerUm);
+        });
 
         // Camera scanning is intentionally manual — the probe briefly opens camera
         // handles which triggers macOS's privacy sound even when muted. The user

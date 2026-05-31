@@ -34,7 +34,9 @@ public:
     struct Widgets {
         // View
         LiveView*       liveView          = nullptr;
-        // ROI toolbar
+        // Toolbar
+        QPushButton*    setScaleButton    = nullptr;
+        QLabel*         scaleLabel        = nullptr;
         QPushButton*    drawRoiButton     = nullptr;
         QPushButton*    clearRoiButton    = nullptr;
         QLabel*         roiLabel          = nullptr;
@@ -75,6 +77,12 @@ public slots:
      *  camera privacy sound so should not be called at application startup. */
     void scanCameras();
 
+signals:
+    /** Emitted after a successful scale measurement.
+     *  @p pixelsPerUnit  pixels per @p unit (e.g. pixels per mm).
+     *  Connect to MainWindow to update pixelSizeSpinBoxD. */
+    void pixelScaleSet(double pixelsPerUnit, QString unit);
+
 private slots:
     void onScanClicked();
     void onConnectClicked();
@@ -99,6 +107,9 @@ private slots:
     void onRoiDefined(QRectF roi);
     void onRoiCleared();
 
+    void onSetScaleClicked();
+    void onScaleMeasured(double pixelLength);
+
 private:
     void setConnectedState(bool connected);
     void applyParamInfo(QDoubleSpinBox* spin, QCheckBox* autoBox,
@@ -116,6 +127,10 @@ private:
     QString           m_outputDirectory;
     bool              m_connected  = false;
     bool              m_recording  = false;
+
+    // Scale calibration state (pending measurement)
+    double  m_scalePhysicalValue = 1.0;
+    QString m_scaleUnit;
 };
 
 #endif // CAPTUREPANEL_H

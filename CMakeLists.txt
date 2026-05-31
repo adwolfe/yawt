@@ -58,6 +58,7 @@ set(SOURCES
     src/gui/mainwindow.cpp
     src/gui/analysisdialog.cpp
     src/gui/analysispanel.cpp
+    src/gui/scaledialog.cpp
     src/gui/trackingprogressdialog.cpp
 
     # GUI widgets and delegates
@@ -94,6 +95,7 @@ set(SOURCES
     src/data/trackingdatastorage.cpp
     src/data/trackingcommon.cpp
     src/data/wormobject.cpp
+    src/data/videometadatastore.cpp
 
     # Debug
     src/debug/debugdatastore.cpp
@@ -116,6 +118,7 @@ set(HEADERS
     src/gui/mainwindow.h
     src/gui/analysisdialog.h
     src/gui/analysispanel.h
+    src/gui/scaledialog.h
     src/gui/trackingprogressdialog.h
 
     # GUI widgets / delegates
@@ -154,6 +157,7 @@ set(HEADERS
     src/data/trackingdatastorage.h
     src/data/trackingcommon.h
     src/data/wormobject.h
+    src/data/videometadatastore.h
 
     # Debug
     src/debug/debugrecords.h

@@ -70,6 +70,16 @@ void LiveView::setRoiMode(bool enabled)
 {
     m_roiMode    = enabled;
     m_drawingRoi = false;
+    if (enabled) { m_scaleMeasureMode = false; m_scaleHasStart = false; }
+    updateCursor();
+    update();
+}
+
+void LiveView::setScaleMeasureMode(bool enabled)
+{
+    m_scaleMeasureMode = enabled;
+    m_scaleHasStart    = false;
+    if (enabled) { m_roiMode = false; m_drawingRoi = false; }
     updateCursor();
     update();
 }
@@ -152,6 +162,51 @@ void LiveView::paintEvent(QPaintEvent*)
                    Qt::AlignBottom | Qt::AlignLeft,
                    "Click and drag to draw ROI");
     }
+
+    // --- Scale measure overlay ---
+    if (m_scaleMeasureMode) {
+        const QColor scaleColor(255, 220, 60);
+
+        if (!m_scaleHasStart) {
+            // Prompt
+            p.setPen(QPen(scaleColor, 1));
+            p.drawText(rect().adjusted(6, 6, -6, -6),
+                       Qt::AlignBottom | Qt::AlignLeft,
+                       "Click to set start of measurement line");
+        } else {
+            // Draw crosshair at start (widget coords)
+            QPointF sw = videoToWidget(m_scaleStartVideo);
+            QPointF ew = videoToWidget(m_scaleCurrentVideo);
+
+            // Line
+            p.setPen(QPen(scaleColor, 2, Qt::DashLine));
+            p.drawLine(sw, ew);
+
+            // Crosshair at start
+            const qreal arm = 8.0;
+            p.setPen(QPen(scaleColor, 2, Qt::SolidLine));
+            p.drawLine(sw + QPointF(-arm, 0), sw + QPointF(arm, 0));
+            p.drawLine(sw + QPointF(0, -arm), sw + QPointF(0, arm));
+
+            // Crosshair at current end
+            p.setPen(QPen(scaleColor, 1, Qt::SolidLine));
+            p.drawLine(ew + QPointF(-arm * 0.7, 0), ew + QPointF(arm * 0.7, 0));
+            p.drawLine(ew + QPointF(0, -arm * 0.7), ew + QPointF(0, arm * 0.7));
+
+            // Live pixel-length annotation near midpoint
+            QPointF mid = (sw + ew) / 2.0;
+            QPointF delta = m_scaleCurrentVideo - m_scaleStartVideo;
+            double px = std::sqrt(delta.x() * delta.x() + delta.y() * delta.y());
+            QString lengthStr = QString("%1 px").arg(px, 0, 'f', 1);
+            p.setPen(scaleColor);
+            p.drawText(mid + QPointF(6, -6), lengthStr);
+
+            // Prompt
+            p.drawText(rect().adjusted(6, 6, -6, -6),
+                       Qt::AlignBottom | Qt::AlignLeft,
+                       "Click to set end of measurement line");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +218,25 @@ void LiveView::mousePressEvent(QMouseEvent* event)
     m_lastMousePos = event->position();
 
     if (event->button() == Qt::LeftButton && !m_frame.isNull()) {
+        if (m_scaleMeasureMode) {
+            QPointF vp = widgetToVideo(event->position());
+            if (!m_scaleHasStart) {
+                m_scaleStartVideo   = vp;
+                m_scaleCurrentVideo = vp;
+                m_scaleHasStart     = true;
+            } else {
+                // Second click — finalise
+                QPointF delta = vp - m_scaleStartVideo;
+                double px = std::sqrt(delta.x() * delta.x() + delta.y() * delta.y());
+                m_scaleHasStart    = false;
+                m_scaleMeasureMode = false;
+                updateCursor();
+                update();
+                emit scaleMeasured(px);
+            }
+            event->accept();
+            return;
+        }
         if (m_roiMode) {
             m_drawingRoi  = true;
             m_roiDragStart = event->position();
@@ -183,6 +257,13 @@ void LiveView::mouseMoveEvent(QMouseEvent* event)
     QPointF pos   = event->position();
     QPointF delta = pos - m_lastMousePos;
     m_lastMousePos = pos;
+
+    if (m_scaleMeasureMode && m_scaleHasStart) {
+        m_scaleCurrentVideo = widgetToVideo(pos);
+        update();
+        event->accept();
+        return;
+    }
 
     if (m_drawingRoi && (event->buttons() & Qt::LeftButton)) {
         m_roiDragEnd = pos;
@@ -376,7 +457,7 @@ QPointF LiveView::videoToWidget(const QPointF& vp) const
 
 void LiveView::updateCursor()
 {
-    if (m_roiMode)
+    if (m_scaleMeasureMode || m_roiMode)
         setCursor(Qt::CrossCursor);
     else if (m_isPanning)
         setCursor(Qt::ClosedHandCursor);

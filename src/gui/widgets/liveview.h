@@ -42,11 +42,21 @@ public slots:
     void setRoi(const QRectF& videoRect);
     void clearRoi();
 
+    /** Enter/leave scale-measure mode.
+     *  In this mode: first click sets the line start, second click finalises
+     *  it and emits scaleMeasured() with the pixel distance in video coords. */
+    void setScaleMeasureMode(bool enabled);
+
 signals:
     /** Emitted when the user finishes drawing an ROI (video coordinates). */
     void roiDefined(QRectF videoRect);
     /** Emitted when the ROI is cleared by the user or programmatically. */
     void roiCleared();
+
+    /** Emitted after the second click in scale-measure mode.
+     *  @p pixelLength  Euclidean distance in video (camera) pixels.
+     *  The mode is automatically exited after emission. */
+    void scaleMeasured(double pixelLength);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -81,6 +91,12 @@ private:
     QPointF m_roiDragStart;   // widget coords during drag
     QPointF m_roiDragEnd;     // widget coords during drag
     QRectF  m_roi;            // committed ROI in video coords (empty = none)
+
+    // --- Scale measure ---
+    bool    m_scaleMeasureMode = false;
+    bool    m_scaleHasStart    = false;
+    QPointF m_scaleStartVideo;    // video coords of first click
+    QPointF m_scaleCurrentVideo;  // video coords of current cursor position
 };
 
 #endif // LIVEVIEW_H

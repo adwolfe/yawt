@@ -304,6 +304,24 @@
              <item>
               <layout class="QHBoxLayout" name="captureRoiBar">
                <item>
+                <widget class="QPushButton" name="setScaleButton">
+                 <property name="text"><string>Set Scale</string></property>
+                 <property name="toolTip"><string>Calibrate pixel size by drawing a line of known length on the live view</string></property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="captureScaleLabel">
+                 <property name="text"><string/></property>
+                 <property name="styleSheet"><string notr="true">color: #5aab5a; font-size: 11px;</string></property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="captureScaleSpacer">
+                 <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+                 <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
+                </spacer>
+               </item>
+               <item>
                 <widget class="QPushButton" name="captureDrawRoiButton">
                  <property name="toolTip">
                   <string>Click and drag in the view to define a capture ROI</string>

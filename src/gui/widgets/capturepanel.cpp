@@ -2,6 +2,8 @@
 #include "liveview.h"
 #include "captureworker.h"
 #include "cameraenumerator.h"
+#include "../scaledialog.h"
+#include "../../data/videometadatastore.h"
 
 #include <QComboBox>
 #include <QPushButton>
@@ -11,6 +13,7 @@
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDir>
+#include <cmath>
 #include <QMetaType>
 
 CapturePanel::CapturePanel(QObject* parent)
@@ -75,10 +78,14 @@ void CapturePanel::setup(const Widgets& widgets)
             this, &CapturePanel::onDisconnectClicked);
     connect(w.recordButton,      &QPushButton::toggled,
             this, &CapturePanel::onRecordToggled);
+    connect(w.setScaleButton,    &QPushButton::clicked,
+            this, &CapturePanel::onSetScaleClicked);
     connect(w.drawRoiButton,     &QPushButton::toggled,
             this, &CapturePanel::onDrawRoiToggled);
     connect(w.clearRoiButton,    &QPushButton::clicked,
             this, &CapturePanel::onClearRoiClicked);
+    connect(w.liveView, &LiveView::scaleMeasured,
+            this, &CapturePanel::onScaleMeasured);
 
     // Parameter spinboxes
     connect(w.exposureSpin,      qOverload<double>(&QDoubleSpinBox::valueChanged),
@@ -402,4 +409,51 @@ void CapturePanel::onRoiCleared()
     w.clearRoiButton->setEnabled(false);
     w.roiLabel->clear();
     QMetaObject::invokeMethod(m_worker, "clearRoi", Qt::QueuedConnection);
+}
+
+// ---------------------------------------------------------------------------
+// Scale calibration slots
+// ---------------------------------------------------------------------------
+
+void CapturePanel::onSetScaleClicked()
+{
+    ScaleDialog dlg(w.setScaleButton ? w.setScaleButton->window() : nullptr);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    m_scalePhysicalValue = dlg.physicalValue();
+    m_scaleUnit          = dlg.unit();
+
+    w.liveView->setScaleMeasureMode(true);
+    w.scaleLabel->setText(
+        QString("Draw a line = %1 %2")
+            .arg(m_scalePhysicalValue, 0, 'g', 4)
+            .arg(m_scaleUnit));
+}
+
+void CapturePanel::onScaleMeasured(double pixelLength)
+{
+    if (pixelLength < 1.0 || m_scaleUnit.isEmpty()) return;
+
+    const double pixelsPerUnit = pixelLength / m_scalePhysicalValue;
+
+    // Show result in toolbar label
+    w.scaleLabel->setText(
+        QString("Scale: %1 px/%2")
+            .arg(pixelsPerUnit, 0, 'f', 2)
+            .arg(m_scaleUnit));
+
+    // Persist to JSON if we have a project folder
+    if (!m_outputDirectory.isEmpty()) {
+        // dataDir = <projectFolder>/yawt  (mirrors VideoLoader convention)
+        const QString dataDir = QDir(m_outputDirectory).filePath("yawt");
+        VideoMetadataStore::ScaleCalibration cal;
+        cal.pixelsPerUnit  = pixelsPerUnit;
+        cal.unit           = m_scaleUnit;
+        cal.physicalValue  = m_scalePhysicalValue;
+        cal.pixelLength    = pixelLength;
+        cal.timestamp      = QDateTime::currentDateTime();
+        VideoMetadataStore::saveScale(dataDir, "capture_calibration", cal);
+    }
+
+    emit pixelScaleSet(pixelsPerUnit, m_scaleUnit);
 }
