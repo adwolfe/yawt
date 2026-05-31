@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QDialog>
 #include <QList>
+#include <QSet>
 #include <QWidget>
 
 class QTabWidget;
@@ -35,6 +36,7 @@ public:
     void setPixelSizeUmPerPixel(double umPerPixel);
     void setVideoFps(double fps);
     void setSpeedLutRange(bool enabled, double minSpeed, double maxSpeed);
+    void setVisibleWormIds(const QSet<int>& ids);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -58,6 +60,8 @@ private:
     bool m_speedRangeEnabled = false;
     double m_speedRangeMin = 0.0;
     double m_speedRangeMax = 0.0;
+    QSet<int> m_visibleWormIds;
+    bool m_hasVisibleFilter = false;
 };
 
 class AnalysisDialog : public QDialog

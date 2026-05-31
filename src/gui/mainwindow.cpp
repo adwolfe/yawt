@@ -30,6 +30,7 @@
 #include "itemtypedelegate.h"
 // #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
 #include "analysisdialog.h"
+#include "analysispanel.h"
 #include "trackingprogressdialog.h"
 #include "../core/appcontroller.h"
 #include "../core/centerlineworker.h"
@@ -273,6 +274,41 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     initializeUIStates();
 
+    // Build the Analysis tab panel inside analysisTab
+    {
+        auto* analysisLayout = new QVBoxLayout(ui->analysisTab);
+        analysisLayout->setContentsMargins(0, 0, 0, 0);
+        m_analysisPanel = new AnalysisPanel(m_trackingDataStorage, ui->analysisTab);
+        m_analysisPanel->setPixelSizeUmPerPixel(ui->pixelSizeSpinBoxD->value());
+        m_analysisPanel->setVideoFps(m_videoFps);
+        analysisLayout->addWidget(m_analysisPanel);
+
+        connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                m_analysisPanel, &AnalysisPanel::setPixelSizeUmPerPixel);
+        connect(m_analysisPanel, &AnalysisPanel::wormSelectionChanged,
+                this, [this](const QSet<int>& ids) {
+                    if (m_analysisTabActive) {
+                        // Sync wormTableView selection without re-entering the analysis-tab handler
+                        m_analysisTabActive = false;
+                        QItemSelection sel;
+                        const int nCols = m_wormProxyModel->columnCount();
+                        for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
+                            QModelIndex srcIdx = m_wormProxyModel->mapToSource(
+                                m_wormProxyModel->index(row, 0));
+                            if (srcIdx.isValid()) {
+                                const int id = m_blobTableModel->getItem(srcIdx.row()).id;
+                                if (ids.contains(id))
+                                    sel.select(m_wormProxyModel->index(row, 0),
+                                               m_wormProxyModel->index(row, nCols - 1));
+                            }
+                        }
+                        ui->wormTableView->selectionModel()->select(
+                            sel, QItemSelectionModel::ClearAndSelect);
+                        m_analysisTabActive = true;
+                    }
+                });
+    }
+
     QMenu* fileMenu = menuBar()->addMenu("File");
     QAction* loadRunAction = new QAction("Load Run...", this);
     fileMenu->addAction(loadRunAction);
@@ -368,7 +404,7 @@ void MainWindow::showEvent(QShowEvent* event) {
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
     if (obj == ui->captureOutputPathEdit
-        && event->type() == QEvent::MouseButtonDblClick) {
+        && event->type() == QEvent::MouseButtonPress) {
         chooseWorkingDirectory();
         return true; // consumed
     }
@@ -720,6 +756,24 @@ void MainWindow::setupConnections() {
     // Debug control keyboard shortcut
     QShortcut* debugToggle = new QShortcut(QKeySequence("Ctrl+D"), this);
     connect(debugToggle, &QShortcut::activated, this, &MainWindow::toggleTrackingDebug);
+
+    // Main tab switching: Analysis tab gets multi-select; others get single-select
+    connect(ui->mainTabWidget, &QTabWidget::currentChanged,
+            this, &MainWindow::onMainTabChanged);
+
+    // When on the Analysis tab and worm table selection changes, forward to analysis panel
+    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, [this](const QItemSelection&, const QItemSelection&) {
+        if (!m_analysisTabActive || !m_analysisPanel) return;
+        QSet<int> ids;
+        const auto rows = ui->wormTableView->selectionModel()->selectedRows();
+        for (const QModelIndex& idx : rows) {
+            QModelIndex srcIdx = m_wormProxyModel->mapToSource(idx);
+            if (srcIdx.isValid())
+                ids.insert(m_blobTableModel->getItem(srcIdx.row()).id);
+        }
+        m_analysisPanel->setSelectedWormIds(ids);
+    });
 
     // Connections for TrackingProgressDialog are made when it's created/shown
 }
@@ -1333,9 +1387,10 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
     updateWormTimeline();
 
-    if (m_analysisDialog) {
+    if (m_analysisDialog)
         m_analysisDialog->setVideoFps(m_videoFps);
-    }
+    if (m_analysisPanel)
+        m_analysisPanel->setVideoFps(m_videoFps);
 }
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {
@@ -1586,25 +1641,66 @@ void MainWindow::onPlaybackStateChanged(bool isPlaying, double currentSpeed) {
     }
 }
 
-void MainWindow::resultsButtonClicked() {
-    if (m_analysisDialog) {
-        m_analysisDialog->close();
-        return;
-    }
+void MainWindow::resultsButtonClicked()
+{
+    // Navigate to the Analysis tab (dialog-based analysis is deprecated)
+    const int idx = ui->mainTabWidget->indexOf(ui->analysisTab);
+    if (idx >= 0)
+        ui->mainTabWidget->setCurrentIndex(idx);
+}
 
-    m_analysisDialog = new AnalysisDialog(m_trackingDataStorage, this);
-    ui->resultsButton->setChecked(true);
-    m_analysisDialog->setPixelSizeUmPerPixel(ui->pixelSizeSpinBoxD->value());
-    m_analysisDialog->setVideoFps(m_videoFps);
-    connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
-            m_analysisDialog, &AnalysisDialog::setPixelSizeUmPerPixel);
-    connect(m_analysisDialog, &QDialog::finished, this, [this](int) {
-        ui->resultsButton->setChecked(false);
-        m_analysisDialog = nullptr;
-    });
-    m_analysisDialog->show();
-    m_analysisDialog->raise();
-    m_analysisDialog->activateWindow();
+void MainWindow::onMainTabChanged(int index)
+{
+    const bool goingToAnalysis = (ui->mainTabWidget->widget(index) == ui->analysisTab);
+
+    if (goingToAnalysis && !m_analysisTabActive) {
+        // Save the currently selected single worm (if any)
+        m_savedAnalysisWormId = -1;
+        if (ui->wormTableView->selectionModel()->hasSelection()) {
+            const auto rows = ui->wormTableView->selectionModel()->selectedRows();
+            if (!rows.isEmpty()) {
+                QModelIndex srcIdx = m_wormProxyModel->mapToSource(rows.first());
+                if (srcIdx.isValid())
+                    m_savedAnalysisWormId = m_blobTableModel->getItem(srcIdx.row()).id;
+            }
+        }
+
+        m_analysisTabActive = true;
+        ui->wormTableView->setSelectionMode(QAbstractItemView::MultiSelection);
+
+        // Auto-select all worms
+        ui->wormTableView->selectAll();
+
+        // Feed the full selection to the analysis panel (the selectionChanged signal
+        // from selectAll() will also fire, but guard against ordering issues)
+        if (m_analysisPanel) {
+            QSet<int> allIds;
+            for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
+                QModelIndex srcIdx = m_wormProxyModel->mapToSource(m_wormProxyModel->index(row, 0));
+                if (srcIdx.isValid())
+                    allIds.insert(m_blobTableModel->getItem(srcIdx.row()).id);
+            }
+            m_analysisPanel->setSelectedWormIds(allIds);
+        }
+
+    } else if (!goingToAnalysis && m_analysisTabActive) {
+        m_analysisTabActive = false;
+        ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
+
+        // Restore saved selection
+        if (m_savedAnalysisWormId >= 0) {
+            const int idCol = static_cast<int>(BlobTableModel::Column::ID);
+            for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
+                QModelIndex idx2 = m_wormProxyModel->index(row, idCol);
+                if (m_wormProxyModel->data(idx2, Qt::DisplayRole).toInt() == m_savedAnalysisWormId) {
+                    ui->wormTableView->selectRow(row);
+                    break;
+                }
+            }
+        } else {
+            ui->wormTableView->clearSelection();
+        }
+    }
 }
 
 void MainWindow::frameSliderMoved(int value) {

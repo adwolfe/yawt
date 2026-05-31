@@ -82,6 +82,13 @@ void TrackXYPlotWidget::setSpeedLutRange(bool enabled, double minSpeed, double m
     update();
 }
 
+void TrackXYPlotWidget::setVisibleWormIds(const QSet<int>& ids)
+{
+    m_visibleWormIds = ids;
+    m_hasVisibleFilter = true;
+    update();
+}
+
 void TrackXYPlotWidget::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event)
@@ -249,6 +256,7 @@ void TrackXYPlotWidget::paintEvent(QPaintEvent *event)
         if (speedMode) {
             for (const auto &pair : tracks) {
                 const int wormId = pair.first;
+                if (m_hasVisibleFilter && !m_visibleWormIds.contains(wormId)) continue;
                 const auto &points = pair.second;
                 std::vector<SpeedSample> samples;
                 samples.reserve(points.size());
@@ -335,6 +343,7 @@ void TrackXYPlotWidget::paintEvent(QPaintEvent *event)
         for (const auto &pair : tracks) {
             const int wormId = pair.first;
             const auto &points = pair.second;
+            if (m_hasVisibleFilter && !m_visibleWormIds.contains(wormId)) continue;
             if (!speedMode) {
                 QPainterPath path;
                 bool hasPath = false;

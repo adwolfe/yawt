@@ -21,6 +21,7 @@ class ItemTypeFilterProxyModel;
 class TrackingDataStorage;
 class AppController; // Application controller (owns core non-UI components)
 class AnalysisDialog;
+class AnalysisPanel;
 class CapturePanel;
 
 // Include VideoLoader header for enums and QFlags type
@@ -178,6 +179,7 @@ public slots:
     void onPlaybackStateChanged(bool isPlaying, double currentSpeed);
     void resultsButtonClicked();
     void onDebugImageTableSelectionChanged();
+    void onMainTabChanged(int index);
 
 private:
     void setupConnections();
@@ -234,7 +236,12 @@ private:
     TrackingDataStorage *m_trackingDataStorage;
 
     QPointer<AnalysisDialog> m_analysisDialog;
+    AnalysisPanel* m_analysisPanel = nullptr;
     CapturePanel* m_capturePanel = nullptr;  // QObject controller, not a widget
+
+    // Tab-switch state: saved worm ID selection before entering Analysis tab
+    int  m_savedAnalysisWormId = -1;
+    bool m_analysisTabActive   = false;
 
     /** Button group for interaction modes (Pan, ROI, Crop, EditBlobs, EditTracks). Owned by MainWindow. */
     QButtonGroup *m_interactionModeButtonGroup;
