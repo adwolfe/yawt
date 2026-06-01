@@ -521,6 +521,8 @@ QVariant AnalysisSessionModel::data(const QModelIndex& idx, int role) const
     if (isGroup(idx)) {
         const auto& g = m_groups[idx.row()];
         switch (role) {
+        case Qt::EditRole:
+            return g.name;   // plain name for the in-place editor
         case Qt::DisplayRole: {
             int n = 0;
             for (const auto& v : g.videos) n += v.worms.size();
@@ -591,7 +593,19 @@ QVariant AnalysisSessionModel::data(const QModelIndex& idx, int role) const
 bool AnalysisSessionModel::setData(const QModelIndex& idx,
                                    const QVariant& value, int role)
 {
-    if (!idx.isValid() || role != Qt::CheckStateRole) return false;
+    if (!idx.isValid()) return false;
+
+    // ── Group rename ─────────────────────────────────────────────────────────
+    if (isGroup(idx) && role == Qt::EditRole) {
+        const QString name = value.toString().trimmed();
+        if (name.isEmpty()) return false;
+        m_groups[idx.row()].name = name;
+        emit dataChanged(idx, idx, {Qt::DisplayRole, Qt::EditRole});
+        saveState();
+        return true;
+    }
+
+    if (role != Qt::CheckStateRole) return false;
 
     // ── Group node: cascade to all videos and all worms ──────────────────────
     if (isGroup(idx)) {
@@ -686,7 +700,8 @@ Qt::ItemFlags AnalysisSessionModel::flags(const QModelIndex& idx) const
     if (!idx.isValid()) return Qt::NoItemFlags;
 
     if (isGroup(idx))
-        return Qt::ItemIsEnabled | Qt::ItemIsDropEnabled | Qt::ItemIsUserCheckable;
+        return Qt::ItemIsEnabled | Qt::ItemIsDropEnabled | Qt::ItemIsUserCheckable
+             | Qt::ItemIsEditable;
 
     if (isVideo(idx))
         return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled
