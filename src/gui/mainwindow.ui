@@ -1845,6 +1845,143 @@ QToolButton#lastFrameButton {
        <attribute name="title">
         <string>Analysis</string>
        </attribute>
+       <layout class="QHBoxLayout" name="analysisTabLayout">
+        <property name="leftMargin"><number>0</number></property>
+        <property name="topMargin"><number>0</number></property>
+        <property name="rightMargin"><number>0</number></property>
+        <property name="bottomMargin"><number>0</number></property>
+        <property name="spacing"><number>0</number></property>
+        <item>
+         <widget class="QSplitter" name="analysisSplitter">
+          <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+          <!-- Left control panel -->
+          <widget class="QWidget" name="analysisLeftPanel" native="true">
+           <layout class="QVBoxLayout" name="analysisLeftLayout">
+            <property name="leftMargin"><number>4</number></property>
+            <property name="topMargin"><number>4</number></property>
+            <property name="rightMargin"><number>4</number></property>
+            <property name="bottomMargin"><number>4</number></property>
+            <property name="spacing"><number>6</number></property>
+            <!-- Settings group -->
+            <item>
+             <widget class="QGroupBox" name="analysisSettingsGroup">
+              <property name="title"><string>Settings</string></property>
+              <layout class="QFormLayout" name="analysisSettingsForm">
+               <property name="leftMargin"><number>8</number></property>
+               <property name="topMargin"><number>8</number></property>
+               <property name="rightMargin"><number>8</number></property>
+               <property name="bottomMargin"><number>8</number></property>
+               <!-- Arena shape -->
+               <item row="0" column="0">
+                <widget class="QLabel" name="analysisArenaShapeLabel">
+                 <property name="text"><string>Arena shape</string></property>
+                </widget>
+               </item>
+               <item row="0" column="1">
+                <widget class="QComboBox" name="analysisArenaShapeCombo">
+                 <item><property name="text"><string>Round</string></property></item>
+                 <item><property name="text"><string>Square</string></property></item>
+                </widget>
+               </item>
+               <!-- Arena size -->
+               <item row="1" column="0">
+                <widget class="QLabel" name="analysisArenaSizeLabel">
+                 <property name="text"><string>Size (diam / width)</string></property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QSpinBox" name="analysisArenaSizeSpin">
+                 <property name="minimum"><number>1</number></property>
+                 <property name="maximum"><number>1000</number></property>
+                 <property name="value"><number>50</number></property>
+                 <property name="suffix"><string> mm</string></property>
+                </widget>
+               </item>
+               <!-- Speed LUT range toggle -->
+               <item row="2" column="0">
+                <widget class="QLabel" name="analysisSpeedRangeLabel">
+                 <property name="text"><string>Speed LUT range</string></property>
+                </widget>
+               </item>
+               <item row="2" column="1">
+                <widget class="QCheckBox" name="analysisSpeedRangeCheck">
+                 <property name="text"><string>Manual</string></property>
+                </widget>
+               </item>
+               <!-- Speed min -->
+               <item row="3" column="0">
+                <widget class="QLabel" name="analysisSpeedMinLabel">
+                 <property name="text"><string>  Min</string></property>
+                </widget>
+               </item>
+               <item row="3" column="1">
+                <widget class="QDoubleSpinBox" name="analysisSpeedRangeMinSpin">
+                 <property name="decimals"><number>3</number></property>
+                 <property name="value"><double>0.000000000000000</double></property>
+                </widget>
+               </item>
+               <!-- Speed max -->
+               <item row="4" column="0">
+                <widget class="QLabel" name="analysisSpeedMaxLabel">
+                 <property name="text"><string>  Max</string></property>
+                </widget>
+               </item>
+               <item row="4" column="1">
+                <widget class="QDoubleSpinBox" name="analysisSpeedRangeMaxSpin">
+                 <property name="decimals"><number>3</number></property>
+                 <property name="value"><double>1.000000000000000</double></property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <!-- Worm list -->
+            <item>
+             <widget class="QLabel" name="analysisWormsLabel">
+              <property name="text"><string>Worms</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTreeView" name="analysisWormListView">
+              <property name="minimumSize"><size><width>0</width><height>80</height></size></property>
+              <property name="maximumSize"><size><width>16777215</width><height>160</height></size></property>
+              <property name="selectionMode">
+               <enum>QAbstractItemView::SelectionMode::NoSelection</enum>
+              </property>
+              <property name="rootIsDecorated"><bool>false</bool></property>
+              <attribute name="headerVisible"><bool>false</bool></attribute>
+             </widget>
+            </item>
+            <!-- Plot selector -->
+            <item>
+             <widget class="QLabel" name="analysisPlotsLabel">
+              <property name="text"><string>Plots</string></property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QListWidget" name="analysisPlotSelector"/>
+            </item>
+            <!-- Stretch -->
+            <item>
+             <spacer name="analysisLeftSpacer">
+              <property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
+              <property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property>
+             </spacer>
+            </item>
+           </layout>
+          </widget>
+          <!-- MDI area for plot sub-windows -->
+          <widget class="QMdiArea" name="analysisMdiArea">
+           <property name="horizontalScrollBarPolicy">
+            <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
+           </property>
+           <property name="verticalScrollBarPolicy">
+            <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
+           </property>
+          </widget>
+         </widget>
+        </item>
+       </layout>
       </widget>
      </widget>
     </item>

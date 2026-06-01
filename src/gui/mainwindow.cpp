@@ -290,14 +290,22 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     initializeUIStates();
 
-    // Build the Analysis tab panel inside analysisTab
+    // Wire the Analysis tab panel to the widgets defined in mainwindow.ui.
     {
-        auto* analysisLayout = new QVBoxLayout(ui->analysisTab);
-        analysisLayout->setContentsMargins(0, 0, 0, 0);
-        m_analysisPanel = new AnalysisPanel(m_trackingDataStorage, ui->analysisTab);
+        m_analysisPanel = new AnalysisPanel(m_trackingDataStorage, this);
+        AnalysisPanel::Widgets aw;
+        aw.arenaShapeCombo    = ui->analysisArenaShapeCombo;
+        aw.arenaSizeSpin      = ui->analysisArenaSizeSpin;
+        aw.speedRangeCheck    = ui->analysisSpeedRangeCheck;
+        aw.speedRangeMinSpin  = ui->analysisSpeedRangeMinSpin;
+        aw.speedRangeMaxSpin  = ui->analysisSpeedRangeMaxSpin;
+        aw.wormListView       = ui->analysisWormListView;
+        aw.plotSelector       = ui->analysisPlotSelector;
+        aw.mdiArea            = ui->analysisMdiArea;
+        aw.splitter           = ui->analysisSplitter;
+        m_analysisPanel->setup(aw);
         m_analysisPanel->setPixelSizeUmPerPixel(ui->pixelSizeSpinBoxD->value());
         m_analysisPanel->setVideoFps(m_videoFps);
-        analysisLayout->addWidget(m_analysisPanel);
 
         connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
                 m_analysisPanel, &AnalysisPanel::setPixelSizeUmPerPixel);

@@ -1,6 +1,7 @@
 #ifndef ANALYSISPANEL_H
 #define ANALYSISPANEL_H
 
+#include <QObject>
 #include <QWidget>
 #include <QSet>
 #include <QMap>
@@ -15,6 +16,7 @@ class QListWidget;
 class QListWidgetItem;
 class QMdiArea;
 class QMdiSubWindow;
+class QSplitter;
 class QStandardItemModel;
 class QStandardItem;
 class QGroupBox;
@@ -95,12 +97,38 @@ private:
     QList<TableItems::ClickedItem> m_items;
 };
 
-// Main analysis tab panel
-class AnalysisPanel : public QWidget
+/**
+ * AnalysisPanel — controller for the Analysis tab.
+ *
+ * Not a widget itself; operates on widgets defined in mainwindow.ui.
+ * The QMdiArea, worm list model, and plot sub-windows are still managed
+ * here since they are dynamic/model-driven and can't live in a .ui file.
+ *
+ * Usage:
+ *   m_analysisPanel = new AnalysisPanel(storage, this);
+ *   m_analysisPanel->setup({ ui->analysisArenaShapeCombo, ... });
+ */
+class AnalysisPanel : public QObject
 {
     Q_OBJECT
 public:
-    explicit AnalysisPanel(TrackingDataStorage* storage, QWidget* parent = nullptr);
+    struct Widgets {
+        QComboBox*       arenaShapeCombo    = nullptr;
+        QSpinBox*        arenaSizeSpin      = nullptr;
+        QCheckBox*       speedRangeCheck    = nullptr;
+        QDoubleSpinBox*  speedRangeMinSpin  = nullptr;
+        QDoubleSpinBox*  speedRangeMaxSpin  = nullptr;
+        QTreeView*       wormListView       = nullptr;
+        QListWidget*     plotSelector       = nullptr;
+        QMdiArea*        mdiArea            = nullptr;
+        QSplitter*       splitter           = nullptr;  ///< for setSizes on first show
+    };
+
+    explicit AnalysisPanel(TrackingDataStorage* storage, QObject* parent = nullptr);
+
+    /** Wire the controller to the UI widgets. Call once, after setupUi(). */
+    void setup(const Widgets& w);
+
     void setPixelSizeUmPerPixel(double umPerPixel);
     void setVideoFps(double fps);
 
@@ -116,7 +144,6 @@ private slots:
     void onPlotItemChanged(QListWidgetItem* item);
 
 private:
-    void buildUi();
     void rebuildWormList(const QList<TableItems::ClickedItem>& items);
     void propagateSelectionToPlots();
     void propagateSettings(QWidget* w);
@@ -124,34 +151,21 @@ private:
     QWidget* createPlotWidget(int plotIndex);
     static QIcon makeColorIcon(const QColor& color);
 
-    // Left-pane settings
-    QComboBox*       m_arenaShapeCombo     = nullptr;
-    QSpinBox*        m_arenaSizeSpin       = nullptr;
-    QCheckBox*       m_speedRangeCheck     = nullptr;
-    QDoubleSpinBox*  m_speedRangeMinSpin   = nullptr;
-    QDoubleSpinBox*  m_speedRangeMaxSpin   = nullptr;
+    // UI widget pointers (non-owning, sourced from mainwindow.ui)
+    Widgets w;
 
-    // Worm list
+    // Owned by this controller (not in the .ui file — dynamic/model-driven)
     QStandardItemModel* m_wormListModel = nullptr;
-    QTreeView*          m_wormListView  = nullptr;
-
-    // Plot selector
-    QListWidget* m_plotSelector = nullptr;
-
-    // MDI area
-    QMdiArea* m_mdiArea = nullptr;
-
-    // Active sub-windows (index matches m_plotSelector row)
     QList<QMdiSubWindow*> m_subWindows;
 
     static constexpr int kPlotCount = 5;
     static const char* kPlotNames[kPlotCount];
 
-    TrackingDataStorage* m_storage        = nullptr;
+    TrackingDataStorage* m_storage           = nullptr;
     QSet<int>            m_selectedWormIds;
-    bool                 m_updatingSelection = false;
-    double               m_umPerPixel = 0.0;
-    double               m_videoFps   = 0.0;
+    bool                 m_updatingSelection  = false;
+    double               m_umPerPixel         = 0.0;
+    double               m_videoFps           = 0.0;
 };
 
 #endif // ANALYSISPANEL_H

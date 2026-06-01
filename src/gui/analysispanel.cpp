@@ -575,33 +575,95 @@ const char* AnalysisPanel::kPlotNames[AnalysisPanel::kPlotCount] = {
     "Reversals"
 };
 
-AnalysisPanel::AnalysisPanel(TrackingDataStorage* storage, QWidget* parent)
-    : QWidget(parent), m_storage(storage)
+AnalysisPanel::AnalysisPanel(TrackingDataStorage* storage, QObject* parent)
+    : QObject(parent), m_storage(storage)
 {
-    buildUi();
-
     if (m_storage) {
         connect(m_storage, &TrackingDataStorage::itemsChanged,
                 this, &AnalysisPanel::onStorageItemsChanged);
-        onStorageItemsChanged(m_storage->getAllItems());
     }
+}
+
+void AnalysisPanel::setup(const Widgets& widgets)
+{
+    w = widgets;
+
+    // Splitter sizing — done here since XML can't set initial sizes.
+    if (w.splitter) {
+        w.splitter->setStretchFactor(0, 0);
+        w.splitter->setStretchFactor(1, 1);
+        w.splitter->setSizes({200, 600});
+    }
+
+    // Speed range spinbox limits (too large for convenient XML entry).
+    if (w.speedRangeMinSpin) { w.speedRangeMinSpin->setRange(0.0, 1e6); }
+    if (w.speedRangeMaxSpin) { w.speedRangeMaxSpin->setRange(0.0, 1e6); w.speedRangeMaxSpin->setValue(1.0); }
+
+    // Worm list model — owned by this controller.
+    m_wormListModel = new QStandardItemModel(this);
+    if (w.wormListView) {
+        w.wormListView->setModel(m_wormListModel);
+        w.wormListView->setHeaderHidden(true);
+        w.wormListView->setRootIsDecorated(false);
+        w.wormListView->setSelectionMode(QAbstractItemView::NoSelection);
+        connect(m_wormListModel, &QStandardItemModel::itemChanged,
+                this, &AnalysisPanel::onWormItemChanged);
+    }
+
+    // Populate plot selector with checkable items.
+    if (w.plotSelector) {
+        for (int i = 0; i < kPlotCount; ++i) {
+            auto* item = new QListWidgetItem(kPlotNames[i], w.plotSelector);
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(Qt::Unchecked);
+        }
+        connect(w.plotSelector, &QListWidget::itemChanged,
+                this, &AnalysisPanel::onPlotItemChanged);
+    }
+
+    // Sub-window list initialised to nullptrs.
+    m_subWindows.resize(kPlotCount, nullptr);
+
+    // Settings → propagate to open plots.
+    auto propagateAll = [this]() {
+        if (!w.mdiArea) return;
+        for (auto* sw : w.mdiArea->subWindowList())
+            if (auto* pw = sw->widget()) propagateSettings(pw);
+    };
+    if (w.arenaShapeCombo)
+        connect(w.arenaShapeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, propagateAll);
+    if (w.arenaSizeSpin)
+        connect(w.arenaSizeSpin, qOverload<int>(&QSpinBox::valueChanged),
+                this, propagateAll);
+    if (w.speedRangeCheck)
+        connect(w.speedRangeCheck, &QCheckBox::toggled, this, propagateAll);
+    if (w.speedRangeMinSpin)
+        connect(w.speedRangeMinSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, propagateAll);
+    if (w.speedRangeMaxSpin)
+        connect(w.speedRangeMaxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, propagateAll);
+
+    // Load initial data.
+    if (m_storage)
+        onStorageItemsChanged(m_storage->getAllItems());
 }
 
 void AnalysisPanel::setPixelSizeUmPerPixel(double v)
 {
     m_umPerPixel = v;
-    // Propagate to all open sub-windows' widgets
-    for (auto* sw : m_mdiArea->subWindowList()) {
-        if (auto* w = sw->widget()) propagateSettings(w);
-    }
+    if (!w.mdiArea) return;
+    for (auto* sw : w.mdiArea->subWindowList())
+        if (auto* pw = sw->widget()) propagateSettings(pw);
 }
 
 void AnalysisPanel::setVideoFps(double v)
 {
     m_videoFps = v;
-    for (auto* sw : m_mdiArea->subWindowList()) {
-        if (auto* w = sw->widget()) propagateSettings(w);
-    }
+    if (!w.mdiArea) return;
+    for (auto* sw : w.mdiArea->subWindowList())
+        if (auto* pw = sw->widget()) propagateSettings(pw);
 }
 
 void AnalysisPanel::setSelectedWormIds(const QSet<int>& ids)
@@ -646,137 +708,25 @@ void AnalysisPanel::onWormItemChanged(QStandardItem* item)
 
 void AnalysisPanel::onPlotItemChanged(QListWidgetItem* item)
 {
-    const int idx = m_plotSelector->row(item);
+    if (!w.plotSelector || !w.mdiArea) return;
+    const int idx = w.plotSelector->row(item);
     if (idx < 0 || idx >= kPlotCount) return;
 
     if (item->checkState() == Qt::Checked) {
-        // Create sub-window + plot widget
         QWidget* plotWidget = createPlotWidget(idx);
         if (!plotWidget) return;
-
-        auto* sw = m_mdiArea->addSubWindow(plotWidget);
+        auto* sw = w.mdiArea->addSubWindow(plotWidget);
         sw->setWindowTitle(kPlotNames[idx]);
         sw->show();
         m_subWindows[idx] = sw;
     } else {
-        // Remove sub-window
         if (m_subWindows[idx]) {
-            m_mdiArea->removeSubWindow(m_subWindows[idx]);
+            w.mdiArea->removeSubWindow(m_subWindows[idx]);
             m_subWindows[idx]->deleteLater();
             m_subWindows[idx] = nullptr;
         }
     }
     updateMdiLayout();
-}
-
-void AnalysisPanel::buildUi()
-{
-    auto* rootLayout = new QHBoxLayout(this);
-    rootLayout->setContentsMargins(0, 0, 0, 0);
-    rootLayout->setSpacing(0);
-
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    rootLayout->addWidget(splitter);
-
-    // ── Left pane ────────────────────────────────────────────────────────────
-    auto* leftWidget = new QWidget(splitter);
-    auto* leftLayout = new QVBoxLayout(leftWidget);
-    leftLayout->setContentsMargins(4, 4, 4, 4);
-    leftLayout->setSpacing(6);
-
-    // Settings group
-    auto* settingsGroup = new QGroupBox(tr("Settings"), leftWidget);
-    auto* formLayout = new QFormLayout(settingsGroup);
-    formLayout->setContentsMargins(8, 8, 8, 8);
-
-    m_arenaShapeCombo = new QComboBox(settingsGroup);
-    m_arenaShapeCombo->addItem(tr("Round"));
-    m_arenaShapeCombo->addItem(tr("Square"));
-
-    m_arenaSizeSpin = new QSpinBox(settingsGroup);
-    m_arenaSizeSpin->setRange(1, 1000);
-    m_arenaSizeSpin->setValue(50);
-    m_arenaSizeSpin->setSuffix(tr(" mm"));
-
-    m_speedRangeCheck = new QCheckBox(tr("Manual"), settingsGroup);
-
-    m_speedRangeMinSpin = new QDoubleSpinBox(settingsGroup);
-    m_speedRangeMinSpin->setRange(0.0, 1e6);
-    m_speedRangeMinSpin->setDecimals(3);
-    m_speedRangeMinSpin->setValue(0.0);
-
-    m_speedRangeMaxSpin = new QDoubleSpinBox(settingsGroup);
-    m_speedRangeMaxSpin->setRange(0.0, 1e6);
-    m_speedRangeMaxSpin->setDecimals(3);
-    m_speedRangeMaxSpin->setValue(1.0);
-
-    formLayout->addRow(tr("Arena shape"), m_arenaShapeCombo);
-    formLayout->addRow(tr("Size (diam / width)"), m_arenaSizeSpin);
-    formLayout->addRow(tr("Speed LUT range"), m_speedRangeCheck);
-    formLayout->addRow(tr("  Min"), m_speedRangeMinSpin);
-    formLayout->addRow(tr("  Max"), m_speedRangeMaxSpin);
-
-    connect(m_arenaShapeCombo, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, [this](int) {
-                for (auto* sw : m_mdiArea->subWindowList())
-                    if (auto* w = sw->widget()) propagateSettings(w);
-            });
-    connect(m_arenaSizeSpin, qOverload<int>(&QSpinBox::valueChanged),
-            this, [this](int) {
-                for (auto* sw : m_mdiArea->subWindowList())
-                    if (auto* w = sw->widget()) propagateSettings(w);
-            });
-    auto speedRangeChanged = [this]() {
-        for (auto* sw : m_mdiArea->subWindowList())
-            if (auto* w = sw->widget()) propagateSettings(w);
-    };
-    connect(m_speedRangeCheck,   &QCheckBox::toggled,                            this, speedRangeChanged);
-    connect(m_speedRangeMinSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),this, speedRangeChanged);
-    connect(m_speedRangeMaxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged),this, speedRangeChanged);
-
-    leftLayout->addWidget(settingsGroup);
-
-    // Worm list
-    leftLayout->addWidget(new QLabel(tr("Worms"), leftWidget));
-    m_wormListModel = new QStandardItemModel(this);
-    m_wormListView  = new QTreeView(leftWidget);
-    m_wormListView->setModel(m_wormListModel);
-    m_wormListView->setHeaderHidden(true);
-    m_wormListView->setRootIsDecorated(false);
-    m_wormListView->setSelectionMode(QAbstractItemView::NoSelection);
-    m_wormListView->setMinimumHeight(80);
-    m_wormListView->setMaximumHeight(160);
-    connect(m_wormListModel, &QStandardItemModel::itemChanged,
-            this, &AnalysisPanel::onWormItemChanged);
-    leftLayout->addWidget(m_wormListView);
-
-    // Plot selector
-    leftLayout->addWidget(new QLabel(tr("Plots"), leftWidget));
-    m_plotSelector = new QListWidget(leftWidget);
-    for (int i = 0; i < kPlotCount; ++i) {
-        auto* item = new QListWidgetItem(kPlotNames[i], m_plotSelector);
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Unchecked);
-    }
-    connect(m_plotSelector, &QListWidget::itemChanged,
-            this, &AnalysisPanel::onPlotItemChanged);
-    leftLayout->addWidget(m_plotSelector);
-    leftLayout->addStretch();
-
-    splitter->addWidget(leftWidget);
-
-    // ── Right pane: MDI area ──────────────────────────────────────────────────
-    m_mdiArea = new QMdiArea(splitter);
-    m_mdiArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_mdiArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    splitter->addWidget(m_mdiArea);
-
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 1);
-    splitter->setSizes({200, 600});
-
-    // Initialize sub-window list to kPlotCount nullptrs
-    m_subWindows.resize(kPlotCount, nullptr);
 }
 
 void AnalysisPanel::rebuildWormList(const QList<TableItems::ClickedItem>& items)
@@ -801,38 +751,40 @@ void AnalysisPanel::rebuildWormList(const QList<TableItems::ClickedItem>& items)
 
 void AnalysisPanel::propagateSelectionToPlots()
 {
-    for (auto* sw : m_mdiArea->subWindowList()) {
-        QWidget* w = sw->widget();
-        if (!w) continue;
-        if (auto* p = qobject_cast<TrackXYPlotWidget*>(w))
+    if (!w.mdiArea) return;
+    for (auto* sw : w.mdiArea->subWindowList()) {
+        QWidget* pw = sw->widget();
+        if (!pw) continue;
+        if (auto* p = qobject_cast<TrackXYPlotWidget*>(pw))
             p->setVisibleWormIds(m_selectedWormIds);
-        else if (auto* p = qobject_cast<SpeedTimelineWidget*>(w))
+        else if (auto* p = qobject_cast<SpeedTimelineWidget*>(pw))
             p->setVisibleWormIds(m_selectedWormIds);
-        else if (auto* p = qobject_cast<AverageSpeedWidget*>(w))
+        else if (auto* p = qobject_cast<AverageSpeedWidget*>(pw))
             p->setVisibleWormIds(m_selectedWormIds);
-        else if (auto* p = qobject_cast<ReversalCountWidget*>(w))
+        else if (auto* p = qobject_cast<ReversalCountWidget*>(pw))
             p->setVisibleWormIds(m_selectedWormIds);
     }
 }
 
-void AnalysisPanel::propagateSettings(QWidget* w)
+void AnalysisPanel::propagateSettings(QWidget* pw)
 {
-    if (!w) return;
-    if (auto* p = qobject_cast<TrackXYPlotWidget*>(w)) {
-        p->setArenaShape(m_arenaShapeCombo->currentIndex());
-        p->setArenaSizeMm(m_arenaSizeSpin->value());
+    if (!pw) return;
+    if (auto* p = qobject_cast<TrackXYPlotWidget*>(pw)) {
+        if (w.arenaShapeCombo)    p->setArenaShape(w.arenaShapeCombo->currentIndex());
+        if (w.arenaSizeSpin)      p->setArenaSizeMm(w.arenaSizeSpin->value());
         p->setPixelSizeUmPerPixel(m_umPerPixel);
         p->setVideoFps(m_videoFps);
-        p->setSpeedLutRange(m_speedRangeCheck->isChecked(),
-                             m_speedRangeMinSpin->value(),
-                             m_speedRangeMaxSpin->value());
-    } else if (auto* p = qobject_cast<SpeedTimelineWidget*>(w)) {
+        if (w.speedRangeCheck && w.speedRangeMinSpin && w.speedRangeMaxSpin)
+            p->setSpeedLutRange(w.speedRangeCheck->isChecked(),
+                                w.speedRangeMinSpin->value(),
+                                w.speedRangeMaxSpin->value());
+    } else if (auto* p = qobject_cast<SpeedTimelineWidget*>(pw)) {
         p->setPixelSizeUmPerPixel(m_umPerPixel);
         p->setVideoFps(m_videoFps);
-    } else if (auto* p = qobject_cast<AverageSpeedWidget*>(w)) {
+    } else if (auto* p = qobject_cast<AverageSpeedWidget*>(pw)) {
         p->setPixelSizeUmPerPixel(m_umPerPixel);
         p->setVideoFps(m_videoFps);
-    } else if (auto* p = qobject_cast<ReversalCountWidget*>(w)) {
+    } else if (auto* p = qobject_cast<ReversalCountWidget*>(pw)) {
         p->setPixelSizeUmPerPixel(m_umPerPixel);
         p->setVideoFps(m_videoFps);
     }
@@ -840,8 +792,7 @@ void AnalysisPanel::propagateSettings(QWidget* w)
 
 void AnalysisPanel::updateMdiLayout()
 {
-    // Tile all open sub-windows to fill the MDI area evenly
-    m_mdiArea->tileSubWindows();
+    if (w.mdiArea) w.mdiArea->tileSubWindows();
 }
 
 QWidget* AnalysisPanel::createPlotWidget(int plotIndex)
