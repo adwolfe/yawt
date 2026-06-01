@@ -124,8 +124,8 @@ QStringList AnalysisSessionModel::buildWarnings(const QString& procDir,
         if (err.error == QJsonParseError::NoError && doc.isObject()) {
             for (const QJsonValue& v : doc.object().value("items").toArray()) {
                 const QString type = v.toObject().value("type").toString();
-                if (type == "StartPoint") hasStart = true;
-                if (type == "EndPoint")   hasEnd   = true;
+                if (type == "Start Point") hasStart = true;
+                if (type == "End Point")   hasEnd   = true;
             }
         }
         if (!hasStart && !hasEnd)
@@ -836,16 +836,42 @@ bool AnalysisSessionModel::dropMimeData(const QMimeData* data,
     if (dstGroupRow < 0 || dstGroupRow >= m_groups.size()) return false;
     if (srcGroupRow == dstGroupRow) return false; // no-op: same group
 
-    // Move video — use beginResetModel so all persistent indexes stay valid
-    beginResetModel();
+    // Use targeted remove + insert so the view keeps its expansion state.
+    // (beginResetModel would collapse every group node.)
+
+    const QModelIndex srcGroupIdx = index(srcGroupRow, 0);
+    const QModelIndex dstGroupIdx = index(dstGroupRow, 0);
+    const int dstInsertRow = m_groups[dstGroupRow].videos.size(); // append to end
+
+    // 1. Remove from source group
+    beginRemoveRows(srcGroupIdx, srcVideoRow, srcVideoRow);
     VideoItem vid = m_groups[srcGroupRow].videos.takeAt(srcVideoRow);
+    endRemoveRows();
+
+    // 2. Insert into destination group
+    beginInsertRows(dstGroupIdx, dstInsertRow, dstInsertRow);
     m_groups[dstGroupRow].videos.append(std::move(vid));
+    endInsertRows();
+
+    // 3. Recalculate colors for both groups and notify worm nodes of the change
     recalcGroupColors(srcGroupRow);
     recalcGroupColors(dstGroupRow);
-    endResetModel();
-    saveState();  // structural change: group assignment changed
 
-    // Return true so Qt's InternalMove/DragDrop machinery knows we handled it;
-    // our removeRows no-op prevents double-deletion.
+    // Emit dataChanged for all worm children (colors changed) + group labels
+    const auto notifyGroup = [this](int g) {
+        const QModelIndex gIdx = index(g, 0);
+        emit dataChanged(gIdx, gIdx, {Qt::DisplayRole, Qt::CheckStateRole});
+        for (int v = 0; v < m_groups[g].videos.size(); ++v) {
+            const QModelIndex vIdx = index(v, 0, gIdx);
+            const int wc = m_groups[g].videos[v].worms.size();
+            if (wc > 0)
+                emit dataChanged(index(0, 0, vIdx), index(wc-1, 0, vIdx),
+                                 {Qt::DecorationRole});
+        }
+    };
+    notifyGroup(srcGroupRow);
+    notifyGroup(dstGroupRow);
+
+    saveState();
     return true;
 }
