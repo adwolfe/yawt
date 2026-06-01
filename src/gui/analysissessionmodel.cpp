@@ -96,6 +96,51 @@ Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& 
     return tracks;
 }
 
+/**
+ * Build the list of human-readable warnings for a video proc run.
+ * Currently checks:
+ *  1. Pixel scale missing (umPerPixel == 0)
+ *  2. Start point or end point absent from roi_points.json
+ */
+QStringList AnalysisSessionModel::buildWarnings(const QString& procDir,
+                                                const QString& yawtDir,
+                                                const QString& baseName,
+                                                double umPerPixel)
+{
+    QStringList warnings;
+
+    if (umPerPixel <= 0.0)
+        warnings << "No pixel scale set (µm/pixel is unknown)";
+
+    // Check roi_points.json for StartPoint and EndPoint
+    const QString roiPath = QDir(procDir).absoluteFilePath("roi_points.json");
+    QFile f(roiPath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        warnings << "Missing start point and end point (roi_points.json not found)";
+    } else {
+        QJsonParseError err;
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+        bool hasStart = false, hasEnd = false;
+        if (err.error == QJsonParseError::NoError && doc.isObject()) {
+            for (const QJsonValue& v : doc.object().value("items").toArray()) {
+                const QString type = v.toObject().value("type").toString();
+                if (type == "StartPoint") hasStart = true;
+                if (type == "EndPoint")   hasEnd   = true;
+            }
+        }
+        if (!hasStart && !hasEnd)
+            warnings << "Missing start point and end point";
+        else if (!hasStart)
+            warnings << "Missing start point";
+        else if (!hasEnd)
+            warnings << "Missing end point";
+    }
+
+    Q_UNUSED(yawtDir)
+    Q_UNUSED(baseName)
+    return warnings;
+}
+
 /** Find the most recent PROC_* subfolder inside videoSubDir (sort descending by name). */
 QString AnalysisSessionModel::findMostRecentProc(const QString& videoSubDir)
 {
@@ -238,6 +283,7 @@ void AnalysisSessionModel::loadAndMergeState(
                 vid.procStamp = diskStamp;
                 vid.tracks    = loadTracksFromJson(wormsJson);
                 VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
+                vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
 
                 const bool reprocessed = (diskStamp != savedStamp);
 
@@ -290,6 +336,7 @@ void AnalysisSessionModel::loadAndMergeState(
         vid.procStamp = diskStamp;
         vid.tracks    = loadTracksFromJson(wormsJson);
         VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
+        vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
 
         for (int i = 0; i < wormIds.size(); ++i) {
             WormItem w;
@@ -556,6 +603,12 @@ QVariant AnalysisSessionModel::data(const QModelIndex& idx, int role) const
         switch (role) {
         case Qt::DisplayRole:
             return QString("%1  [%2]").arg(vid.baseName, vid.procStamp);
+        case Qt::ToolTipRole:
+            return vid.warnings.isEmpty()
+                ? QVariant()
+                : QVariant(vid.warnings.join("\n"));
+        case Qt::UserRole:   // WarningsRole — QStringList, consumed by the delegate
+            return QVariant(vid.warnings);
         case Qt::CheckStateRole: {
             // Tristate: all checked → Checked, none → Unchecked, mixed → PartiallyChecked
             int checkedCount = 0;

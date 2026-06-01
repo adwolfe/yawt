@@ -7,15 +7,87 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
+#include <QHelpEvent>
 #include <QInputDialog>
 #include <QListWidget>
 #include <QMdiArea>
 #include <QMdiSubWindow>
+#include <QPainter>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStyledItemDelegate>
+#include <QToolTip>
 #include <QTreeView>
 #include <QHeaderView>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AnalysisWarningDelegate — paints a red "!" badge at the right of video nodes
+// that have validation warnings, and surfaces the tooltip when hovered.
+// ─────────────────────────────────────────────────────────────────────────────
+class AnalysisWarningDelegate : public QStyledItemDelegate
+{
+    Q_OBJECT
+public:
+    explicit AnalysisWarningDelegate(QObject* parent = nullptr)
+        : QStyledItemDelegate(parent) {}
+
+    void paint(QPainter* p, const QStyleOptionViewItem& opt,
+               const QModelIndex& idx) const override
+    {
+        QStyledItemDelegate::paint(p, opt, idx);
+
+        const QStringList warnings = idx.data(Qt::UserRole).toStringList();
+        if (warnings.isEmpty()) return;
+
+        const QRect badge = badgeRect(opt);
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing, true);
+
+        // Red circle
+        p->setPen(Qt::NoPen);
+        p->setBrush(QColor(0xD0, 0x20, 0x20));
+        p->drawEllipse(badge);
+
+        // White "!"
+        p->setPen(Qt::white);
+        QFont f = p->font();
+        f.setBold(true);
+        f.setPixelSize(badge.height() - 4);
+        p->setFont(f);
+        p->drawText(badge, Qt::AlignCenter, "!");
+
+        p->restore();
+    }
+
+    bool helpEvent(QHelpEvent* ev, QAbstractItemView* view,
+                   const QStyleOptionViewItem& opt,
+                   const QModelIndex& idx) override
+    {
+        const QStringList warnings = idx.data(Qt::UserRole).toStringList();
+        if (!warnings.isEmpty() && badgeRect(opt).contains(ev->pos())) {
+            QToolTip::showText(ev->globalPos(),
+                               "<b>Missing data:</b><br>" +
+                               warnings.join("<br>"),
+                               view);
+            return true;
+        }
+        QToolTip::hideText();
+        return QStyledItemDelegate::helpEvent(ev, view, opt, idx);
+    }
+
+private:
+    static QRect badgeRect(const QStyleOptionViewItem& opt)
+    {
+        constexpr int kSize   = 14;
+        constexpr int kMargin = 4;
+        const int x = opt.rect.right() - kSize - kMargin;
+        const int y = opt.rect.top() + (opt.rect.height() - kSize) / 2;
+        return QRect(x, y, kSize, kSize);
+    }
+};
+
+#include "analysispanel.moc"   // needed because the class is defined in a .cpp
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AnalysisPanel
@@ -65,6 +137,8 @@ void AnalysisPanel::setup(const Widgets& widgets)
         w.wormListView->setDragDropMode(QAbstractItemView::DragDrop);
         w.wormListView->setDefaultDropAction(Qt::MoveAction);
         w.wormListView->setDropIndicatorShown(true);
+        w.wormListView->setMouseTracking(true);   // needed for hover tooltips
+        w.wormListView->setItemDelegate(new AnalysisWarningDelegate(w.wormListView));
     }
 
     // ↻ button → force rescan of the yawt directory

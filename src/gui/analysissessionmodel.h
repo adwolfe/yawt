@@ -58,6 +58,9 @@ public:
         // Track data loaded from worms.json — available for analysis plots
         Tracking::AllWormTracks tracks;
         double umPerPixel = 0.0;   // µm/pixel from _metadata.json (0 if unknown)
+
+        // Validation warnings (empty = no issues)
+        QStringList warnings;
     };
 
     // ── Grouped data structs (returned by getGroupedData) ─────────────────────
@@ -167,6 +170,10 @@ private:
     static QList<int>                parseWormIds(const QString& wormsJsonPath);
     static Tracking::AllWormTracks   loadTracksFromJson(const QString& wormsJsonPath);
     static QString                   findMostRecentProc(const QString& videoSubDir);
+    static QStringList               buildWarnings(const QString& procDir,
+                                                   const QString& yawtDir,
+                                                   const QString& baseName,
+                                                   double umPerPixel);
     static QColor     colormapColor(int index, int total);
     static QIcon      makeColorIcon(const QColor& c);
 
