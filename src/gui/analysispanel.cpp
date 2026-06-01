@@ -2,7 +2,11 @@
 #include "analysissessionmodel.h"
 #include "analysisgroupwidgets.h"
 #include "trackingdatastorage.h"
+#include "../plugins/pluginloader.h"
+#include "../plugins/pluginplotwidget.h"
+#include "../utils/yawtpaths.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -212,12 +216,48 @@ void AnalysisPanel::setYawtDirectory(const QString& yawtDir)
     m_yawtDir = yawtDir;
     m_sessionModel->scanYawtDirectory(yawtDir);
     if (w.wormListView) {
-        // Expand group nodes so videos are visible, but leave video nodes
-        // collapsed so the worm list stays hidden until the user opens them.
         w.wormListView->collapseAll();
         const int groupCount = m_sessionModel->rowCount();
         for (int i = 0; i < groupCount; ++i)
             w.wormListView->expand(m_sessionModel->index(i, 0));
+    }
+    loadPlugins();
+}
+
+void AnalysisPanel::loadPlugins()
+{
+    if (!w.plotSelector) return;
+
+    // Close and remove any existing plugin sub-windows
+    for (auto* sw : m_pluginSubWindows.values()) {
+        if (sw && w.mdiArea) w.mdiArea->removeSubWindow(sw);
+        if (sw) sw->deleteLater();
+    }
+    m_pluginSubWindows.clear();
+
+    // Remove existing plugin items from the selector (keep built-ins at top)
+    while (w.plotSelector->count() > kPlotCount)
+        delete w.plotSelector->takeItem(kPlotCount);
+
+    // Load plugins from all search dirs (project > user > bundled)
+    const QStringList searchDirs = YawtPaths::pluginSearchDirs(m_yawtDir);
+    m_plugins = PluginLoader::loadAll(searchDirs);
+
+    // Add valid plugins to the selector with a separator label first
+    bool separatorAdded = false;
+    for (const PlotPluginSpec& spec : m_plugins) {
+        if (!spec.isValid) continue;
+        if (!separatorAdded) {
+            auto* sep = new QListWidgetItem("── Plugins ──", w.plotSelector);
+            sep->setFlags(Qt::NoItemFlags);
+            sep->setForeground(QApplication::palette().mid());
+            separatorAdded = true;
+        }
+        auto* item = new QListWidgetItem(spec.name, w.plotSelector);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Unchecked);
+        if (!spec.description.isEmpty())
+            item->setToolTip(spec.description);
     }
 }
 
@@ -258,20 +298,53 @@ void AnalysisPanel::onPlotItemChanged(QListWidgetItem* item)
 {
     if (!w.plotSelector || !w.mdiArea) return;
     const int idx = w.plotSelector->row(item);
-    if (idx < 0 || idx >= kPlotCount) return;
+    if (idx < 0) return;
+
+    // ── Built-in plots ─────────────────────────────────────────────────────
+    if (idx < kPlotCount) {
+        if (item->checkState() == Qt::Checked) {
+            QWidget* plotWidget = createPlotWidget(idx);
+            if (!plotWidget) return;
+            auto* sw = w.mdiArea->addSubWindow(plotWidget);
+            sw->setWindowTitle(kPlotNames[idx]);
+            sw->show();
+            m_subWindows[idx] = sw;
+        } else {
+            if (m_subWindows[idx]) {
+                w.mdiArea->removeSubWindow(m_subWindows[idx]);
+                m_subWindows[idx]->deleteLater();
+                m_subWindows[idx] = nullptr;
+            }
+        }
+        updateMdiLayout();
+        return;
+    }
+
+    // ── Plugin plots ───────────────────────────────────────────────────────
+    // Find which plugin this item corresponds to (skip separator items)
+    int pluginIdx = -1;
+    int pluginCounter = 0;
+    for (int i = kPlotCount; i < w.plotSelector->count(); ++i) {
+        QListWidgetItem* it = w.plotSelector->item(i);
+        if (!(it->flags() & Qt::ItemIsUserCheckable)) continue; // separator
+        if (it == item) { pluginIdx = pluginCounter; break; }
+        ++pluginCounter;
+    }
+    if (pluginIdx < 0 || pluginIdx >= m_plugins.size()) return;
+    const PlotPluginSpec& spec = m_plugins[pluginIdx];
 
     if (item->checkState() == Qt::Checked) {
-        QWidget* plotWidget = createPlotWidget(idx);
-        if (!plotWidget) return;
-        auto* sw = w.mdiArea->addSubWindow(plotWidget);
-        sw->setWindowTitle(kPlotNames[idx]);
+        if (m_pluginSubWindows.contains(item)) return; // already open
+        auto* pw = new PluginPlotWidget(spec, m_sessionModel);
+        auto* sw = w.mdiArea->addSubWindow(pw);
+        sw->setWindowTitle(spec.name);
         sw->show();
-        m_subWindows[idx] = sw;
+        m_pluginSubWindows[item] = sw;
     } else {
-        if (m_subWindows[idx]) {
-            w.mdiArea->removeSubWindow(m_subWindows[idx]);
-            m_subWindows[idx]->deleteLater();
-            m_subWindows[idx] = nullptr;
+        if (m_pluginSubWindows.contains(item)) {
+            w.mdiArea->removeSubWindow(m_pluginSubWindows[item]);
+            m_pluginSubWindows[item]->deleteLater();
+            m_pluginSubWindows.remove(item);
         }
     }
     updateMdiLayout();

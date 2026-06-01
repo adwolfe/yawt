@@ -7,6 +7,8 @@
 #include <QMap>
 #include <QList>
 
+#include "../plugins/plotpluginspec.h"
+
 class QComboBox;
 class QSpinBox;
 class QCheckBox;
@@ -20,6 +22,7 @@ class QMdiSubWindow;
 class QSplitter;
 class AnalysisSessionModel;
 class TrackingDataStorage;
+class PluginPlotWidget;
 
 /**
  * AnalysisPanel — controller for the Analysis tab.
@@ -87,11 +90,17 @@ private:
     static constexpr int kPlotCount = 5;
     static const char* kPlotNames[kPlotCount];
 
+    void loadPlugins();
+
     TrackingDataStorage* m_storage      = nullptr;
     QSet<int>            m_selectedWormIds;
     double               m_umPerPixel  = 0.0;
     double               m_videoFps    = 0.0;
     QString              m_yawtDir;
+
+    // Plugin plots — items beyond the built-in kPlotCount entries in the selector
+    QList<PlotPluginSpec>                    m_plugins;
+    QMap<QListWidgetItem*, QMdiSubWindow*>   m_pluginSubWindows;
 };
 
 #endif // ANALYSISPANEL_H

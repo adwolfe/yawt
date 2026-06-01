@@ -111,6 +111,7 @@ set(SOURCES
     # Plugins
     src/plugins/pluginloader.cpp
     src/plugins/pluginengine.cpp
+    src/plugins/pluginplotwidget.cpp
     src/plugins/expreval.cpp
 )
 
@@ -183,6 +184,7 @@ set(HEADERS
     src/plugins/plotpluginspec.h
     src/plugins/pluginloader.h
     src/plugins/pluginengine.h
+    src/plugins/pluginplotwidget.h
     src/plugins/expreval.h
 )
 
