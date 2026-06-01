@@ -318,7 +318,7 @@ void CapturePanel::onRecordingStarted(const QString& path)
     // automatically when the file is later opened in the Processing tab.
     if (m_currentUmPerPixel > 0 && !m_outputDirectory.isEmpty()) {
         const QString dataDir  = QDir(m_outputDirectory).filePath("yawt");
-        const QString baseName = QFileInfo(path).baseName();
+        const QString baseName = QFileInfo(path).completeBaseName();
         VideoMetadataStore::saveUmPerPixel(dataDir, baseName, m_currentUmPerPixel);
     }
 }

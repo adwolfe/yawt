@@ -1475,7 +1475,7 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     // Load pixel size from this video's metadata JSON (or reset to 0 if absent).
     // VideoLoader has already created the data directory before emitting videoLoaded.
     m_currentVideoDataDir  = ui->videoLoader->getDataDirectory();
-    m_currentVideoBaseName = QFileInfo(filePath).baseName();
+    m_currentVideoBaseName = QFileInfo(filePath).completeBaseName();
     {
         QSignalBlocker blocker(ui->pixelSizeSpinBoxD);
         double umPerPixel = 0.0;
@@ -1766,6 +1766,11 @@ void MainWindow::onMainTabChanged(int index)
         m_analysisTabActive = true;
         ui->wormTableView->setEnabled(false);
         ui->roiTableView->setEnabled(false);
+
+        // Rescan the yawt directory every time the Analysis tab is opened —
+        // new proc runs may have been completed since the last visit.
+        if (m_analysisPanel && !m_currentVideoDataDir.isEmpty())
+            m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
 
     } else if (!goingToAnalysis && m_analysisTabActive) {
         m_analysisTabActive = false;
