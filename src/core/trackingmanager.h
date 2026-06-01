@@ -5,14 +5,13 @@
  * Responsibilities:
  *  - Orchestrate end-to-end tracking: initial video processing, per-worm trackers (forward/backward),
  *    frame-atomic merge/split handling, progress aggregation, and finalization.
- *  - Own/coordinate worker threads (video processing, per-worm tracking, optional video saving).
+ *  - Own/coordinate worker threads (video processing, per-worm tracking).
  *  - Persist run metadata (threshold settings, input blobs) and populate merge history in storage.
  *
  * Threading model:
  *  - GUI thread constructs and connects to TrackingManager.
  *  - Video processing workers run on QThreads (chunked).
  *  - Per-worm trackers (forward/backward) run on QThreads.
- *  - Optional VideoSaverWorker runs on a background QThread.
  *  - Cross-thread communication via queued signals/slots; registerMetaTypes() registers custom types.
  *
  * Lifecycle:
@@ -116,60 +115,6 @@ struct FrameSpecificPhysicalBlob {
 class TrackingDataStorage;
 namespace Debug { class DebugDataStore; }
 
-/**
- * @class VideoSaverWorker
- * @brief Background worker that saves thresholded video on a separate thread.
- *
- * Receives processed frames via receiveVideoData(...), writes a video file asynchronously,
- * and reports progress/completion/failure via signals. Intended to keep the GUI responsive
- * and to reduce memory pressure by streaming out frames.
- */
-class VideoSaverWorker : public QObject {
-    Q_OBJECT
-
-public:
-    explicit VideoSaverWorker(QObject* parent = nullptr);
-
-public slots:
-    /**
-     * @brief Receive processed frames and parameters to begin asynchronous video saving.
-     * @param reversedFrames Frames from the backward pass (reverse order for output concatenation).
-     * @param forwardFrames Frames from the forward pass.
-     * @param outputPath Target path for the saved video file.
-     * @param fps Frames per second to use for encoding.
-     * @param frameSize Frame dimensions (width/height) for the output video.
-     */
-    void receiveVideoData(std::vector<cv::Mat> reversedFrames,
-                         std::vector<cv::Mat> forwardFrames,
-                         const QString& outputPath,
-                         double fps,
-                         cv::Size frameSize);
-
-signals:
-    /**
-     * @brief Emitted when saving completes successfully.
-     * @param savedVideoPath Absolute path to the saved video file.
-     */
-    void savingComplete(const QString& savedVideoPath);
-    /**
-     * @brief Emitted when saving fails.
-     * @param errorMessage Human-readable error description.
-     */
-    void savingError(const QString& errorMessage);
-    /**
-     * @brief Emitted periodically to indicate save progress (0–100).
-     */
-    void savingProgress(int percentage);
-
-private:
-    void startSaving();
-    
-    std::vector<cv::Mat> m_reversedFrames;
-    std::vector<cv::Mat> m_forwardFrames;
-    QString m_outputPath;
-    double m_fps;
-    cv::Size m_frameSize;
-};
 
 class TrackingManager : public QObject {
     Q_OBJECT
@@ -195,11 +140,6 @@ public:
     ~TrackingManager();
     
     // Retracking functionality
-    /**
-     * @brief Get the path to the last saved thresholded video (if any).
-     * @return Absolute path to the saved video or empty if none was saved.
-     */
-    QString getSavedVideoPath() const;
     /**
      * @brief Start a focused retracking on a pre-thresholded video segment for a specific blob.
      * @param thresholdedVideoPath Path to the pre-processed (thresholded) video.
@@ -289,10 +229,6 @@ private slots:
     void handleWormTrackerError(int reportingConceptualWormId, QString errorMessage);
     void handleWormTrackerProgress(int reportingConceptualWormId, int percentDone);
 
-    // Video saving slots
-    void handleVideoSavingComplete(const QString& savedVideoPath);
-    void handleVideoSavingError(const QString& errorMessage);
-
     // Centerline computation slots
     void handleCenterlineFinished();
     void handleCenterlineFailed(const QString& reason);
@@ -335,20 +271,6 @@ signals:
      */
     void centerlineFinished();
 
-    /**
-     * @brief Send processed frames to the background video-saver worker thread.
-     * @param reversedFrames Backward-direction frames (reverse order for output concatenation).
-     * @param forwardFrames Forward-direction frames.
-     * @param outputPath Target path for the saved video file.
-     * @param fps Frames per second for encoding.
-     * @param frameSize Dimensions of frames to be written.
-     */
-    void sendVideoDataToWorker(std::vector<cv::Mat> reversedFrames,
-                              std::vector<cv::Mat> forwardFrames,
-                              const QString& outputPath,
-                              double fps,
-                              cv::Size frameSize);
-
 
 private:
     // Core logic for frame-atomic merge/split handling
@@ -380,9 +302,6 @@ private:
     void assembleProcessedFrames(); // For parallel video processing
     size_t getProcessedVideoMemoryUsage() const; // Returns memory usage in bytes
     void clearProcessedVideoMemory(); // Clear processed video data from memory
-    
-    // Video saving functionality
-    void startVideoSaving(); // Start background video saving process
 
     // (startCenterlineComputation is declared as a public slot above)
     
@@ -409,7 +328,6 @@ private:
     int m_totalFramesInVideoHint;
     bool m_isTrackingRunning;
     bool m_cancelRequested;
-    bool m_isVideoSaving;
 
     // Video processing members (for parallel processing)
     QList<QPointer<QThread>> m_videoProcessorThreads; // One per VideoProcessor chunk worker (lifetime: run scoped)
@@ -457,10 +375,6 @@ private:
     //   Enables quick lookups of the physical blob membership for continuity across frames.
     QMap<int, int> m_wormToPhysicalBlobIdMap;
 
-
-    // Video saving members
-    QPointer<QThread> m_videoSaverThread; // Background worker thread for thresholded video saving (optional)
-    QString m_savedVideoPath; // Path where the thresholded video will be saved
 
     // Centerline computation members (post-tracking background phase)
     QList<QPointer<QThread>> m_centerlineThreads;

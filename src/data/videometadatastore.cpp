@@ -44,6 +44,11 @@ static double unitToUmFactor(const QString& unit)
     return 0.0; // unknown
 }
 
+// OUTPUT: {dataDir}/{videoBaseName}_metadata.json
+// FORMAT: JSON (indented); merges into the existing file so other sections are preserved.
+// DATA:   Scale calibration: pixelsPerUnit, unit, physicalValue, pixelLength, timestamp;
+//           also writes the derived umPerPixel (µm/pixel) for fast reloading.
+// TRIGGER: User saves a scale calibration in the measurement UI.
 bool VideoMetadataStore::saveScale(const QString& dataDir,
                                     const QString& videoBaseName,
                                     const ScaleCalibration& cal)
@@ -77,6 +82,12 @@ bool VideoMetadataStore::saveScale(const QString& dataDir,
     return true;
 }
 
+// OUTPUT: {dataDir}/{videoBaseName}_metadata.json  (same file as saveScale)
+// FORMAT: JSON (indented); merges into the existing file.
+// DATA:   Single field: umPerPixel — spatial resolution in micrometers per pixel.
+//           Used when the calibration value is updated programmatically without a full
+//           ScaleCalibration struct (e.g., unit conversion recalculation).
+// TRIGGER: Programmatic update of spatial resolution independent of full scale save.
 bool VideoMetadataStore::saveUmPerPixel(const QString& dataDir,
                                          const QString& videoBaseName,
                                          double umPerPixel)
