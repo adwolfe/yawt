@@ -40,6 +40,7 @@
 #include "version.h"
 #include "wormtimeline.h"
 #include "capturepanel.h"
+#include "scaledialog.h"
 #include "../data/videometadatastore.h"
 #include "../utils/thresholdingutils.h"
 #include <opencv2/core.hpp>
@@ -300,6 +301,7 @@ MainWindow::MainWindow(QWidget *parent)
         aw.speedRangeMinSpin  = ui->analysisSpeedRangeMinSpin;
         aw.speedRangeMaxSpin  = ui->analysisSpeedRangeMaxSpin;
         aw.wormListView       = ui->analysisWormListView;
+        aw.addGroupBtn        = ui->analysisAddGroupBtn;
         aw.plotSelector       = ui->analysisPlotSelector;
         aw.mdiArea            = ui->analysisMdiArea;
         aw.splitter           = ui->analysisSplitter;
@@ -443,6 +445,58 @@ void MainWindow::onPixelSizeSpinEditingFinished()
         m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel);
 }
 
+void MainWindow::onMeasureButtonClicked()
+{
+    if (!ui->videoLoader->isVideoLoaded()) {
+        // Nothing to measure against — silently ignore.
+        return;
+    }
+    ScaleDialog dlg(this);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    // Stash dialog values so onVideoScaleMeasured can use them.
+    m_pendingScalePhysical = dlg.physicalValue();
+    m_pendingScaleUnit     = dlg.unit();
+
+    ui->videoLoader->setScaleMeasureMode(true);
+    ui->processingScaleLabel->setText(
+        QString("Draw a line = %1 %2")
+            .arg(m_pendingScalePhysical, 0, 'g', 4)
+            .arg(m_pendingScaleUnit));
+}
+
+void MainWindow::onVideoScaleMeasured(double pixelLength)
+{
+    if (pixelLength < 1.0 || m_pendingScaleUnit.isEmpty()) return;
+
+    const double pixelsPerUnit = pixelLength / m_pendingScalePhysical;
+
+    // Convert to µm/pixel for the spinbox.
+    auto unitToUm = [](const QString& u) -> double {
+        if (u == "mm")   return 1000.0;
+        if (u == "µm")   return 1.0;
+        if (u == "cm")   return 10000.0;
+        if (u == "inch") return 25400.0;
+        return 0.0;
+    };
+    const double factor     = unitToUm(m_pendingScaleUnit);
+    const double umPerPixel = (factor > 0 && pixelsPerUnit > 0) ? factor / pixelsPerUnit : 0.0;
+
+    if (umPerPixel > 0) {
+        ui->pixelSizeSpinBoxD->setValue(umPerPixel);   // triggers valueChanged → AppController
+        ui->processingScaleLabel->setText(
+            QString("Scale: %1 µm/px").arg(umPerPixel, 0, 'f', 2));
+
+        // Persist to this video's metadata JSON immediately.
+        if (!m_currentVideoDataDir.isEmpty() && !m_currentVideoBaseName.isEmpty())
+            VideoMetadataStore::saveUmPerPixel(
+                m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel);
+    }
+
+    m_pendingScalePhysical = 0.0;
+    m_pendingScaleUnit.clear();
+}
+
 void MainWindow::setupConnections() {
     // Connect ROI factor spinbox to BlobTableModel
     connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -456,6 +510,12 @@ void MainWindow::setupConnections() {
     // Save to video metadata JSON when the user manually finishes editing the spinbox.
     connect(ui->pixelSizeSpinBoxD, &QDoubleSpinBox::editingFinished,
             this, &MainWindow::onPixelSizeSpinEditingFinished);
+
+    // Processing tab ruler calibration
+    connect(ui->measureButton, &QToolButton::clicked,
+            this, &MainWindow::onMeasureButtonClicked);
+    connect(ui->videoLoader,   &VideoLoader::scaleMeasured,
+            this, &MainWindow::onVideoScaleMeasured);
 
     // File/Directory
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
@@ -799,20 +859,6 @@ void MainWindow::setupConnections() {
     // Main tab switching: Analysis tab gets multi-select; others get single-select
     connect(ui->mainTabWidget, &QTabWidget::currentChanged,
             this, &MainWindow::onMainTabChanged);
-
-    // When on the Analysis tab and worm table selection changes, forward to analysis panel
-    connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, [this](const QItemSelection&, const QItemSelection&) {
-        if (!m_analysisTabActive || !m_analysisPanel) return;
-        QSet<int> ids;
-        const auto rows = ui->wormTableView->selectionModel()->selectedRows();
-        for (const QModelIndex& idx : rows) {
-            QModelIndex srcIdx = m_wormProxyModel->mapToSource(idx);
-            if (srcIdx.isValid())
-                ids.insert(m_blobTableModel->getItem(srcIdx.row()).id);
-        }
-        m_analysisPanel->setSelectedWormIds(ids);
-    });
 
     // Connections for TrackingProgressDialog are made when it's created/shown
 }
@@ -1444,8 +1490,13 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
 
     if (m_analysisDialog)
         m_analysisDialog->setVideoFps(m_videoFps);
-    if (m_analysisPanel)
+    if (m_analysisPanel) {
         m_analysisPanel->setVideoFps(m_videoFps);
+        // Trigger a (re-)scan of the yawt directory so the Analysis tree reflects
+        // all available proc runs for this video's sibling videos.
+        if (!m_currentVideoDataDir.isEmpty())
+            m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
+    }
 }
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {
@@ -1706,55 +1757,20 @@ void MainWindow::resultsButtonClicked()
 
 void MainWindow::onMainTabChanged(int index)
 {
+    // The Analysis tab and the Processing tab are fully independent.
+    // Disable the processing-side table views while Analysis is active so
+    // no selection-change signals cross the tab boundary.
     const bool goingToAnalysis = (ui->mainTabWidget->widget(index) == ui->analysisTab);
 
     if (goingToAnalysis && !m_analysisTabActive) {
-        // Save the currently selected single worm (if any)
-        m_savedAnalysisWormId = -1;
-        if (ui->wormTableView->selectionModel()->hasSelection()) {
-            const auto rows = ui->wormTableView->selectionModel()->selectedRows();
-            if (!rows.isEmpty()) {
-                QModelIndex srcIdx = m_wormProxyModel->mapToSource(rows.first());
-                if (srcIdx.isValid())
-                    m_savedAnalysisWormId = m_blobTableModel->getItem(srcIdx.row()).id;
-            }
-        }
-
         m_analysisTabActive = true;
-        ui->wormTableView->setSelectionMode(QAbstractItemView::MultiSelection);
-
-        // Auto-select all worms
-        ui->wormTableView->selectAll();
-
-        // Feed the full selection to the analysis panel (the selectionChanged signal
-        // from selectAll() will also fire, but guard against ordering issues)
-        if (m_analysisPanel) {
-            QSet<int> allIds;
-            for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
-                QModelIndex srcIdx = m_wormProxyModel->mapToSource(m_wormProxyModel->index(row, 0));
-                if (srcIdx.isValid())
-                    allIds.insert(m_blobTableModel->getItem(srcIdx.row()).id);
-            }
-            m_analysisPanel->setSelectedWormIds(allIds);
-        }
+        ui->wormTableView->setEnabled(false);
+        ui->roiTableView->setEnabled(false);
 
     } else if (!goingToAnalysis && m_analysisTabActive) {
         m_analysisTabActive = false;
-        ui->wormTableView->setSelectionMode(QAbstractItemView::SingleSelection);
-
-        // Restore saved selection
-        if (m_savedAnalysisWormId >= 0) {
-            const int idCol = static_cast<int>(BlobTableModel::Column::ID);
-            for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
-                QModelIndex idx2 = m_wormProxyModel->index(row, idCol);
-                if (m_wormProxyModel->data(idx2, Qt::DisplayRole).toInt() == m_savedAnalysisWormId) {
-                    ui->wormTableView->selectRow(row);
-                    break;
-                }
-            }
-        } else {
-            ui->wormTableView->clearSelection();
-        }
+        ui->wormTableView->setEnabled(true);
+        ui->roiTableView->setEnabled(true);
     }
 }
 
@@ -1918,6 +1934,10 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
     // Mark that we have completed tracking
     m_hasCompletedTracking = true;
+
+    // Re-scan the yawt directory so the Analysis tree picks up the new proc folder.
+    if (m_analysisPanel && !m_currentVideoDataDir.isEmpty())
+        m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
 
     statusBar()->showMessage("Tracking completed", 4000);
 

@@ -11,91 +11,19 @@ class QComboBox;
 class QSpinBox;
 class QCheckBox;
 class QDoubleSpinBox;
+class QPushButton;
 class QTreeView;
 class QListWidget;
 class QListWidgetItem;
 class QMdiArea;
 class QMdiSubWindow;
 class QSplitter;
-class QStandardItemModel;
-class QStandardItem;
 class QGroupBox;
+class AnalysisSessionModel;
 class TrackingDataStorage;
 class TrackXYPlotWidget;
 
 namespace TableItems { struct ClickedItem; }
-
-// Speed over time: one line per worm, X = frame, Y = speed
-class SpeedTimelineWidget : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit SpeedTimelineWidget(TrackingDataStorage* storage, QWidget* parent = nullptr);
-    void setPixelSizeUmPerPixel(double umPerPixel);
-    void setVideoFps(double fps);
-    void setVisibleWormIds(const QSet<int>& ids);
-
-protected:
-    void paintEvent(QPaintEvent* event) override;
-
-private:
-    void refreshItems(const QList<TableItems::ClickedItem>& items);
-    QColor colorForId(int id) const;
-
-    TrackingDataStorage* m_storage = nullptr;
-    double m_umPerPixel = 0.0;
-    double m_videoFps = 0.0;
-    QSet<int> m_visibleWormIds;
-    QList<TableItems::ClickedItem> m_items;
-};
-
-// Average speed bar chart: one bar per worm
-class AverageSpeedWidget : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit AverageSpeedWidget(TrackingDataStorage* storage, QWidget* parent = nullptr);
-    void setPixelSizeUmPerPixel(double umPerPixel);
-    void setVideoFps(double fps);
-    void setVisibleWormIds(const QSet<int>& ids);
-
-protected:
-    void paintEvent(QPaintEvent* event) override;
-
-private:
-    void refreshItems(const QList<TableItems::ClickedItem>& items);
-    QColor colorForId(int id) const;
-
-    TrackingDataStorage* m_storage = nullptr;
-    double m_umPerPixel = 0.0;
-    double m_videoFps = 0.0;
-    QSet<int> m_visibleWormIds;
-    QList<TableItems::ClickedItem> m_items;
-};
-
-// Reversal count bar chart: counts direction reversals per worm
-class ReversalCountWidget : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit ReversalCountWidget(TrackingDataStorage* storage, QWidget* parent = nullptr);
-    void setPixelSizeUmPerPixel(double umPerPixel);
-    void setVideoFps(double fps);
-    void setVisibleWormIds(const QSet<int>& ids);
-
-protected:
-    void paintEvent(QPaintEvent* event) override;
-
-private:
-    void refreshItems(const QList<TableItems::ClickedItem>& items);
-    QColor colorForId(int id) const;
-
-    TrackingDataStorage* m_storage = nullptr;
-    double m_umPerPixel = 0.0;
-    double m_videoFps = 0.0;
-    QSet<int> m_visibleWormIds;
-    QList<TableItems::ClickedItem> m_items;
-};
 
 /**
  * AnalysisPanel — controller for the Analysis tab.
@@ -119,6 +47,7 @@ public:
         QDoubleSpinBox*  speedRangeMinSpin  = nullptr;
         QDoubleSpinBox*  speedRangeMaxSpin  = nullptr;
         QTreeView*       wormListView       = nullptr;
+        QPushButton*     addGroupBtn        = nullptr;
         QListWidget*     plotSelector       = nullptr;
         QMdiArea*        mdiArea            = nullptr;
         QSplitter*       splitter           = nullptr;  ///< for setSizes on first show
@@ -132,30 +61,30 @@ public:
     void setPixelSizeUmPerPixel(double umPerPixel);
     void setVideoFps(double fps);
 
+    /** Scan (or re-scan) all proc runs found under the given yawt directory. */
+    void setYawtDirectory(const QString& yawtDir);
+
 public slots:
     void setSelectedWormIds(const QSet<int>& ids);
-    void onStorageItemsChanged(const QList<TableItems::ClickedItem>& items);
 
 signals:
     void wormSelectionChanged(const QSet<int>& ids);
 
 private slots:
-    void onWormItemChanged(QStandardItem* item);
+    void onSessionCheckedChanged();
     void onPlotItemChanged(QListWidgetItem* item);
 
 private:
-    void rebuildWormList(const QList<TableItems::ClickedItem>& items);
     void propagateSelectionToPlots();
-    void propagateSettings(QWidget* w);
+    void propagateSettings(QWidget* pw);
     void updateMdiLayout();
     QWidget* createPlotWidget(int plotIndex);
-    static QIcon makeColorIcon(const QColor& color);
 
     // UI widget pointers (non-owning, sourced from mainwindow.ui)
     Widgets w;
 
     // Owned by this controller (not in the .ui file — dynamic/model-driven)
-    QStandardItemModel* m_wormListModel = nullptr;
+    AnalysisSessionModel* m_sessionModel = nullptr;
     QList<QMdiSubWindow*> m_subWindows;
 
     static constexpr int kPlotCount = 5;
@@ -166,6 +95,7 @@ private:
     bool                 m_updatingSelection  = false;
     double               m_umPerPixel         = 0.0;
     double               m_videoFps           = 0.0;
+    QString              m_yawtDir;
 };
 
 #endif // ANALYSISPANEL_H

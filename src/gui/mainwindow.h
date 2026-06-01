@@ -187,6 +187,8 @@ private:
     /** Called when the user finishes manually editing the pixel-size spinbox.
      *  Persists the new value to the current video's metadata JSON. */
     void onPixelSizeSpinEditingFinished();
+    void onMeasureButtonClicked();
+    void onVideoScaleMeasured(double pixelLength);
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
     void updateWormTimeline();
@@ -246,9 +248,11 @@ private:
     QString m_currentVideoDataDir;
     QString m_currentVideoBaseName;
 
-    // Tab-switch state: saved worm ID selection before entering Analysis tab
-    int  m_savedAnalysisWormId = -1;
-    bool m_analysisTabActive   = false;
+    // Pending scale measurement (set when ScaleDialog is accepted, cleared after result).
+    double  m_pendingScalePhysical = 0.0;
+    QString m_pendingScaleUnit;
+
+    bool m_analysisTabActive = false;
 
     /** Button group for interaction modes (Pan, ROI, Crop, EditBlobs, EditTracks). Owned by MainWindow. */
     QButtonGroup *m_interactionModeButtonGroup;

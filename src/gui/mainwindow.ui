@@ -659,6 +659,28 @@
               </widget>
              </item>
              <item>
+              <widget class="QToolButton" name="measureButton">
+               <property name="toolTip">
+                <string>Measure a known distance on the video to calibrate pixel size</string>
+               </property>
+               <property name="statusTip">
+                <string>Calibrate pixel size</string>
+               </property>
+               <property name="text">
+                <string>⇔</string>
+               </property>
+               <property name="checkable">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="processingScaleLabel">
+               <property name="text"><string/></property>
+               <property name="styleSheet"><string notr="true">color: #5aab5a; font-size: 11px;</string></property>
+              </widget>
+             </item>
+             <item>
               <spacer name="horizontalSpacer">
                <property name="orientation">
                 <enum>Qt::Orientation::Horizontal</enum>
@@ -1935,21 +1957,49 @@ QToolButton#lastFrameButton {
               </layout>
              </widget>
             </item>
-            <!-- Worm list -->
+            <!-- Analysis Groups tree + Add Group button -->
             <item>
-             <widget class="QLabel" name="analysisWormsLabel">
-              <property name="text"><string>Worms</string></property>
-             </widget>
+             <layout class="QHBoxLayout" name="analysisGroupsHeaderLayout">
+              <property name="spacing"><number>4</number></property>
+              <item>
+               <widget class="QLabel" name="analysisWormsLabel">
+                <property name="text"><string>Analysis Groups</string></property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="analysisGroupsHeaderSpacer">
+                <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+                <property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property>
+               </spacer>
+              </item>
+             </layout>
             </item>
             <item>
              <widget class="QTreeView" name="analysisWormListView">
-              <property name="minimumSize"><size><width>0</width><height>80</height></size></property>
-              <property name="maximumSize"><size><width>16777215</width><height>160</height></size></property>
-              <property name="selectionMode">
-               <enum>QAbstractItemView::SelectionMode::NoSelection</enum>
+              <property name="minimumSize"><size><width>0</width><height>120</height></size></property>
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+                <horstretch>0</horstretch>
+                <verstretch>1</verstretch>
+               </sizepolicy>
               </property>
-              <property name="rootIsDecorated"><bool>false</bool></property>
+              <property name="selectionMode">
+               <enum>QAbstractItemView::SelectionMode::SingleSelection</enum>
+              </property>
+              <property name="rootIsDecorated"><bool>true</bool></property>
+              <property name="dragEnabled"><bool>true</bool></property>
+              <property name="dragDropMode">
+               <enum>QAbstractItemView::DragDropMode::DragDrop</enum>
+              </property>
+              <property name="showDropIndicator" stdset="0"><bool>true</bool></property>
               <attribute name="headerVisible"><bool>false</bool></attribute>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="analysisAddGroupBtn">
+              <property name="text"><string>+ Add Group</string></property>
+              <property name="maximumSize"><size><width>16777215</width><height>24</height></size></property>
+              <property name="toolTip"><string>Create a new named group for pooling videos</string></property>
              </widget>
             </item>
             <!-- Plot selector -->
@@ -1960,13 +2010,6 @@ QToolButton#lastFrameButton {
             </item>
             <item>
              <widget class="QListWidget" name="analysisPlotSelector"/>
-            </item>
-            <!-- Stretch -->
-            <item>
-             <spacer name="analysisLeftSpacer">
-              <property name="orientation"><enum>Qt::Orientation::Vertical</enum></property>
-              <property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property>
-             </spacer>
             </item>
            </layout>
           </widget>

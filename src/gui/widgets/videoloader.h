@@ -194,6 +194,11 @@ public slots:
     void setViewModeOption(VideoLoader::ViewModeOption option, bool active);
 
     void clearRoi(); // Clears the general purpose ROI
+
+    /** Enter/leave scale-measure mode.
+     *  First click sets start; second click finalises and emits scaleMeasured().
+     *  Automatically exits measure mode after emission. */
+    void setScaleMeasureMode(bool enabled);
     void setPlaybackSpeed(double multiplier);
     // void clearWormSelections(); // Will be obsolete as selections are not stored here temporarily
 
@@ -253,6 +258,10 @@ signals:
 
     void thresholdParametersChanged(const Thresholding::ThresholdSettings& newSettings);
     void playbackSpeedChanged(double newSpeedMultiplier);
+
+    /** Emitted after the second click in scale-measure mode.
+     *  @p pixelLength  Euclidean distance in video (camera) pixels. */
+    void scaleMeasured(double pixelLength);
 
     /**
      * @brief Emitted when a blob is clicked by the user in EditBlobs mode,
@@ -356,6 +365,12 @@ private:
     // --- Zoom & Pan Members ---
     double m_zoomFactor;
     QPointF m_panOffset;
+
+    // --- Scale measure ---
+    bool    m_scaleMeasureMode  = false;
+    bool    m_scaleHasStart     = false;
+    QPointF m_scaleStartVideo;    // video coords of first click
+    QPointF m_scaleCurrentVideo;  // video coords of live cursor
 
     // --- Thresholding & Pre-processing Members ---
     // bool m_showThresholdMask; // This state is now part of m_currentViewMode (ViewMode::Threshold)

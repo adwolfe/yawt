@@ -2,6 +2,7 @@
 #include "frameloader.h"
 
 #include <QDebug>
+#include <cmath>
 #include "../../utils/loggingcategories.h"
 #include <QFileInfo>
 #include <QMessageBox>
@@ -505,6 +506,19 @@ void VideoLoader::clearRoi() {
         update();
         emit roiDefined(m_activeRoiRect);
     }
+}
+
+void VideoLoader::setScaleMeasureMode(bool enabled)
+{
+    m_scaleMeasureMode = enabled;
+    m_scaleHasStart    = false;
+    if (enabled) {
+        // Suspend current interaction mode visually without changing the stored mode.
+        setCursor(Qt::CrossCursor);
+    } else {
+        updateCursorShape();
+    }
+    update();
 }
 
 void VideoLoader::setPlaybackSpeed(double multiplier) {
@@ -1261,11 +1275,75 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             }
         }
     }
+    // ── Scale-measure overlay ────────────────────────────────────────────────
+    if (m_scaleMeasureMode && isVideoLoaded()) {
+        const QColor scaleColor(255, 220, 60);
+
+        if (!m_scaleHasStart) {
+            painter.setPen(QPen(scaleColor, 1));
+            painter.drawText(rect().adjusted(6, 6, -6, -6),
+                             Qt::AlignBottom | Qt::AlignLeft,
+                             "Click to set start of measurement line");
+        } else {
+            QPointF sw = mapPointFromVideo(m_scaleStartVideo);
+            QPointF ew = mapPointFromVideo(m_scaleCurrentVideo);
+
+            // Dashed line
+            painter.setPen(QPen(scaleColor, 2, Qt::DashLine));
+            painter.drawLine(sw, ew);
+
+            // Crosshair at start
+            const qreal arm = 8.0;
+            painter.setPen(QPen(scaleColor, 2, Qt::SolidLine));
+            painter.drawLine(sw + QPointF(-arm, 0), sw + QPointF(arm, 0));
+            painter.drawLine(sw + QPointF(0, -arm), sw + QPointF(0, arm));
+
+            // Crosshair at current end
+            painter.setPen(QPen(scaleColor, 1, Qt::SolidLine));
+            painter.drawLine(ew + QPointF(-arm * 0.7, 0), ew + QPointF(arm * 0.7, 0));
+            painter.drawLine(ew + QPointF(0, -arm * 0.7), ew + QPointF(0, arm * 0.7));
+
+            // Live pixel-length annotation
+            QPointF delta = m_scaleCurrentVideo - m_scaleStartVideo;
+            double px = std::sqrt(delta.x() * delta.x() + delta.y() * delta.y());
+            QPointF mid = (sw + ew) / 2.0;
+            painter.setPen(scaleColor);
+            painter.drawText(mid + QPointF(6, -6), QString("%1 px").arg(px, 0, 'f', 1));
+
+            painter.setPen(QPen(scaleColor, 1));
+            painter.drawText(rect().adjusted(6, 6, -6, -6),
+                             Qt::AlignBottom | Qt::AlignLeft,
+                             "Click to set end of measurement line");
+        }
+    }
 } // End of paintEvent
 
 void VideoLoader::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->position();
     if (!isVideoLoaded()) { QWidget::mousePressEvent(event); return; }
+
+    // Scale-measure mode intercepts all left clicks before the normal mode handling.
+    if (m_scaleMeasureMode && event->button() == Qt::LeftButton) {
+        QPointF vp = mapPointToVideo(event->position());
+        if (vp.x() >= 0) {
+            if (!m_scaleHasStart) {
+                m_scaleStartVideo   = vp;
+                m_scaleCurrentVideo = vp;
+                m_scaleHasStart     = true;
+            } else {
+                // Second click — finalise.
+                QPointF delta = vp - m_scaleStartVideo;
+                double px = std::sqrt(delta.x() * delta.x() + delta.y() * delta.y());
+                m_scaleHasStart    = false;
+                m_scaleMeasureMode = false;
+                updateCursorShape();
+                update();
+                emit scaleMeasured(px);
+            }
+            event->accept();
+            return;
+        }
+    }
 
     if (event->button() == Qt::LeftButton) {
         // ROI/Crop remain exclusive drawing modes
@@ -1388,6 +1466,14 @@ void VideoLoader::mouseMoveEvent(QMouseEvent* event) {
     m_lastMousePos = currentPos;
     if (!isVideoLoaded()) {
         QWidget::mouseMoveEvent(event);
+        return;
+    }
+    // Keep the live measurement line updated while in scale-measure mode.
+    if (m_scaleMeasureMode && m_scaleHasStart) {
+        QPointF vp = mapPointToVideo(currentPos);
+        if (vp.x() >= 0) m_scaleCurrentVideo = vp;
+        update();
+        event->accept();
         return;
     }
     if (m_isPanning && (event->buttons() & Qt::LeftButton)) {
