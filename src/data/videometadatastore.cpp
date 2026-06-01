@@ -123,6 +123,36 @@ bool VideoMetadataStore::loadUmPerPixel(const QString& dataDir,
     return false;
 }
 
+bool VideoMetadataStore::saveFps(const QString& dataDir,
+                                  const QString& videoBaseName,
+                                  double fps)
+{
+    if (fps <= 0) return false;
+    const QString path = metadataPath(dataDir, videoBaseName);
+    QJsonObject root = readRoot(path);
+    root["version"] = 1;
+    root["fps"] = fps;
+    if (!writeRoot(path, root)) {
+        qWarning() << "[VideoMetadataStore] Could not write fps to" << path;
+        return false;
+    }
+    return true;
+}
+
+bool VideoMetadataStore::loadFps(const QString& dataDir,
+                                  const QString& videoBaseName,
+                                  double& fps)
+{
+    const QString path = metadataPath(dataDir, videoBaseName);
+    QJsonObject root = readRoot(path);
+    if (root.isEmpty()) return false;
+    if (!root.contains("fps")) return false;
+    double v = root.value("fps").toDouble(0.0);
+    if (v <= 0) return false;
+    fps = v;
+    return true;
+}
+
 bool VideoMetadataStore::loadScale(const QString& dataDir,
                                     const QString& videoBaseName,
                                     ScaleCalibration& cal)

@@ -83,6 +83,47 @@ Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& 
                                          static_cast<float>(pos.value("y").toDouble()));
             }
             p.quality = static_cast<Tracking::TrackPointQuality>(pObj.value("quality").toInt());
+
+            // Blob-derived morphology (optional, written post-centerline)
+            if (pObj.contains("area"))
+                p.area = static_cast<float>(pObj.value("area").toDouble());
+            if (pObj.contains("aspectRatio"))
+                p.aspectRatio = static_cast<float>(pObj.value("aspectRatio").toDouble());
+
+            // Body length from centerline points
+            if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
+                const QJsonArray clArr = pObj["centerlinePoints"].toArray();
+                float arcLen = 0.f;
+                cv::Point2f prev{};
+                bool hasPrev = false;
+                for (const QJsonValue& cv : clArr) {
+                    if (!cv.isArray() || cv.toArray().size() < 2) continue;
+                    cv::Point2f pt(static_cast<float>(cv.toArray()[0].toDouble()),
+                                   static_cast<float>(cv.toArray()[1].toDouble()));
+                    if (hasPrev) {
+                        cv::Point2f d = pt - prev;
+                        arcLen += std::sqrt(d.x*d.x + d.y*d.y);
+                    }
+                    prev = pt;
+                    hasPrev = true;
+                }
+                if (arcLen > 0.f) p.bodyLength = arcLen;
+            }
+
+            // Head/tail tips
+            if (pObj.contains("tips") && pObj["tips"].isObject()) {
+                const QJsonObject tips = pObj["tips"].toObject();
+                if (tips.contains("head") && tips.contains("tail")) {
+                    const QJsonObject h = tips["head"].toObject();
+                    const QJsonObject t = tips["tail"].toObject();
+                    p.headTip = cv::Point2f(static_cast<float>(h.value("x").toDouble()),
+                                            static_cast<float>(h.value("y").toDouble()));
+                    p.tailTip = cv::Point2f(static_cast<float>(t.value("x").toDouble()),
+                                            static_cast<float>(t.value("y").toDouble()));
+                    p.hasTips = true;
+                }
+            }
+
             points.push_back(p);
         }
         if (!points.empty()) {
@@ -283,6 +324,7 @@ void AnalysisSessionModel::loadAndMergeState(
                 vid.procStamp = diskStamp;
                 vid.tracks    = loadTracksFromJson(wormsJson);
                 VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
+                VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
                 vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
 
                 const bool reprocessed = (diskStamp != savedStamp);
@@ -336,6 +378,7 @@ void AnalysisSessionModel::loadAndMergeState(
         vid.procStamp = diskStamp;
         vid.tracks    = loadTracksFromJson(wormsJson);
         VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
+        VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
         vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
 
         for (int i = 0; i < wormIds.size(); ++i) {
@@ -454,6 +497,7 @@ AnalysisSessionModel::getGroupedData() const
                 entry.label        = worm.label;
                 entry.color        = worm.color;
                 entry.umPerPixel   = vid.umPerPixel;
+                entry.fps          = vid.fps;
                 entry.videoBaseName = vid.baseName;
                 entry.points       = it->second;  // full copy, sorted in loadTracksFromJson
                 gd.worms.append(std::move(entry));

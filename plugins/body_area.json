@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "Body Area (Box)",
+  "description": "Mean blob area per worm across tracked frames. Area is the pixel count of the thresholded worm blob per frame. Only single-tracking frames are included to exclude merged-blob inflation. Shown as box-and-whisker per group.",
+  "aggregate": "per_worm",
+  "formula": "area",
+  "filter": "quality == Single",
+  "reduce": "mean",
+  "plot": {
+    "type": "box",
+    "y_label": "Body Area (px²)",
+    "y_label_um": "Body Area (µm²)"
+  }
+}

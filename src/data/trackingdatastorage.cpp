@@ -435,7 +435,28 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                     p.roi = QRectF(r.value("x").toDouble(), r.value("y").toDouble(),
                                    r.value("width").toDouble(), r.value("height").toDouble());
                 }
-                p.quality = static_cast<Tracking::TrackPointQuality>(pObj.value("quality").toInt(static_cast<int>(p.quality)));
+                p.quality = static_cast<Tracking::TrackPointQuality>(
+                    pObj.value("quality").toInt(static_cast<int>(p.quality)));
+
+                // Restore centerline points into m_detectedBlobsByFrame so
+                // analysis plots can access them without re-tracking.
+                if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
+                    Tracking::DetectedBlob blob;
+                    blob.isValid   = true;
+                    blob.centroid  = QPointF(static_cast<double>(p.position.x),
+                                             static_cast<double>(p.position.y));
+                    blob.boundingBox = p.roi;
+                    for (const QJsonValue& cv : pObj["centerlinePoints"].toArray()) {
+                        const QJsonArray a = cv.toArray();
+                        if (a.size() >= 2)
+                            blob.centerlinePoints.push_back(
+                                cv::Point2f(static_cast<float>(a[0].toDouble()),
+                                            static_cast<float>(a[1].toDouble())));
+                    }
+                    if (!blob.centerlinePoints.empty())
+                        setDetectedBlobForFrame(p.frameNumberOriginal, wormId, blob);
+                }
+
                 points.push_back(p);
             }
             m_tracks[wormId] = points;

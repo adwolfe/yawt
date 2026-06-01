@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "Body Length (Box)",
+  "description": "Mean body length per worm computed as the arc length of the centerline fitted during tracking. Only frames where a centerline was successfully computed are included. Shown as box-and-whisker per group.",
+  "aggregate": "per_worm",
+  "formula": "body_length",
+  "filter": "body_length > 0",
+  "reduce": "mean",
+  "plot": {
+    "type": "box",
+    "y_label": "Body Length (px)",
+    "y_label_um": "Body Length (µm)"
+  }
+}

@@ -68,4 +68,15 @@ public:
     static bool loadUmPerPixel(const QString& dataDir,
                                const QString& videoBaseName,
                                double& umPerPixel);
+
+    /** Save the video frame rate (frames per second). Preserves all other metadata sections. */
+    static bool saveFps(const QString& dataDir,
+                        const QString& videoBaseName,
+                        double fps);
+
+    /** Load the video frame rate. Returns false if not found;
+     *  @p fps is left untouched in that case. */
+    static bool loadFps(const QString& dataDir,
+                        const QString& videoBaseName,
+                        double& fps);
 };

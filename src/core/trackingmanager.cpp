@@ -44,6 +44,7 @@
  *  - clearProcessedVideoMemory() frees accumulated processed frames early after save/cancel/fail and emits a status update to inform the UI.
   */
 #include "trackingmanager.h"
+#include "../data/videometadatastore.h"
 #include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
 #include "../debug/debugdatastore.h"
@@ -83,439 +84,220 @@
 #include <QJsonArray>
 #include <QFile>
 
-// OUTPUT: {processingOutputDir}/frame_atomic_state.json
-// FORMAT: JSON (indented)
-// DATA:   Per-frame physical blob records needed to resume or replay tracking:
-//           nextPhysicalBlobId, frameMergeRecords (contour/hole points, participating worm IDs,
-//           detected blob details with centerline points), splitResolutionMap,
-//           wormToPhysicalBlobIdMap, thresholdSettings (for compatibility checks on reload).
-// TRIGGER: Saved incrementally as frames are processed; read back if tracking is resumed.
-static void saveFrameAtomicStateToJson(const QString& directoryPath,
-                                      int nextPhysicalBlobId,
-                                      const QMap<int, QList<FrameSpecificPhysicalBlob>>& frameMergeRecords,
-                                      const QMap<int, QMap<int, Tracking::DetectedBlob>>& splitResolutionMap,
-                                      const QMap<int, int>& wormToPhysicalBlobIdMap,
-                                      const Thresholding::ThresholdSettings& thresholdSettings)
+// frame_atomic_state.json has been eliminated.
+// All merge/split state is now saved inside worms.json (mergeState section).
+// The helpers below replace loadFrameAtomicStateFromJson.
+
+// ---------------------------------------------------------------------------
+// Shared JSON helpers for DetectedBlob <-> JSON (used by save and load paths)
+// ---------------------------------------------------------------------------
+static QJsonObject detectedBlobToJson(const Tracking::DetectedBlob& db)
 {
-    if (directoryPath.isEmpty()) {
-        qWarning() << "saveFrameAtomicStateToJson: No directory provided; skipping save.";
-        return;
+    QJsonObject obj;
+    obj["isValid"]          = db.isValid;
+    obj["area"]             = db.area;
+    obj["convexHullArea"]   = db.convexHullArea;
+    obj["touchesROIboundary"] = db.touchesROIboundary;
+
+    QJsonObject cent;
+    cent["x"] = db.centroid.x();
+    cent["y"] = db.centroid.y();
+    obj["centroid"] = cent;
+
+    QJsonObject bbox;
+    bbox["x"]      = db.boundingBox.x();
+    bbox["y"]      = db.boundingBox.y();
+    bbox["width"]  = db.boundingBox.width();
+    bbox["height"] = db.boundingBox.height();
+    obj["boundingBox"] = bbox;
+
+    QJsonArray contourArr;
+    for (const cv::Point& pt : db.contourPoints) {
+        QJsonArray a; a.append(pt.x); a.append(pt.y);
+        contourArr.append(a);
+    }
+    obj["contourPoints"] = contourArr;
+
+    QJsonArray clArr;
+    for (const cv::Point2f& pt : db.centerlinePoints) {
+        QJsonArray a;
+        a.append(static_cast<double>(pt.x));
+        a.append(static_cast<double>(pt.y));
+        clArr.append(a);
+    }
+    obj["centerlinePoints"] = clArr;
+
+    obj["hasCenterlineCutPoint"] = db.hasCenterlineCutPoint;
+    if (db.hasCenterlineCutPoint) {
+        QJsonObject cut;
+        cut["x"] = static_cast<double>(db.centerlineCutPoint.x);
+        cut["y"] = static_cast<double>(db.centerlineCutPoint.y);
+        obj["centerlineCutPoint"] = cut;
     }
 
-    QJsonObject root;
-    root["version"] = 1;
-    root["nextPhysicalBlobId"] = nextPhysicalBlobId;
-
-    // Serialize threshold settings (minimal representation)
-    QJsonObject threshObj;
-    threshObj["algorithm"] = static_cast<int>(thresholdSettings.algorithm);
-    threshObj["globalThresholdValue"] = thresholdSettings.globalThresholdValue;
-    threshObj["adaptiveBlockSize"] = thresholdSettings.adaptiveBlockSize;
-    threshObj["adaptiveCValue"] = thresholdSettings.adaptiveCValue;
-    threshObj["assumeLightBackground"] = thresholdSettings.assumeLightBackground;
-    threshObj["enableBlur"] = thresholdSettings.enableBlur;
-    threshObj["blurKernelSize"] = thresholdSettings.blurKernelSize;
-    threshObj["blurSigmaX"] = thresholdSettings.blurSigmaX;
-    root["thresholdSettings"] = threshObj;
-
-    // wormToPhysicalBlobIdMap
-    QJsonObject wormToPhysObj;
-    for (auto it = wormToPhysicalBlobIdMap.constBegin(); it != wormToPhysicalBlobIdMap.constEnd(); ++it) {
-        wormToPhysObj[QString::number(it.key())] = it.value();
-    }
-    root["wormToPhysicalBlobIdMap"] = wormToPhysObj;
-
-    // frameMergeRecords
-    QJsonObject frameMergeObj;
-    for (auto fit = frameMergeRecords.constBegin(); fit != frameMergeRecords.constEnd(); ++fit) {
-        int frameNum = fit.key();
-        const QList<FrameSpecificPhysicalBlob>& blobList = fit.value();
-        QJsonArray blobsArr;
-        for (const FrameSpecificPhysicalBlob& pb : blobList) {
-            QJsonObject pbObj;
-            pbObj["uniqueId"] = pb.uniqueId;
-            pbObj["frameNumber"] = pb.frameNumber;
-            pbObj["currentArea"] = pb.currentArea;
-
-            // Centroid (cv::Point2f)
-            QJsonObject cObj;
-            cObj["x"] = static_cast<double>(pb.currentCentroid.x);
-            cObj["y"] = static_cast<double>(pb.currentCentroid.y);
-            pbObj["currentCentroid"] = cObj;
-
-            // Bounding box (QRectF)
-            QJsonObject bObj;
-            bObj["x"] = pb.currentBoundingBox.x();
-            bObj["y"] = pb.currentBoundingBox.y();
-            bObj["width"] = pb.currentBoundingBox.width();
-            bObj["height"] = pb.currentBoundingBox.height();
-            pbObj["currentBoundingBox"] = bObj;
-
-            // Serialize contour points for this physical blob (vector<cv::Point>)
-            QJsonArray contourArr;
-            for (const cv::Point& pt : pb.contourPoints) {
-                QJsonArray ptArr;
-                ptArr.append(pt.x);
-                ptArr.append(pt.y);
-                contourArr.append(ptArr);
-            }
-            pbObj["contourPoints"] = contourArr;
-
-            // Serialize hole contours (for ring-shaped coiled worms)
-            QJsonArray holesArr;
-            for (const auto& hole : pb.holeContourPoints) {
-                QJsonArray holeArr;
-                for (const cv::Point& pt : hole) {
-                    QJsonArray ptArr;
-                    ptArr.append(pt.x);
-                    ptArr.append(pt.y);
-                    holeArr.append(ptArr);
-                }
-                holesArr.append(holeArr);
-            }
-            pbObj["holeContourPoints"] = holesArr;
-
-            // participatingWormTrackerIDs (QSet<int>)
-            QJsonArray partArr;
-            for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
-            pbObj["participatingWormTrackerIDs"] = partArr;
-
-            pbObj["selectedByWormTrackerId"] = pb.selectedByWormTrackerId;
-
-            blobsArr.append(pbObj);
+    QJsonArray holesArr;
+    for (const auto& hole : db.holeContourPoints) {
+        QJsonArray holeArr;
+        for (const cv::Point& pt : hole) {
+            QJsonArray a; a.append(pt.x); a.append(pt.y);
+            holeArr.append(a);
         }
-        frameMergeObj[QString::number(frameNum)] = blobsArr;
+        holesArr.append(holeArr);
     }
-    root["frameMergeRecords"] = frameMergeObj;
+    obj["holeContourPoints"] = holesArr;
+    return obj;
+}
 
-    // splitResolutionMap
-    QJsonObject splitMapObj;
-    for (auto sfit = splitResolutionMap.constBegin(); sfit != splitResolutionMap.constEnd(); ++sfit) {
-        int frameNum = sfit.key();
-        const QMap<int, Tracking::DetectedBlob>& wormMap = sfit.value();
-        QJsonObject wormMapObj;
-        for (auto wit = wormMap.constBegin(); wit != wormMap.constEnd(); ++wit) {
-            int wormId = wit.key();
-            const Tracking::DetectedBlob& db = wit.value();
-            QJsonObject dbObj;
-            dbObj["isValid"] = db.isValid;
-            dbObj["area"] = db.area;
-            dbObj["convexHullArea"] = db.convexHullArea;
-            dbObj["touchesROIboundary"] = db.touchesROIboundary;
-
-            QJsonObject cent;
-            cent["x"] = db.centroid.x();
-            cent["y"] = db.centroid.y();
-            dbObj["centroid"] = cent;
-
-            QJsonObject bbox;
-            bbox["x"] = db.boundingBox.x();
-            bbox["y"] = db.boundingBox.y();
-            bbox["width"] = db.boundingBox.width();
-            bbox["height"] = db.boundingBox.height();
-            dbObj["boundingBox"] = bbox;
-
-            // Serialize contour points for this detected blob (if available)
-            QJsonArray dbContourArr;
-            for (const cv::Point& pt : db.contourPoints) {
-                QJsonArray ptArr;
-                ptArr.append(pt.x);
-                ptArr.append(pt.y);
-                dbContourArr.append(ptArr);
-            }
-            dbObj["contourPoints"] = dbContourArr;
-
-            QJsonArray dbCenterlineArr;
-            for (const cv::Point2f& pt : db.centerlinePoints) {
-                QJsonArray ptArr;
-                ptArr.append(static_cast<double>(pt.x));
-                ptArr.append(static_cast<double>(pt.y));
-                dbCenterlineArr.append(ptArr);
-            }
-            dbObj["centerlinePoints"] = dbCenterlineArr;
-
-            dbObj["hasCenterlineCutPoint"] = db.hasCenterlineCutPoint;
-            if (db.hasCenterlineCutPoint) {
-                QJsonObject cutObj;
-                cutObj["x"] = static_cast<double>(db.centerlineCutPoint.x);
-                cutObj["y"] = static_cast<double>(db.centerlineCutPoint.y);
-                dbObj["centerlineCutPoint"] = cutObj;
-            }
-
-            // Serialize hole contours
-            QJsonArray dbHolesArr;
-            for (const auto& hole : db.holeContourPoints) {
-                QJsonArray holeArr;
-                for (const cv::Point& pt : hole) {
-                    QJsonArray ptArr;
-                    ptArr.append(pt.x);
-                    ptArr.append(pt.y);
-                    holeArr.append(ptArr);
-                }
-                dbHolesArr.append(holeArr);
-            }
-            dbObj["holeContourPoints"] = dbHolesArr;
-
-            wormMapObj[QString::number(wormId)] = dbObj;
-        }
-        splitMapObj[QString::number(frameNum)] = wormMapObj;
-    }
-    root["splitResolutionMap"] = splitMapObj;
-
-    // Write to file
-    QString outPath = QDir(directoryPath).absoluteFilePath("frame_atomic_state.json");
-    QFile f(outPath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning() << "saveFrameAtomicStateToJson: Failed to open" << outPath << "for writing.";
-        return;
-    }
-    QJsonDocument doc(root);
-    QByteArray data = doc.toJson(QJsonDocument::Indented);
-    qint64 written = f.write(data);
-    f.close();
-    if (written <= 0) {
-        qWarning() << "saveFrameAtomicStateToJson: Failed to write data to" << outPath;
-    } else {
-        qDebug() << "saveFrameAtomicStateToJson: Wrote frame-atomic state to" << outPath << "(" << written << "bytes )";
-    }
-} // end saveFrameAtomicStateToJson
-
-
-// Helper: Load frame-atomic merge/split state from JSON into provided output references.
-// Returns true on successful load.
-static bool loadFrameAtomicStateFromJson(const QString& directoryPath,
-                                         int &outNextPhysicalBlobId,
-                                         QMap<int, QList<FrameSpecificPhysicalBlob>>& outFrameMergeRecords,
-                                         QMap<int, QMap<int, Tracking::DetectedBlob>>& outSplitResolutionMap,
-                                         QMap<int, int>& outWormToPhysicalBlobIdMap,
-                                         Thresholding::ThresholdSettings& outThresholdSettings)
+static Tracking::DetectedBlob detectedBlobFromJson(const QJsonObject& obj)
 {
-    if (directoryPath.isEmpty()) {
-        qWarning() << "loadFrameAtomicStateFromJson: No directory provided; skipping load.";
-        return false;
-    }
-    QString inPath = QDir(directoryPath).absoluteFilePath("frame_atomic_state.json");
-    QFile f(inPath);
-    if (!f.exists()) {
-        qDebug() << "loadFrameAtomicStateFromJson: No saved state file at" << inPath;
-        return false;
-    }
-    if (!f.open(QIODevice::ReadOnly)) {
-        qWarning() << "loadFrameAtomicStateFromJson: Failed to open" << inPath << "for reading.";
-        return false;
-    }
-    QByteArray data = f.readAll();
-    f.close();
-    QJsonParseError perr;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &perr);
-    if (perr.error != QJsonParseError::NoError) {
-        qWarning() << "loadFrameAtomicStateFromJson: JSON parse error in" << inPath << ":" << perr.errorString();
-        return false;
-    }
-    if (!doc.isObject()) {
-        qWarning() << "loadFrameAtomicStateFromJson: Unexpected JSON root (not an object) in" << inPath;
-        return false;
-    }
-    QJsonObject root = doc.object();
-    int version = root.value("version").toInt(0);
-    if (version != 1) {
-        qWarning() << "loadFrameAtomicStateFromJson: Unsupported version" << version << "in" << inPath;
-        return false;
-    }
-    outNextPhysicalBlobId = root.value("nextPhysicalBlobId").toInt(outNextPhysicalBlobId);
+    Tracking::DetectedBlob db;
+    db.isValid            = obj.value("isValid").toBool(false);
+    db.area               = obj.value("area").toDouble(0);
+    db.convexHullArea     = obj.value("convexHullArea").toDouble(0);
+    db.touchesROIboundary = obj.value("touchesROIboundary").toBool(false);
 
-    // Threshold settings (optional fallback)
-    if (root.contains("thresholdSettings") && root["thresholdSettings"].isObject()) {
-        QJsonObject t = root["thresholdSettings"].toObject();
-        outThresholdSettings.algorithm = static_cast<Thresholding::ThresholdAlgorithm>(t.value("algorithm").toInt(static_cast<int>(outThresholdSettings.algorithm)));
-        outThresholdSettings.globalThresholdValue = t.value("globalThresholdValue").toInt(outThresholdSettings.globalThresholdValue);
-        outThresholdSettings.adaptiveBlockSize = t.value("adaptiveBlockSize").toInt(outThresholdSettings.adaptiveBlockSize);
-        outThresholdSettings.adaptiveCValue = t.value("adaptiveCValue").toDouble(outThresholdSettings.adaptiveCValue);
-        outThresholdSettings.assumeLightBackground = t.value("assumeLightBackground").toBool(outThresholdSettings.assumeLightBackground);
-        outThresholdSettings.enableBlur = t.value("enableBlur").toBool(outThresholdSettings.enableBlur);
-        outThresholdSettings.blurKernelSize = t.value("blurKernelSize").toInt(outThresholdSettings.blurKernelSize);
-        outThresholdSettings.blurSigmaX = t.value("blurSigmaX").toDouble(outThresholdSettings.blurSigmaX);
+    if (obj.contains("centroid") && obj["centroid"].isObject()) {
+        const QJsonObject c = obj["centroid"].toObject();
+        db.centroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
     }
+    if (obj.contains("boundingBox") && obj["boundingBox"].isObject()) {
+        const QJsonObject b = obj["boundingBox"].toObject();
+        db.boundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                b.value("width").toDouble(), b.value("height").toDouble());
+    }
+    for (const QJsonValue& v : obj.value("contourPoints").toArray()) {
+        const QJsonArray a = v.toArray();
+        if (a.size() >= 2) db.contourPoints.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
+    }
+    for (const QJsonValue& v : obj.value("centerlinePoints").toArray()) {
+        const QJsonArray a = v.toArray();
+        if (a.size() >= 2)
+            db.centerlinePoints.push_back(cv::Point2f(static_cast<float>(a[0].toDouble()),
+                                                       static_cast<float>(a[1].toDouble())));
+    }
+    db.hasCenterlineCutPoint = obj.value("hasCenterlineCutPoint").toBool(false);
+    if (db.hasCenterlineCutPoint && obj.contains("centerlineCutPoint")) {
+        const QJsonObject c = obj["centerlineCutPoint"].toObject();
+        db.centerlineCutPoint = cv::Point2f(static_cast<float>(c.value("x").toDouble()),
+                                             static_cast<float>(c.value("y").toDouble()));
+    }
+    for (const QJsonValue& hv : obj.value("holeContourPoints").toArray()) {
+        std::vector<cv::Point> hole;
+        for (const QJsonValue& pv : hv.toArray()) {
+            const QJsonArray a = pv.toArray();
+            if (a.size() >= 2) hole.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
+        }
+        db.holeContourPoints.push_back(std::move(hole));
+    }
+    return db;
+}
+
+// ---------------------------------------------------------------------------
+// Load merge/split state from the mergeState section of worms.json.
+// Replaces loadFrameAtomicStateFromJson — reads from worms.json in procDir.
+// ---------------------------------------------------------------------------
+static bool loadMergeStateFromWormsJson(
+    const QString& procDir,
+    int& outNextPhysicalBlobId,
+    QMap<int, QList<FrameSpecificPhysicalBlob>>& outFrameMergeRecords,
+    QMap<int, QMap<int, Tracking::DetectedBlob>>& outSplitResolutionMap,
+    QMap<int, int>& outWormToPhysicalBlobIdMap)
+{
+    const QString path = QDir(procDir).absoluteFilePath("worms.json");
+    QFile f(path);
+    if (!f.exists()) return false;
+    if (!f.open(QIODevice::ReadOnly)) return false;
+
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return false;
+
+    const QJsonObject root = doc.object();
+    if (!root.contains("mergeState") || !root["mergeState"].isObject()) {
+        qDebug() << "loadMergeStateFromWormsJson: no mergeState section in" << path;
+        return false;
+    }
+    const QJsonObject ms = root["mergeState"].toObject();
+
+    outNextPhysicalBlobId = ms.value("nextPhysicalBlobId").toInt(outNextPhysicalBlobId);
 
     // wormToPhysicalBlobIdMap
     outWormToPhysicalBlobIdMap.clear();
-    if (root.contains("wormToPhysicalBlobIdMap") && root["wormToPhysicalBlobIdMap"].isObject()) {
-        QJsonObject wmap = root["wormToPhysicalBlobIdMap"].toObject();
-        for (auto it = wmap.constBegin(); it != wmap.constEnd(); ++it) {
-            bool ok = false;
-            int key = it.key().toInt(&ok);
-            if (!ok) continue;
-            outWormToPhysicalBlobIdMap.insert(key, it.value().toInt());
-        }
+    for (auto it = ms.value("wormToPhysicalBlobIdMap").toObject().constBegin();
+         it != ms.value("wormToPhysicalBlobIdMap").toObject().constEnd(); ++it) {
+        bool ok = false;
+        const int key = it.key().toInt(&ok);
+        if (ok) outWormToPhysicalBlobIdMap.insert(key, it.value().toInt());
     }
 
     // frameMergeRecords
     outFrameMergeRecords.clear();
-    if (root.contains("frameMergeRecords") && root["frameMergeRecords"].isObject()) {
-        QJsonObject fm = root["frameMergeRecords"].toObject();
-        for (auto fit = fm.constBegin(); fit != fm.constEnd(); ++fit) {
-            bool ok = false;
-            int frameNum = fit.key().toInt(&ok);
-            if (!ok) continue;
-            QJsonArray arr = fit.value().toArray();
-            QList<FrameSpecificPhysicalBlob> list;
-            list.reserve(arr.size());
-            for (const QJsonValue &v : arr) {
-                if (!v.isObject()) continue;
-                QJsonObject pbObj = v.toObject();
-                FrameSpecificPhysicalBlob pb;
-                pb.uniqueId = pbObj.value("uniqueId").toInt(pb.uniqueId);
-                pb.frameNumber = pbObj.value("frameNumber").toInt(pb.frameNumber);
-                pb.currentArea = pbObj.value("currentArea").toDouble(pb.currentArea);
-                if (pbObj.contains("currentCentroid") && pbObj["currentCentroid"].isObject()) {
-                    QJsonObject c = pbObj["currentCentroid"].toObject();
-                    pb.currentCentroid = cv::Point2f(static_cast<float>(c.value("x").toDouble()), static_cast<float>(c.value("y").toDouble()));
-                }
-                if (pbObj.contains("currentBoundingBox") && pbObj["currentBoundingBox"].isObject()) {
-                    QJsonObject b = pbObj["currentBoundingBox"].toObject();
-                    pb.currentBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(), b.value("width").toDouble(), b.value("height").toDouble());
-                }
-
-                // Deserialize contourPoints (array of [x,y] pairs) if present
-                pb.contourPoints.clear();
-                if (pbObj.contains("contourPoints") && pbObj["contourPoints"].isArray()) {
-                    QJsonArray contourArr = pbObj["contourPoints"].toArray();
-                    for (const QJsonValue &cv : contourArr) {
-                        if (cv.isArray()) {
-                            QJsonArray ptArr = cv.toArray();
-                            if (ptArr.size() >= 2) {
-                                int px = ptArr.at(0).toInt();
-                                int py = ptArr.at(1).toInt();
-                                pb.contourPoints.push_back(cv::Point(px, py));
-                            }
-                        }
-                    }
-                }
-
-                // Deserialize hole contours if present
-                pb.holeContourPoints.clear();
-                if (pbObj.contains("holeContourPoints") && pbObj["holeContourPoints"].isArray()) {
-                    for (const QJsonValue& hv : pbObj["holeContourPoints"].toArray()) {
-                        if (!hv.isArray()) continue;
-                        std::vector<cv::Point> hole;
-                        for (const QJsonValue& ptv : hv.toArray()) {
-                            if (ptv.isArray()) {
-                                QJsonArray ptArr = ptv.toArray();
-                                if (ptArr.size() >= 2)
-                                    hole.push_back(cv::Point(ptArr.at(0).toInt(), ptArr.at(1).toInt()));
-                            }
-                        }
-                        pb.holeContourPoints.push_back(std::move(hole));
-                    }
-                }
-
-                pb.participatingWormTrackerIDs.clear();
-                if (pbObj.contains("participatingWormTrackerIDs") && pbObj["participatingWormTrackerIDs"].isArray()) {
-                    QJsonArray part = pbObj["participatingWormTrackerIDs"].toArray();
-                    for (const QJsonValue &pid : part) pb.participatingWormTrackerIDs.insert(pid.toInt());
-                }
-                pb.selectedByWormTrackerId = pbObj.value("selectedByWormTrackerId").toInt(pb.selectedByWormTrackerId);
-                list.append(pb);
+    for (auto fit = ms.value("frameMergeRecords").toObject().constBegin();
+         fit != ms.value("frameMergeRecords").toObject().constEnd(); ++fit) {
+        bool ok = false;
+        const int frameNum = fit.key().toInt(&ok);
+        if (!ok) continue;
+        QList<FrameSpecificPhysicalBlob> list;
+        for (const QJsonValue& v : fit.value().toArray()) {
+            if (!v.isObject()) continue;
+            const QJsonObject pbObj = v.toObject();
+            FrameSpecificPhysicalBlob pb;
+            pb.uniqueId    = pbObj.value("uniqueId").toInt();
+            pb.frameNumber = pbObj.value("frameNumber").toInt();
+            pb.currentArea = pbObj.value("currentArea").toDouble();
+            if (pbObj.contains("currentCentroid")) {
+                const QJsonObject c = pbObj["currentCentroid"].toObject();
+                pb.currentCentroid = cv::Point2f(static_cast<float>(c.value("x").toDouble()),
+                                                  static_cast<float>(c.value("y").toDouble()));
             }
-            outFrameMergeRecords.insert(frameNum, list);
+            if (pbObj.contains("currentBoundingBox")) {
+                const QJsonObject b = pbObj["currentBoundingBox"].toObject();
+                pb.currentBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                               b.value("width").toDouble(), b.value("height").toDouble());
+            }
+            for (const QJsonValue& cv2 : pbObj.value("contourPoints").toArray()) {
+                const QJsonArray a = cv2.toArray();
+                if (a.size() >= 2) pb.contourPoints.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
+            }
+            for (const QJsonValue& hv : pbObj.value("holeContourPoints").toArray()) {
+                std::vector<cv::Point> hole;
+                for (const QJsonValue& pv : hv.toArray()) {
+                    const QJsonArray a = pv.toArray();
+                    if (a.size() >= 2) hole.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
+                }
+                pb.holeContourPoints.push_back(std::move(hole));
+            }
+            for (const QJsonValue& pid : pbObj.value("participatingWormTrackerIDs").toArray())
+                pb.participatingWormTrackerIDs.insert(pid.toInt());
+            pb.selectedByWormTrackerId = pbObj.value("selectedByWormTrackerId").toInt();
+            list.append(pb);
         }
+        outFrameMergeRecords.insert(frameNum, list);
     }
 
     // splitResolutionMap
     outSplitResolutionMap.clear();
-    if (root.contains("splitResolutionMap") && root["splitResolutionMap"].isObject()) {
-        QJsonObject sm = root["splitResolutionMap"].toObject();
-        for (auto sfit = sm.constBegin(); sfit != sm.constEnd(); ++sfit) {
-            bool okf = false;
-            int frameNum = sfit.key().toInt(&okf);
-            if (!okf) continue;
-            QJsonObject wormMapObj = sfit.value().toObject();
-            QMap<int, Tracking::DetectedBlob> inner;
-            for (auto wit = wormMapObj.constBegin(); wit != wormMapObj.constEnd(); ++wit) {
-                bool okw = false;
-                int wormId = wit.key().toInt(&okw);
-                if (!okw) continue;
-                if (!wit.value().isObject()) continue;
-                QJsonObject dbObj = wit.value().toObject();
-                Tracking::DetectedBlob db;
-                db.isValid = dbObj.value("isValid").toBool(db.isValid);
-                db.area = dbObj.value("area").toDouble(db.area);
-                db.convexHullArea = dbObj.value("convexHullArea").toDouble(db.convexHullArea);
-                db.touchesROIboundary = dbObj.value("touchesROIboundary").toBool(db.touchesROIboundary);
-                if (dbObj.contains("centroid") && dbObj["centroid"].isObject()) {
-                    QJsonObject cent = dbObj["centroid"].toObject();
-                    db.centroid = QPointF(cent.value("x").toDouble(), cent.value("y").toDouble());
-                }
-                if (dbObj.contains("boundingBox") && dbObj["boundingBox"].isObject()) {
-                    QJsonObject bbox = dbObj["boundingBox"].toObject();
-                    db.boundingBox = QRectF(bbox.value("x").toDouble(), bbox.value("y").toDouble(),
-                                            bbox.value("width").toDouble(), bbox.value("height").toDouble());
-                }
-                // Deserialize contourPoints for DetectedBlob if present
-                db.contourPoints.clear();
-                if (dbObj.contains("contourPoints") && dbObj["contourPoints"].isArray()) {
-                    QJsonArray dbContourArr = dbObj["contourPoints"].toArray();
-                    for (const QJsonValue &ptv : dbContourArr) {
-                        if (ptv.isArray()) {
-                            QJsonArray ptArr = ptv.toArray();
-                            if (ptArr.size() >= 2) {
-                                int px = ptArr.at(0).toInt();
-                                int py = ptArr.at(1).toInt();
-                                db.contourPoints.push_back(cv::Point(px, py));
-                            }
-                        }
-                    }
-                }
-                db.centerlinePoints.clear();
-                if (dbObj.contains("centerlinePoints") && dbObj["centerlinePoints"].isArray()) {
-                    QJsonArray dbCenterlineArr = dbObj["centerlinePoints"].toArray();
-                    for (const QJsonValue& ptv : dbCenterlineArr) {
-                        if (ptv.isArray()) {
-                            QJsonArray ptArr = ptv.toArray();
-                            if (ptArr.size() >= 2) {
-                                db.centerlinePoints.push_back(cv::Point2f(
-                                    static_cast<float>(ptArr.at(0).toDouble()),
-                                    static_cast<float>(ptArr.at(1).toDouble())));
-                            }
-                        }
-                    }
-                }
-                db.hasCenterlineCutPoint = dbObj.value("hasCenterlineCutPoint").toBool(false);
-                if (db.hasCenterlineCutPoint &&
-                    dbObj.contains("centerlineCutPoint") && dbObj["centerlineCutPoint"].isObject()) {
-                    QJsonObject cutObj = dbObj["centerlineCutPoint"].toObject();
-                    db.centerlineCutPoint = cv::Point2f(
-                        static_cast<float>(cutObj.value("x").toDouble()),
-                        static_cast<float>(cutObj.value("y").toDouble()));
-                } else {
-                    db.hasCenterlineCutPoint = false;
-                }
-
-                // Deserialize hole contours for DetectedBlob if present
-                db.holeContourPoints.clear();
-                if (dbObj.contains("holeContourPoints") && dbObj["holeContourPoints"].isArray()) {
-                    for (const QJsonValue& hv : dbObj["holeContourPoints"].toArray()) {
-                        if (!hv.isArray()) continue;
-                        std::vector<cv::Point> hole;
-                        for (const QJsonValue& ptv : hv.toArray()) {
-                            if (ptv.isArray()) {
-                                QJsonArray ptArr = ptv.toArray();
-                                if (ptArr.size() >= 2)
-                                    hole.push_back(cv::Point(ptArr.at(0).toInt(), ptArr.at(1).toInt()));
-                            }
-                        }
-                        db.holeContourPoints.push_back(std::move(hole));
-                    }
-                }
-                inner.insert(wormId, db);
-            }
-            outSplitResolutionMap.insert(frameNum, inner);
+    for (auto sfit = ms.value("splitResolutionMap").toObject().constBegin();
+         sfit != ms.value("splitResolutionMap").toObject().constEnd(); ++sfit) {
+        bool ok = false;
+        const int frameNum = sfit.key().toInt(&ok);
+        if (!ok) continue;
+        QMap<int, Tracking::DetectedBlob> inner;
+        for (auto wit = sfit.value().toObject().constBegin();
+             wit != sfit.value().toObject().constEnd(); ++wit) {
+            bool okw = false;
+            const int wormId = wit.key().toInt(&okw);
+            if (!okw || !wit.value().isObject()) continue;
+            inner.insert(wormId, detectedBlobFromJson(wit.value().toObject()));
         }
+        outSplitResolutionMap.insert(frameNum, inner);
     }
 
-    qDebug() << "loadFrameAtomicStateFromJson: Loaded frame-atomic state from" << inPath;
+    qDebug() << "loadMergeStateFromWormsJson: loaded from" << path;
     return true;
 }
+
+// (saveFrameAtomicStateToJson removed — data now lives in worms.json mergeState section)
 
 namespace {
 
@@ -1112,18 +894,17 @@ void TrackingManager::startFullTrackingProcess(
                     TRACKING_DEBUG() << "Current threshold settings differ from stored settings in" << thresholdFilePath;
                     emit trackingStatusUpdate("Threshold settings differ from previous run");
                 } else {
-                    bool loaded = loadFrameAtomicStateFromJson(latestProcDir,
-                                                              m_nextPhysicalBlobId,
-                                                              m_frameMergeRecords,
-                                                              m_splitResolutionMap,
-                                                              m_wormToPhysicalBlobIdMap,
-                                                              m_thresholdSettings);
+                    bool loaded = loadMergeStateFromWormsJson(latestProcDir,
+                                                             m_nextPhysicalBlobId,
+                                                             m_frameMergeRecords,
+                                                             m_splitResolutionMap,
+                                                             m_wormToPhysicalBlobIdMap);
                     if (loaded) {
-                        TRACKING_DEBUG() << "TrackingManager: Loaded saved frame-atomic state from"
-                                         << QDir(latestProcDir).absoluteFilePath("frame_atomic_state.json");
+                        TRACKING_DEBUG() << "TrackingManager: Loaded merge/split state from worms.json in"
+                                         << latestProcDir;
                         emit trackingStatusUpdate("Loaded previous merge/split state (retracking enabled)");
                     } else {
-                        TRACKING_DEBUG() << "TrackingManager: No valid saved frame-atomic state found (or load failed).";
+                        TRACKING_DEBUG() << "TrackingManager: No merge state found in worms.json (first run or old format).";
                     }
                 }
             }
@@ -1194,6 +975,8 @@ void TrackingManager::startFullTrackingProcess(
     if (actualTotalFrames <= 0 && m_totalFramesInVideoHint > 0) actualTotalFrames = m_totalFramesInVideoHint;
     else if (actualTotalFrames <= 0) { emit trackingFailed("Could not determine total frames."); m_isTrackingRunning = false; return; }
     if (m_videoFps <= 0) m_videoFps = 25.0;
+    if (!m_dataDirectory.isEmpty() && !m_videoPath.isEmpty())
+        VideoMetadataStore::saveFps(m_dataDirectory, QFileInfo(m_videoPath).completeBaseName(), m_videoFps);
     if (m_videoFrameSize.width <= 0 || m_videoFrameSize.height <= 0) { emit trackingFailed("Could not determine frame size."); m_isTrackingRunning = false; return; }
     if (m_keyFrameNum < 0 || m_keyFrameNum >= actualTotalFrames) { emit trackingFailed("Keyframe out of bounds."); m_isTrackingRunning = false; return; }
 
@@ -2036,15 +1819,7 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                 populateMergeHistoryInStorage();
 
                 if (!m_processingOutputDirectory.isEmpty()) {
-                    // Save frame-atomic JSON state to processing folder
-                    saveFrameAtomicStateToJson(m_processingOutputDirectory,
-                                               m_nextPhysicalBlobId,
-                                               m_frameMergeRecords,
-                                               m_splitResolutionMap,
-                                               m_wormToPhysicalBlobIdMap,
-                                               m_thresholdSettings);
-
-                    // Save full worms.json (storage snapshot) for recovery
+                    // worms.json now contains everything (tracks, centerlines, merge state)
                     if (!saveWormsJson(m_processingOutputDirectory)) {
                         emit trackingStatusUpdate("Warning: Failed to save worms.json");
                     }
@@ -2367,6 +2142,152 @@ static QByteArray buildSwapWorkbookRelsXml()
     x.writeAttribute("Target","styles.xml");
     x.writeEndElement(); x.writeEndDocument();
     return d;
+}
+
+// OUTPUT: {directoryPath}/worm_summary.json
+// FORMAT: JSON (indented)
+// DATA:   Per-worm statistics for use by the analysis plugin system: frame quality counts,
+//           distance, displacement, speed, and morphology averages (area, body length, aspect ratio).
+//           All _um fields are 0 when no pixel calibration is available.
+// TRIGGER: Written once at end of centerline computation (tracking finalization).
+void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
+{
+    if (directoryPath.isEmpty() || !m_storage) return;
+
+    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
+    const double umPerPixel = (m_pixelSizePixelsPerUm > 0) ? 1.0 / m_pixelSizePixelsPerUm : 0.0;
+
+    QJsonObject wormsObj;
+
+    QList<int> sortedIds;
+    for (const auto& entry : tracks) sortedIds.append(entry.first);
+    std::sort(sortedIds.begin(), sortedIds.end());
+
+    for (int wormId : sortedIds) {
+        const auto& rawPoints = tracks.at(wormId);
+        if (rawPoints.empty()) continue;
+
+        std::vector<Tracking::WormTrackPoint> pts = rawPoints;
+        std::sort(pts.begin(), pts.end(),
+                  [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
+                      return a.frameNumberOriginal < b.frameNumberOriginal;
+                  });
+
+        int nSingle = 0, nSplit = 0, nMerged = 0, nLost = 0;
+        double totalDist = 0.0;
+        double sumAreaPx = 0.0;
+        double sumBodyLenPx = 0.0;
+        double sumAspectRatio = 0.0;
+        int nAreaSamples = 0, nBodyLenSamples = 0, nAspectSamples = 0;
+
+        for (const Tracking::WormTrackPoint& tp : pts) {
+            using Q = Tracking::TrackPointQuality;
+            switch (tp.quality) {
+            case Q::Single: ++nSingle; break;
+            case Q::Split:  ++nSplit;  break;
+            case Q::Merged: ++nMerged; break;
+            case Q::Lost:   ++nLost;   break;
+            }
+
+            // Morphology from detected blobs (skip merged/lost for cleaner stats)
+            if (tp.quality == Q::Single || tp.quality == Q::Split) {
+                QMap<int, Tracking::DetectedBlob> blobs =
+                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                if (blobs.contains(wormId)) {
+                    const Tracking::DetectedBlob& blob = blobs[wormId];
+                    if (blob.isValid) {
+                        if (blob.area > 0) { sumAreaPx += blob.area; ++nAreaSamples; }
+                        // Body length: arc length of centerline
+                        if (blob.centerlinePoints.size() >= 2) {
+                            double arcLen = 0.0;
+                            for (size_t k = 1; k < blob.centerlinePoints.size(); ++k) {
+                                cv::Point2f d = blob.centerlinePoints[k] - blob.centerlinePoints[k-1];
+                                arcLen += std::sqrt(d.x*d.x + d.y*d.y);
+                            }
+                            sumBodyLenPx += arcLen;
+                            ++nBodyLenSamples;
+                        }
+                        // Aspect ratio from bounding box
+                        if (blob.boundingBox.width() > 0 && blob.boundingBox.height() > 0) {
+                            double ar = blob.boundingBox.width() / blob.boundingBox.height();
+                            sumAspectRatio += (ar < 1.0 ? 1.0 / ar : ar);
+                            ++nAspectSamples;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Distance: sum displacement between consecutive non-lost frames
+        cv::Point2f prevPos{};
+        bool hasPrev = false;
+        for (const Tracking::WormTrackPoint& tp : pts) {
+            if (tp.quality == Tracking::TrackPointQuality::Lost) { hasPrev = false; continue; }
+            if (hasPrev) {
+                cv::Point2f d = tp.position - prevPos;
+                totalDist += std::sqrt(d.x*d.x + d.y*d.y);
+            }
+            prevPos = tp.position;
+            hasPrev = true;
+        }
+
+        // Net displacement: first to last non-lost position
+        cv::Point2f firstPos{}, lastPos{};
+        bool hasFirst = false;
+        for (const Tracking::WormTrackPoint& tp : pts) {
+            if (tp.quality == Tracking::TrackPointQuality::Lost) continue;
+            if (!hasFirst) { firstPos = tp.position; hasFirst = true; }
+            lastPos = tp.position;
+        }
+        cv::Point2f netVec = lastPos - firstPos;
+        double netDisp = std::sqrt(netVec.x*netVec.x + netVec.y*netVec.y);
+
+        // Speed: total distance / tracked time (non-lost frames, using FPS)
+        int nTrackedFrames = nSingle + nSplit + nMerged;
+        double trackedTimeSec = (m_videoFps > 0 && nTrackedFrames > 1)
+                                    ? (nTrackedFrames - 1) / m_videoFps : 0.0;
+        double meanSpeed = (trackedTimeSec > 0) ? totalDist / trackedTimeSec : 0.0;
+
+        double meanArea       = nAreaSamples    > 0 ? sumAreaPx / nAreaSamples       : 0.0;
+        double meanBodyLen    = nBodyLenSamples > 0 ? sumBodyLenPx / nBodyLenSamples : 0.0;
+        double meanAspectRatio = nAspectSamples > 0 ? sumAspectRatio / nAspectSamples : 0.0;
+
+        QJsonObject w;
+        w["frames_tracked"] = static_cast<int>(pts.size());
+        w["frames_single"]  = nSingle;
+        w["frames_split"]   = nSplit;
+        w["frames_merged"]  = nMerged;
+        w["frames_lost"]    = nLost;
+        w["total_distance_px"]    = totalDist;
+        w["total_distance_um"]    = umPerPixel > 0 ? totalDist * umPerPixel : 0.0;
+        w["net_displacement_px"]  = netDisp;
+        w["net_displacement_um"]  = umPerPixel > 0 ? netDisp * umPerPixel : 0.0;
+        w["mean_speed_px_per_s"]  = meanSpeed;
+        w["mean_speed_um_per_s"]  = umPerPixel > 0 ? meanSpeed * umPerPixel : 0.0;
+        w["mean_area_px2"]        = meanArea;
+        w["mean_area_um2"]        = umPerPixel > 0 ? meanArea * umPerPixel * umPerPixel : 0.0;
+        w["mean_body_length_px"]  = meanBodyLen;
+        w["mean_body_length_um"]  = umPerPixel > 0 ? meanBodyLen * umPerPixel : 0.0;
+        w["mean_aspect_ratio"]    = meanAspectRatio;
+
+        wormsObj[QString::number(wormId)] = w;
+    }
+
+    QJsonObject root;
+    root["fps"]          = m_videoFps;
+    root["um_per_pixel"] = umPerPixel;
+    root["frame_width"]  = m_videoFrameSize.width;
+    root["frame_height"] = m_videoFrameSize.height;
+    root["worms"]        = wormsObj;
+
+    const QString path = QDir(directoryPath).filePath("worm_summary.json");
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qWarning() << "TrackingManager: could not write worm_summary.json to" << path;
+        return;
+    }
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    qDebug() << "TrackingManager: worm_summary.json saved to" << path;
 }
 
 // OUTPUT: caller-specified path (typically {processingOutputDir}/{basename}_summary.txt)
@@ -2743,12 +2664,14 @@ void TrackingManager::saveThresholdingJson(const QString& directoryPath, const T
 
 // OUTPUT: {processingOutputDir}/worms.json
 // FORMAT: JSON (indented)
-// DATA:   Complete tracking results for all worm items:
+// DATA:   Single authoritative file for all tracking results:
 //           version, videoPath, keyFrame, metrics, items (color, centroid, bounding box),
-//           tracks (per-frame position, ROI, quality for each worm),
-//           mergeGroupsByFrame (which worms shared a blob in each frame).
-// TRIGGER: Written once at tracking finalization.
-bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
+//           tracks (per-frame position, ROI, quality, centerlinePoints for each worm),
+//           mergeGroupsByFrame,
+//           mergeState (nextPhysicalBlobId, frameMergeRecords, splitResolutionMap,
+//                        wormToPhysicalBlobIdMap — used to resume tracking if settings match).
+// TRIGGER: Written once at tracking finalization.  Replaces frame_atomic_state.json.
+bool TrackingManager::saveWormsJson(const QString& directoryPath) {
     if (!m_storage) {
         qWarning() << "TrackingManager: Cannot save worms.json - storage missing";
         return false;
@@ -2820,34 +2743,80 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
     root["items"] = itemsArr;
     root["itemsCount"] = itemsArr.size();
 
+    // ── Tracks (with centerline points) ──────────────────────────────────────
     QJsonObject tracksObj;
     const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
+        const int wormId = it->first;
         QJsonArray pointsArr;
-        const std::vector<Tracking::WormTrackPoint>& points = it->second;
-        for (const Tracking::WormTrackPoint& p : points) {
+        for (const Tracking::WormTrackPoint& p : it->second) {
             QJsonObject pObj;
-            pObj["frame"] = p.frameNumberOriginal;
+            pObj["frame"]   = p.frameNumberOriginal;
+            pObj["quality"] = static_cast<int>(p.quality);
+
             QJsonObject posObj;
-            posObj["x"] = p.position.x;
-            posObj["y"] = p.position.y;
+            posObj["x"] = static_cast<double>(p.position.x);
+            posObj["y"] = static_cast<double>(p.position.y);
             pObj["position"] = posObj;
+
             QJsonObject roiObj;
-            roiObj["x"] = p.roi.x();
-            roiObj["y"] = p.roi.y();
-            roiObj["width"] = p.roi.width();
+            roiObj["x"]      = p.roi.x();
+            roiObj["y"]      = p.roi.y();
+            roiObj["width"]  = p.roi.width();
             roiObj["height"] = p.roi.height();
             pObj["roi"] = roiObj;
-            pObj["quality"] = static_cast<int>(p.quality);
+
+            // Blob-derived data from the detected-blob store
+            const auto blobsForFrame = m_storage->getDetectedBlobsForFrame(p.frameNumberOriginal);
+            const auto blobIt = blobsForFrame.constFind(wormId);
+            if (blobIt != blobsForFrame.constEnd()) {
+                const Tracking::DetectedBlob& blob = blobIt.value();
+
+                // Centerline points
+                QJsonArray clArr;
+                for (const cv::Point2f& pt : blob.centerlinePoints) {
+                    QJsonArray a;
+                    a.append(static_cast<double>(pt.x));
+                    a.append(static_cast<double>(pt.y));
+                    clArr.append(a);
+                }
+                if (!clArr.isEmpty()) pObj["centerlinePoints"] = clArr;
+
+                // Morphology
+                if (blob.area > 0)
+                    pObj["area"] = blob.area;
+                if (blob.boundingBox.width() > 0 && blob.boundingBox.height() > 0) {
+                    double ar = blob.boundingBox.width() / blob.boundingBox.height();
+                    pObj["aspectRatio"] = ar < 1.0 ? 1.0 / ar : ar;
+                }
+
+                // Head/tail tip positions
+                const bool hasHead = blob.assignedHeadTipIdx >= 0
+                                     && blob.assignedHeadTipIdx < static_cast<int>(blob.tipCandidates.size());
+                const bool hasTail = blob.assignedTailTipIdx >= 0
+                                     && blob.assignedTailTipIdx < static_cast<int>(blob.tipCandidates.size());
+                if (hasHead && hasTail) {
+                    const cv::Point2f& h = blob.tipCandidates[blob.assignedHeadTipIdx].point;
+                    const cv::Point2f& t = blob.tipCandidates[blob.assignedTailTipIdx].point;
+                    QJsonObject tips;
+                    QJsonObject headObj; headObj["x"] = static_cast<double>(h.x); headObj["y"] = static_cast<double>(h.y);
+                    QJsonObject tailObj; tailObj["x"] = static_cast<double>(t.x); tailObj["y"] = static_cast<double>(t.y);
+                    tips["head"] = headObj;
+                    tips["tail"] = tailObj;
+                    pObj["tips"] = tips;
+                }
+            }
+
             pointsArr.append(pObj);
         }
-        tracksObj[QString::number(it->first)] = pointsArr;
+        tracksObj[QString::number(wormId)] = pointsArr;
     }
-    root["tracks"] = tracksObj;
+    root["tracks"]      = tracksObj;
     root["tracksCount"] = static_cast<int>(tracks.size());
 
+    // ── Merge groups (high-level, for display) ────────────────────────────────
     QJsonObject mergeObj;
-    QMap<int, QList<QList<int>>> mergeGroups = m_storage->getAllMergeGroups();
+    const QMap<int, QList<QList<int>>> mergeGroups = m_storage->getAllMergeGroups();
     for (auto it = mergeGroups.constBegin(); it != mergeGroups.constEnd(); ++it) {
         QJsonArray groupsArr;
         for (const QList<int>& group : it.value()) {
@@ -2858,6 +2827,85 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) const {
         mergeObj[QString::number(it.key())] = groupsArr;
     }
     root["mergeGroupsByFrame"] = mergeObj;
+
+    // ── Merge state (for tracking resumption) ─────────────────────────────────
+    {
+        QJsonObject ms;
+        ms["nextPhysicalBlobId"] = m_nextPhysicalBlobId;
+
+        // wormToPhysicalBlobIdMap
+        QJsonObject wormToPhysObj;
+        for (auto it = m_wormToPhysicalBlobIdMap.constBegin();
+             it != m_wormToPhysicalBlobIdMap.constEnd(); ++it)
+            wormToPhysObj[QString::number(it.key())] = it.value();
+        ms["wormToPhysicalBlobIdMap"] = wormToPhysObj;
+
+        // frameMergeRecords
+        QJsonObject fmObj;
+        for (auto fit = m_frameMergeRecords.constBegin();
+             fit != m_frameMergeRecords.constEnd(); ++fit) {
+            QJsonArray blobsArr;
+            for (const FrameSpecificPhysicalBlob& pb : fit.value()) {
+                QJsonObject pbObj;
+                pbObj["uniqueId"]    = pb.uniqueId;
+                pbObj["frameNumber"] = pb.frameNumber;
+                pbObj["currentArea"] = pb.currentArea;
+
+                QJsonObject cObj;
+                cObj["x"] = static_cast<double>(pb.currentCentroid.x);
+                cObj["y"] = static_cast<double>(pb.currentCentroid.y);
+                pbObj["currentCentroid"] = cObj;
+
+                QJsonObject bObj;
+                bObj["x"]      = pb.currentBoundingBox.x();
+                bObj["y"]      = pb.currentBoundingBox.y();
+                bObj["width"]  = pb.currentBoundingBox.width();
+                bObj["height"] = pb.currentBoundingBox.height();
+                pbObj["currentBoundingBox"] = bObj;
+
+                QJsonArray contourArr;
+                for (const cv::Point& pt : pb.contourPoints) {
+                    QJsonArray a; a.append(pt.x); a.append(pt.y);
+                    contourArr.append(a);
+                }
+                pbObj["contourPoints"] = contourArr;
+
+                QJsonArray holesArr;
+                for (const auto& hole : pb.holeContourPoints) {
+                    QJsonArray holeArr;
+                    for (const cv::Point& pt : hole) {
+                        QJsonArray a; a.append(pt.x); a.append(pt.y);
+                        holeArr.append(a);
+                    }
+                    holesArr.append(holeArr);
+                }
+                pbObj["holeContourPoints"] = holesArr;
+
+                QJsonArray partArr;
+                for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
+                pbObj["participatingWormTrackerIDs"] = partArr;
+                pbObj["selectedByWormTrackerId"] = pb.selectedByWormTrackerId;
+
+                blobsArr.append(pbObj);
+            }
+            fmObj[QString::number(fit.key())] = blobsArr;
+        }
+        ms["frameMergeRecords"] = fmObj;
+
+        // splitResolutionMap
+        QJsonObject splitObj;
+        for (auto sfit = m_splitResolutionMap.constBegin();
+             sfit != m_splitResolutionMap.constEnd(); ++sfit) {
+            QJsonObject wormMapObj;
+            for (auto wit = sfit.value().constBegin();
+                 wit != sfit.value().constEnd(); ++wit)
+                wormMapObj[QString::number(wit.key())] = detectedBlobToJson(wit.value());
+            splitObj[QString::number(sfit.key())] = wormMapObj;
+        }
+        ms["splitResolutionMap"] = splitObj;
+
+        root["mergeState"] = ms;
+    }
 
     QJsonDocument doc(root);
     QString filePath = QDir(directoryPath).absoluteFilePath("worms.json");
@@ -3347,6 +3395,10 @@ void TrackingManager::handleCenterlineFinished() {
         exportProcessingSummary(summaryPath);
         emit trackingStatusUpdate("Processing summary saved: " + summaryPath);
     }
+
+    // Export machine-readable per-worm summary for the plugin/analysis system.
+    if (!dir.isEmpty())
+        saveWormSummaryJson(dir);
 
     emit centerlineFinished();
     QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);

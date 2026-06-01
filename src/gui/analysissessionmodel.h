@@ -58,6 +58,7 @@ public:
         // Track data loaded from worms.json — available for analysis plots
         Tracking::AllWormTracks tracks;
         double umPerPixel = 0.0;   // µm/pixel from _metadata.json (0 if unknown)
+        double fps        = 0.0;   // frames/s from _metadata.json (0 if unknown)
 
         // Validation warnings (empty = no issues)
         QStringList warnings;
@@ -70,6 +71,7 @@ public:
         QString label;         // "Worm 1" …
         QColor  color;         // group colormap color
         double  umPerPixel;    // from the video this worm belongs to
+        double  fps;           // from the video this worm belongs to (0 if unknown)
         QString videoBaseName;
         std::vector<Tracking::WormTrackPoint> points;  // sorted by frame
     };

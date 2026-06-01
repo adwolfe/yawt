@@ -267,7 +267,14 @@ struct WormTrackPoint {
     cv::Point2f position;           // Position (centroid) in video coordinates
     QRectF roi;                     // ROI used for this worm at this frame (in video coordinates)
     TrackPointQuality quality;      // Single is confident, merged is ambiguous. For visualization later.
-    // Can add behavior annotations later.
+
+    // Blob-derived morphology — populated post-centerline; 0/invalid if unavailable.
+    float area        = 0.f;        // Blob area in pixels²
+    float aspectRatio = 0.f;        // Bounding-box aspect ratio (long/short side, >= 1)
+    float bodyLength  = 0.f;        // Arc length of centerline in pixels
+    cv::Point2f headTip{};          // Assigned head tip position in video coordinates
+    cv::Point2f tailTip{};          // Assigned tail tip position in video coordinates
+    bool hasTips      = false;      // True when headTip/tailTip are valid
 };
 
 /**

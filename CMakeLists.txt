@@ -106,6 +106,12 @@ set(SOURCES
     # Utils
     src/utils/debugutils.cpp
     src/utils/thresholdingutils.cpp
+    src/utils/yawtpaths.cpp
+
+    # Plugins
+    src/plugins/pluginloader.cpp
+    src/plugins/pluginengine.cpp
+    src/plugins/expreval.cpp
 )
 
 # List of headers (updated to new locations)
@@ -171,6 +177,30 @@ set(HEADERS
     # Utils
     src/utils/debugutils.h
     src/utils/thresholdingutils.h
+    src/utils/yawtpaths.h
+
+    # Plugins
+    src/plugins/plotpluginspec.h
+    src/plugins/pluginloader.h
+    src/plugins/pluginengine.h
+    src/plugins/expreval.h
+)
+
+# Bundled example plugins — installed into Contents/Resources/plugins/ in the macOS app bundle.
+# Users can add their own plugins to ~/Library/Application Support/yawt/plugins/ or to
+# a per-project plugins/ folder without modifying the bundle.
+set(BUNDLED_PLUGINS
+    plugins/speed_box.json
+    plugins/speed_timeline.json
+    plugins/total_distance.json
+    plugins/body_length.json
+    plugins/body_area.json
+    plugins/aspect_ratio.json
+    plugins/chemotaxis_index.json
+    plugins/distance_from_start_timeline.json
+)
+set_source_files_properties(${BUNDLED_PLUGINS} PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources/plugins"
 )
 
 # UI files (moved)
@@ -197,7 +227,7 @@ if(WIN32)
     add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_RESOURCE_WINDOWS})
 else()
     add_executable(${PROJECT_NAME} MACOSX_BUNDLE
-        ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_MAC}
+        ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_MAC} ${BUNDLED_PLUGINS}
     )
 endif()
 

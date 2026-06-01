@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "Chemotaxis Index",
+  "description": "Per-worm mean chemotaxis index: (dist_to_start - dist_to_end) / (dist_to_start + dist_to_end). Requires a Start Point and End Point to be set in the project (e.g. representing the start of an odour gradient and the attractant source). Values range from -1 (always at start) to +1 (always at end). Shown as box-and-whisker per group.",
+  "aggregate": "per_worm",
+  "formula": "(dist_to_start - dist_to_end) / (dist_to_start + dist_to_end)",
+  "filter": "quality != Lost",
+  "reduce": "mean",
+  "plot": {
+    "type": "box",
+    "y_label": "Chemotaxis Index"
+  }
+}
