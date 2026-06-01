@@ -18,12 +18,8 @@ class QListWidgetItem;
 class QMdiArea;
 class QMdiSubWindow;
 class QSplitter;
-class QGroupBox;
 class AnalysisSessionModel;
 class TrackingDataStorage;
-class TrackXYPlotWidget;
-
-namespace TableItems { struct ClickedItem; }
 
 /**
  * AnalysisPanel — controller for the Analysis tab.
@@ -90,11 +86,10 @@ private:
     static constexpr int kPlotCount = 5;
     static const char* kPlotNames[kPlotCount];
 
-    TrackingDataStorage* m_storage           = nullptr;
+    TrackingDataStorage* m_storage      = nullptr;
     QSet<int>            m_selectedWormIds;
-    bool                 m_updatingSelection  = false;
-    double               m_umPerPixel         = 0.0;
-    double               m_videoFps           = 0.0;
+    double               m_umPerPixel  = 0.0;
+    double               m_videoFps    = 0.0;
     QString              m_yawtDir;
 };
 
