@@ -9,8 +9,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QMimeData>
 #include <QPixmap>
+#include <QTimer>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static helpers
@@ -123,72 +125,228 @@ void AnalysisSessionModel::recalcGroupColors(int g)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Persistence helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+QString AnalysisSessionModel::stateFilePath(const QString& yawtDir)
+{
+    return QDir(yawtDir).absoluteFilePath("analysis_state.json");
+}
+
+void AnalysisSessionModel::saveState() const
+{
+    if (m_yawtDir.isEmpty()) return;
+
+    QJsonArray groupsArr;
+    for (const auto& g : m_groups) {
+        QJsonArray videosArr;
+        for (const auto& v : g.videos) {
+            QJsonArray checkedArr;
+            for (const auto& w : v.worms)
+                if (w.checked) checkedArr.append(w.id);
+
+            QJsonObject vObj;
+            vObj["baseName"]       = v.baseName;
+            vObj["procStamp"]      = v.procStamp;
+            vObj["checkedWormIds"] = checkedArr;
+            videosArr.append(vObj);
+        }
+        QJsonObject gObj;
+        gObj["name"]   = g.name;
+        gObj["videos"] = videosArr;
+        groupsArr.append(gObj);
+    }
+
+    QJsonObject root;
+    root["version"] = 1;
+    root["groups"]  = groupsArr;
+
+    QFile f(stateFilePath(m_yawtDir));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+}
+
+void AnalysisSessionModel::scheduleStateSave()
+{
+    if (!m_saveTimer) return;
+    m_saveTimer->start(800);   // debounce: save 800 ms after the last change
+}
+
+/**
+ * Merge saved state with the current disk contents.
+ *
+ * diskVideos: baseName → (procDir, procStamp)   (all videos found on disk)
+ *
+ * Rules:
+ *  - Groups and their video assignments are restored from the state file.
+ *  - A video whose procStamp matches what's on disk is restored as-is
+ *    (including saved check states).
+ *  - A video present in the state but with a *newer* proc on disk keeps its
+ *    group assignment but gets fresh track data and all worms re-checked.
+ *  - A video present in the state but missing from disk is silently dropped.
+ *  - A disk video not in the state at all is added to "Unassigned".
+ */
+void AnalysisSessionModel::loadAndMergeState(
+    const QString& yawtDir,
+    const QMap<QString, QPair<QString,QString>>& diskVideos)
+{
+    // ── Load state file ───────────────────────────────────────────────────────
+    QJsonObject root;
+    {
+        QFile f(stateFilePath(yawtDir));
+        if (f.open(QIODevice::ReadOnly)) {
+            QJsonParseError err;
+            const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+            if (err.error == QJsonParseError::NoError && doc.isObject())
+                root = doc.object();
+        }
+    }
+
+    // Track which disk videos have been placed somewhere
+    QSet<QString> placed;
+
+    if (!root.isEmpty()) {
+        // ── Restore groups from state ─────────────────────────────────────────
+        m_groups.clear();
+
+        const QJsonArray groupsArr = root.value("groups").toArray();
+        for (const QJsonValue& gv : groupsArr) {
+            const QJsonObject gObj = gv.toObject();
+            GroupItem gi;
+            gi.name = gObj.value("name").toString();
+
+            const QJsonArray videosArr = gObj.value("videos").toArray();
+            for (const QJsonValue& vv : videosArr) {
+                const QJsonObject vObj = vv.toObject();
+                const QString baseName  = vObj.value("baseName").toString();
+                const QString savedStamp = vObj.value("procStamp").toString();
+
+                // Does this video still exist on disk?
+                if (!diskVideos.contains(baseName)) continue;
+
+                const auto& [diskProcDir, diskStamp] = diskVideos[baseName];
+                placed.insert(baseName);
+
+                // Load the worms.json for the current (possibly updated) proc
+                const QString wormsJson = QDir(diskProcDir).absoluteFilePath("worms.json");
+                const QList<int> wormIds = parseWormIds(wormsJson);
+                if (wormIds.isEmpty()) continue;
+
+                VideoItem vid;
+                vid.baseName  = baseName;
+                vid.procDir   = diskProcDir;
+                vid.procStamp = diskStamp;
+                vid.tracks    = loadTracksFromJson(wormsJson);
+                VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
+
+                const bool reprocessed = (diskStamp != savedStamp);
+
+                // Rebuild the saved check set for this video
+                QSet<int> savedChecked;
+                if (!reprocessed) {
+                    for (const QJsonValue& cv : vObj.value("checkedWormIds").toArray())
+                        savedChecked.insert(cv.toInt());
+                }
+
+                for (int i = 0; i < wormIds.size(); ++i) {
+                    WormItem w;
+                    w.id      = wormIds[i];
+                    w.color   = Qt::gray;
+                    w.label   = QString("Worm %1").arg(i + 1);
+                    // Reprocessed → all checked; otherwise restore saved state
+                    w.checked = reprocessed ? true : savedChecked.contains(wormIds[i]);
+                    vid.worms.append(w);
+                }
+                gi.videos.append(std::move(vid));
+            }
+            m_groups.append(std::move(gi));
+        }
+
+        // Ensure "Unassigned" exists as the first group
+        if (m_groups.isEmpty() || m_groups.first().name != "Unassigned")
+            m_groups.prepend(GroupItem{"Unassigned", {}});
+
+    } else {
+        // No state file: start fresh with just Unassigned
+        m_groups.clear();
+        m_groups.append(GroupItem{"Unassigned", {}});
+    }
+
+    // ── Add any disk videos not yet placed → Unassigned ──────────────────────
+    for (auto it = diskVideos.constBegin(); it != diskVideos.constEnd(); ++it) {
+        if (placed.contains(it.key())) continue;
+
+        const QString& baseName   = it.key();
+        const QString& diskProcDir = it.value().first;
+        const QString& diskStamp  = it.value().second;
+
+        const QString wormsJson = QDir(diskProcDir).absoluteFilePath("worms.json");
+        const QList<int> wormIds = parseWormIds(wormsJson);
+        if (wormIds.isEmpty()) continue;
+
+        VideoItem vid;
+        vid.baseName  = baseName;
+        vid.procDir   = diskProcDir;
+        vid.procStamp = diskStamp;
+        vid.tracks    = loadTracksFromJson(wormsJson);
+        VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
+
+        for (int i = 0; i < wormIds.size(); ++i) {
+            WormItem w;
+            w.id      = wormIds[i];
+            w.checked = true;
+            w.color   = Qt::gray;
+            w.label   = QString("Worm %1").arg(i + 1);
+            vid.worms.append(w);
+        }
+        m_groups[0].videos.append(std::move(vid));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Construction / population
 // ─────────────────────────────────────────────────────────────────────────────
 
 AnalysisSessionModel::AnalysisSessionModel(QObject* parent)
     : QAbstractItemModel(parent)
 {
-    // Always start with the "Unassigned" group
     m_groups.append(GroupItem{"Unassigned", {}});
+
+    // Debounce timer for saving check-state changes
+    m_saveTimer = new QTimer(this);
+    m_saveTimer->setSingleShot(true);
+    connect(m_saveTimer, &QTimer::timeout, this, &AnalysisSessionModel::saveState);
 }
 
 void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
 {
-    beginResetModel();
+    m_yawtDir = yawtDir;
 
-    // Keep any user-created groups but clear their video lists first —
-    // we are about to re-populate from disk.  Then rebuild "Unassigned".
-    // For simplicity: preserve group names but clear all video data,
-    // then re-populate Unassigned from disk.
-    const QStringList preservedGroupNames = [&]{
-        QStringList n;
-        for (int i = 1; i < m_groups.size(); ++i) // skip index 0 (Unassigned)
-            n << m_groups[i].name;
-        return n;
-    }();
-
-    m_groups.clear();
-    m_groups.append(GroupItem{"Unassigned", {}});
-    for (const QString& name : preservedGroupNames)
-        m_groups.append(GroupItem{name, {}});
-
-    // Scan: each immediate subdirectory of yawtDir is a video basename
+    // ── Build disk inventory: baseName → (procDir, procStamp) ────────────────
+    QMap<QString, QPair<QString,QString>> diskVideos;
     const QStringList videoDirs = QDir(yawtDir).entryList(
         QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 
-    for (const QString& videoBaseName : videoDirs) {
-        const QString videoSubDir = QDir(yawtDir).absoluteFilePath(videoBaseName);
-        const QString procDir     = findMostRecentProc(videoSubDir);
+    for (const QString& baseName : videoDirs) {
+        const QString subDir  = QDir(yawtDir).absoluteFilePath(baseName);
+        const QString procDir = findMostRecentProc(subDir);
         if (procDir.isEmpty()) continue;
-
-        const QString wormsJson = QDir(procDir).absoluteFilePath("worms.json");
-        const QList<int> wormIds = parseWormIds(wormsJson);
-        if (wormIds.isEmpty()) continue;
-
-        VideoItem vid;
-        vid.baseName  = videoBaseName;
-        vid.procDir   = procDir;
-        vid.procStamp = QFileInfo(procDir).fileName().mid(5); // strip "PROC_"
-
-        // Load full track data and scale calibration for analysis plots
-        vid.tracks = loadTracksFromJson(wormsJson);
-        VideoMetadataStore::loadUmPerPixel(yawtDir, videoBaseName, vid.umPerPixel);
-
-        for (int i = 0; i < wormIds.size(); ++i) {
-            WormItem w;
-            w.id      = wormIds[i];
-            w.checked = true;
-            w.color   = Qt::gray;          // recalculated below
-            w.label   = QString("Worm %1").arg(i + 1);
-            vid.worms.append(w);
-        }
-
-        m_groups[0].videos.append(std::move(vid));
+        const QString stamp   = QFileInfo(procDir).fileName().mid(5); // strip "PROC_"
+        diskVideos[baseName]  = {procDir, stamp};
     }
 
-    recalcGroupColors(0);
+    // ── Merge with saved state (preserves group assignments) ─────────────────
+    beginResetModel();
+    loadAndMergeState(yawtDir, diskVideos);
+
+    // Recalculate colors for every group
+    for (int g = 0; g < m_groups.size(); ++g)
+        recalcGroupColors(g);
+
     endResetModel();
+
+    // Persist the (possibly updated) state immediately
+    saveState();
 }
 
 void AnalysisSessionModel::addGroup(const QString& name)
@@ -198,6 +356,7 @@ void AnalysisSessionModel::addGroup(const QString& name)
     beginInsertRows({}, row, row);
     m_groups.append(GroupItem{name, {}});
     endInsertRows();
+    saveState();  // structural change
 }
 
 void AnalysisSessionModel::setCheckedForProcDir(const QString& procDir, bool checked)
@@ -386,6 +545,14 @@ QVariant AnalysisSessionModel::data(const QModelIndex& idx, int role) const
         switch (role) {
         case Qt::DisplayRole:
             return QString("%1  [%2]").arg(vid.baseName, vid.procStamp);
+        case Qt::CheckStateRole: {
+            // Tristate: all checked → Checked, none → Unchecked, mixed → PartiallyChecked
+            int checkedCount = 0;
+            for (const auto& w : vid.worms) if (w.checked) ++checkedCount;
+            if (checkedCount == 0)                       return Qt::Unchecked;
+            if (checkedCount == vid.worms.size())        return Qt::Checked;
+            return Qt::PartiallyChecked;
+        }
         default: return {};
         }
     }
@@ -415,21 +582,55 @@ QVariant AnalysisSessionModel::data(const QModelIndex& idx, int role) const
 bool AnalysisSessionModel::setData(const QModelIndex& idx,
                                    const QVariant& value, int role)
 {
-    if (!idx.isValid() || !isWorm(idx)) return false;
-    if (role != Qt::CheckStateRole) return false;
+    if (!idx.isValid() || role != Qt::CheckStateRole) return false;
 
-    const int g = groupRowOf(idx);
-    const int v = videoRowOf(idx);
-    const int w = idx.row();
-    if (g >= m_groups.size()
-            || v >= m_groups[g].videos.size()
-            || w >= m_groups[g].videos[v].worms.size())
-        return false;
+    // ── Video node: cascade to all worms ────────────────────────────────────
+    if (isVideo(idx)) {
+        const int g = groupRowOf(idx);
+        const int v = idx.row();
+        if (g >= m_groups.size() || v >= m_groups[g].videos.size()) return false;
 
-    m_groups[g].videos[v].worms[w].checked = (value.toInt() == Qt::Checked);
-    emit dataChanged(idx, idx, {Qt::CheckStateRole});
-    emit checkedWormIdsChanged();
-    return true;
+        // Treat PartiallyChecked clicks (from toggling a mixed state) as Checked
+        const bool checked = (value.toInt() != Qt::Unchecked);
+        auto& worms = m_groups[g].videos[v].worms;
+        for (auto& w : worms) w.checked = checked;
+
+        // Notify: the video node itself + all its worm children
+        emit dataChanged(idx, idx, {Qt::CheckStateRole});
+        if (!worms.isEmpty()) {
+            emit dataChanged(index(0,         0, idx),
+                             index(worms.size()-1, 0, idx),
+                             {Qt::CheckStateRole});
+        }
+        emit checkedWormIdsChanged();
+        scheduleStateSave();  // debounced check-state save
+        return true;
+    }
+
+    // ── Worm node: single toggle ─────────────────────────────────────────────
+    if (isWorm(idx)) {
+        const int g = groupRowOf(idx);
+        const int v = videoRowOf(idx);
+        const int w = idx.row();
+        if (g >= m_groups.size()
+                || v >= m_groups[g].videos.size()
+                || w >= m_groups[g].videos[v].worms.size())
+            return false;
+
+        m_groups[g].videos[v].worms[w].checked = (value.toInt() == Qt::Checked);
+        emit dataChanged(idx, idx, {Qt::CheckStateRole});
+
+        // Also refresh the parent video node's tristate indicator
+        const QModelIndex parentVideo = parent(idx);
+        if (parentVideo.isValid())
+            emit dataChanged(parentVideo, parentVideo, {Qt::CheckStateRole});
+
+        emit checkedWormIdsChanged();
+        scheduleStateSave();  // debounced check-state save
+        return true;
+    }
+
+    return false;
 }
 
 Qt::ItemFlags AnalysisSessionModel::flags(const QModelIndex& idx) const
@@ -440,7 +641,8 @@ Qt::ItemFlags AnalysisSessionModel::flags(const QModelIndex& idx) const
         return Qt::ItemIsEnabled | Qt::ItemIsDropEnabled;
 
     if (isVideo(idx))
-        return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
+        return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled
+             | Qt::ItemIsUserCheckable;
 
     if (isWorm(idx))
         return Qt::ItemIsEnabled | Qt::ItemIsUserCheckable;
@@ -525,6 +727,7 @@ bool AnalysisSessionModel::dropMimeData(const QMimeData* data,
     recalcGroupColors(srcGroupRow);
     recalcGroupColors(dstGroupRow);
     endResetModel();
+    saveState();  // structural change: group assignment changed
 
     // Return true so Qt's InternalMove/DragDrop machinery knows we handled it;
     // our removeRows no-op prevents double-deletion.

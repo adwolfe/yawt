@@ -67,6 +67,14 @@ void AnalysisPanel::setup(const Widgets& widgets)
         w.wormListView->setDropIndicatorShown(true);
     }
 
+    // ↻ button → force rescan of the yawt directory
+    if (w.refreshBtn) {
+        connect(w.refreshBtn, &QPushButton::clicked, this, [this]() {
+            if (!m_yawtDir.isEmpty())
+                setYawtDirectory(m_yawtDir);
+        });
+    }
+
     // "+" button → add a named group
     if (w.addGroupBtn) {
         connect(w.addGroupBtn, &QPushButton::clicked, this, [this]() {

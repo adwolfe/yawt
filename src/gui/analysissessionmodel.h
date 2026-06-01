@@ -10,6 +10,7 @@
 #include <QMimeData>
 #include <QSet>
 #include <QString>
+#include <QTimer>
 
 /**
  * AnalysisSessionModel — 3-level tree model for the Analysis tab worm list.
@@ -169,7 +170,17 @@ private:
     static QColor     colormapColor(int index, int total);
     static QIcon      makeColorIcon(const QColor& c);
 
+    // Persistence helpers
+    static QString    stateFilePath(const QString& yawtDir);
+    void              saveState() const;
+    void              loadAndMergeState(
+                          const QString& yawtDir,
+                          const QMap<QString, QPair<QString,QString>>& diskVideos);
+    void              scheduleStateSave();   // debounced, for check-state changes
+
     QList<GroupItem> m_groups;
+    QString          m_yawtDir;              // set during scan, used for auto-save
+    QTimer*          m_saveTimer = nullptr;  // debounce timer for check-state saves
 };
 
 #endif // ANALYSISSESSIONMODEL_H

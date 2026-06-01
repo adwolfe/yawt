@@ -44,6 +44,7 @@ public:
         QDoubleSpinBox*  speedRangeMaxSpin  = nullptr;
         QTreeView*       wormListView       = nullptr;
         QPushButton*     addGroupBtn        = nullptr;
+        QPushButton*     refreshBtn         = nullptr;
         QListWidget*     plotSelector       = nullptr;
         QMdiArea*        mdiArea            = nullptr;
         QSplitter*       splitter           = nullptr;  ///< for setSizes on first show

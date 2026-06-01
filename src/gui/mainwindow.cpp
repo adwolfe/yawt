@@ -302,6 +302,7 @@ MainWindow::MainWindow(QWidget *parent)
         aw.speedRangeMaxSpin  = ui->analysisSpeedRangeMaxSpin;
         aw.wormListView       = ui->analysisWormListView;
         aw.addGroupBtn        = ui->analysisAddGroupBtn;
+        aw.refreshBtn         = ui->analysisRefreshBtn;
         aw.plotSelector       = ui->analysisPlotSelector;
         aw.mdiArea            = ui->analysisMdiArea;
         aw.splitter           = ui->analysisSplitter;
@@ -1766,11 +1767,8 @@ void MainWindow::onMainTabChanged(int index)
         m_analysisTabActive = true;
         ui->wormTableView->setEnabled(false);
         ui->roiTableView->setEnabled(false);
-
-        // Rescan the yawt directory every time the Analysis tab is opened —
-        // new proc runs may have been completed since the last visit.
-        if (m_analysisPanel && !m_currentVideoDataDir.isEmpty())
-            m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
+        // No rescan here — state is preserved across tab switches.
+        // A rescan only happens when the data directory changes or tracking completes.
 
     } else if (!goingToAnalysis && m_analysisTabActive) {
         m_analysisTabActive = false;
