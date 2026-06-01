@@ -521,6 +521,16 @@ void MainWindow::setupConnections() {
     // File/Directory
     connect(ui->selectDirButton, &QToolButton::clicked, this, &MainWindow::chooseWorkingDirectory);
 
+    // When the project folder changes, populate the Analysis tab from the yawt
+    // subfolder immediately — no need to open a video first.
+    connect(ui->dirSelected, &QLineEdit::textChanged,
+            this, [this](const QString& dir) {
+        if (!m_analysisPanel || dir.isEmpty()) return;
+        const QString yawtDir = QDir(dir).absoluteFilePath("yawt");
+        if (QDir(yawtDir).exists())
+            m_analysisPanel->setYawtDirectory(yawtDir);
+    });
+
     // VideoLoader basic signals
     connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);

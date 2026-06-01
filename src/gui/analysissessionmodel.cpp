@@ -531,6 +531,15 @@ QVariant AnalysisSessionModel::data(const QModelIndex& idx, int role) const
             f.setBold(true);
             return f;
         }
+        case Qt::CheckStateRole: {
+            // Tristate across all worms in every video in this group
+            int checked = 0, total = 0;
+            for (const auto& v : g.videos)
+                for (const auto& w : v.worms) { ++total; if (w.checked) ++checked; }
+            if (total == 0 || checked == 0)    return Qt::Unchecked;
+            if (checked == total)              return Qt::Checked;
+            return Qt::PartiallyChecked;
+        }
         default: return {};
         }
     }
@@ -584,6 +593,35 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
 {
     if (!idx.isValid() || role != Qt::CheckStateRole) return false;
 
+    // ── Group node: cascade to all videos and all worms ──────────────────────
+    if (isGroup(idx)) {
+        const int g = idx.row();
+        if (g >= m_groups.size()) return false;
+
+        const bool checked = (value.toInt() != Qt::Unchecked);
+        for (auto& vid : m_groups[g].videos)
+            for (auto& w : vid.worms)
+                w.checked = checked;
+
+        // Notify the group node itself
+        emit dataChanged(idx, idx, {Qt::CheckStateRole});
+
+        // Notify each video child and its worms
+        const int vidCount = m_groups[g].videos.size();
+        for (int v = 0; v < vidCount; ++v) {
+            const QModelIndex vidIdx = index(v, 0, idx);
+            emit dataChanged(vidIdx, vidIdx, {Qt::CheckStateRole});
+            const int wormCount = m_groups[g].videos[v].worms.size();
+            if (wormCount > 0)
+                emit dataChanged(index(0, 0, vidIdx),
+                                 index(wormCount - 1, 0, vidIdx),
+                                 {Qt::CheckStateRole});
+        }
+        emit checkedWormIdsChanged();
+        scheduleStateSave();
+        return true;
+    }
+
     // ── Video node: cascade to all worms ────────────────────────────────────
     if (isVideo(idx)) {
         const int g = groupRowOf(idx);
@@ -602,6 +640,11 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
                              index(worms.size()-1, 0, idx),
                              {Qt::CheckStateRole});
         }
+        // Refresh the parent group's tristate indicator
+        const QModelIndex parentGroup = parent(idx);
+        if (parentGroup.isValid())
+            emit dataChanged(parentGroup, parentGroup, {Qt::CheckStateRole});
+
         emit checkedWormIdsChanged();
         scheduleStateSave();  // debounced check-state save
         return true;
@@ -620,10 +663,15 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
         m_groups[g].videos[v].worms[w].checked = (value.toInt() == Qt::Checked);
         emit dataChanged(idx, idx, {Qt::CheckStateRole});
 
-        // Also refresh the parent video node's tristate indicator
+        // Refresh the parent video node's tristate indicator
         const QModelIndex parentVideo = parent(idx);
-        if (parentVideo.isValid())
+        if (parentVideo.isValid()) {
             emit dataChanged(parentVideo, parentVideo, {Qt::CheckStateRole});
+            // And the grandparent group node
+            const QModelIndex parentGroup = parent(parentVideo);
+            if (parentGroup.isValid())
+                emit dataChanged(parentGroup, parentGroup, {Qt::CheckStateRole});
+        }
 
         emit checkedWormIdsChanged();
         scheduleStateSave();  // debounced check-state save
@@ -638,7 +686,7 @@ Qt::ItemFlags AnalysisSessionModel::flags(const QModelIndex& idx) const
     if (!idx.isValid()) return Qt::NoItemFlags;
 
     if (isGroup(idx))
-        return Qt::ItemIsEnabled | Qt::ItemIsDropEnabled;
+        return Qt::ItemIsEnabled | Qt::ItemIsDropEnabled | Qt::ItemIsUserCheckable;
 
     if (isVideo(idx))
         return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled

@@ -138,7 +138,12 @@ void AnalysisPanel::setYawtDirectory(const QString& yawtDir)
     m_yawtDir = yawtDir;
     m_sessionModel->scanYawtDirectory(yawtDir);
     if (w.wormListView) {
-        w.wormListView->expandAll();
+        // Expand group nodes so videos are visible, but leave video nodes
+        // collapsed so the worm list stays hidden until the user opens them.
+        w.wormListView->collapseAll();
+        const int groupCount = m_sessionModel->rowCount();
+        for (int i = 0; i < groupCount; ++i)
+            w.wormListView->expand(m_sessionModel->index(i, 0));
     }
 }
 
