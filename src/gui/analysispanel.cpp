@@ -188,6 +188,9 @@ void AnalysisPanel::setup(const Widgets& widgets)
 
     m_subWindows.resize(kPlotCount, nullptr);
 
+    // Load bundled + user plugins immediately (no project needed for these).
+    loadPlugins();
+
     // Settings → propagate to open plots
     auto propagateAll = [this]() {
         if (!w.mdiArea) return;

@@ -27,7 +27,7 @@ include_directories(
 )
 
 # Find Qt modules
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent)
 
 # Include OpenCV
 # Prefer standard OpenCV discovery; allow overriding via -DOpenCV_DIR
@@ -200,6 +200,7 @@ set(BUNDLED_PLUGINS
     plugins/aspect_ratio.json
     plugins/chemotaxis_index.json
     plugins/distance_from_start_timeline.json
+    plugins/reversals.json
 )
 set_source_files_properties(${BUNDLED_PLUGINS} PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources/plugins"
@@ -244,6 +245,7 @@ target_link_libraries(${PROJECT_NAME}
     Qt6::Gui
     Qt6::Widgets
     Qt6::Svg
+    Qt6::Concurrent
     ${OpenCV_LIBS}
 )
 

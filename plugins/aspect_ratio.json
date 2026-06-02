@@ -1,10 +1,10 @@
 {
   "version": 1,
   "name": "Aspect Ratio (Box)",
-  "description": "Mean bounding-box aspect ratio (long side / short side) per worm. A straight worm has a high aspect ratio; a coiled worm approaches 1. Only single-tracking frames are included. Shown as box-and-whisker per group.",
+  "description": "Mean bounding-box aspect ratio (long side / short side) per worm. A straight worm has a high aspect ratio; a coiled worm approaches 1. Only single-tracking frames with a recorded aspect ratio are included. Requires re-tracking with YAWT v0.9.8+ — earlier worms.json files do not contain aspect ratio data and will show no data.",
   "aggregate": "per_worm",
   "formula": "aspect_ratio",
-  "filter": "quality == Single",
+  "filter": "quality == Single && aspect_ratio > 0",
   "reduce": "mean",
   "plot": {
     "type": "box",

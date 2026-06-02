@@ -5,7 +5,7 @@
 
 #include <QString>
 #include <QList>
-#include <QMap>
+#include <QHash>
 #include <QPointF>
 
 /** Optional ROI reference points for use in plugin expressions (start_x, dist_to_end, etc.). */
@@ -88,7 +88,7 @@ public:
 
 private:
     // Build the variable map for a single track point
-    static QMap<QString, double> buildVars(
+    static QHash<QString, double> buildVars(
         const AnalysisSessionModel::AnalysisWormEntry& worm,
         int pointIdx,
         const PluginRoiPoints& roi,
@@ -96,9 +96,9 @@ private:
         double fps);
 
     // Apply bindings on top of a base variable map
-    static bool applyBindings(QMap<QString, double>& vars,
-                              const QMap<QString, double>& prevVars,
-                              const QMap<QString, QString>& bindings,
+    static bool applyBindings(QHash<QString, double>& vars,
+                              const QHash<QString, double>& prevVars,
+                              const QHash<QString, QString>& bindings,
                               double fps,
                               QString& error);
 

@@ -1,10 +1,10 @@
 {
   "version": 1,
   "name": "Body Area (Box)",
-  "description": "Mean blob area per worm across tracked frames. Area is the pixel count of the thresholded worm blob per frame. Only single-tracking frames are included to exclude merged-blob inflation. Shown as box-and-whisker per group.",
+  "description": "Mean blob area per worm across tracked frames. Only single-tracking frames with a non-zero recorded area are included. Requires re-tracking with YAWT v0.9.8+ — earlier worms.json files do not contain area data and will show no data.",
   "aggregate": "per_worm",
   "formula": "area",
-  "filter": "quality == Single",
+  "filter": "quality == Single && area > 0",
   "reduce": "mean",
   "plot": {
     "type": "box",

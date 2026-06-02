@@ -1,40 +1,64 @@
 #pragma once
 
 #include <QString>
-#include <QMap>
+#include <QHash>
+#include <functional>
+#include <memory>
 
 /**
- * ExprEval — simple recursive-descent expression evaluator.
+ * ExprEval — recursive-descent expression evaluator with optional compilation.
  *
- * Supports:
+ * Two usage modes:
+ *
+ * 1. Interpret (parse + evaluate each call) — simple but slow for hot loops:
+ *      double result = ExprEval::evaluate("sqrt(x*x + y*y)", vars, &err);
+ *
+ * 2. Compile once, call many times — eliminates per-call string parsing:
+ *      auto fn = ExprEval::compile("sqrt(x*x + y*y)", &err);
+ *      if (fn) {
+ *          for (auto& frame : frames)
+ *              double v = fn(frameVars);
+ *      }
+ *
+ * The compiled callable is a std::function that holds a closure tree
+ * mirroring the parse tree. Variable lookup still goes through the QHash
+ * passed at call time, so variable values can change between calls.
+ *
+ * Supported:
  *   - Double-precision arithmetic: + - * / ^ (right-associative power)
- *   - Unary minus
+ *   - Unary minus / plus
  *   - Parentheses
- *   - Numeric literals (integer and floating-point)
- *   - Named variables (looked up via the supplied variable map)
- *   - Built-in functions: sqrt abs floor ceil sin cos tan log exp min max
- *
- * Variables and function names are case-sensitive.
- * On error (unknown variable, division by zero, etc.), returns 0.0 and sets
- * the `error` out-parameter to a non-empty string.
- *
- * Usage:
- *   QMap<QString,double> vars{{"x", 3.0}, {"y", 4.0}};
- *   QString err;
- *   double result = ExprEval::evaluate("sqrt(x*x + y*y)", vars, &err);
- *   // result == 5.0, err is empty
+ *   - Ternary: cond ? then : else
+ *   - Logical: && ||
+ *   - Comparisons: == != < <= > >=
+ *   - Numeric literals (integer and float)
+ *   - Named variables (looked up in the QHash at call time)
+ *   - Built-in functions: sqrt abs floor ceil sin cos tan log exp min max pow
  */
+
+using VarMap = QHash<QString, double>;
+using CompiledExpr = std::function<double(const VarMap&)>;
+
 class ExprEval
 {
 public:
     ExprEval() = delete;
 
     /**
-     * Evaluate `expr` with the given variable bindings.
-     * @param error  If non-null, set to a description of any error (empty on success).
-     * @return Numeric result, or 0.0 on error.
+     * Interpret: parse and evaluate in one shot.
+     * Use only for one-off evaluations or error checking.
+     * For hot paths, use compile() instead.
      */
     static double evaluate(const QString& expr,
-                           const QMap<QString, double>& vars,
+                           const VarMap& vars,
                            QString* error = nullptr);
+
+    /**
+     * Compile: parse the expression string into a reusable callable.
+     * Returns nullptr (empty function) on parse error; sets *error if provided.
+     * The resulting function throws no exceptions and returns 0.0 on runtime
+     * errors (division by zero, unknown variable, etc.).
+     */
+    static CompiledExpr compile(const QString& expr,
+                                QString* error = nullptr);
 };

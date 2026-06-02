@@ -2,7 +2,7 @@
 
 #include <QString>
 #include <QStringList>
-#include <QMap>
+#include <QHash>
 
 /**
  * PlotPluginSpec — in-memory representation of a user-defined plot plugin.
@@ -48,7 +48,7 @@ struct PlotPluginSpec
      *   "diff(t)"  → 1.0 / fps
      * Other values are plain expressions evaluated from standard vocabulary.
      */
-    QMap<QString, QString> bindings;
+    QHash<QString, QString> bindings;
 
     /**
      * Optional filter expression. Frames where this evaluates to 0 are excluded.
