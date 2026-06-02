@@ -41,6 +41,12 @@
  *   dist_to_start_px, dist_to_start_um,
  *   dist_to_end_px, dist_to_end_um,
  *   dist_to_center_px, dist_to_center_um — explicit distance units
+ *
+ * Stateful binding helpers:
+ *   diff(expr)                          — current expr minus previous frame expr
+ *   smooth(expr, seconds)               — rolling mean over a time window
+ *   smooth(expr, seconds, sample_filter) — rolling mean that only admits samples
+ *                                         where sample_filter is non-zero
  */
 class PluginLoader
 {

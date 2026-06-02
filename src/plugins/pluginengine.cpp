@@ -333,8 +333,12 @@ struct PlanBinding {
     int prevSlot = -1;
     bool isDiff = false;
     bool isDiffT = false;
+    bool isSmooth = false;
     SlotExpr plainFn;
     SlotExpr innerFn;
+    SlotExpr smoothValueFn;
+    SlotExpr smoothWindowFn;
+    SlotExpr smoothFilterFn;
 };
 
 struct CompiledPluginPlan {
@@ -381,6 +385,35 @@ static QSet<QString> identifiersInExpression(const QString& expr)
         ids.insert(expr.mid(start, pos - start));
     }
     return ids;
+}
+
+static bool extractFunctionArgs(const QString& expr, const QString& fnName, QStringList& args)
+{
+    args.clear();
+    const QString trimmed = expr.trimmed();
+    const QString prefix = fnName + "(";
+    if (!trimmed.startsWith(prefix) || !trimmed.endsWith(")")) {
+        return false;
+    }
+
+    const QString inner = trimmed.mid(prefix.length(), trimmed.length() - prefix.length() - 1);
+    int depth = 0;
+    int start = 0;
+    for (int i = 0; i < inner.length(); ++i) {
+        const QChar c = inner[i];
+        if (c == '(') {
+            ++depth;
+        } else if (c == ')') {
+            --depth;
+            if (depth < 0) return false;
+        } else if (c == ',' && depth == 0) {
+            args.append(inner.mid(start, i - start).trimmed());
+            start = i + 1;
+        }
+    }
+    if (depth != 0) return false;
+    args.append(inner.mid(start).trimmed());
+    return true;
 }
 
 static QSet<QString> requiredBindingKeys(const QHash<QString, QString>& bindings,
@@ -481,8 +514,13 @@ static std::shared_ptr<CompiledPluginPlan> compilePluginPlan(const PlotPluginSpe
         binding.prevSlot = dynamicSlots.value("prev_" + key, -1);
 
         const QString expr = spec.bindings.value(key).trimmed();
-        if (expr.startsWith("diff(") && expr.endsWith(")")) {
-            const QString inner = expr.mid(5, expr.length() - 6).trimmed();
+        QStringList fnArgs;
+        if (extractFunctionArgs(expr, "diff", fnArgs)) {
+            if (fnArgs.size() != 1) {
+                error = "Binding '" + key + "': diff() requires 1 argument";
+                return nullptr;
+            }
+            const QString inner = fnArgs.first();
             binding.isDiff = true;
             if (inner == "t") {
                 binding.isDiffT = true;
@@ -492,6 +530,33 @@ static std::shared_ptr<CompiledPluginPlan> compilePluginPlan(const PlotPluginSpe
                 binding.innerFn = compileSlotExpression(inner, resolve, &err);
                 if (!binding.innerFn) {
                     error = "Binding '" + key + "': " + err;
+                    return nullptr;
+                }
+            }
+        } else if (extractFunctionArgs(expr, "smooth", fnArgs)) {
+            if (fnArgs.size() < 2 || fnArgs.size() > 3) {
+                error = "Binding '" + key + "': smooth() requires 2 or 3 arguments";
+                return nullptr;
+            }
+            binding.isSmooth = true;
+            plan->requiredSlots.insert(S_T);
+            plan->requiredSlots.insert(S_FRAME);
+
+            QString err;
+            binding.smoothValueFn = compileSlotExpression(fnArgs[0], resolve, &err);
+            if (!binding.smoothValueFn) {
+                error = "Binding '" + key + "' smooth value: " + err;
+                return nullptr;
+            }
+            binding.smoothWindowFn = compileSlotExpression(fnArgs[1], resolve, &err);
+            if (!binding.smoothWindowFn) {
+                error = "Binding '" + key + "' smooth window: " + err;
+                return nullptr;
+            }
+            if (fnArgs.size() == 3) {
+                binding.smoothFilterFn = compileSlotExpression(fnArgs[2], resolve, &err);
+                if (!binding.smoothFilterFn) {
+                    error = "Binding '" + key + "' smooth filter: " + err;
                     return nullptr;
                 }
             }
@@ -743,6 +808,53 @@ struct SpeedSlotState {
     }
 };
 
+struct SmoothSlotState {
+    std::deque<std::pair<double, double>> win;
+    double sum = 0.0;
+    double lastCoord = -std::numeric_limits<double>::infinity();
+
+    void reset() {
+        win.clear();
+        sum = 0.0;
+        lastCoord = -std::numeric_limits<double>::infinity();
+    }
+};
+
+static double updateSmoothSlot(SmoothSlotState& state,
+                               double value,
+                               double window,
+                               double coord,
+                               bool acceptSample)
+{
+    if (!std::isfinite(coord)) {
+        return kNaN;
+    }
+    if (coord < state.lastCoord) {
+        state.reset();
+    }
+    state.lastCoord = coord;
+
+    if (!std::isfinite(window) || window < 0.0) {
+        window = 0.0;
+    }
+
+    while (!state.win.empty() && (coord - state.win.front().first) > window) {
+        state.sum -= state.win.front().second;
+        state.win.pop_front();
+    }
+
+    if (!acceptSample || !std::isfinite(value)) {
+        return kNaN;
+    }
+
+    state.win.emplace_back(coord, value);
+    state.sum += value;
+
+    return state.win.empty()
+        ? kNaN
+        : state.sum / static_cast<double>(state.win.size());
+}
+
 static PluginRoiPoints effectiveRoiForWorm(
     const AnalysisSessionModel::AnalysisWormEntry& worm,
     const PluginRoiPoints& fallback)
@@ -989,6 +1101,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
 
         bool hasPrevFrame = false;
         SpeedSlotState speedState;
+        QVector<SmoothSlotState> smoothStates(plan->bindings.size());
 
         for (const Tracking::WormTrackPoint& point : worm.points) {
             updateSlotValues(slotValues, *plan, worm, point, roi, speedState);
@@ -1017,6 +1130,20 @@ PluginEngine::PluginResult PluginEngine::evaluate(
                     } else {
                         value = binding.innerFn(slotValues) - binding.innerFn(prevSlots);
                     }
+                } else if (binding.isSmooth) {
+                    const bool acceptSample = !binding.smoothFilterFn
+                                           || binding.smoothFilterFn(slotValues) != 0.0;
+                    const double coord = worm.fps > 0.0
+                        ? slotValues[S_T]
+                        : slotValues[S_FRAME];
+                    const double rawValue = acceptSample
+                        ? binding.smoothValueFn(slotValues)
+                        : kNaN;
+                    value = updateSmoothSlot(smoothStates[bi],
+                                             rawValue,
+                                             binding.smoothWindowFn(slotValues),
+                                             coord,
+                                             acceptSample);
                 } else {
                     value = binding.plainFn(slotValues);
                 }
