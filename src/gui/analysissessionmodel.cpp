@@ -467,6 +467,7 @@ void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
     for (int g = 0; g < m_groups.size(); ++g)
         recalcGroupColors(g);
 
+    ++m_dataRevision;
     endResetModel();
 
     // Persist the (possibly updated) state immediately
@@ -479,6 +480,7 @@ void AnalysisSessionModel::addGroup(const QString& name)
     const int row = m_groups.size();
     beginInsertRows({}, row, row);
     m_groups.append(GroupItem{name, {}});
+    ++m_dataRevision;
     endInsertRows();
     saveState();  // structural change
 }
@@ -737,6 +739,7 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
         const QString name = value.toString().trimmed();
         if (name.isEmpty()) return false;
         m_groups[idx.row()].name = name;
+        ++m_dataRevision;
         emit dataChanged(idx, idx, {Qt::DisplayRole, Qt::EditRole});
         saveState();
         return true;
@@ -940,6 +943,7 @@ bool AnalysisSessionModel::dropMimeData(const QMimeData* data,
     // 3. Recalculate colors for both groups and notify worm nodes of the change
     recalcGroupColors(srcGroupRow);
     recalcGroupColors(dstGroupRow);
+    ++m_dataRevision;
 
     // Emit dataChanged for all worm children (colors changed) + group labels
     const auto notifyGroup = [this](int g) {

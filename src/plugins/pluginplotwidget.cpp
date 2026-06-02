@@ -6,6 +6,7 @@
 #include <QCryptographicHash>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -40,10 +41,12 @@ void addHashNumber(QCryptographicHash& hash, double value)
 }
 
 QString resultCacheKey(const PlotPluginSpec& spec,
-                       const QList<AnalysisSessionModel::AnalysisGroupData>& data,
+                       quint64 dataRevision,
+                       const QSet<int>& checkedWormIds,
                        const PluginRoiPoints& roi)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
+    addHashText(hash, QString::number(dataRevision));
     addHashText(hash, spec.filePath);
     addHashText(hash, QString::number(spec.version));
     addHashText(hash, spec.name);
@@ -73,44 +76,10 @@ QString resultCacheKey(const PlotPluginSpec& spec,
     addHashNumber(hash, roi.centerX);
     addHashNumber(hash, roi.centerY);
 
-    for (const auto& group : data) {
-        addHashText(hash, group.name);
-        addHashText(hash, QString::number(group.worms.size()));
-        for (const auto& worm : group.worms) {
-            addHashText(hash, QString::number(worm.wormId));
-            addHashText(hash, worm.label);
-            addHashText(hash, worm.color.name(QColor::HexArgb));
-            addHashText(hash, worm.videoBaseName);
-            addHashNumber(hash, worm.umPerPixel);
-            addHashNumber(hash, worm.fps);
-            addHashText(hash, worm.hasStartPoint ? "worm-start" : "worm-no-start");
-            addHashNumber(hash, worm.startPoint.x());
-            addHashNumber(hash, worm.startPoint.y());
-            addHashText(hash, worm.hasEndPoint ? "worm-end" : "worm-no-end");
-            addHashNumber(hash, worm.endPoint.x());
-            addHashNumber(hash, worm.endPoint.y());
-            addHashText(hash, worm.hasCenterPoint ? "worm-center" : "worm-no-center");
-            addHashNumber(hash, worm.centerPoint.x());
-            addHashNumber(hash, worm.centerPoint.y());
-            addHashText(hash, QString::number(worm.points.size()));
-            for (const Tracking::WormTrackPoint& point : worm.points) {
-                addHashText(hash, QString::number(point.frameNumberOriginal));
-                addHashNumber(hash, point.position.x);
-                addHashNumber(hash, point.position.y);
-                addHashText(hash, QString::number(static_cast<int>(point.quality)));
-                addHashNumber(hash, point.area);
-                addHashNumber(hash, point.bodyLength);
-                addHashNumber(hash, point.aspectRatio);
-                addHashText(hash, point.hasTips ? "tips" : "no-tips");
-                if (point.hasTips) {
-                    addHashNumber(hash, point.headTip.x);
-                    addHashNumber(hash, point.headTip.y);
-                    addHashNumber(hash, point.tailTip.x);
-                    addHashNumber(hash, point.tailTip.y);
-                }
-            }
-        }
-    }
+    QList<int> checkedIds = checkedWormIds.values();
+    std::sort(checkedIds.begin(), checkedIds.end());
+    for (int wormId : checkedIds)
+        addHashText(hash, QString::number(wormId));
 
     return QString::fromLatin1(hash.result().toHex());
 }
@@ -172,7 +141,7 @@ PluginPlotWidget::PluginPlotWidget(const PlotPluginSpec& spec,
         connect(m_model, &AnalysisSessionModel::checkedWormIdsChanged,
                 this, &PluginPlotWidget::refreshData);
 
-    refreshData();
+    QTimer::singleShot(0, this, &PluginPlotWidget::refreshData);
 }
 
 PluginPlotWidget::~PluginPlotWidget()
@@ -195,11 +164,12 @@ void PluginPlotWidget::refreshData()
     // If already computing, note that another refresh is needed and return.
     if (m_computing) { m_pendingRefresh = true; return; }
 
-    // Take a snapshot of the data on the GUI thread.
-    auto data = m_model->getGroupedData();
     PlotPluginSpec spec = m_spec;
     const PluginRoiPoints roi = m_roi;
-    const QString cacheKey = resultCacheKey(spec, data, roi);
+    const QString cacheKey = resultCacheKey(spec,
+                                           m_model->dataRevision(),
+                                           m_model->checkedWormIds(),
+                                           roi);
 
     {
         QMutexLocker locker(&resultCacheMutex());
@@ -217,6 +187,9 @@ void PluginPlotWidget::refreshData()
     m_pendingRefresh = false;
     m_activeCacheKey = cacheKey;
     update();  // paint "Computing…"
+
+    // Take a snapshot of the data on the GUI thread after the cheap cache check.
+    auto data = m_model->getGroupedData();
 
     auto future = QtConcurrent::run([spec = std::move(spec),
                                      data = std::move(data),

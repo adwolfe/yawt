@@ -128,6 +128,12 @@ public:
     /** Return the set of all currently checked worm IDs (across all groups). */
     QSet<int> checkedWormIds() const;
 
+    /**
+     * Monotonic revision for analysis data that can affect plot results apart
+     * from the checked worm set.
+     */
+    quint64 dataRevision() const { return m_dataRevision; }
+
     // ── QAbstractItemModel interface ──────────────────────────────────────────
     QModelIndex index(int row, int column,
                       const QModelIndex& parent = {}) const override;
@@ -206,6 +212,7 @@ private:
     QList<GroupItem> m_groups;
     QString          m_yawtDir;              // set during scan, used for auto-save
     QTimer*          m_saveTimer = nullptr;  // debounce timer for check-state saves
+    quint64          m_dataRevision = 1;
 };
 
 #endif // ANALYSISSESSIONMODEL_H
