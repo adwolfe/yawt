@@ -8,6 +8,7 @@
 #include <QIcon>
 #include <QList>
 #include <QMimeData>
+#include <QPointF>
 #include <QSet>
 #include <QString>
 #include <QTimer>
@@ -62,6 +63,13 @@ public:
 
         // Validation warnings (empty = no issues)
         QStringList warnings;
+
+        bool hasStartPoint = false;
+        QPointF startPoint;
+        bool hasEndPoint = false;
+        QPointF endPoint;
+        bool hasCenterPoint = false;
+        QPointF centerPoint;
     };
 
     // ── Grouped data structs (returned by getGroupedData) ─────────────────────
@@ -74,6 +82,13 @@ public:
         double  fps;           // from the video this worm belongs to (0 if unknown)
         QString videoBaseName;
         std::vector<Tracking::WormTrackPoint> points;  // sorted by frame
+
+        bool hasStartPoint = false;
+        QPointF startPoint;
+        bool hasEndPoint = false;
+        QPointF endPoint;
+        bool hasCenterPoint = false;
+        QPointF centerPoint;
     };
 
     /** All checked worms that belong to one group. */
@@ -176,6 +191,7 @@ private:
                                                    const QString& yawtDir,
                                                    const QString& baseName,
                                                    double umPerPixel);
+    static void                      loadRoiReferencePoints(VideoItem& vid);
     static QColor     colormapColor(int index, int total);
     static QIcon      makeColorIcon(const QColor& c);
 

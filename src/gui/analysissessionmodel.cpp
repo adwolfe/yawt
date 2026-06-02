@@ -182,6 +182,38 @@ QStringList AnalysisSessionModel::buildWarnings(const QString& procDir,
     return warnings;
 }
 
+void AnalysisSessionModel::loadRoiReferencePoints(VideoItem& vid)
+{
+    const QString roiPath = QDir(vid.procDir).absoluteFilePath("roi_points.json");
+    QFile f(roiPath);
+    if (!f.open(QIODevice::ReadOnly)) return;
+
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+
+    const QJsonArray items = doc.object().value("items").toArray();
+    for (const QJsonValue& v : items) {
+        if (!v.isObject()) continue;
+        const QJsonObject obj = v.toObject();
+        const QString type = obj.value("type").toString();
+        const QJsonObject centroid = obj.value("initialCentroid").toObject();
+        const QPointF pt(centroid.value("x").toDouble(),
+                         centroid.value("y").toDouble());
+
+        if (type == "Start Point") {
+            vid.hasStartPoint = true;
+            vid.startPoint = pt;
+        } else if (type == "End Point") {
+            vid.hasEndPoint = true;
+            vid.endPoint = pt;
+        } else if (type == "Control Point" || type == "Center") {
+            vid.hasCenterPoint = true;
+            vid.centerPoint = pt;
+        }
+    }
+}
+
 /** Find the most recent PROC_* subfolder inside videoSubDir (sort descending by name). */
 QString AnalysisSessionModel::findMostRecentProc(const QString& videoSubDir)
 {
@@ -326,6 +358,7 @@ void AnalysisSessionModel::loadAndMergeState(
                 VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
                 VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
                 vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
+                loadRoiReferencePoints(vid);
 
                 const bool reprocessed = (diskStamp != savedStamp);
 
@@ -380,6 +413,7 @@ void AnalysisSessionModel::loadAndMergeState(
         VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
         VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
         vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
+        loadRoiReferencePoints(vid);
 
         for (int i = 0; i < wormIds.size(); ++i) {
             WormItem w;
@@ -500,6 +534,12 @@ AnalysisSessionModel::getGroupedData() const
                 entry.fps          = vid.fps;
                 entry.videoBaseName = vid.baseName;
                 entry.points       = it->second;  // full copy, sorted in loadTracksFromJson
+                entry.hasStartPoint = vid.hasStartPoint;
+                entry.startPoint    = vid.startPoint;
+                entry.hasEndPoint   = vid.hasEndPoint;
+                entry.endPoint      = vid.endPoint;
+                entry.hasCenterPoint = vid.hasCenterPoint;
+                entry.centerPoint    = vid.centerPoint;
                 gd.worms.append(std::move(entry));
             }
         }

@@ -5,6 +5,7 @@
 #include <QHash>
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <numeric>
 
@@ -41,14 +42,18 @@ static void initVarMap(VarMap& v,
         "area","area_um2","body_length","body_length_um","aspect_ratio",
         "xhead","yhead","xtail","ytail",
         "xhead_um","yhead_um","xtail_um","ytail_um",
+        "speed","speed_px","speed_um",
+        "has_start","start_x","start_y","dist_to_start","dist_to_start_px","dist_to_start_um",
+        "has_end","end_x","end_y","dist_to_end","dist_to_end_px","dist_to_end_um",
+        "has_center","center_x","center_y","dist_to_center","dist_to_center_px","dist_to_center_um",
         "fps"
     };
     for (const QString& k : keys) v[k] = 0.0;
 
     // ROI reference points
-    if (roi.hasStart)  { v["start_x"]  = roi.startX;  v["start_y"]  = roi.startY;  v["dist_to_start"]  = 0.0; }
-    if (roi.hasEnd)    { v["end_x"]    = roi.endX;    v["end_y"]    = roi.endY;    v["dist_to_end"]    = 0.0; }
-    if (roi.hasCenter) { v["center_x"] = roi.centerX; v["center_y"] = roi.centerY; v["dist_to_center"] = 0.0; }
+    if (roi.hasStart)  { v["has_start"] = 1.0;  v["start_x"]  = roi.startX;  v["start_y"]  = roi.startY; }
+    if (roi.hasEnd)    { v["has_end"] = 1.0;    v["end_x"]    = roi.endX;    v["end_y"]    = roi.endY; }
+    if (roi.hasCenter) { v["has_center"] = 1.0; v["center_x"] = roi.centerX; v["center_y"] = roi.centerY; }
 
     // Named quality constants
     v["Single"] = Q_SINGLE; v["Merged"] = Q_MERGED;
@@ -96,15 +101,27 @@ static void updateVarMap(VarMap& v,
 
     if (roi.hasStart) {
         double dx = x-roi.startX, dy = y-roi.startY;
-        v["dist_to_start"] = std::sqrt(dx*dx + dy*dy);
+        const double distPx = std::sqrt(dx*dx + dy*dy);
+        const double distUm = (um > 0.0) ? distPx * um : distPx;
+        v["dist_to_start_px"] = distPx;
+        v["dist_to_start_um"] = distUm;
+        v["dist_to_start"] = (um > 0.0) ? distUm : distPx;
     }
     if (roi.hasEnd) {
         double dx = x-roi.endX, dy = y-roi.endY;
-        v["dist_to_end"] = std::sqrt(dx*dx + dy*dy);
+        const double distPx = std::sqrt(dx*dx + dy*dy);
+        const double distUm = (um > 0.0) ? distPx * um : distPx;
+        v["dist_to_end_px"] = distPx;
+        v["dist_to_end_um"] = distUm;
+        v["dist_to_end"] = (um > 0.0) ? distUm : distPx;
     }
     if (roi.hasCenter) {
         double dx = x-roi.centerX, dy = y-roi.centerY;
-        v["dist_to_center"] = std::sqrt(dx*dx + dy*dy);
+        const double distPx = std::sqrt(dx*dx + dy*dy);
+        const double distUm = (um > 0.0) ? distPx * um : distPx;
+        v["dist_to_center_px"] = distPx;
+        v["dist_to_center_um"] = distUm;
+        v["dist_to_center"] = (um > 0.0) ? distUm : distPx;
     }
 }
 
@@ -261,11 +278,30 @@ PluginEngine::PluginResult PluginEngine::evaluate(
     {
         const double um  = worm.umPerPixel;
         const double fps = worm.fps;
+        const int speedWindow = (fps > 0.0)
+            ? std::max(1, static_cast<int>(std::round(2.0 * fps)))
+            : 1;
+        PluginRoiPoints effectiveRoi = roiPoints;
+        if (worm.hasStartPoint) {
+            effectiveRoi.hasStart = true;
+            effectiveRoi.startX = worm.startPoint.x();
+            effectiveRoi.startY = worm.startPoint.y();
+        }
+        if (worm.hasEndPoint) {
+            effectiveRoi.hasEnd = true;
+            effectiveRoi.endX = worm.endPoint.x();
+            effectiveRoi.endY = worm.endPoint.y();
+        }
+        if (worm.hasCenterPoint) {
+            effectiveRoi.hasCenter = true;
+            effectiveRoi.centerX = worm.centerPoint.x();
+            effectiveRoi.centerY = worm.centerPoint.y();
+        }
 
         // Pre-allocate var maps with all keys once.
         VarMap vars, prevVars;
-        initVarMap(vars,     roiPoints, spec.bindings);
-        initVarMap(prevVars, roiPoints, spec.bindings);
+        initVarMap(vars,     effectiveRoi, spec.bindings);
+        initVarMap(prevVars, effectiveRoi, spec.bindings);
         // prevVars starts truly empty (signals "no previous frame" for diff).
         bool hasPrevFrame = false;
 
@@ -276,9 +312,75 @@ PluginEngine::PluginResult PluginEngine::evaluate(
         for (const auto& cb : compiledBindings)
             prevBindingVals[cb.key] = kNaN;
 
+        bool hasPrevSpeedFrame = false;
+        cv::Point2f prevSpeedPos{};
+        int prevSpeedFrame = 0;
+        std::deque<std::pair<int, double>> speedWinPx;
+        std::deque<std::pair<int, double>> speedWinUm;
+        double speedWinSumPx = 0.0;
+        double speedWinSumUm = 0.0;
+
         for (int i = 0; i < static_cast<int>(worm.points.size()); ++i) {
             // 1. Update raw vocabulary values in-place (no allocation).
-            updateVarMap(vars, worm, i, roiPoints, um, fps);
+            updateVarMap(vars, worm, i, effectiveRoi, um, fps);
+
+            const Tracking::WormTrackPoint& point = worm.points[i];
+            if (point.quality == Tracking::TrackPointQuality::Lost) {
+                hasPrevSpeedFrame = false;
+                speedWinPx.clear();
+                speedWinUm.clear();
+                speedWinSumPx = 0.0;
+                speedWinSumUm = 0.0;
+                vars["speed"] = 0.0;
+                vars["speed_px"] = 0.0;
+                vars["speed_um"] = 0.0;
+            } else if (!hasPrevSpeedFrame || fps <= 0.0) {
+                hasPrevSpeedFrame = true;
+                prevSpeedPos = point.position;
+                prevSpeedFrame = point.frameNumberOriginal;
+                vars["speed"] = 0.0;
+                vars["speed_px"] = 0.0;
+                vars["speed_um"] = 0.0;
+            } else {
+                const int df = point.frameNumberOriginal - prevSpeedFrame;
+                if (df <= 0) {
+                    vars["speed"] = 0.0;
+                    vars["speed_px"] = 0.0;
+                    vars["speed_um"] = 0.0;
+                } else {
+                    const double dx = static_cast<double>(point.position.x - prevSpeedPos.x);
+                    const double dy = static_cast<double>(point.position.y - prevSpeedPos.y);
+                    const double distPx = std::sqrt(dx * dx + dy * dy);
+                    const double dt = static_cast<double>(df) / fps;
+                    const double speedPx = dt > 0.0 ? distPx / dt : 0.0;
+                    const double speedUm = (um > 0.0) ? speedPx * um : speedPx;
+
+                    speedWinPx.emplace_back(point.frameNumberOriginal, speedPx);
+                    speedWinSumPx += speedPx;
+                    speedWinUm.emplace_back(point.frameNumberOriginal, speedUm);
+                    speedWinSumUm += speedUm;
+                    while (!speedWinPx.empty()
+                           && (point.frameNumberOriginal - speedWinPx.front().first) > speedWindow) {
+                        speedWinSumPx -= speedWinPx.front().second;
+                        speedWinPx.pop_front();
+                    }
+                    while (!speedWinUm.empty()
+                           && (point.frameNumberOriginal - speedWinUm.front().first) > speedWindow) {
+                        speedWinSumUm -= speedWinUm.front().second;
+                        speedWinUm.pop_front();
+                    }
+
+                    const double smoothedPx = speedWinPx.empty()
+                        ? speedPx : speedWinSumPx / static_cast<double>(speedWinPx.size());
+                    const double smoothedUm = speedWinUm.empty()
+                        ? speedUm : speedWinSumUm / static_cast<double>(speedWinUm.size());
+                    vars["speed"] = (um > 0.0) ? smoothedUm : smoothedPx;
+                    vars["speed_px"] = smoothedPx;
+                    vars["speed_um"] = smoothedUm;
+                }
+                prevSpeedPos = point.position;
+                prevSpeedFrame = point.frameNumberOriginal;
+            }
 
             // 2. Inject prev_<name> (O(n) in-place writes, no allocation).
             for (auto pit = prevBindingVals.constBegin();
@@ -290,7 +392,11 @@ PluginEngine::PluginResult PluginEngine::evaluate(
                 double value = 0.0;
                 if (cb.isDiff) {
                     if (cb.isDiffT) {
-                        value = (fps > 0) ? 1.0 / fps : 0.0;
+                        if (!hasPrevFrame) {
+                            vars[cb.key] = kNaN;
+                            continue;
+                        }
+                        value = vars.value("t", 0.0) - prevVars.value("t", 0.0);
                     } else if (!hasPrevFrame) {
                         vars[cb.key] = kNaN;
                         continue;
@@ -308,7 +414,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
                 prevBindingVals[cb.key] = vars.value(cb.key, kNaN);
 
             // Update prevVars raw vocabulary in-place (no allocation).
-            updateVarMap(prevVars, worm, i, roiPoints, um, fps);
+            updateVarMap(prevVars, worm, i, effectiveRoi, um, fps);
             hasPrevFrame = true;
 
             // 5. Skip if any binding is NaN.

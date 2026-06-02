@@ -1,14 +1,9 @@
 {
   "version": 1,
   "name": "Speed (Timeline)",
-  "description": "Instantaneous speed at each frame, plotted as a time series line per worm. Mirrors the built-in Speed Timeline plot.",
+  "description": "Smoothed speed at each frame, plotted as a time series line per worm. Mirrors the built-in Speed Timeline plot.",
   "aggregate": "per_frame",
-  "formula": "sqrt(dx*dx + dy*dy) / dt",
-  "bindings": {
-    "dx": "diff(x)",
-    "dy": "diff(y)",
-    "dt": "diff(t)"
-  },
+  "formula": "speed",
   "filter": "quality != Lost",
   "plot": {
     "type": "line",

@@ -1,15 +1,10 @@
 {
   "version": 1,
   "name": "Speed (Box)",
-  "description": "Mean speed per worm, shown as box-and-whisker per group. Each data point is one worm's average instantaneous speed across its tracked frames. Mirrors the built-in Speed Box plot.",
+  "description": "Mean speed per worm, shown as box-and-whisker per group. Each data point is one worm's average smoothed speed across its tracked frames. Mirrors the built-in Speed Box plot.",
   "aggregate": "per_worm",
-  "formula": "sqrt(dx*dx + dy*dy) / dt",
-  "bindings": {
-    "dx": "diff(x)",
-    "dy": "diff(y)",
-    "dt": "diff(t)"
-  },
-  "filter": "quality != Lost",
+  "formula": "speed",
+  "filter": "quality != Lost && speed > 0",
   "reduce": "mean",
   "plot": {
     "type": "box",
