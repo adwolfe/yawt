@@ -4,24 +4,23 @@
 #include <QStringList>
 
 /**
- * PluginLoader — reads plot plugin JSON files into PlotPluginSpec objects.
+ * PluginLoader — reads plot plugin YAML/JSON files into PlotPluginSpec objects.
  *
- * JSON schema (all fields except name and formula are optional):
- * {
- *   "version": 1,
- *   "name": "Speed",
- *   "description": "Mean speed per worm per group",
- *   "aggregate": "per_worm",          // per_worm | per_frame | spatial
- *   "formula": "speed",
- *   "filter": "quality != Lost && speed > 0",
- *   "reduce": "mean",                 // mean|median|sum|count|min|max|std|last
- *   "plot": {
- *     "type": "box",                  // box|bar|line|scatter
- *     "y_label": "Speed (px/s)",
- *     "y_label_um": "Speed (µm/s)",
- *     "x_label": "Group"
- *   }
- * }
+ * YAML schema (all fields except name and formula are optional):
+ *   version: 1
+ *   name: Speed
+ *   description: Mean speed per worm per group
+ *   aggregate: per_worm          # per_worm | per_frame | spatial
+ *   formula: speed
+ *   filter: quality != Lost && speed > 0
+ *   reduce: mean                 # mean|median|sum|count|min|max|std|last
+ *   plot:
+ *     type: box                  # box|bar|line|scatter
+ *     y_label: Speed (px/s)
+ *     y_label_um: Speed (µm/s)
+ *     x_label: Group
+ *
+ * JSON plugins remain supported for backward compatibility.
  *
  * Standard vocabulary available in formula/filter/bindings:
  *   x, y, x_um, y_um                    — centroid position
@@ -57,7 +56,8 @@ public:
     static PlotPluginSpec load(const QString& filePath);
 
     /**
-     * Scan a directory for *.json files and attempt to load each as a plugin.
+     * Scan a directory for *.yaml, *.yml, and *.json files and attempt to load
+     * each as a plugin.
      * Invalid files are included in the result with isValid == false.
      */
     static QList<PlotPluginSpec> loadDirectory(const QString& dirPath);

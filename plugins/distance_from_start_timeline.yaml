@@ -1,0 +1,11 @@
+version: 1
+name: Distance from Start (Timeline)
+description: Per-frame distance from the project Start Point, plotted as a time series per worm. Useful for visualising how individual worms move relative to their starting position or a reference point in the arena. Requires a Start Point to be set.
+aggregate: per_frame
+formula: dist_to_start
+filter: has_start && quality != Lost
+plot:
+  type: line
+  y_label: Distance from Start (px)
+  y_label_um: Distance from Start (µm)
+  x_label: Time (s)

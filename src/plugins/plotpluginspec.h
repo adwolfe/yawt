@@ -7,18 +7,19 @@
 /**
  * PlotPluginSpec — in-memory representation of a user-defined plot plugin.
  *
- * A plugin is loaded from a JSON file and describes:
+ * A plugin is loaded from a YAML or JSON file and describes:
  *  - How to compute a derived metric from per-frame worm track data (formula + bindings)
  *  - How to aggregate that metric across frames and worms
  *  - How to display the result as a plot
  *
- * File format: JSON, typically stored in a per-project or user plugins/ directory.
+ * File format: YAML preferred, JSON supported for compatibility. Plugins are
+ * typically stored in a per-project or user plugins/ directory.
  * See PluginLoader for the schema details and validation.
  */
 struct PlotPluginSpec
 {
     // ── Identity ───────────────────────────────────────────────────────────────
-    QString filePath;           // Absolute path to the source .json file
+    QString filePath;           // Absolute path to the source plugin file
     int     version = 1;
     QString name;
     QString description;

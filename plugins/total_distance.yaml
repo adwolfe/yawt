@@ -1,0 +1,14 @@
+version: 1
+name: Total Distance (Box)
+description: Total path length traveled by each worm across all tracked frames, accumulated as a sum of frame-to-frame displacements. Shown as box-and-whisker per group.
+aggregate: per_worm
+bindings:
+  dx: diff(x)
+  dy: diff(y)
+formula: sqrt(dx*dx + dy*dy)
+filter: quality != Lost
+reduce: sum
+plot:
+  type: box
+  y_label: Total Distance (px)
+  y_label_um: Total Distance (µm)

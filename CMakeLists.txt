@@ -192,16 +192,16 @@ set(HEADERS
 # Users can add their own plugins to ~/Library/Application Support/yawt/plugins/ or to
 # a per-project plugins/ folder without modifying the bundle.
 set(BUNDLED_PLUGINS
-    plugins/speed.json
-    plugins/speed_timeline.json
-    plugins/total_distance.json
-    plugins/body_length.json
-    plugins/body_area.json
-    plugins/aspect_ratio.json
-    plugins/chemotaxis_index.json
-    plugins/distance_from_start_timeline.json
-    plugins/reversals.json
-    plugins/speed_from_xy.json
+    plugins/speed.yaml
+    plugins/speed_timeline.yaml
+    plugins/total_distance.yaml
+    plugins/body_length.yaml
+    plugins/body_area.yaml
+    plugins/aspect_ratio.yaml
+    plugins/chemotaxis_index.yaml
+    plugins/distance_from_start_timeline.yaml
+    plugins/reversals.yaml
+    plugins/speed_from_xy.yaml
 )
 set_source_files_properties(${BUNDLED_PLUGINS} PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources/plugins"
