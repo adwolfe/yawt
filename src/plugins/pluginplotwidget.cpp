@@ -3,12 +3,119 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QFontMetrics>
+#include <QCryptographicHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <vector>
+
+namespace {
+
+QMutex& resultCacheMutex()
+{
+    static QMutex mutex;
+    return mutex;
+}
+
+QHash<QString, PluginEngine::PluginResult>& resultCache()
+{
+    static QHash<QString, PluginEngine::PluginResult> cache;
+    return cache;
+}
+
+void addHashText(QCryptographicHash& hash, const QString& text)
+{
+    const QByteArray bytes = text.toUtf8();
+    hash.addData(bytes);
+    hash.addData(QByteArray(1, '\0'));
+}
+
+void addHashNumber(QCryptographicHash& hash, double value)
+{
+    addHashText(hash, QString::number(value, 'g', 17));
+}
+
+QString resultCacheKey(const PlotPluginSpec& spec,
+                       const QList<AnalysisSessionModel::AnalysisGroupData>& data,
+                       const PluginRoiPoints& roi)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    addHashText(hash, spec.filePath);
+    addHashText(hash, QString::number(spec.version));
+    addHashText(hash, spec.name);
+    addHashText(hash, QString::number(static_cast<int>(spec.aggregate)));
+    addHashText(hash, spec.formula);
+    addHashText(hash, spec.filter);
+    addHashText(hash, spec.reduce);
+    addHashText(hash, QString::number(static_cast<int>(spec.plotType)));
+    addHashText(hash, spec.yLabel);
+    addHashText(hash, spec.yLabelUm);
+    addHashText(hash, spec.xLabel);
+
+    QStringList bindingKeys = spec.bindings.keys();
+    bindingKeys.sort();
+    for (const QString& key : bindingKeys) {
+        addHashText(hash, key);
+        addHashText(hash, spec.bindings.value(key));
+    }
+
+    addHashText(hash, roi.hasStart ? "start" : "no-start");
+    addHashNumber(hash, roi.startX);
+    addHashNumber(hash, roi.startY);
+    addHashText(hash, roi.hasEnd ? "end" : "no-end");
+    addHashNumber(hash, roi.endX);
+    addHashNumber(hash, roi.endY);
+    addHashText(hash, roi.hasCenter ? "center" : "no-center");
+    addHashNumber(hash, roi.centerX);
+    addHashNumber(hash, roi.centerY);
+
+    for (const auto& group : data) {
+        addHashText(hash, group.name);
+        addHashText(hash, QString::number(group.worms.size()));
+        for (const auto& worm : group.worms) {
+            addHashText(hash, QString::number(worm.wormId));
+            addHashText(hash, worm.label);
+            addHashText(hash, worm.color.name(QColor::HexArgb));
+            addHashText(hash, worm.videoBaseName);
+            addHashNumber(hash, worm.umPerPixel);
+            addHashNumber(hash, worm.fps);
+            addHashText(hash, worm.hasStartPoint ? "worm-start" : "worm-no-start");
+            addHashNumber(hash, worm.startPoint.x());
+            addHashNumber(hash, worm.startPoint.y());
+            addHashText(hash, worm.hasEndPoint ? "worm-end" : "worm-no-end");
+            addHashNumber(hash, worm.endPoint.x());
+            addHashNumber(hash, worm.endPoint.y());
+            addHashText(hash, worm.hasCenterPoint ? "worm-center" : "worm-no-center");
+            addHashNumber(hash, worm.centerPoint.x());
+            addHashNumber(hash, worm.centerPoint.y());
+            addHashText(hash, QString::number(worm.points.size()));
+            for (const Tracking::WormTrackPoint& point : worm.points) {
+                addHashText(hash, QString::number(point.frameNumberOriginal));
+                addHashNumber(hash, point.position.x);
+                addHashNumber(hash, point.position.y);
+                addHashText(hash, QString::number(static_cast<int>(point.quality)));
+                addHashNumber(hash, point.area);
+                addHashNumber(hash, point.bodyLength);
+                addHashNumber(hash, point.aspectRatio);
+                addHashText(hash, point.hasTips ? "tips" : "no-tips");
+                if (point.hasTips) {
+                    addHashNumber(hash, point.headTip.x);
+                    addHashNumber(hash, point.headTip.y);
+                    addHashNumber(hash, point.tailTip.x);
+                    addHashNumber(hash, point.tailTip.y);
+                }
+            }
+        }
+    }
+
+    return QString::fromLatin1(hash.result().toHex());
+}
+
+} // namespace
 
 // ── Box-plot statistics ────────────────────────────────────────────────────
 
@@ -89,15 +196,31 @@ void PluginPlotWidget::refreshData()
     if (m_computing) { m_pendingRefresh = true; return; }
 
     // Take a snapshot of the data on the GUI thread.
-    const auto data = m_model->getGroupedData();
-    const PlotPluginSpec spec = m_spec;
+    auto data = m_model->getGroupedData();
+    PlotPluginSpec spec = m_spec;
     const PluginRoiPoints roi = m_roi;
+    const QString cacheKey = resultCacheKey(spec, data, roi);
+
+    {
+        QMutexLocker locker(&resultCacheMutex());
+        const auto it = resultCache().constFind(cacheKey);
+        if (it != resultCache().constEnd()) {
+            m_result = it.value();
+            m_computing = false;
+            m_pendingRefresh = false;
+            update();
+            return;
+        }
+    }
 
     m_computing = true;
     m_pendingRefresh = false;
+    m_activeCacheKey = cacheKey;
     update();  // paint "Computing…"
 
-    auto future = QtConcurrent::run([spec, data, roi]() {
+    auto future = QtConcurrent::run([spec = std::move(spec),
+                                     data = std::move(data),
+                                     roi]() {
         return PluginEngine::evaluate(spec, data, roi);
     });
     m_watcher.setFuture(future);
@@ -106,6 +229,15 @@ void PluginPlotWidget::refreshData()
 void PluginPlotWidget::onComputationFinished()
 {
     m_result = m_watcher.result();
+    if (!m_activeCacheKey.isEmpty()) {
+        QMutexLocker locker(&resultCacheMutex());
+        QHash<QString, PluginEngine::PluginResult>& cache = resultCache();
+        if (cache.size() > 64) {
+            cache.clear();
+        }
+        cache.insert(m_activeCacheKey, m_result);
+    }
+    m_activeCacheKey.clear();
     m_computing = false;
     update();
 

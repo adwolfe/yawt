@@ -5,6 +5,7 @@
 #include "../gui/analysissessionmodel.h"
 
 #include <QFutureWatcher>
+#include <QString>
 #include <QWidget>
 
 /**
@@ -48,6 +49,7 @@ private:
 
     bool m_computing = false;
     bool m_pendingRefresh = false;  // another refresh queued while computing
+    QString m_activeCacheKey;
 
     QFutureWatcher<PluginEngine::PluginResult> m_watcher;
 };

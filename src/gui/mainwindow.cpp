@@ -395,7 +395,7 @@ void MainWindow::setupInteractionModeButtonGroup() {
     // Interaction Mode Buttons - These should be checkable QToolButtons
     m_interactionModeButtonGroup->addButton(ui->panModeButton);
     m_interactionModeButtonGroup->addButton(ui->pointButton);
-    m_interactionModeButtonGroup->addButton(ui->roiModeButton);
+    //m_interactionModeButtonGroup->addButton(ui->roiModeButton);
     m_interactionModeButtonGroup->addButton(ui->cropModeButton);
     m_interactionModeButtonGroup->addButton(ui->selectionModeButton);
     //m_interactionModeButtonGroup->addButton(ui->trackModeButton);
@@ -555,10 +555,10 @@ void MainWindow::setupConnections() {
     // Interaction Mode Buttons -> VideoLoader (via slots that call VideoLoader)
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeButtonClicked);
     connect(ui->pointButton, &QToolButton::clicked, this, &MainWindow::pointModeButtonClicked);
-    connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeButtonClicked);
+   // connect(ui->roiModeButton, &QToolButton::clicked, this, &MainWindow::roiModeButtonClicked);
     connect(ui->cropModeButton, &QToolButton::clicked, this, &MainWindow::cropModeButtonClicked);
     connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::editBlobsModeButtonClicked);
-    connect(ui->resultsButton, &QToolButton::clicked, this, &MainWindow::resultsButtonClicked);
+   // connect(ui->resultsButton, &QToolButton::clicked, this, &MainWindow::resultsButtonClicked);
 
     // View Mode Option Buttons (Checkable QToolButtons or QCheckBoxes) -> VideoLoader
     // Assuming ui->showThreshButton is checkable
@@ -1072,7 +1072,7 @@ void MainWindow::syncInteractionModeButtons(VideoLoader::InteractionMode newMode
     // Or, if not using QButtonGroup for these specific buttons for some reason:
     ui->panModeButton->setChecked(newMode == VideoLoader::InteractionMode::PanZoom);
     ui->pointButton->setChecked(newMode == VideoLoader::InteractionMode::Point);
-    ui->roiModeButton->setChecked(newMode == VideoLoader::InteractionMode::DrawROI);
+    //ui->roiModeButton->setChecked(newMode == VideoLoader::InteractionMode::DrawROI);
     ui->cropModeButton->setChecked(newMode == VideoLoader::InteractionMode::Crop);
     ui->selectionModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditBlobs);
     //ui->trackModeButton->setChecked(newMode == VideoLoader::InteractionMode::EditTracks);

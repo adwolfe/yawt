@@ -3,10 +3,14 @@
 
 #include <QColor>
 #include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QSet>
 #include <algorithm>
 #include <cmath>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <numeric>
 
 // ── Standard vocabulary constants ─────────────────────────────────────────
@@ -26,6 +30,526 @@ struct CompiledBinding {
     CompiledExpr  innerFn;            // compiled inner expr for diff()
     CompiledExpr  plainFn;            // compiled expr for plain bindings
 };
+
+enum Slot : int {
+    S_X, S_Y, S_X_UM, S_Y_UM, S_FRAME, S_T,
+    S_QUALITY, S_SINGLE, S_MERGED, S_SPLIT, S_LOST,
+    S_AREA, S_AREA_UM2, S_BODY_LENGTH, S_BODY_LENGTH_UM, S_ASPECT_RATIO,
+    S_XHEAD, S_YHEAD, S_XTAIL, S_YTAIL,
+    S_XHEAD_UM, S_YHEAD_UM, S_XTAIL_UM, S_YTAIL_UM,
+    S_SPEED, S_SPEED_PX, S_SPEED_UM,
+    S_HAS_START, S_START_X, S_START_Y, S_DIST_TO_START, S_DIST_TO_START_PX, S_DIST_TO_START_UM,
+    S_HAS_END, S_END_X, S_END_Y, S_DIST_TO_END, S_DIST_TO_END_PX, S_DIST_TO_END_UM,
+    S_HAS_CENTER, S_CENTER_X, S_CENTER_Y, S_DIST_TO_CENTER, S_DIST_TO_CENTER_PX, S_DIST_TO_CENTER_UM,
+    S_FPS,
+    S_COUNT
+};
+
+using SlotExpr = std::function<double(const QVector<double>&)>;
+
+struct SlotCompileState {
+    const QChar* src = nullptr;
+    int pos = 0;
+    int len = 0;
+    QString error;
+    std::function<int(const QString&)> resolve;
+
+    QChar cur() const { return (pos < len) ? src[pos] : QChar(0); }
+    void skip() { while (pos < len && src[pos].isSpace()) ++pos; }
+    void advance() { ++pos; skip(); }
+};
+
+static void setSlotErr(SlotCompileState& s, const QString& msg)
+{
+    if (s.error.isEmpty()) s.error = msg;
+}
+
+static SlotExpr compileSlotExpr(SlotCompileState& s);
+
+static QString parseSlotIdent(SlotCompileState& s)
+{
+    int start = s.pos;
+    while (s.pos < s.len && (s.src[s.pos].isLetterOrNumber() || s.src[s.pos] == '_')) ++s.pos;
+    const QString id = QString(s.src + start, s.pos - start);
+    s.skip();
+    return id;
+}
+
+static SlotExpr compileSlotLiteral(SlotCompileState& s)
+{
+    int start = s.pos;
+    if (s.cur() == '-') ++s.pos;
+    while (s.pos < s.len && (s.src[s.pos].isDigit() || s.src[s.pos] == '.')) ++s.pos;
+    if (s.pos < s.len && (s.src[s.pos] == 'e' || s.src[s.pos] == 'E')) {
+        ++s.pos;
+        if (s.pos < s.len && (s.src[s.pos] == '+' || s.src[s.pos] == '-')) ++s.pos;
+        while (s.pos < s.len && s.src[s.pos].isDigit()) ++s.pos;
+    }
+    const QString tok = QString(s.src + start, s.pos - start);
+    s.skip();
+    bool ok = false;
+    const double v = tok.toDouble(&ok);
+    if (!ok) { setSlotErr(s, "Invalid number: " + tok); return nullptr; }
+    return [v](const QVector<double>&) { return v; };
+}
+
+static SlotExpr compileSlotBuiltin(const QString& name, QVector<SlotExpr> args, SlotCompileState& s)
+{
+    if (name == "min" || name == "max" || name == "pow") {
+        if (args.size() != 2) { setSlotErr(s, name + "() requires 2 arguments"); return nullptr; }
+        auto a = std::move(args[0]), b = std::move(args[1]);
+        if (name == "min") return [a,b](const QVector<double>& v){ return std::min(a(v), b(v)); };
+        if (name == "max") return [a,b](const QVector<double>& v){ return std::max(a(v), b(v)); };
+        return [a,b](const QVector<double>& v){ return std::pow(a(v), b(v)); };
+    }
+    if (args.size() != 1) { setSlotErr(s, name + "() requires 1 argument"); return nullptr; }
+    auto a = std::move(args[0]);
+    if (name == "sqrt")  return [a](const QVector<double>& v){ double x=a(v); return x<0?0.0:std::sqrt(x); };
+    if (name == "abs")   return [a](const QVector<double>& v){ return std::abs(a(v)); };
+    if (name == "floor") return [a](const QVector<double>& v){ return std::floor(a(v)); };
+    if (name == "ceil")  return [a](const QVector<double>& v){ return std::ceil(a(v)); };
+    if (name == "sin")   return [a](const QVector<double>& v){ return std::sin(a(v)); };
+    if (name == "cos")   return [a](const QVector<double>& v){ return std::cos(a(v)); };
+    if (name == "tan")   return [a](const QVector<double>& v){ return std::tan(a(v)); };
+    if (name == "log")   return [a](const QVector<double>& v){ double x=a(v); return x<=0?0.0:std::log(x); };
+    if (name == "exp")   return [a](const QVector<double>& v){ return std::exp(a(v)); };
+    setSlotErr(s, "Unknown function: " + name);
+    return nullptr;
+}
+
+static SlotExpr compileSlotPrimary(SlotCompileState& s)
+{
+    s.skip();
+    if (!s.error.isEmpty()) return nullptr;
+    if (s.cur() == '-') {
+        s.advance();
+        auto inner = compileSlotPrimary(s);
+        if (!inner) return nullptr;
+        return [inner](const QVector<double>& v){ return -inner(v); };
+    }
+    if (s.cur() == '+') { s.advance(); return compileSlotPrimary(s); }
+    if (s.cur() == '(') {
+        s.advance();
+        auto inner = compileSlotExpr(s);
+        if (!inner) return nullptr;
+        if (s.cur() != ')') { setSlotErr(s, "Expected ')'"); return nullptr; }
+        s.advance();
+        return inner;
+    }
+    if (s.cur().isDigit() || s.cur() == '.') return compileSlotLiteral(s);
+    if (s.cur().isLetter() || s.cur() == '_') {
+        const QString id = parseSlotIdent(s);
+        if (s.cur() == '(') {
+            s.advance();
+            QVector<SlotExpr> args;
+            if (s.cur() != ')') {
+                args.append(compileSlotExpr(s));
+                if (!args.last()) return nullptr;
+                while (s.cur() == ',') {
+                    s.advance();
+                    args.append(compileSlotExpr(s));
+                    if (!args.last()) return nullptr;
+                }
+            }
+            if (s.cur() != ')') { setSlotErr(s, "Expected ')'"); return nullptr; }
+            s.advance();
+            return compileSlotBuiltin(id, std::move(args), s);
+        }
+        const int slot = s.resolve ? s.resolve(id) : -1;
+        return [slot](const QVector<double>& vars) -> double {
+            return (slot >= 0 && slot < vars.size()) ? vars[slot] : 0.0;
+        };
+    }
+    setSlotErr(s, QString("Unexpected character: '%1'").arg(s.cur()));
+    return nullptr;
+}
+
+static SlotExpr compileSlotPower(SlotCompileState& s)
+{
+    auto base = compileSlotPrimary(s);
+    if (!base || !s.error.isEmpty()) return base;
+    if (s.cur() == '^') {
+        s.advance();
+        auto exp = compileSlotPower(s);
+        if (!exp) return nullptr;
+        return [base,exp](const QVector<double>& v){ return std::pow(base(v), exp(v)); };
+    }
+    return base;
+}
+
+static SlotExpr compileSlotMul(SlotCompileState& s)
+{
+    auto lhs = compileSlotPower(s);
+    if (!lhs) return nullptr;
+    while (s.error.isEmpty() && (s.cur() == '*' || s.cur() == '/')) {
+        const bool isDiv = (s.cur() == '/');
+        s.advance();
+        auto rhs = compileSlotPower(s);
+        if (!rhs) return nullptr;
+        auto prev = std::move(lhs);
+        lhs = isDiv
+            ? SlotExpr([prev,rhs](const QVector<double>& v){ double r=rhs(v); return r == 0.0 ? 0.0 : prev(v) / r; })
+            : SlotExpr([prev,rhs](const QVector<double>& v){ return prev(v) * rhs(v); });
+    }
+    return lhs;
+}
+
+static SlotExpr compileSlotAdd(SlotCompileState& s)
+{
+    auto lhs = compileSlotMul(s);
+    if (!lhs) return nullptr;
+    while (s.error.isEmpty() && (s.cur() == '+' || s.cur() == '-')) {
+        const bool isSub = (s.cur() == '-');
+        s.advance();
+        auto rhs = compileSlotMul(s);
+        if (!rhs) return nullptr;
+        auto prev = std::move(lhs);
+        lhs = isSub
+            ? SlotExpr([prev,rhs](const QVector<double>& v){ return prev(v) - rhs(v); })
+            : SlotExpr([prev,rhs](const QVector<double>& v){ return prev(v) + rhs(v); });
+    }
+    return lhs;
+}
+
+static SlotExpr compileSlotCompare(SlotCompileState& s)
+{
+    auto lhs = compileSlotAdd(s);
+    if (!lhs || !s.error.isEmpty()) return lhs;
+    const QChar c0 = s.cur();
+    if (c0 == '=' || c0 == '!' || c0 == '<' || c0 == '>') {
+        QString op; op += c0; ++s.pos;
+        if (s.pos < s.len && s.src[s.pos] == '=') { op += '='; ++s.pos; }
+        s.skip();
+        auto rhs = compileSlotAdd(s);
+        if (!rhs) return nullptr;
+        if      (op == "==") return [lhs,rhs](const QVector<double>& v){ return lhs(v)==rhs(v)?1.0:0.0; };
+        else if (op == "!=") return [lhs,rhs](const QVector<double>& v){ return lhs(v)!=rhs(v)?1.0:0.0; };
+        else if (op == "<")  return [lhs,rhs](const QVector<double>& v){ return lhs(v)< rhs(v)?1.0:0.0; };
+        else if (op == "<=") return [lhs,rhs](const QVector<double>& v){ return lhs(v)<=rhs(v)?1.0:0.0; };
+        else if (op == ">")  return [lhs,rhs](const QVector<double>& v){ return lhs(v)> rhs(v)?1.0:0.0; };
+        else if (op == ">=") return [lhs,rhs](const QVector<double>& v){ return lhs(v)>=rhs(v)?1.0:0.0; };
+        setSlotErr(s, "Unknown operator: " + op);
+    }
+    return lhs;
+}
+
+static SlotExpr compileSlotAnd(SlotCompileState& s)
+{
+    auto lhs = compileSlotCompare(s);
+    if (!lhs) return nullptr;
+    while (s.error.isEmpty() && s.cur() == '&' && s.pos+1 < s.len && s.src[s.pos+1] == '&') {
+        s.pos += 2; s.skip();
+        auto rhs = compileSlotCompare(s);
+        if (!rhs) return nullptr;
+        auto prev = std::move(lhs);
+        lhs = [prev,rhs](const QVector<double>& v){ return (prev(v)!=0.0 && rhs(v)!=0.0)?1.0:0.0; };
+    }
+    return lhs;
+}
+
+static SlotExpr compileSlotOr(SlotCompileState& s)
+{
+    auto lhs = compileSlotAnd(s);
+    if (!lhs) return nullptr;
+    while (s.error.isEmpty() && s.cur() == '|' && s.pos+1 < s.len && s.src[s.pos+1] == '|') {
+        s.pos += 2; s.skip();
+        auto rhs = compileSlotAnd(s);
+        if (!rhs) return nullptr;
+        auto prev = std::move(lhs);
+        lhs = [prev,rhs](const QVector<double>& v){ return (prev(v)!=0.0 || rhs(v)!=0.0)?1.0:0.0; };
+    }
+    return lhs;
+}
+
+static SlotExpr compileSlotTernary(SlotCompileState& s)
+{
+    auto cond = compileSlotOr(s);
+    if (!cond || !s.error.isEmpty()) return cond;
+    if (s.cur() == '?') {
+        s.advance();
+        auto thenE = compileSlotOr(s);
+        if (!thenE) return nullptr;
+        if (s.cur() != ':') { setSlotErr(s, "Expected ':'"); return nullptr; }
+        s.advance();
+        auto elseE = compileSlotOr(s);
+        if (!elseE) return nullptr;
+        return [cond,thenE,elseE](const QVector<double>& v){
+            return cond(v) != 0.0 ? thenE(v) : elseE(v); };
+    }
+    return cond;
+}
+
+static SlotExpr compileSlotExpr(SlotCompileState& s) { return compileSlotTernary(s); }
+
+static SlotExpr compileSlotExpression(const QString& expr,
+                                      const std::function<int(const QString&)>& resolve,
+                                      QString* error)
+{
+    if (expr.trimmed().isEmpty()) {
+        if (error) *error = "Empty expression";
+        return nullptr;
+    }
+    SlotCompileState s;
+    s.src = expr.constData();
+    s.pos = 0;
+    s.len = expr.length();
+    s.resolve = resolve;
+    s.skip();
+
+    SlotExpr fn = compileSlotExpr(s);
+    if (s.error.isEmpty() && s.pos < s.len)
+        s.error = QString("Unexpected trailing text at position %1").arg(s.pos);
+    if (!s.error.isEmpty()) {
+        if (error) *error = s.error;
+        return nullptr;
+    }
+    return fn;
+}
+
+static const QHash<QString, int>& standardSlotMap()
+{
+    static const QHash<QString, int> map{
+        {"x", S_X}, {"y", S_Y}, {"x_um", S_X_UM}, {"y_um", S_Y_UM}, {"frame", S_FRAME}, {"t", S_T},
+        {"quality", S_QUALITY}, {"Single", S_SINGLE}, {"Merged", S_MERGED}, {"Split", S_SPLIT}, {"Lost", S_LOST},
+        {"area", S_AREA}, {"area_um2", S_AREA_UM2}, {"body_length", S_BODY_LENGTH},
+        {"body_length_um", S_BODY_LENGTH_UM}, {"aspect_ratio", S_ASPECT_RATIO},
+        {"xhead", S_XHEAD}, {"yhead", S_YHEAD}, {"xtail", S_XTAIL}, {"ytail", S_YTAIL},
+        {"xhead_um", S_XHEAD_UM}, {"yhead_um", S_YHEAD_UM}, {"xtail_um", S_XTAIL_UM}, {"ytail_um", S_YTAIL_UM},
+        {"speed", S_SPEED}, {"speed_px", S_SPEED_PX}, {"speed_um", S_SPEED_UM},
+        {"has_start", S_HAS_START}, {"start_x", S_START_X}, {"start_y", S_START_Y},
+        {"dist_to_start", S_DIST_TO_START}, {"dist_to_start_px", S_DIST_TO_START_PX}, {"dist_to_start_um", S_DIST_TO_START_UM},
+        {"has_end", S_HAS_END}, {"end_x", S_END_X}, {"end_y", S_END_Y},
+        {"dist_to_end", S_DIST_TO_END}, {"dist_to_end_px", S_DIST_TO_END_PX}, {"dist_to_end_um", S_DIST_TO_END_UM},
+        {"has_center", S_HAS_CENTER}, {"center_x", S_CENTER_X}, {"center_y", S_CENTER_Y},
+        {"dist_to_center", S_DIST_TO_CENTER}, {"dist_to_center_px", S_DIST_TO_CENTER_PX}, {"dist_to_center_um", S_DIST_TO_CENTER_UM},
+        {"fps", S_FPS}
+    };
+    return map;
+}
+
+struct PlanBinding {
+    QString key;
+    int slot = -1;
+    int prevSlot = -1;
+    bool isDiff = false;
+    bool isDiffT = false;
+    SlotExpr plainFn;
+    SlotExpr innerFn;
+};
+
+struct CompiledPluginPlan {
+    int slotCount = S_COUNT;
+    QSet<int> requiredSlots;
+    QVector<PlanBinding> bindings;
+    SlotExpr filterFn;
+    SlotExpr formulaFn;
+};
+
+static QString pluginPlanCacheKey(const PlotPluginSpec& spec)
+{
+    QStringList bindingParts;
+    QStringList keys = spec.bindings.keys();
+    keys.sort();
+    for (const QString& key : keys)
+        bindingParts << key + "=" + spec.bindings.value(key);
+
+    return QString::number(spec.version) + "\n"
+         + spec.filePath + "\n"
+         + spec.name + "\n"
+         + QString::number(static_cast<int>(spec.aggregate)) + "\n"
+         + QString::number(static_cast<int>(spec.plotType)) + "\n"
+         + spec.formula + "\n"
+         + spec.filter + "\n"
+         + spec.reduce + "\n"
+         + bindingParts.join("\n");
+}
+
+static QSet<QString> identifiersInExpression(const QString& expr)
+{
+    QSet<QString> ids;
+    int pos = 0;
+    while (pos < expr.size()) {
+        const QChar c = expr[pos];
+        if (!c.isLetter() && c != '_') {
+            ++pos;
+            continue;
+        }
+        const int start = pos++;
+        while (pos < expr.size() && (expr[pos].isLetterOrNumber() || expr[pos] == '_')) {
+            ++pos;
+        }
+        ids.insert(expr.mid(start, pos - start));
+    }
+    return ids;
+}
+
+static QSet<QString> requiredBindingKeys(const QHash<QString, QString>& bindings,
+                                         const QString& formula,
+                                         const QString& filter)
+{
+    QSet<QString> required;
+    QStringList pending = identifiersInExpression(formula).values();
+    pending.append(identifiersInExpression(filter).values());
+
+    while (!pending.isEmpty()) {
+        const QString id = pending.takeLast();
+        QString bindingKey = id;
+        if (!bindings.contains(bindingKey) && bindingKey.startsWith("prev_")) {
+            bindingKey = bindingKey.mid(5);
+        }
+        if (!bindings.contains(bindingKey) || required.contains(bindingKey)) {
+            continue;
+        }
+
+        required.insert(bindingKey);
+        pending.append(identifiersInExpression(bindings.value(bindingKey)).values());
+    }
+
+    return required;
+}
+
+static QStringList orderedBindingKeys(const QHash<QString, QString>& bindings,
+                                      const QSet<QString>& required)
+{
+    QStringList remaining = bindings.keys();
+    remaining.erase(std::remove_if(remaining.begin(), remaining.end(),
+                                   [&](const QString& key) { return !required.contains(key); }),
+                    remaining.end());
+    remaining.sort();
+    QStringList ordered;
+
+    while (!remaining.isEmpty()) {
+        bool progressed = false;
+        for (int i = 0; i < remaining.size();) {
+            const QString key = remaining[i];
+            const QSet<QString> ids = identifiersInExpression(bindings.value(key));
+            bool dependsOnRemaining = false;
+            for (const QString& other : remaining) {
+                if (other == key) continue;
+                if (ids.contains(other)) {
+                    dependsOnRemaining = true;
+                    break;
+                }
+            }
+            if (dependsOnRemaining) {
+                ++i;
+                continue;
+            }
+            ordered.append(key);
+            remaining.removeAt(i);
+            progressed = true;
+        }
+        if (!progressed) {
+            ordered.append(remaining);
+            break;
+        }
+    }
+
+    return ordered;
+}
+
+static std::shared_ptr<CompiledPluginPlan> compilePluginPlan(const PlotPluginSpec& spec, QString& error)
+{
+    auto plan = std::make_shared<CompiledPluginPlan>();
+    QHash<QString, int> dynamicSlots;
+    int nextSlot = S_COUNT;
+
+    const QSet<QString> requiredBindings = requiredBindingKeys(spec.bindings, spec.formula, spec.filter);
+    const QStringList bindingKeys = orderedBindingKeys(spec.bindings, requiredBindings);
+    for (const QString& key : bindingKeys) {
+        dynamicSlots.insert(key, nextSlot++);
+        dynamicSlots.insert("prev_" + key, nextSlot++);
+    }
+    plan->slotCount = nextSlot;
+
+    auto resolve = [&](const QString& name) -> int {
+        const auto dyn = dynamicSlots.constFind(name);
+        if (dyn != dynamicSlots.constEnd()) return dyn.value();
+
+        const auto stdIt = standardSlotMap().constFind(name);
+        if (stdIt != standardSlotMap().constEnd()) {
+            plan->requiredSlots.insert(stdIt.value());
+            return stdIt.value();
+        }
+        return -1;
+    };
+
+    for (const QString& key : bindingKeys) {
+        PlanBinding binding;
+        binding.key = key;
+        binding.slot = dynamicSlots.value(key, -1);
+        binding.prevSlot = dynamicSlots.value("prev_" + key, -1);
+
+        const QString expr = spec.bindings.value(key).trimmed();
+        if (expr.startsWith("diff(") && expr.endsWith(")")) {
+            const QString inner = expr.mid(5, expr.length() - 6).trimmed();
+            binding.isDiff = true;
+            if (inner == "t") {
+                binding.isDiffT = true;
+                plan->requiredSlots.insert(S_T);
+            } else {
+                QString err;
+                binding.innerFn = compileSlotExpression(inner, resolve, &err);
+                if (!binding.innerFn) {
+                    error = "Binding '" + key + "': " + err;
+                    return nullptr;
+                }
+            }
+        } else {
+            QString err;
+            binding.plainFn = compileSlotExpression(expr, resolve, &err);
+            if (!binding.plainFn) {
+                error = "Binding '" + key + "': " + err;
+                return nullptr;
+            }
+        }
+        plan->bindings.append(std::move(binding));
+    }
+
+    if (!spec.filter.isEmpty()) {
+        QString err;
+        plan->filterFn = compileSlotExpression(spec.filter, resolve, &err);
+        if (!plan->filterFn) {
+            error = "Filter: " + err;
+            return nullptr;
+        }
+    }
+
+    {
+        QString err;
+        plan->formulaFn = compileSlotExpression(spec.formula, resolve, &err);
+        if (!plan->formulaFn) {
+            error = "Formula: " + err;
+            return nullptr;
+        }
+    }
+
+    return plan;
+}
+
+static std::shared_ptr<CompiledPluginPlan> cachedPluginPlan(const PlotPluginSpec& spec, QString& error)
+{
+    static QMutex mutex;
+    static QHash<QString, std::shared_ptr<CompiledPluginPlan>> cache;
+
+    const QString key = pluginPlanCacheKey(spec);
+    {
+        QMutexLocker locker(&mutex);
+        auto it = cache.constFind(key);
+        if (it != cache.constEnd()) {
+            return it.value();
+        }
+    }
+
+    std::shared_ptr<CompiledPluginPlan> plan = compilePluginPlan(spec, error);
+    if (!plan) return nullptr;
+
+    {
+        QMutexLocker locker(&mutex);
+        cache.insert(key, plan);
+    }
+    return plan;
+}
 
 // ── Build and initialize the var map (once per worm) ─────────────────────
 
@@ -201,6 +725,231 @@ double PluginEngine::reduce(const QVector<double>& vals, const QString& method)
     return mean;
 }
 
+struct SpeedSlotState {
+    bool hasPrev = false;
+    cv::Point2f prevPos{};
+    int prevFrame = 0;
+    std::deque<std::pair<int, double>> winPx;
+    std::deque<std::pair<int, double>> winUm;
+    double sumPx = 0.0;
+    double sumUm = 0.0;
+
+    void reset() {
+        hasPrev = false;
+        winPx.clear();
+        winUm.clear();
+        sumPx = 0.0;
+        sumUm = 0.0;
+    }
+};
+
+static PluginRoiPoints effectiveRoiForWorm(
+    const AnalysisSessionModel::AnalysisWormEntry& worm,
+    const PluginRoiPoints& fallback)
+{
+    PluginRoiPoints roi = fallback;
+    if (worm.hasStartPoint) {
+        roi.hasStart = true;
+        roi.startX = worm.startPoint.x();
+        roi.startY = worm.startPoint.y();
+    }
+    if (worm.hasEndPoint) {
+        roi.hasEnd = true;
+        roi.endX = worm.endPoint.x();
+        roi.endY = worm.endPoint.y();
+    }
+    if (worm.hasCenterPoint) {
+        roi.hasCenter = true;
+        roi.centerX = worm.centerPoint.x();
+        roi.centerY = worm.centerPoint.y();
+    }
+    return roi;
+}
+
+static void initSlotValues(QVector<double>& slotValues,
+                           const CompiledPluginPlan& plan,
+                           const PluginRoiPoints& roi,
+                           double fps)
+{
+    slotValues.fill(0.0);
+    slotValues[S_SINGLE] = Q_SINGLE;
+    slotValues[S_MERGED] = Q_MERGED;
+    slotValues[S_SPLIT] = Q_SPLIT;
+    slotValues[S_LOST] = Q_LOST;
+    slotValues[S_FPS] = fps;
+
+    if (roi.hasStart) {
+        slotValues[S_HAS_START] = 1.0;
+        slotValues[S_START_X] = roi.startX;
+        slotValues[S_START_Y] = roi.startY;
+    }
+    if (roi.hasEnd) {
+        slotValues[S_HAS_END] = 1.0;
+        slotValues[S_END_X] = roi.endX;
+        slotValues[S_END_Y] = roi.endY;
+    }
+    if (roi.hasCenter) {
+        slotValues[S_HAS_CENTER] = 1.0;
+        slotValues[S_CENTER_X] = roi.centerX;
+        slotValues[S_CENTER_Y] = roi.centerY;
+    }
+
+    for (const PlanBinding& binding : plan.bindings) {
+        if (binding.prevSlot >= 0 && binding.prevSlot < slotValues.size())
+            slotValues[binding.prevSlot] = kNaN;
+    }
+}
+
+static void updateSlotValues(QVector<double>& slotValues,
+                             const CompiledPluginPlan& plan,
+                             const AnalysisSessionModel::AnalysisWormEntry& worm,
+                             const Tracking::WormTrackPoint& p,
+                             const PluginRoiPoints& roi,
+                             SpeedSlotState& speedState)
+{
+    const QSet<int>& req = plan.requiredSlots;
+    const double x = static_cast<double>(p.position.x);
+    const double y = static_cast<double>(p.position.y);
+    const double um = worm.umPerPixel;
+    const double fps = worm.fps;
+
+    if (req.contains(S_X)) slotValues[S_X] = x;
+    if (req.contains(S_Y)) slotValues[S_Y] = y;
+    if (req.contains(S_X_UM)) slotValues[S_X_UM] = x * um;
+    if (req.contains(S_Y_UM)) slotValues[S_Y_UM] = y * um;
+    if (req.contains(S_FRAME)) slotValues[S_FRAME] = p.frameNumberOriginal;
+    if (req.contains(S_T)) slotValues[S_T] = (fps > 0.0) ? p.frameNumberOriginal / fps : 0.0;
+    if (req.contains(S_QUALITY)) slotValues[S_QUALITY] = static_cast<double>(static_cast<int>(p.quality));
+    if (req.contains(S_AREA)) slotValues[S_AREA] = p.area;
+    if (req.contains(S_AREA_UM2)) slotValues[S_AREA_UM2] = p.area * um * um;
+    if (req.contains(S_BODY_LENGTH)) slotValues[S_BODY_LENGTH] = p.bodyLength;
+    if (req.contains(S_BODY_LENGTH_UM)) slotValues[S_BODY_LENGTH_UM] = p.bodyLength * um;
+    if (req.contains(S_ASPECT_RATIO)) slotValues[S_ASPECT_RATIO] = p.aspectRatio;
+
+    if (p.hasTips) {
+        if (req.contains(S_XHEAD)) slotValues[S_XHEAD] = p.headTip.x;
+        if (req.contains(S_YHEAD)) slotValues[S_YHEAD] = p.headTip.y;
+        if (req.contains(S_XTAIL)) slotValues[S_XTAIL] = p.tailTip.x;
+        if (req.contains(S_YTAIL)) slotValues[S_YTAIL] = p.tailTip.y;
+        if (req.contains(S_XHEAD_UM)) slotValues[S_XHEAD_UM] = p.headTip.x * um;
+        if (req.contains(S_YHEAD_UM)) slotValues[S_YHEAD_UM] = p.headTip.y * um;
+        if (req.contains(S_XTAIL_UM)) slotValues[S_XTAIL_UM] = p.tailTip.x * um;
+        if (req.contains(S_YTAIL_UM)) slotValues[S_YTAIL_UM] = p.tailTip.y * um;
+    } else {
+        if (req.contains(S_XHEAD)) slotValues[S_XHEAD] = 0.0;
+        if (req.contains(S_YHEAD)) slotValues[S_YHEAD] = 0.0;
+        if (req.contains(S_XTAIL)) slotValues[S_XTAIL] = 0.0;
+        if (req.contains(S_YTAIL)) slotValues[S_YTAIL] = 0.0;
+        if (req.contains(S_XHEAD_UM)) slotValues[S_XHEAD_UM] = 0.0;
+        if (req.contains(S_YHEAD_UM)) slotValues[S_YHEAD_UM] = 0.0;
+        if (req.contains(S_XTAIL_UM)) slotValues[S_XTAIL_UM] = 0.0;
+        if (req.contains(S_YTAIL_UM)) slotValues[S_YTAIL_UM] = 0.0;
+    }
+
+    const bool needsStartDist = req.contains(S_DIST_TO_START) ||
+                                req.contains(S_DIST_TO_START_PX) ||
+                                req.contains(S_DIST_TO_START_UM);
+    if (needsStartDist && roi.hasStart) {
+        const double dx = x - roi.startX;
+        const double dy = y - roi.startY;
+        const double distPx = std::sqrt(dx * dx + dy * dy);
+        const double distUm = (um > 0.0) ? distPx * um : distPx;
+        slotValues[S_DIST_TO_START_PX] = distPx;
+        slotValues[S_DIST_TO_START_UM] = distUm;
+        slotValues[S_DIST_TO_START] = (um > 0.0) ? distUm : distPx;
+    }
+
+    const bool needsEndDist = req.contains(S_DIST_TO_END) ||
+                              req.contains(S_DIST_TO_END_PX) ||
+                              req.contains(S_DIST_TO_END_UM);
+    if (needsEndDist && roi.hasEnd) {
+        const double dx = x - roi.endX;
+        const double dy = y - roi.endY;
+        const double distPx = std::sqrt(dx * dx + dy * dy);
+        const double distUm = (um > 0.0) ? distPx * um : distPx;
+        slotValues[S_DIST_TO_END_PX] = distPx;
+        slotValues[S_DIST_TO_END_UM] = distUm;
+        slotValues[S_DIST_TO_END] = (um > 0.0) ? distUm : distPx;
+    }
+
+    const bool needsCenterDist = req.contains(S_DIST_TO_CENTER) ||
+                                 req.contains(S_DIST_TO_CENTER_PX) ||
+                                 req.contains(S_DIST_TO_CENTER_UM);
+    if (needsCenterDist && roi.hasCenter) {
+        const double dx = x - roi.centerX;
+        const double dy = y - roi.centerY;
+        const double distPx = std::sqrt(dx * dx + dy * dy);
+        const double distUm = (um > 0.0) ? distPx * um : distPx;
+        slotValues[S_DIST_TO_CENTER_PX] = distPx;
+        slotValues[S_DIST_TO_CENTER_UM] = distUm;
+        slotValues[S_DIST_TO_CENTER] = (um > 0.0) ? distUm : distPx;
+    }
+
+    const bool needsSpeed = req.contains(S_SPEED) ||
+                            req.contains(S_SPEED_PX) ||
+                            req.contains(S_SPEED_UM);
+    if (!needsSpeed) return;
+
+    if (p.quality == Tracking::TrackPointQuality::Lost) {
+        speedState.reset();
+        slotValues[S_SPEED] = 0.0;
+        slotValues[S_SPEED_PX] = 0.0;
+        slotValues[S_SPEED_UM] = 0.0;
+        return;
+    }
+
+    if (!speedState.hasPrev || fps <= 0.0) {
+        speedState.hasPrev = true;
+        speedState.prevPos = p.position;
+        speedState.prevFrame = p.frameNumberOriginal;
+        slotValues[S_SPEED] = 0.0;
+        slotValues[S_SPEED_PX] = 0.0;
+        slotValues[S_SPEED_UM] = 0.0;
+        return;
+    }
+
+    const int df = p.frameNumberOriginal - speedState.prevFrame;
+    if (df > 0) {
+        const double dx = static_cast<double>(p.position.x - speedState.prevPos.x);
+        const double dy = static_cast<double>(p.position.y - speedState.prevPos.y);
+        const double distPx = std::sqrt(dx * dx + dy * dy);
+        const double dt = static_cast<double>(df) / fps;
+        const double speedPx = dt > 0.0 ? distPx / dt : 0.0;
+        const double speedUm = (um > 0.0) ? speedPx * um : speedPx;
+        const int speedWindow = std::max(1, static_cast<int>(std::round(2.0 * fps)));
+
+        speedState.winPx.emplace_back(p.frameNumberOriginal, speedPx);
+        speedState.sumPx += speedPx;
+        speedState.winUm.emplace_back(p.frameNumberOriginal, speedUm);
+        speedState.sumUm += speedUm;
+        while (!speedState.winPx.empty()
+               && (p.frameNumberOriginal - speedState.winPx.front().first) > speedWindow) {
+            speedState.sumPx -= speedState.winPx.front().second;
+            speedState.winPx.pop_front();
+        }
+        while (!speedState.winUm.empty()
+               && (p.frameNumberOriginal - speedState.winUm.front().first) > speedWindow) {
+            speedState.sumUm -= speedState.winUm.front().second;
+            speedState.winUm.pop_front();
+        }
+
+        const double smoothedPx = speedState.winPx.empty()
+            ? speedPx : speedState.sumPx / static_cast<double>(speedState.winPx.size());
+        const double smoothedUm = speedState.winUm.empty()
+            ? speedUm : speedState.sumUm / static_cast<double>(speedState.winUm.size());
+        slotValues[S_SPEED] = (um > 0.0) ? smoothedUm : smoothedPx;
+        slotValues[S_SPEED_PX] = smoothedPx;
+        slotValues[S_SPEED_UM] = smoothedUm;
+    } else {
+        slotValues[S_SPEED] = 0.0;
+        slotValues[S_SPEED_PX] = 0.0;
+        slotValues[S_SPEED_UM] = 0.0;
+    }
+
+    speedState.prevPos = p.position;
+    speedState.prevFrame = p.frameNumberOriginal;
+}
+
 // ── Main evaluation ───────────────────────────────────────────────────────
 
 PluginEngine::PluginResult PluginEngine::evaluate(
@@ -214,52 +963,11 @@ PluginEngine::PluginResult PluginEngine::evaluate(
         return result;
     }
 
-    // ── Compile all expressions ONCE ─────────────────────────────────────
-    // Bindings
-    QList<CompiledBinding> compiledBindings;
-    for (auto it = spec.bindings.constBegin(); it != spec.bindings.constEnd(); ++it) {
-        CompiledBinding cb;
-        cb.key = it.key();
-        const QString& expr = it.value();
-        if (expr.startsWith("diff(") && expr.endsWith(")")) {
-            const QString inner = expr.mid(5, expr.length() - 6).trimmed();
-            cb.isDiff = true;
-            if (inner == "t") {
-                cb.isDiffT = true;
-            } else {
-                QString err;
-                cb.innerFn = ExprEval::compile(inner, &err);
-                if (!cb.innerFn) {
-                    result.errorMessage = "Binding '" + cb.key + "': " + err;
-                    return result;
-                }
-            }
-        } else {
-            cb.isDiff = false;
-            QString err;
-            cb.plainFn = ExprEval::compile(expr, &err);
-            if (!cb.plainFn) {
-                result.errorMessage = "Binding '" + cb.key + "': " + err;
-                return result;
-            }
-        }
-        compiledBindings.append(std::move(cb));
-    }
-
-    // Filter (optional)
-    CompiledExpr compiledFilter;
-    if (!spec.filter.isEmpty()) {
-        QString err;
-        compiledFilter = ExprEval::compile(spec.filter, &err);
-        if (!compiledFilter) { result.errorMessage = "Filter: " + err; return result; }
-    }
-
-    // Formula
-    CompiledExpr compiledFormula;
-    {
-        QString err;
-        compiledFormula = ExprEval::compile(spec.formula, &err);
-        if (!compiledFormula) { result.errorMessage = "Formula: " + err; return result; }
+    QString planError;
+    const std::shared_ptr<CompiledPluginPlan> plan = cachedPluginPlan(spec, planError);
+    if (!plan) {
+        result.errorMessage = planError;
+        return result;
     }
 
     // µm flag
@@ -269,165 +977,75 @@ PluginEngine::PluginResult PluginEngine::evaluate(
             if (worm.umPerPixel <= 0) { allHaveUm = false; break; }
     result.usedUm = allHaveUm;
 
-    // ── Per-worm frame loop ───────────────────────────────────────────────
-    // vars and prevVars are allocated ONCE per worm; values updated in-place
-    // each frame — zero per-frame heap allocations after init.
-
     auto runWormLoop = [&](const AnalysisSessionModel::AnalysisWormEntry& worm,
-                           std::function<bool(const VarMap&)> frameCallback) -> bool
+                           std::function<bool(const QVector<double>&, const Tracking::WormTrackPoint&)> frameCallback) -> bool
     {
-        const double um  = worm.umPerPixel;
-        const double fps = worm.fps;
-        const int speedWindow = (fps > 0.0)
-            ? std::max(1, static_cast<int>(std::round(2.0 * fps)))
-            : 1;
-        PluginRoiPoints effectiveRoi = roiPoints;
-        if (worm.hasStartPoint) {
-            effectiveRoi.hasStart = true;
-            effectiveRoi.startX = worm.startPoint.x();
-            effectiveRoi.startY = worm.startPoint.y();
-        }
-        if (worm.hasEndPoint) {
-            effectiveRoi.hasEnd = true;
-            effectiveRoi.endX = worm.endPoint.x();
-            effectiveRoi.endY = worm.endPoint.y();
-        }
-        if (worm.hasCenterPoint) {
-            effectiveRoi.hasCenter = true;
-            effectiveRoi.centerX = worm.centerPoint.x();
-            effectiveRoi.centerY = worm.centerPoint.y();
-        }
+        const PluginRoiPoints roi = effectiveRoiForWorm(worm, roiPoints);
+        QVector<double> slotValues(plan->slotCount, 0.0);
+        QVector<double> prevSlots(plan->slotCount, 0.0);
+        QVector<double> prevBindingVals(plan->bindings.size(), kNaN);
+        initSlotValues(slotValues, *plan, roi, worm.fps);
+        initSlotValues(prevSlots, *plan, roi, worm.fps);
 
-        // Pre-allocate var maps with all keys once.
-        VarMap vars, prevVars;
-        initVarMap(vars,     effectiveRoi, spec.bindings);
-        initVarMap(prevVars, effectiveRoi, spec.bindings);
-        // prevVars starts truly empty (signals "no previous frame" for diff).
         bool hasPrevFrame = false;
+        SpeedSlotState speedState;
 
-        // prevBindingVals: resolved binding values from the previous frame,
-        // injected as prev_<name> before each frame's binding evaluation.
-        // Seeded with NaN so frame 0 is safely skipped when prev_* is referenced.
-        QHash<QString, double> prevBindingVals;
-        for (const auto& cb : compiledBindings)
-            prevBindingVals[cb.key] = kNaN;
+        for (const Tracking::WormTrackPoint& point : worm.points) {
+            updateSlotValues(slotValues, *plan, worm, point, roi, speedState);
 
-        bool hasPrevSpeedFrame = false;
-        cv::Point2f prevSpeedPos{};
-        int prevSpeedFrame = 0;
-        std::deque<std::pair<int, double>> speedWinPx;
-        std::deque<std::pair<int, double>> speedWinUm;
-        double speedWinSumPx = 0.0;
-        double speedWinSumUm = 0.0;
-
-        for (int i = 0; i < static_cast<int>(worm.points.size()); ++i) {
-            // 1. Update raw vocabulary values in-place (no allocation).
-            updateVarMap(vars, worm, i, effectiveRoi, um, fps);
-
-            const Tracking::WormTrackPoint& point = worm.points[i];
-            if (point.quality == Tracking::TrackPointQuality::Lost) {
-                hasPrevSpeedFrame = false;
-                speedWinPx.clear();
-                speedWinUm.clear();
-                speedWinSumPx = 0.0;
-                speedWinSumUm = 0.0;
-                vars["speed"] = 0.0;
-                vars["speed_px"] = 0.0;
-                vars["speed_um"] = 0.0;
-            } else if (!hasPrevSpeedFrame || fps <= 0.0) {
-                hasPrevSpeedFrame = true;
-                prevSpeedPos = point.position;
-                prevSpeedFrame = point.frameNumberOriginal;
-                vars["speed"] = 0.0;
-                vars["speed_px"] = 0.0;
-                vars["speed_um"] = 0.0;
-            } else {
-                const int df = point.frameNumberOriginal - prevSpeedFrame;
-                if (df <= 0) {
-                    vars["speed"] = 0.0;
-                    vars["speed_px"] = 0.0;
-                    vars["speed_um"] = 0.0;
-                } else {
-                    const double dx = static_cast<double>(point.position.x - prevSpeedPos.x);
-                    const double dy = static_cast<double>(point.position.y - prevSpeedPos.y);
-                    const double distPx = std::sqrt(dx * dx + dy * dy);
-                    const double dt = static_cast<double>(df) / fps;
-                    const double speedPx = dt > 0.0 ? distPx / dt : 0.0;
-                    const double speedUm = (um > 0.0) ? speedPx * um : speedPx;
-
-                    speedWinPx.emplace_back(point.frameNumberOriginal, speedPx);
-                    speedWinSumPx += speedPx;
-                    speedWinUm.emplace_back(point.frameNumberOriginal, speedUm);
-                    speedWinSumUm += speedUm;
-                    while (!speedWinPx.empty()
-                           && (point.frameNumberOriginal - speedWinPx.front().first) > speedWindow) {
-                        speedWinSumPx -= speedWinPx.front().second;
-                        speedWinPx.pop_front();
-                    }
-                    while (!speedWinUm.empty()
-                           && (point.frameNumberOriginal - speedWinUm.front().first) > speedWindow) {
-                        speedWinSumUm -= speedWinUm.front().second;
-                        speedWinUm.pop_front();
-                    }
-
-                    const double smoothedPx = speedWinPx.empty()
-                        ? speedPx : speedWinSumPx / static_cast<double>(speedWinPx.size());
-                    const double smoothedUm = speedWinUm.empty()
-                        ? speedUm : speedWinSumUm / static_cast<double>(speedWinUm.size());
-                    vars["speed"] = (um > 0.0) ? smoothedUm : smoothedPx;
-                    vars["speed_px"] = smoothedPx;
-                    vars["speed_um"] = smoothedUm;
-                }
-                prevSpeedPos = point.position;
-                prevSpeedFrame = point.frameNumberOriginal;
+            for (int bi = 0; bi < plan->bindings.size(); ++bi) {
+                const PlanBinding& binding = plan->bindings[bi];
+                if (binding.prevSlot >= 0) slotValues[binding.prevSlot] = prevBindingVals[bi];
             }
 
-            // 2. Inject prev_<name> (O(n) in-place writes, no allocation).
-            for (auto pit = prevBindingVals.constBegin();
-                 pit != prevBindingVals.constEnd(); ++pit)
-                vars["prev_" + pit.key()] = pit.value();
-
-            // 3. Apply compiled bindings.
-            for (const CompiledBinding& cb : compiledBindings) {
+            bool hasNaN = false;
+            for (int bi = 0; bi < plan->bindings.size(); ++bi) {
+                const PlanBinding& binding = plan->bindings[bi];
                 double value = 0.0;
-                if (cb.isDiff) {
-                    if (cb.isDiffT) {
+                if (binding.isDiff) {
+                    if (binding.isDiffT) {
                         if (!hasPrevFrame) {
-                            vars[cb.key] = kNaN;
+                            slotValues[binding.slot] = kNaN;
+                            hasNaN = true;
                             continue;
                         }
-                        value = vars.value("t", 0.0) - prevVars.value("t", 0.0);
+                        value = slotValues[S_T] - prevSlots[S_T];
                     } else if (!hasPrevFrame) {
-                        vars[cb.key] = kNaN;
+                        slotValues[binding.slot] = kNaN;
+                        hasNaN = true;
                         continue;
                     } else {
-                        value = cb.innerFn(vars) - cb.innerFn(prevVars);
+                        value = binding.innerFn(slotValues) - binding.innerFn(prevSlots);
                     }
                 } else {
-                    value = cb.plainFn(vars);
+                    value = binding.plainFn(slotValues);
                 }
-                vars[cb.key] = value;
+                slotValues[binding.slot] = value;
+                if (std::isnan(value)) {
+                    hasNaN = true;
+                }
             }
 
-            // 4. Capture binding vals for next frame; update prevVars raw vocab.
-            for (const auto& cb : compiledBindings)
-                prevBindingVals[cb.key] = vars.value(cb.key, kNaN);
+            auto capturePreviousState = [&]() {
+                prevSlots = slotValues;
+                for (int bi = 0; bi < plan->bindings.size(); ++bi)
+                    prevBindingVals[bi] = slotValues[plan->bindings[bi].slot];
+                hasPrevFrame = true;
+            };
 
-            // Update prevVars raw vocabulary in-place (no allocation).
-            updateVarMap(prevVars, worm, i, effectiveRoi, um, fps);
-            hasPrevFrame = true;
+            if (hasNaN) {
+                capturePreviousState();
+                continue;
+            }
 
-            // 5. Skip if any binding is NaN.
-            bool hasNaN = false;
-            for (const auto& cb : compiledBindings)
-                if (std::isnan(vars.value(cb.key, kNaN))) { hasNaN = true; break; }
-            if (hasNaN) continue;
+            if (plan->filterFn && plan->filterFn(slotValues) == 0.0) {
+                capturePreviousState();
+                continue;
+            }
 
-            // 6. Apply filter.
-            if (compiledFilter && compiledFilter(vars) == 0.0) continue;
+            if (!frameCallback(slotValues, point)) return false;
 
-            // 7. Invoke callback with the fully populated var map.
-            if (!frameCallback(vars)) return false;
+            capturePreviousState();
         }
         return true;
     };
@@ -440,8 +1058,8 @@ PluginEngine::PluginResult PluginEngine::evaluate(
             gr.name = group.name;
             for (const auto& worm : group.worms) {
                 QVector<double> frameValues;
-                const bool ok = runWormLoop(worm, [&](const VarMap& vars) -> bool {
-                    const double val = compiledFormula(vars);
+                const bool ok = runWormLoop(worm, [&](const QVector<double>& slotValues, const Tracking::WormTrackPoint&) -> bool {
+                    const double val = plan->formulaFn(slotValues);
                     if (!std::isnan(val) && std::isfinite(val))
                         frameValues.append(val);
                     return true;
@@ -467,10 +1085,13 @@ PluginEngine::PluginResult PluginEngine::evaluate(
                 ws.label     = worm.label;
                 ws.color     = worm.color;
                 ws.groupName = group.name;
-                const bool ok = runWormLoop(worm, [&](const VarMap& vars) -> bool {
-                    const double val = compiledFormula(vars);
+                const bool ok = runWormLoop(worm, [&](const QVector<double>& slotValues, const Tracking::WormTrackPoint& point) -> bool {
+                    const double val = plan->formulaFn(slotValues);
                     if (!std::isnan(val) && std::isfinite(val))
-                        ws.points.append(QPointF(vars.value("t"), val));
+                        ws.points.append(QPointF(worm.fps > 0.0
+                                                 ? static_cast<double>(point.frameNumberOriginal) / worm.fps
+                                                 : static_cast<double>(point.frameNumberOriginal),
+                                                 val));
                     return true;
                 });
                 if (!ok) return result;
