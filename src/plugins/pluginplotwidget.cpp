@@ -1,4 +1,5 @@
 #include "pluginplotwidget.h"
+#include "plotcolors.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -42,11 +43,12 @@ void addHashNumber(QCryptographicHash& hash, double value)
 
 QString resultCacheKey(const PlotPluginSpec& spec,
                        quint64 dataRevision,
-                       const QSet<int>& checkedWormIds,
+                       quint64 checkRevision,
                        const PluginRoiPoints& roi)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     addHashText(hash, QString::number(dataRevision));
+    addHashText(hash, QString::number(checkRevision));
     addHashText(hash, spec.filePath);
     addHashText(hash, QString::number(spec.version));
     addHashText(hash, spec.name);
@@ -75,11 +77,6 @@ QString resultCacheKey(const PlotPluginSpec& spec,
     addHashText(hash, roi.hasCenter ? "center" : "no-center");
     addHashNumber(hash, roi.centerX);
     addHashNumber(hash, roi.centerY);
-
-    QList<int> checkedIds = checkedWormIds.values();
-    std::sort(checkedIds.begin(), checkedIds.end());
-    for (int wormId : checkedIds)
-        addHashText(hash, QString::number(wormId));
 
     return QString::fromLatin1(hash.result().toHex());
 }
@@ -168,7 +165,7 @@ void PluginPlotWidget::refreshData()
     const PluginRoiPoints roi = m_roi;
     const QString cacheKey = resultCacheKey(spec,
                                            m_model->dataRevision(),
-                                           m_model->checkedWormIds(),
+                                           m_model->checkRevision(),
                                            roi);
 
     {
@@ -333,6 +330,7 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
     drawYAxis(p, plotArea, area, yMin, yMax, yLabel, fm);
 
     const int nGroups = groups.size();
+    const bool singleGroup = (nGroups == 1);
     const int slotW = plotArea.width() / std::max(nGroups, 1);
     const int boxW  = std::min(slotW * 2 / 3, 60);
 
@@ -346,34 +344,41 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
         if (bs.n == 0) continue;
 
         const int cx = plotArea.left() + slotW * gi + slotW / 2;
-        const QColor col = (gr.worms.isEmpty() ? QColor(100,100,200) : gr.worms[0].color).lighter(130);
+        // Single group: neutral mid-Inferno for the box structure.
+        // Multiple groups: evenly spaced Inferno color per group.
+        const QColor baseCol = singleGroup ? infernoColor(0.5) : plotColor(gi, nGroups);
+        QColor fill = baseCol; fill.setAlphaF(0.45);
 
-        // Whiskers
-        p.setPen(QPen(col.darker(150), 1.5));
+        // Whiskers (always black)
+        p.setPen(QPen(Qt::black, 1.5));
         p.drawLine(cx, toY(bs.whiskerLow),  cx, toY(bs.q1));
         p.drawLine(cx, toY(bs.q3), cx, toY(bs.whiskerHigh));
         const int capW = boxW / 4;
         p.drawLine(cx - capW, toY(bs.whiskerLow),  cx + capW, toY(bs.whiskerLow));
         p.drawLine(cx - capW, toY(bs.whiskerHigh), cx + capW, toY(bs.whiskerHigh));
 
-        // Box body
+        // Box body — semi-transparent fill, black outline
         const QRect box(cx - boxW/2, toY(bs.q3), boxW, std::max(1, toY(bs.q1) - toY(bs.q3)));
-        p.fillRect(box, col);
-        p.setPen(QPen(col.darker(160), 1.5));
+        p.fillRect(box, fill);
+        p.setPen(QPen(Qt::black, 1.5));
         p.drawRect(box);
 
-        // Median
-        p.setPen(QPen(col.darker(200), 2.5));
+        // Median (always black)
+        p.setPen(QPen(Qt::black, 2.5));
         p.drawLine(cx - boxW/2, toY(bs.median), cx + boxW/2, toY(bs.median));
 
-        // Individual data points
-        p.setPen(QPen(col.darker(180), 1));
+        // Individual data points — hollow circles; per-worm color (single group) or group color.
+        const int nWorms = gr.worms.size();
         p.setBrush(Qt::NoBrush);
-        for (const auto& ws : gr.worms) {
+        for (int wi = 0; wi < nWorms; ++wi) {
+            const auto& ws = gr.worms[wi];
             if (!std::isfinite(ws.value)) continue;
+            QColor dc = singleGroup ? plotColor(wi, nWorms) : baseCol;
+            dc.setAlphaF(0.65);
+            p.setPen(QPen(dc, 1.5));
             const int y = toY(ws.value);
             const int jitterRange = std::max(1, boxW / 2);
-            const int jitter = gr.worms.size() > 1
+            const int jitter = nWorms > 1
                 ? static_cast<int>(qHash(ws.label) % static_cast<uint>(jitterRange)) - boxW / 4
                 : 0;
             p.drawEllipse(QPoint(cx + jitter, y), 3, 3);
@@ -397,13 +402,15 @@ void PluginPlotWidget::paintBar(QPainter& p, const QRect& area)
     const auto& groups = m_result.groups;
     if (groups.isEmpty()) { paintStatus(p, area, "No data"); return; }
 
+    const int nGroupsBar = groups.size();
     struct GStats { QString name; double mean = 0, sd = 0; QColor color; int n = 0; };
     QList<GStats> gstats;
     double yMax = 0;
-    for (const auto& gr : groups) {
+    for (int gi = 0; gi < nGroupsBar; ++gi) {
+        const auto& gr = groups[gi];
         GStats gs;
         gs.name = gr.name;
-        gs.color = gr.worms.isEmpty() ? QColor(100,100,200) : gr.worms[0].color;
+        gs.color = plotColor(gi, nGroupsBar);
         gs.n = gr.worms.size();
         double sum = 0;
         for (const auto& ws : gr.worms) sum += ws.value;
@@ -438,17 +445,17 @@ void PluginPlotWidget::paintBar(QPainter& p, const QRect& area)
     for (int gi = 0; gi < nGroups; ++gi) {
         const GStats& gs = gstats[gi];
         const int cx = plotArea.left() + slotW * gi + slotW / 2;
-        const QColor col = gs.color.lighter(140);
+        QColor fill = gs.color; fill.setAlphaF(0.45);
 
         const int barTop = toY(gs.mean);
         const int barBot = toY(0);
         const QRect bar(cx - barW/2, barTop, barW, std::max(1, barBot - barTop));
-        p.fillRect(bar, col);
-        p.setPen(QPen(col.darker(160), 1.5));
+        p.fillRect(bar, fill);
+        p.setPen(QPen(Qt::black, 1.5));
         p.drawRect(bar);
 
         if (gs.sd > 0) {
-            p.setPen(QPen(col.darker(200), 1.5));
+            p.setPen(QPen(Qt::black, 1.5));
             p.drawLine(cx, toY(gs.mean + gs.sd), cx, toY(gs.mean - gs.sd));
             p.drawLine(cx - 6, toY(gs.mean + gs.sd), cx + 6, toY(gs.mean + gs.sd));
             p.drawLine(cx - 6, toY(gs.mean - gs.sd), cx + 6, toY(gs.mean - gs.sd));
@@ -522,16 +529,43 @@ void PluginPlotWidget::paintLine(QPainter& p, const QRect& area)
                    Qt::AlignCenter, xLabel);
     }
 
+    // Build color map: single group → one color per worm series; multiple groups → one color per group.
+    QStringList uniqueGroups;
+    for (const auto& ws : series)
+        if (!uniqueGroups.contains(ws.groupName))
+            uniqueGroups.append(ws.groupName);
+    const bool singleGroupLine = (uniqueGroups.size() == 1);
+
+    QHash<QString, QColor> groupColor;
+    for (int gi = 0; gi < uniqueGroups.size(); ++gi)
+        groupColor[uniqueGroups[gi]] = plotColor(gi, uniqueGroups.size());
+
     // Lines
     p.setClipRect(plotArea);
-    for (const auto& ws : series) {
-        if (ws.points.size() < 2) continue;
-        p.setPen(QPen(ws.color, 1.5));
-        QPainterPath path;
-        path.moveTo(toX(ws.points[0].x()), toY(ws.points[0].y()));
-        for (int i = 1; i < ws.points.size(); ++i)
-            path.lineTo(toX(ws.points[i].x()), toY(ws.points[i].y()));
-        p.drawPath(path);
+    if (singleGroupLine) {
+        // Color each worm series individually across the full Turbo range.
+        const int nSeries = series.size();
+        for (int si = 0; si < nSeries; ++si) {
+            const auto& ws = series[si];
+            if (ws.points.size() < 2) continue;
+            p.setPen(QPen(plotColor(si, nSeries), 1.5));
+            QPainterPath path;
+            path.moveTo(toX(ws.points[0].x()), toY(ws.points[0].y()));
+            for (int i = 1; i < ws.points.size(); ++i)
+                path.lineTo(toX(ws.points[i].x()), toY(ws.points[i].y()));
+            p.drawPath(path);
+        }
+    } else {
+        // All worms in the same group share the group's Turbo color.
+        for (const auto& ws : series) {
+            if (ws.points.size() < 2) continue;
+            p.setPen(QPen(groupColor.value(ws.groupName), 1.5));
+            QPainterPath path;
+            path.moveTo(toX(ws.points[0].x()), toY(ws.points[0].y()));
+            for (int i = 1; i < ws.points.size(); ++i)
+                path.lineTo(toX(ws.points[i].x()), toY(ws.points[i].y()));
+            p.drawPath(path);
+        }
     }
     p.setClipping(false);
 

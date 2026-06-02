@@ -498,6 +498,7 @@ void AnalysisSessionModel::setCheckedForProcDir(const QString& procDir, bool che
     // Emit dataChanged for all worm indices — simplest with a reset
     // (only called infrequently, so the cost is acceptable)
     emit dataChanged(index(0,0), index(m_groups.size()-1, 0));
+    ++m_checkRevision;
     emit checkedWormIdsChanged();
 }
 
@@ -509,6 +510,7 @@ void AnalysisSessionModel::setCheckedWormIds(const QSet<int>& ids)
                 w.checked = ids.contains(w.id);
 
     emit dataChanged(index(0,0), index(m_groups.size()-1, 0));
+    ++m_checkRevision;
     emit checkedWormIdsChanged();
 }
 
@@ -771,7 +773,8 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
                                  index(wormCount - 1, 0, vidIdx),
                                  {Qt::CheckStateRole});
         }
-        emit checkedWormIdsChanged();
+        ++m_checkRevision;
+    emit checkedWormIdsChanged();
         scheduleStateSave();
         return true;
     }
@@ -799,7 +802,8 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
         if (parentGroup.isValid())
             emit dataChanged(parentGroup, parentGroup, {Qt::CheckStateRole});
 
-        emit checkedWormIdsChanged();
+        ++m_checkRevision;
+    emit checkedWormIdsChanged();
         scheduleStateSave();  // debounced check-state save
         return true;
     }
@@ -827,7 +831,8 @@ bool AnalysisSessionModel::setData(const QModelIndex& idx,
                 emit dataChanged(parentGroup, parentGroup, {Qt::CheckStateRole});
         }
 
-        emit checkedWormIdsChanged();
+        ++m_checkRevision;
+    emit checkedWormIdsChanged();
         scheduleStateSave();  // debounced check-state save
         return true;
     }

@@ -134,6 +134,13 @@ public:
      */
     quint64 dataRevision() const { return m_dataRevision; }
 
+    /**
+     * Monotonic revision incremented on every check-state change.
+     * Use this (not checkedWormIds) in cache keys — worm IDs are per-run and
+     * not globally unique, so the same ID set can represent different selections.
+     */
+    quint64 checkRevision() const { return m_checkRevision; }
+
     // ── QAbstractItemModel interface ──────────────────────────────────────────
     QModelIndex index(int row, int column,
                       const QModelIndex& parent = {}) const override;
@@ -213,6 +220,7 @@ private:
     QString          m_yawtDir;              // set during scan, used for auto-save
     QTimer*          m_saveTimer = nullptr;  // debounce timer for check-state saves
     quint64          m_dataRevision = 1;
+    quint64          m_checkRevision = 1;
 };
 
 #endif // ANALYSISSESSIONMODEL_H

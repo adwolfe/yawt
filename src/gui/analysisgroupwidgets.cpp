@@ -1,5 +1,6 @@
 #include "analysisgroupwidgets.h"
 #include "analysissessionmodel.h"
+#include "plotcolors.h"
 #include "trackingcommon.h"
 
 #include <QPainter>
@@ -207,31 +208,33 @@ static void drawBox(QPainter& p, double cx, double boxW,
     const double x2 = cx + boxW * 0.5;
     const QRectF box(x1, toY(s.q3), boxW, toY(s.q1) - toY(s.q3));
 
-    // Filled box
-    QColor fill = col; fill.setAlphaF(0.35);
+    // Filled box — colored fill, black outline
+    QColor fill = col; fill.setAlphaF(0.45);
     p.fillRect(box, fill);
-    p.setPen(QPen(col, 1.5));
+    p.setPen(QPen(Qt::black, 1.5));
     p.drawRect(box);
 
-    // Median line
-    p.setPen(QPen(col.darker(150), 2.0));
+    // Median line (always black)
+    p.setPen(QPen(Qt::black, 2.0));
     const double my = toY(s.median);
     p.drawLine(QPointF(x1, my), QPointF(x2, my));
 
-    // Whiskers
-    p.setPen(QPen(col, 1.0, Qt::DashLine));
+    // Whiskers (always black)
+    p.setPen(QPen(Qt::black, 1.0, Qt::DashLine));
     p.drawLine(QPointF(cx, toY(s.q1)),         QPointF(cx, toY(s.whiskerLow)));
     p.drawLine(QPointF(cx, toY(s.q3)),         QPointF(cx, toY(s.whiskerHigh)));
-    p.setPen(QPen(col, 1.5));
+    p.setPen(QPen(Qt::black, 1.5));
     p.drawLine(QPointF(x1+4, toY(s.whiskerLow)),  QPointF(x2-4, toY(s.whiskerLow)));
     p.drawLine(QPointF(x1+4, toY(s.whiskerHigh)), QPointF(x2-4, toY(s.whiskerHigh)));
 
     // Outlier dots
-    p.setPen(QPen(col, 1.0));
+    p.setPen(QPen(Qt::black, 1.0));
+    p.setBrush(QBrush(col));
     for (double v : s.outliers) {
         const double oy = toY(v);
         p.drawEllipse(QPointF(cx, oy), 3.0, 3.0);
     }
+    p.setBrush(Qt::NoBrush);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,12 +329,27 @@ void GroupTrackXYWidget::paintEvent(QPaintEvent*)
         if (maxSpd <= 0) maxSpd = 1.0;
     }
 
+    // Assign display colors: single group → per worm; multiple groups → per group.
+    const int nGroups = m_data.size();
+    const bool singleGroup = (nGroups == 1);
+    // Build a flat list of (group index, worm index within group) → color
+    QHash<const void*, QColor> wormDisplayColor;
+    for (int gi = 0; gi < nGroups; ++gi) {
+        const auto& g = m_data[gi];
+        const int nWorms = g.worms.size();
+        for (int wi = 0; wi < nWorms; ++wi) {
+            const QColor c = singleGroup ? plotColor(wi, nWorms) : plotColor(gi, nGroups);
+            wormDisplayColor.insert(&g.worms[wi], c);
+        }
+    }
+
     // Draw tracks
     for (const auto& g : m_data) {
         for (const auto& w : g.worms) {
+            const QColor wc = wormDisplayColor.value(&w, Qt::gray);
             if (m_mode == Mode::TrackColor) {
-                // Solid line in group colour
-                p.setPen(QPen(w.color, 1.2));
+                // Solid line in display colour
+                p.setPen(QPen(wc, 1.2));
                 QPainterPath path;
                 bool first = true;
                 for (const auto& pt : w.points) {
@@ -365,8 +383,8 @@ void GroupTrackXYWidget::paintEvent(QPaintEvent*)
             if (!w.points.empty()) {
                 for (const auto& pt : w.points)
                     if (pt.quality != Tracking::TrackPointQuality::Lost) {
-                        p.setPen(QPen(w.color.darker(150), 1));
-                        p.setBrush(w.color);
+                        p.setPen(QPen(wc.darker(150), 1));
+                        p.setBrush(wc);
                         p.drawEllipse(toPlot(pt.position.x, pt.position.y), 3.0, 3.0);
                         p.setBrush(Qt::NoBrush);
                         break;
@@ -375,14 +393,15 @@ void GroupTrackXYWidget::paintEvent(QPaintEvent*)
         }
     }
 
-    // Legend (group name → colour swatch)
+    // Legend: per-group for multi-group, or just show "n worms" for single group
     {
         QFont lf = p.font(); lf.setPointSizeF(lf.pointSizeF() * 0.8); p.setFont(lf);
         const QFontMetrics fm(lf);
         qreal ly = plot.top() + 6;
-        for (const auto& g : m_data) {
+        for (int gi = 0; gi < nGroups; ++gi) {
+            const auto& g = m_data[gi];
             if (g.worms.isEmpty()) continue;
-            const QColor gc = g.worms.first().color;
+            const QColor gc = plotColor(gi, nGroups);
             p.fillRect(QRectF(plot.right()-90, ly, 12, 12), gc);
             p.setPen(palette().text().color());
             p.drawText(QRectF(plot.right()-75, ly-1, 74, 14),
@@ -440,11 +459,13 @@ void GroupSpeedTimelineWidget::paintEvent(QPaintEvent*)
     int minFrame = INT_MAX, maxFrame = INT_MIN;
     double maxSpd = 0.0;
 
+    const int nGroupsTL = m_data.size();
+    int giTL = 0;
     for (const auto& g : m_data) {
         if (g.worms.isEmpty()) continue;
         GroupLine gl;
         gl.name  = g.name;
-        gl.color = g.worms.first().color;
+        gl.color = plotColor(giTL++, nGroupsTL);
 
         for (const auto& w : g.worms) {
             auto tl = speedTimeline(w.points, w.umPerPixel, m_fps);
@@ -563,10 +584,12 @@ void GroupSpeedBoxWidget::paintEvent(QPaintEvent*)
     QList<GroupStats> gs;
     double maxVal = 0.0;
 
-    for (const auto& g : m_data) {
+    const int nGroupsSB = m_data.size();
+    for (int gi = 0; gi < nGroupsSB; ++gi) {
+        const auto& g = m_data[gi];
         GroupStats s;
         s.name  = g.name;
-        s.color = g.worms.isEmpty() ? Qt::gray : g.worms.first().color;
+        s.color = plotColor(gi, nGroupsSB);
         for (const auto& w : g.worms)
             s.vals.append(avgSpeed(w.points, w.umPerPixel, m_fps));
         s.box = computeBox(s.vals);
@@ -657,10 +680,12 @@ void GroupReversalWidget::paintEvent(QPaintEvent*)
     QList<GS> gs;
     double maxVal = 0.0;
 
-    for (const auto& g : m_data) {
+    const int nGroupsRev = m_data.size();
+    for (int gi = 0; gi < nGroupsRev; ++gi) {
+        const auto& g = m_data[gi];
         GS s;
         s.name  = g.name;
-        s.color = g.worms.isEmpty() ? Qt::gray : g.worms.first().color;
+        s.color = plotColor(gi, nGroupsRev);
         for (const auto& w : g.worms)
             s.vals.append(static_cast<double>(countReversals(w.points)));
         s.box = computeBox(s.vals);
