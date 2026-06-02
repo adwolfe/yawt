@@ -15,7 +15,6 @@
 struct BoxStats {
     double q1 = 0, median = 0, q3 = 0;
     double whiskerLow = 0, whiskerHigh = 0;
-    QList<double> outliers;
     int n = 0;
 };
 
@@ -29,23 +28,23 @@ static double pctile(const std::vector<double>& s, double p)
     return s[lo] + (idx - lo) * (s[hi] - s[lo]);
 }
 
-static BoxStats computeBox(const QList<double>& vals)
+static BoxStats computeBox(std::vector<double> vals)
 {
     BoxStats bs;
-    if (vals.isEmpty()) return bs;
-    std::vector<double> s(vals.begin(), vals.end());
-    std::sort(s.begin(), s.end());
-    bs.n = static_cast<int>(s.size());
-    bs.q1     = pctile(s, 0.25);
-    bs.median = pctile(s, 0.50);
-    bs.q3     = pctile(s, 0.75);
+    vals.erase(std::remove_if(vals.begin(), vals.end(),
+                              [](double v) { return !std::isfinite(v); }),
+               vals.end());
+    if (vals.empty()) return bs;
+    std::sort(vals.begin(), vals.end());
+    bs.n = static_cast<int>(vals.size());
+    bs.q1     = pctile(vals, 0.25);
+    bs.median = pctile(vals, 0.50);
+    bs.q3     = pctile(vals, 0.75);
     const double iqr = bs.q3 - bs.q1;
     bs.whiskerLow  = bs.q1 - 1.5 * iqr;
     bs.whiskerHigh = bs.q3 + 1.5 * iqr;
-    for (double v : s)
-        if (v < bs.whiskerLow || v > bs.whiskerHigh) bs.outliers.append(v);
-    for (double v : s)  { if (v >= bs.whiskerLow)  { bs.whiskerLow  = v; break; } }
-    for (auto it = s.rbegin(); it != s.rend(); ++it)
+    for (double v : vals)  { if (v >= bs.whiskerLow)  { bs.whiskerLow  = v; break; } }
+    for (auto it = vals.rbegin(); it != vals.rend(); ++it)
         { if (*it <= bs.whiskerHigh) { bs.whiskerHigh = *it; break; } }
     return bs;
 }
@@ -199,7 +198,16 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
     double yMin = std::numeric_limits<double>::max();
     double yMax = std::numeric_limits<double>::lowest();
     for (const auto& gr : groups)
-        for (const auto& ws : gr.worms) { yMin = std::min(yMin, ws.value); yMax = std::max(yMax, ws.value); }
+        for (const auto& ws : gr.worms) {
+            if (!std::isfinite(ws.value)) continue;
+            yMin = std::min(yMin, ws.value);
+            yMax = std::max(yMax, ws.value);
+        }
+    if (yMin == std::numeric_limits<double>::max()
+            || yMax == std::numeric_limits<double>::lowest()) {
+        paintStatus(p, area, "No finite data");
+        return;
+    }
     if (yMin >= yMax) { yMin -= 0.5; yMax += 0.5; }
     const double yPad = (yMax - yMin) * 0.1;
     yMin -= yPad; yMax += yPad;
@@ -225,9 +233,11 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
 
     for (int gi = 0; gi < nGroups; ++gi) {
         const auto& gr = groups[gi];
-        QList<double> vals;
-        for (const auto& ws : gr.worms) vals.append(ws.value);
-        const BoxStats bs = computeBox(vals);
+        std::vector<double> vals;
+        vals.reserve(static_cast<size_t>(gr.worms.size()));
+        for (const auto& ws : gr.worms)
+            vals.push_back(ws.value);
+        const BoxStats bs = computeBox(std::move(vals));
         if (bs.n == 0) continue;
 
         const int cx = plotArea.left() + slotW * gi + slotW / 2;
@@ -255,8 +265,12 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
         p.setPen(QPen(col.darker(180), 1));
         p.setBrush(Qt::NoBrush);
         for (const auto& ws : gr.worms) {
+            if (!std::isfinite(ws.value)) continue;
             const int y = toY(ws.value);
-            const int jitter = gr.worms.size() > 1 ? (qHash(ws.label) % (boxW / 2)) - boxW / 4 : 0;
+            const int jitterRange = std::max(1, boxW / 2);
+            const int jitter = gr.worms.size() > 1
+                ? static_cast<int>(qHash(ws.label) % static_cast<uint>(jitterRange)) - boxW / 4
+                : 0;
             p.drawEllipse(QPoint(cx + jitter, y), 3, 3);
         }
 

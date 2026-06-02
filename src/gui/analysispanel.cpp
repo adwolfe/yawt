@@ -244,12 +244,14 @@ void AnalysisPanel::loadPlugins()
 
     // Load plugins from all search dirs (project > user > bundled)
     const QStringList searchDirs = YawtPaths::pluginSearchDirs(m_yawtDir);
-    m_plugins = PluginLoader::loadAll(searchDirs);
+    const QList<PlotPluginSpec> loadedPlugins = PluginLoader::loadAll(searchDirs);
+    m_plugins.clear();
 
     // Add valid plugins to the selector with a separator label first
     bool separatorAdded = false;
-    for (const PlotPluginSpec& spec : m_plugins) {
+    for (const PlotPluginSpec& spec : loadedPlugins) {
         if (!spec.isValid) continue;
+        m_plugins.append(spec);
         if (!separatorAdded) {
             auto* sep = new QListWidgetItem("── Plugins ──", w.plotSelector);
             sep->setFlags(Qt::NoItemFlags);
@@ -324,7 +326,8 @@ void AnalysisPanel::onPlotItemChanged(QListWidgetItem* item)
     }
 
     // ── Plugin plots ───────────────────────────────────────────────────────
-    // Find which plugin this item corresponds to (skip separator items)
+    // Find which plugin this item corresponds to (skip separator items).
+    // m_plugins contains only valid, visible plugin specs in this same order.
     int pluginIdx = -1;
     int pluginCounter = 0;
     for (int i = kPlotCount; i < w.plotSelector->count(); ++i) {
