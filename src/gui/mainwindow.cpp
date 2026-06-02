@@ -1300,11 +1300,15 @@ void MainWindow::handlePointDefined(const QPointF& point) {
 }
 
 void MainWindow::handleRemoveBlobsClicked() {
-    m_blobTableModel->removeRows(0, m_blobTableModel->getAllItems().length());
+    if (m_trackingDataStorage) {
+        m_trackingDataStorage->clearAllData();
+    }
     ui->deleteButton->setEnabled(false); // Disable delete button after clearing all items
-    // VideoLoader will get updates from storage, but keep these for backward compatibility
+    // VideoLoader will get updates from storage, but keep these for backward compatibility.
     ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
+    ui->videoLoader->setTracksToDisplay(Tracking::AllWormTracks());
     ui->videoLoader->setVisibleTrackIDs(QSet<int>());
+    updateWormTimeline();
     // Ensure table columns are properly sized after clearing
     resizeTableColumns();
 }
@@ -1332,13 +1336,21 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
     if (!srcIndex.isValid()) return;
 
     const int selectedProxyRow = proxyIndex.row();
-    m_blobTableModel->removeRows(srcIndex.row(), 1);
+    if (!m_blobTableModel->removeRows(srcIndex.row(), 1)) return;
+
+    if (m_trackingDataStorage) {
+        ui->videoLoader->setTracksToDisplay(m_trackingDataStorage->getAllTracks());
+        updateVisibleTracksInVideoLoader(QItemSelection(), QItemSelection());
+    }
+    updateWormTimeline();
 
     if (activeProxy->rowCount() > 0) {
         int newRow = (selectedProxyRow < activeProxy->rowCount()) ? selectedProxyRow : activeProxy->rowCount() - 1;
         QModelIndex newIndex = activeProxy->index(newRow, 0);
         activeView->setCurrentIndex(newIndex);
         activeView->selectionModel()->select(newIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    } else {
+        ui->deleteButton->setEnabled(false);
     }
 
     resizeTableColumns();

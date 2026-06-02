@@ -110,11 +110,8 @@ bool TrackingDataStorage::removeItem(int itemId) {
     // Remove from items list
     m_items.removeAt(index);
     
-    // Remove any associated track data
-    if (m_tracks.count(itemId)) {
-        m_tracks.erase(itemId);
-        emit trackRemoved(itemId);
-    }
+    purgeProcessingDataForItem(itemId);
+    buildFrameIndex();
     
     updateIdToIndexMap();
     recalculateGlobalMetricsAndROIs();
@@ -126,35 +123,19 @@ bool TrackingDataStorage::removeItem(int itemId) {
     return true;
 }
 
+bool TrackingDataStorage::hasAnyData() const {
+    return !m_items.isEmpty()
+        || !m_tracks.empty()
+        || !m_frameIndex.isEmpty()
+        || !m_mergeHistory.isEmpty()
+        || !m_detectedBlobsByFrame.isEmpty()
+        || !m_tipBaselines.isEmpty();
+}
+
 bool TrackingDataStorage::removeAllItems() {
-    if (m_items.isEmpty()) {
-        return false; // Already empty
-    }
-    
-    // Gather IDs of removed items for signals
-    QList<int> removedIds;
-    for (const auto& item : m_items) {
-        removedIds.append(item.id);
-    }
-    
-    // Clear all data
-    m_items.clear();
-    m_tracks.clear();
-    m_idToIndexMap.clear();
-    m_nextId = 1; // Reset ID counter
-    
-    // Update metrics with empty state
-    recalculateGlobalMetricsAndROIs();
-    
-    // Emit signals for removed items and tracks
-    for (int id : removedIds) {
-        emit itemRemoved(id);
-        emit trackRemoved(id);
-    }
-    
-    emit allDataChanged();
-    emit itemsChanged(m_items);
-    return true;
+    const bool hadData = hasAnyData();
+    if (hadData) clearAllData();
+    return hadData;
 }
 
 void TrackingDataStorage::setItemVisibility(int itemId, bool visible) {
@@ -287,28 +268,74 @@ void TrackingDataStorage::clearAllTracks() {
 }
 
 void TrackingDataStorage::clearAllData() {
-    QList<int> removedIds;
+    QList<int> removedItemIds;
     for (const auto& item : m_items) {
-        removedIds.append(item.id);
+        removedItemIds.append(item.id);
+    }
+    QList<int> removedTrackIds;
+    for (const auto& track : m_tracks) {
+        removedTrackIds.append(track.first);
     }
 
     m_items.clear();
     m_tracks.clear();
     m_mergeHistory.clear();
     m_detectedBlobsByFrame.clear();
+    m_tipBaselines.clear();
     m_frameIndex.clear();
     m_idToIndexMap.clear();
     m_nextId = 1;
+    m_currentColorIndex = 0;
 
     recalculateGlobalMetricsAndROIs();
 
-    for (int id : removedIds) {
+    for (int id : removedItemIds) {
         emit itemRemoved(id);
+    }
+    for (int id : removedTrackIds) {
         emit trackRemoved(id);
     }
 
     emit allDataChanged();
     emit itemsChanged(m_items);
+}
+
+void TrackingDataStorage::purgeProcessingDataForItem(int itemId) {
+    const bool hadTrack = (m_tracks.erase(itemId) > 0);
+
+    auto mergeIt = m_mergeHistory.begin();
+    while (mergeIt != m_mergeHistory.end()) {
+        QList<QList<int>>& groups = mergeIt.value();
+        for (auto groupIt = groups.begin(); groupIt != groups.end();) {
+            groupIt->removeAll(itemId);
+            if (groupIt->size() < 2) {
+                groupIt = groups.erase(groupIt);
+            } else {
+                ++groupIt;
+            }
+        }
+        if (groups.isEmpty()) {
+            mergeIt = m_mergeHistory.erase(mergeIt);
+        } else {
+            ++mergeIt;
+        }
+    }
+
+    auto frameIt = m_detectedBlobsByFrame.begin();
+    while (frameIt != m_detectedBlobsByFrame.end()) {
+        frameIt.value().remove(itemId);
+        if (frameIt.value().isEmpty()) {
+            frameIt = m_detectedBlobsByFrame.erase(frameIt);
+        } else {
+            ++frameIt;
+        }
+    }
+
+    m_tipBaselines.remove(itemId);
+
+    if (hadTrack) {
+        emit trackRemoved(itemId);
+    }
 }
 
 static bool isRoiPointType(TableItems::ItemType type) {

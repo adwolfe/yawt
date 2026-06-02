@@ -90,10 +90,15 @@ public:
      * @return True if the item was removed, false if not found
      */
     bool removeItem(int itemId);
+
+    /**
+     * @brief Return true when any user item or processing artifact is present.
+     */
+    bool hasAnyData() const;
     
     /**
-     * @brief Remove all items and their associated tracks
-     * @return True if items were removed, false if already empty
+     * @brief Remove all items and processing artifacts.
+     * @return True if data was removed, false if already empty
      */
     bool removeAllItems();
     
@@ -151,7 +156,7 @@ public:
     void clearAllTracks();
 
     /**
-     * @brief Clear all stored data (items, tracks, merge history, detected blobs, and indexes).
+     * @brief Clear all stored data (items, tracks, merge history, detected blobs, baselines, and indexes).
      */
     void clearAllData();
 
@@ -488,6 +493,7 @@ private:
     void initializeColors();                               // Initialize color palette
     void recalculateGlobalMetricsAndROIs();                // Update metrics and ROIs
     void updateIdToIndexMap();                             // Rebuild ID-to-index map
+    void purgeProcessingDataForItem(int itemId);           // Remove tracks/blobs/merge refs/baselines for one item
     void buildFrameIndex();                                // Build frame index for fast lookups
     
     // Merge history API
