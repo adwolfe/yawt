@@ -42,6 +42,7 @@
 #include "scaledialog.h"
 #include "../data/videometadatastore.h"
 #include "../utils/thresholdingutils.h"
+#include "../utils/cvimageutils.h"
 #include "../utils/yawtjsonio.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -1675,9 +1676,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
                 cv::Mat threshMat;
                 ThresholdingUtils::applyThresholding(inputMat, threshMat, threshSettings);
                 if (!threshMat.empty()) {
-                    QImage gray(threshMat.data, threshMat.cols, threshMat.rows,
-                                threshMat.step, QImage::Format_Grayscale8);
-                    img = gray.copy();
+                    img = CvImageUtils::matToQImage(threshMat);
                 }
             }
 

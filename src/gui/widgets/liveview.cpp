@@ -7,6 +7,7 @@
 #include <QInputDevice>
 #include <QtMath>
 #include <opencv2/imgproc.hpp>
+#include "../../utils/cvimageutils.h"
 
 LiveView::LiveView(QWidget* parent)
     : QWidget(parent)
@@ -28,11 +29,8 @@ void LiveView::updateFrame(const cv::Mat& frame)
 {
     if (frame.empty()) return;
 
-    cv::Mat rgb;
-    cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
-
-    if (QSize(rgb.cols, rgb.rows) != m_frameSize) {
-        m_frameSize  = QSize(rgb.cols, rgb.rows);
+    if (QSize(frame.cols, frame.rows) != m_frameSize) {
+        m_frameSize  = QSize(frame.cols, frame.rows);
         m_zoomFactor = 1.0;
         m_panOffset  = {0.0, 0.0};
         // Scale existing ROI if resolution changed (e.g., after reconnect at different res)
@@ -43,8 +41,7 @@ void LiveView::updateFrame(const cv::Mat& frame)
         }
     }
 
-    m_frame = QImage(rgb.data, rgb.cols, rgb.rows,
-                     static_cast<int>(rgb.step), QImage::Format_RGB888).copy();
+    m_frame = CvImageUtils::matToQImage(frame);
     update();
 }
 

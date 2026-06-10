@@ -295,7 +295,7 @@ private:
     // --- Helper Methods ---
     bool openVideoFile(const QString &filePath);
     void displayFrame(int frameNumber, bool suppressEmit = false); // Will now consider ViewMode for QImage content
-    void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg);
+    void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg) const;
     QRectF calculateTargetRect() const;
     QPointF mapPointToVideo(const QPointF& widgetPoint) const;
     QPointF mapPointFromVideo(const QPointF& videoPoint) const;

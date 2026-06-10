@@ -105,6 +105,7 @@ set(SOURCES
     # Utils
     src/utils/debugutils.cpp
     src/utils/thresholdingutils.cpp
+    src/utils/cvimageutils.cpp
     src/utils/yawtpaths.cpp
     src/utils/yawtjsonio.cpp
 
@@ -177,6 +178,7 @@ set(HEADERS
     # Utils
     src/utils/debugutils.h
     src/utils/thresholdingutils.h
+    src/utils/cvimageutils.h
     src/utils/yawtpaths.h
     src/utils/yawtjsonio.h
 
