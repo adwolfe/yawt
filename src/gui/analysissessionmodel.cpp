@@ -1,5 +1,6 @@
 #include "analysissessionmodel.h"
 #include "videometadatastore.h"
+#include "../utils/yawtjsonio.h"
 
 #include <QDataStream>
 #include <QDir>
@@ -35,11 +36,8 @@ QIcon AnalysisSessionModel::makeColorIcon(const QColor& c)
 /** Read worms.json and return the IDs of Worm and Fix items. */
 QList<int> AnalysisSessionModel::parseWormIds(const QString& wormsJsonPath)
 {
-    QFile f(wormsJsonPath);
-    if (!f.open(QIODevice::ReadOnly)) return {};
-
     QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    const QJsonDocument doc = YawtJsonIO::readJsonDocument(wormsJsonPath, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return {};
 
     QList<int> ids;
@@ -58,11 +56,9 @@ QList<int> AnalysisSessionModel::parseWormIds(const QString& wormsJsonPath)
 Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& wormsJsonPath)
 {
     Tracking::AllWormTracks tracks;
-    QFile f(wormsJsonPath);
-    if (!f.open(QIODevice::ReadOnly)) return tracks;
 
     QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    const QJsonDocument doc = YawtJsonIO::readJsonDocument(wormsJsonPath, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return tracks;
 
     const QJsonObject tracksObj = doc.object().value("tracks").toObject();

@@ -173,6 +173,9 @@ public:
     void setSkipMergedFrames(bool skip);
     void setSmoothCenterline(bool smooth);
     void setMaxReversalFraction(float fraction);
+    void setLoadedRunContext(const QString& videoPath,
+                             const QString& processingOutputDirectory,
+                             int keyFrameNum);
 
 public slots:
     /**

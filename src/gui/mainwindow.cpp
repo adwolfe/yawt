@@ -43,6 +43,7 @@
 #include "scaledialog.h"
 #include "../data/videometadatastore.h"
 #include "../utils/thresholdingutils.h"
+#include "../utils/yawtjsonio.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 // No need to include videoloader.h again if it's in mainwindow.h, but good practice for .cpp
@@ -1469,6 +1470,19 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
         QMessageBox::warning(this, "Load Run", "Failed to load worms.json.");
         return false;
     }
+
+    int loadedKeyFrame = 0;
+    {
+        QJsonParseError err;
+        const QJsonDocument doc = YawtJsonIO::readJsonDocument(wormsPath, &err);
+        if (err.error == QJsonParseError::NoError && doc.isObject()) {
+            loadedKeyFrame = doc.object().value("keyFrame").toInt(0);
+        }
+    }
+    if (m_appController) {
+        m_appController->setLoadedRunContext(videoPath, procDir.absolutePath(), loadedKeyFrame);
+    }
+
     if (QFileInfo::exists(roiPath)) {
         if (!m_trackingDataStorage->loadFromRoiJson(roiPath)) {
             QMessageBox::warning(this, "Load Run", "Failed to load roi_points.json.");

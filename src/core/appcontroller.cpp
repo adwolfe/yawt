@@ -589,6 +589,16 @@ void AppController::setCenterlineSnakeParams(const Centerline::CenterlineSnakePa
     }
 }
 
+void AppController::setLoadedRunContext(const QString& videoPath,
+                                        const QString& processingOutputDirectory,
+                                        int keyFrameNum)
+{
+    if (!m_manager) {
+        return;
+    }
+    m_manager->setLoadedRunContext(videoPath, processingOutputDirectory, keyFrameNum);
+}
+
 void AppController::rerunCenterline(const Centerline::CenterlineSnakeParams& params)
 {
     if (!m_manager) {

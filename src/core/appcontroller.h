@@ -156,6 +156,16 @@ public:
     void setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params);
 
     /**
+     * @brief Set the loaded run directory used by on-demand centerline reruns.
+     *
+     * This is used when a PROC_* run is loaded from disk rather than produced by
+     * the current tracking session, so the rerun can persist back to that folder.
+     */
+    void setLoadedRunContext(const QString& videoPath,
+                             const QString& processingOutputDirectory,
+                             int keyFrameNum);
+
+    /**
      * @brief Re-run the post-tracking centerline computation with the given params.
      *
      * Stores the params (equivalent to calling setCenterlineSnakeParams first) and

@@ -11,6 +11,7 @@
 #include <cmath>  // For std::sqrt (TipFeatureBaseline accessors)
 #include <QColor> // Added for TrackedItem color
 #include <QString> // For typeToString and stringToType
+#include <QJsonObject>
 #include <map>     // For AllWormTracks
 
 
@@ -250,6 +251,9 @@ struct DetectedBlob {
           isValid(false),
           touchesROIboundary(false) {}
 };
+
+QJsonObject detectedBlobToJson(const DetectedBlob& blob);
+DetectedBlob detectedBlobFromJson(const QJsonObject& obj);
 
 enum class TrackPointQuality {
     Single,     // Single (confident) tracking

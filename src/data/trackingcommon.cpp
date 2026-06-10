@@ -3,6 +3,8 @@
 #include "../core/centerlineprocessor.h"
 #include <QtMath>       // For qSqrt, qPow
 #include <QDebug>       // For qWarning/qDebug
+#include <QJsonArray>
+#include <QJsonObject>
 #include "../utils/loggingcategories.h"
 
 #include <algorithm>
@@ -11,6 +13,152 @@
 
 
 namespace Tracking {
+
+QJsonObject detectedBlobToJson(const DetectedBlob& db)
+{
+    QJsonObject obj;
+    obj["isValid"] = db.isValid;
+    obj["area"] = db.area;
+    obj["convexHullArea"] = db.convexHullArea;
+    obj["touchesROIboundary"] = db.touchesROIboundary;
+    obj["assignedHeadTipIdx"] = db.assignedHeadTipIdx;
+    obj["assignedTailTipIdx"] = db.assignedTailTipIdx;
+    obj["topologyState"] = static_cast<int>(db.topologyState);
+
+    QJsonObject cent;
+    cent["x"] = db.centroid.x();
+    cent["y"] = db.centroid.y();
+    obj["centroid"] = cent;
+
+    QJsonObject bbox;
+    bbox["x"] = db.boundingBox.x();
+    bbox["y"] = db.boundingBox.y();
+    bbox["width"] = db.boundingBox.width();
+    bbox["height"] = db.boundingBox.height();
+    obj["boundingBox"] = bbox;
+
+    QJsonArray contourArr;
+    for (const cv::Point& pt : db.contourPoints) {
+        QJsonArray a;
+        a.append(pt.x);
+        a.append(pt.y);
+        contourArr.append(a);
+    }
+    obj["contourPoints"] = contourArr;
+
+    QJsonArray holesArr;
+    for (const auto& hole : db.holeContourPoints) {
+        QJsonArray holeArr;
+        for (const cv::Point& pt : hole) {
+            QJsonArray a;
+            a.append(pt.x);
+            a.append(pt.y);
+            holeArr.append(a);
+        }
+        holesArr.append(holeArr);
+    }
+    obj["holeContourPoints"] = holesArr;
+
+    QJsonArray clArr;
+    for (const cv::Point2f& pt : db.centerlinePoints) {
+        QJsonArray a;
+        a.append(static_cast<double>(pt.x));
+        a.append(static_cast<double>(pt.y));
+        clArr.append(a);
+    }
+    obj["centerlinePoints"] = clArr;
+
+    obj["hasCenterlineCutPoint"] = db.hasCenterlineCutPoint;
+    if (db.hasCenterlineCutPoint) {
+        QJsonObject cut;
+        cut["x"] = static_cast<double>(db.centerlineCutPoint.x);
+        cut["y"] = static_cast<double>(db.centerlineCutPoint.y);
+        obj["centerlineCutPoint"] = cut;
+    }
+
+    QJsonArray tipsArr;
+    for (const TipCandidate& tip : db.tipCandidates) {
+        QJsonObject t;
+        t["x"] = static_cast<double>(tip.point.x);
+        t["y"] = static_cast<double>(tip.point.y);
+        t["curvature"] = static_cast<double>(tip.curvature);
+        t["width"] = static_cast<double>(tip.width);
+        t["source"] = static_cast<int>(tip.source);
+        tipsArr.append(t);
+    }
+    obj["tipCandidates"] = tipsArr;
+
+    return obj;
+}
+
+DetectedBlob detectedBlobFromJson(const QJsonObject& obj)
+{
+    DetectedBlob db;
+    db.isValid = obj.value("isValid").toBool(false);
+    db.area = obj.value("area").toDouble(0.0);
+    db.convexHullArea = obj.value("convexHullArea").toDouble(0.0);
+    db.touchesROIboundary = obj.value("touchesROIboundary").toBool(false);
+    db.assignedHeadTipIdx = obj.value("assignedHeadTipIdx").toInt(-1);
+    db.assignedTailTipIdx = obj.value("assignedTailTipIdx").toInt(-1);
+    db.topologyState = static_cast<TopologyState>(
+        obj.value("topologyState").toInt(static_cast<int>(TopologyState::Unknown)));
+
+    if (obj.contains("centroid") && obj["centroid"].isObject()) {
+        const QJsonObject c = obj["centroid"].toObject();
+        db.centroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
+    }
+    if (obj.contains("boundingBox") && obj["boundingBox"].isObject()) {
+        const QJsonObject b = obj["boundingBox"].toObject();
+        db.boundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
+                                b.value("width").toDouble(), b.value("height").toDouble());
+    }
+
+    for (const QJsonValue& v : obj.value("contourPoints").toArray()) {
+        const QJsonArray a = v.toArray();
+        if (a.size() >= 2) {
+            db.contourPoints.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
+        }
+    }
+    for (const QJsonValue& hv : obj.value("holeContourPoints").toArray()) {
+        std::vector<cv::Point> hole;
+        for (const QJsonValue& pv : hv.toArray()) {
+            const QJsonArray a = pv.toArray();
+            if (a.size() >= 2) {
+                hole.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
+            }
+        }
+        db.holeContourPoints.push_back(std::move(hole));
+    }
+    for (const QJsonValue& v : obj.value("centerlinePoints").toArray()) {
+        const QJsonArray a = v.toArray();
+        if (a.size() >= 2) {
+            db.centerlinePoints.push_back(
+                cv::Point2f(static_cast<float>(a[0].toDouble()),
+                            static_cast<float>(a[1].toDouble())));
+        }
+    }
+
+    db.hasCenterlineCutPoint = obj.value("hasCenterlineCutPoint").toBool(false);
+    if (db.hasCenterlineCutPoint && obj.contains("centerlineCutPoint")) {
+        const QJsonObject c = obj["centerlineCutPoint"].toObject();
+        db.centerlineCutPoint = cv::Point2f(static_cast<float>(c.value("x").toDouble()),
+                                            static_cast<float>(c.value("y").toDouble()));
+    }
+
+    for (const QJsonValue& tv : obj.value("tipCandidates").toArray()) {
+        if (!tv.isObject()) continue;
+        const QJsonObject t = tv.toObject();
+        TipCandidate tip;
+        tip.point = cv::Point2f(static_cast<float>(t.value("x").toDouble()),
+                                static_cast<float>(t.value("y").toDouble()));
+        tip.curvature = static_cast<float>(t.value("curvature").toDouble());
+        tip.width = static_cast<float>(t.value("width").toDouble());
+        tip.source = static_cast<TipCandidate::Source>(t.value("source").toInt(0));
+        db.tipCandidates.push_back(tip);
+    }
+
+    return db;
+}
 
 namespace {
 

@@ -1,0 +1,19 @@
+version: 1
+name: Head-Tail Flip Score (Timeline)
+description: "Per-frame orientation-continuity score for centerline endpoints. Positive values indicate frames where swapping head and tail would better preserve endpoint continuity from the previous frame; larger spikes are more likely head-tail flips."
+aggregate: per_frame
+bindings:
+  hx: xhead
+  hy: yhead
+  tx: xtail
+  ty: ytail
+  same_dist: sqrt((hx - prev_hx) * (hx - prev_hx) + (hy - prev_hy) * (hy - prev_hy)) + sqrt((tx - prev_tx) * (tx - prev_tx) + (ty - prev_ty) * (ty - prev_ty))
+  swapped_dist: sqrt((hx - prev_tx) * (hx - prev_tx) + (hy - prev_ty) * (hy - prev_ty)) + sqrt((tx - prev_hx) * (tx - prev_hx) + (ty - prev_hy) * (ty - prev_hy))
+  continuity_score: (same_dist - swapped_dist) / body_length
+formula: continuity_score
+filter: quality != Lost && body_length > 0
+plot:
+  type: line
+  y_label: Flip Continuity Score
+  y_label_um: Flip Continuity Score
+  x_label: Time (s)

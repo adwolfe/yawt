@@ -107,6 +107,7 @@ set(SOURCES
     src/utils/debugutils.cpp
     src/utils/thresholdingutils.cpp
     src/utils/yawtpaths.cpp
+    src/utils/yawtjsonio.cpp
 
     # Plugins
     src/plugins/pluginloader.cpp
@@ -179,6 +180,7 @@ set(HEADERS
     src/utils/debugutils.h
     src/utils/thresholdingutils.h
     src/utils/yawtpaths.h
+    src/utils/yawtjsonio.h
 
     # Plugins
     src/plugins/plotpluginspec.h
@@ -202,6 +204,7 @@ set(BUNDLED_PLUGINS
     plugins/distance_from_start_timeline.yaml
     plugins/reversals.yaml
     plugins/speed_from_xy.yaml
+    plugins/head_tail_flip_timeline.yaml
 )
 set_source_files_properties(${BUNDLED_PLUGINS} PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources/plugins"

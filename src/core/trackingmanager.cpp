@@ -47,6 +47,7 @@
 #include "../data/videometadatastore.h"
 #include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
+#include "../utils/yawtjsonio.h"
 #include "../debug/debugdatastore.h"
 
 #ifdef TRACKING_DEBUG
@@ -91,105 +92,14 @@
 // ---------------------------------------------------------------------------
 // Shared JSON helpers for DetectedBlob <-> JSON (used by save and load paths)
 // ---------------------------------------------------------------------------
-static QJsonObject detectedBlobToJson(const Tracking::DetectedBlob& db)
+static QJsonObject storageDetectedBlobToJson(const Tracking::DetectedBlob& db)
 {
-    QJsonObject obj;
-    obj["isValid"]          = db.isValid;
-    obj["area"]             = db.area;
-    obj["convexHullArea"]   = db.convexHullArea;
-    obj["touchesROIboundary"] = db.touchesROIboundary;
-
-    QJsonObject cent;
-    cent["x"] = db.centroid.x();
-    cent["y"] = db.centroid.y();
-    obj["centroid"] = cent;
-
-    QJsonObject bbox;
-    bbox["x"]      = db.boundingBox.x();
-    bbox["y"]      = db.boundingBox.y();
-    bbox["width"]  = db.boundingBox.width();
-    bbox["height"] = db.boundingBox.height();
-    obj["boundingBox"] = bbox;
-
-    QJsonArray contourArr;
-    for (const cv::Point& pt : db.contourPoints) {
-        QJsonArray a; a.append(pt.x); a.append(pt.y);
-        contourArr.append(a);
-    }
-    obj["contourPoints"] = contourArr;
-
-    QJsonArray clArr;
-    for (const cv::Point2f& pt : db.centerlinePoints) {
-        QJsonArray a;
-        a.append(static_cast<double>(pt.x));
-        a.append(static_cast<double>(pt.y));
-        clArr.append(a);
-    }
-    obj["centerlinePoints"] = clArr;
-
-    obj["hasCenterlineCutPoint"] = db.hasCenterlineCutPoint;
-    if (db.hasCenterlineCutPoint) {
-        QJsonObject cut;
-        cut["x"] = static_cast<double>(db.centerlineCutPoint.x);
-        cut["y"] = static_cast<double>(db.centerlineCutPoint.y);
-        obj["centerlineCutPoint"] = cut;
-    }
-
-    QJsonArray holesArr;
-    for (const auto& hole : db.holeContourPoints) {
-        QJsonArray holeArr;
-        for (const cv::Point& pt : hole) {
-            QJsonArray a; a.append(pt.x); a.append(pt.y);
-            holeArr.append(a);
-        }
-        holesArr.append(holeArr);
-    }
-    obj["holeContourPoints"] = holesArr;
-    return obj;
+    return Tracking::detectedBlobToJson(db);
 }
 
-static Tracking::DetectedBlob detectedBlobFromJson(const QJsonObject& obj)
+static Tracking::DetectedBlob storageDetectedBlobFromJson(const QJsonObject& obj)
 {
-    Tracking::DetectedBlob db;
-    db.isValid            = obj.value("isValid").toBool(false);
-    db.area               = obj.value("area").toDouble(0);
-    db.convexHullArea     = obj.value("convexHullArea").toDouble(0);
-    db.touchesROIboundary = obj.value("touchesROIboundary").toBool(false);
-
-    if (obj.contains("centroid") && obj["centroid"].isObject()) {
-        const QJsonObject c = obj["centroid"].toObject();
-        db.centroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
-    }
-    if (obj.contains("boundingBox") && obj["boundingBox"].isObject()) {
-        const QJsonObject b = obj["boundingBox"].toObject();
-        db.boundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
-                                b.value("width").toDouble(), b.value("height").toDouble());
-    }
-    for (const QJsonValue& v : obj.value("contourPoints").toArray()) {
-        const QJsonArray a = v.toArray();
-        if (a.size() >= 2) db.contourPoints.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
-    }
-    for (const QJsonValue& v : obj.value("centerlinePoints").toArray()) {
-        const QJsonArray a = v.toArray();
-        if (a.size() >= 2)
-            db.centerlinePoints.push_back(cv::Point2f(static_cast<float>(a[0].toDouble()),
-                                                       static_cast<float>(a[1].toDouble())));
-    }
-    db.hasCenterlineCutPoint = obj.value("hasCenterlineCutPoint").toBool(false);
-    if (db.hasCenterlineCutPoint && obj.contains("centerlineCutPoint")) {
-        const QJsonObject c = obj["centerlineCutPoint"].toObject();
-        db.centerlineCutPoint = cv::Point2f(static_cast<float>(c.value("x").toDouble()),
-                                             static_cast<float>(c.value("y").toDouble()));
-    }
-    for (const QJsonValue& hv : obj.value("holeContourPoints").toArray()) {
-        std::vector<cv::Point> hole;
-        for (const QJsonValue& pv : hv.toArray()) {
-            const QJsonArray a = pv.toArray();
-            if (a.size() >= 2) hole.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
-        }
-        db.holeContourPoints.push_back(std::move(hole));
-    }
-    return db;
+    return Tracking::detectedBlobFromJson(obj);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +116,9 @@ static bool loadMergeStateFromWormsJson(
     const QString path = QDir(procDir).absoluteFilePath("worms.json");
     QFile f(path);
     if (!f.exists()) return false;
-    if (!f.open(QIODevice::ReadOnly)) return false;
 
     QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    const QJsonDocument doc = YawtJsonIO::readJsonDocument(path, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return false;
 
     const QJsonObject root = doc.object();
@@ -296,7 +205,7 @@ static bool loadMergeStateFromWormsJson(
                 bool okw = false;
                 const int wormId = wit.key().toInt(&okw);
                 if (!okw || !wit.value().isObject()) continue;
-                inner.insert(wormId, detectedBlobFromJson(wit.value().toObject()));
+                inner.insert(wormId, storageDetectedBlobFromJson(wit.value().toObject()));
             }
             outSplitResolutionMap.insert(frameNum, inner);
         }
@@ -2780,6 +2689,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
             const auto blobIt = blobsForFrame.constFind(wormId);
             if (blobIt != blobsForFrame.constEnd()) {
                 const Tracking::DetectedBlob& blob = blobIt.value();
+                pObj["detectedBlob"] = storageDetectedBlobToJson(blob);
 
                 // Centerline points
                 QJsonArray clArr;
@@ -2908,7 +2818,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
             QJsonObject wormMapObj;
             for (auto wit = sfit.value().constBegin();
                  wit != sfit.value().constEnd(); ++wit)
-                wormMapObj[QString::number(wit.key())] = detectedBlobToJson(wit.value());
+                wormMapObj[QString::number(wit.key())] = storageDetectedBlobToJson(wit.value());
             splitObj[QString::number(sfit.key())] = wormMapObj;
         }
         ms["splitResolutionMap"] = splitObj;
@@ -2918,15 +2828,13 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
 
     QJsonDocument doc(root);
     QString filePath = QDir(directoryPath).absoluteFilePath("worms.json");
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.write(doc.toJson(QJsonDocument::Indented));
-        file.close();
-        TRACKING_DEBUG() << "TrackingManager: Saved worms.json to:" << filePath;
+    QString error;
+    if (YawtJsonIO::writeCompressedJsonDocument(filePath, doc, &error)) {
+        TRACKING_DEBUG() << "TrackingManager: Saved compressed worms.json to:" << filePath;
         return true;
     }
 
-    qWarning() << "TrackingManager: Failed to save worms.json to:" << filePath;
+    qWarning() << "TrackingManager: Failed to save worms.json to:" << filePath << error;
     return false;
 }
 
@@ -3264,6 +3172,16 @@ void TrackingManager::setMaxReversalFraction(float fraction)
     m_maxReversalFraction = qBound(0.f, fraction, 1.f);
 }
 
+void TrackingManager::setLoadedRunContext(const QString& videoPath,
+                                          const QString& processingOutputDirectory,
+                                          int keyFrameNum)
+{
+    m_videoPath = videoPath;
+    m_processingOutputDirectory = processingOutputDirectory;
+    m_videoSpecificDirectory = QFileInfo(processingOutputDirectory).absoluteDir().absolutePath();
+    m_keyFrameNum = keyFrameNum;
+}
+
 void TrackingManager::startCenterlineComputation() {
     if (!m_centerlineEnabled) {
         emit trackingStatusUpdate("Centerline computation disabled.");
@@ -3390,6 +3308,14 @@ void TrackingManager::handleCenterlineFinished() {
         ? m_processingOutputDirectory
         : m_videoSpecificDirectory;
     const QString baseName = QFileInfo(m_videoPath).completeBaseName();
+
+    // Rewrite worms.json now that centerlines and head/tail assignments have
+    // been written back into storage by the post-tracking centerline workers.
+    if (!dir.isEmpty()) {
+        if (!saveWormsJson(dir)) {
+            emit trackingStatusUpdate("Warning: Failed to save final worms.json");
+        }
+    }
 
     // Export head/tail swap report alongside the other output files.
     if (!m_headTailSwapData.isEmpty() && !dir.isEmpty()) {

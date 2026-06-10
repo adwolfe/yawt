@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <QtMath>
 #include "../utils/loggingcategories.h"
+#include "../utils/yawtjsonio.h"
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -383,19 +384,12 @@ static bool parseItemFromJsonObject(const QJsonObject& obj, TableItems::ClickedI
 }
 
 bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        qWarning() << "TrackingDataStorage: Cannot read worms.json:" << filePath;
-        return false;
-    }
-
-    QByteArray data = file.readAll();
-    file.close();
-
     QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    QString ioError;
+    QJsonDocument doc = YawtJsonIO::readJsonDocument(filePath, &parseError, &ioError);
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        qWarning() << "TrackingDataStorage: JSON parse error in worms.json:" << parseError.errorString();
+        qWarning() << "TrackingDataStorage: JSON parse error in worms.json:"
+                   << parseError.errorString() << ioError;
         return false;
     }
 
@@ -465,9 +459,48 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                 p.quality = static_cast<Tracking::TrackPointQuality>(
                     pObj.value("quality").toInt(static_cast<int>(p.quality)));
 
-                // Restore centerline points into m_detectedBlobsByFrame so
-                // analysis plots can access them without re-tracking.
-                if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
+                if (pObj.contains("area"))
+                    p.area = static_cast<float>(pObj.value("area").toDouble());
+                if (pObj.contains("aspectRatio"))
+                    p.aspectRatio = static_cast<float>(pObj.value("aspectRatio").toDouble());
+
+                if (pObj.contains("tips") && pObj["tips"].isObject()) {
+                    const QJsonObject tips = pObj["tips"].toObject();
+                    if (tips.contains("head") && tips.contains("tail")) {
+                        const QJsonObject h = tips["head"].toObject();
+                        const QJsonObject t = tips["tail"].toObject();
+                        p.headTip = cv::Point2f(static_cast<float>(h.value("x").toDouble()),
+                                                static_cast<float>(h.value("y").toDouble()));
+                        p.tailTip = cv::Point2f(static_cast<float>(t.value("x").toDouble()),
+                                                static_cast<float>(t.value("y").toDouble()));
+                        p.hasTips = true;
+                    }
+                }
+
+                if (pObj.contains("detectedBlob") && pObj["detectedBlob"].isObject()) {
+                    Tracking::DetectedBlob blob =
+                        Tracking::detectedBlobFromJson(pObj["detectedBlob"].toObject());
+                    if (!blob.isValid) {
+                        blob.isValid = true;
+                    }
+                    if (blob.centroid.isNull()) {
+                        blob.centroid = QPointF(static_cast<double>(p.position.x),
+                                                static_cast<double>(p.position.y));
+                    }
+                    if (blob.boundingBox.isNull()) {
+                        blob.boundingBox = p.roi;
+                    }
+                    if (blob.centerlinePoints.size() >= 2) {
+                        double arcLen = 0.0;
+                        for (size_t i = 1; i < blob.centerlinePoints.size(); ++i) {
+                            const cv::Point2f d = blob.centerlinePoints[i] - blob.centerlinePoints[i - 1];
+                            arcLen += std::sqrt(d.x * d.x + d.y * d.y);
+                        }
+                        p.bodyLength = static_cast<float>(arcLen);
+                    }
+                    setDetectedBlobForFrame(p.frameNumberOriginal, wormId, blob);
+                } else if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
+                    // Legacy format: restore the minimal centerline-only blob.
                     Tracking::DetectedBlob blob;
                     blob.isValid   = true;
                     blob.centroid  = QPointF(static_cast<double>(p.position.x),
@@ -480,8 +513,15 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                                 cv::Point2f(static_cast<float>(a[0].toDouble()),
                                             static_cast<float>(a[1].toDouble())));
                     }
-                    if (!blob.centerlinePoints.empty())
+                    if (blob.centerlinePoints.size() >= 2) {
+                        double arcLen = 0.0;
+                        for (size_t i = 1; i < blob.centerlinePoints.size(); ++i) {
+                            const cv::Point2f d = blob.centerlinePoints[i] - blob.centerlinePoints[i - 1];
+                            arcLen += std::sqrt(d.x * d.x + d.y * d.y);
+                        }
+                        p.bodyLength = static_cast<float>(arcLen);
                         setDetectedBlobForFrame(p.frameNumberOriginal, wormId, blob);
+                    }
                 }
 
                 points.push_back(p);
