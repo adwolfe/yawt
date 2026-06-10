@@ -830,17 +830,20 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
 }
 
 void VideoLoader::convertCvMatToQImage(const cv::Mat& mat, QImage& qimg) {
+    // Always return a deep copy: the QImage(uchar* data, ...) constructor only
+    // wraps the source buffer, so the result would dangle once the backing
+    // cv::Mat (often a local or about-to-be-evicted cache entry) is released.
     if (mat.empty()) { qimg = QImage(); return; }
     if (mat.type() == CV_8UC3) {
         qimg = QImage(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step), QImage::Format_RGB888).rgbSwapped();
     } else if (mat.type() == CV_8UC1) {
-        qimg = QImage(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step), QImage::Format_Grayscale8);
+        qimg = QImage(mat.data, mat.cols, mat.rows, static_cast<int>(mat.step), QImage::Format_Grayscale8).copy();
     } else {
         cv::Mat temp;
         try {
             if (mat.channels() == 4) { cv::cvtColor(mat, temp, cv::COLOR_BGRA2BGR); qimg = QImage(temp.data, temp.cols, temp.rows, static_cast<int>(temp.step), QImage::Format_RGB888).rgbSwapped(); }
             else if (mat.channels() == 3 && mat.type() != CV_8UC3) { mat.convertTo(temp, CV_8UC3, 255.0); qimg = QImage(temp.data, temp.cols, temp.rows, static_cast<int>(temp.step), QImage::Format_RGB888).rgbSwapped(); }
-            else if (mat.channels() == 1 && mat.type() != CV_8UC1) { mat.convertTo(temp, CV_8UC1, 255.0); qimg = QImage(temp.data, temp.cols, temp.rows, static_cast<int>(temp.step), QImage::Format_Grayscale8); }
+            else if (mat.channels() == 1 && mat.type() != CV_8UC1) { mat.convertTo(temp, CV_8UC1, 255.0); qimg = QImage(temp.data, temp.cols, temp.rows, static_cast<int>(temp.step), QImage::Format_Grayscale8).copy(); }
             else { qimg = QImage(); }
         } catch (const cv::Exception& ex) {
             YAWT_WARN(lcGuiVideoLoader) << "OpenCV conversion exception:" << ex.what(); qimg = QImage();

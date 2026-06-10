@@ -970,7 +970,10 @@ void TrackingManager::cleanupThreadsAndObjects() {
 
     // Calculate memory usage before cleanup for reporting
     size_t memoryBefore = getProcessedVideoMemoryUsage();
-    size_t tracksMemoryBefore = m_finalTracks.size() * sizeof(Tracking::WormTrackPoint) * 100; // Rough estimate
+    size_t tracksMemoryBefore = 0;
+    for (const auto& [wormId, points] : m_finalTracks) {
+        tracksMemoryBefore += points.size() * sizeof(Tracking::WormTrackPoint);
+    }
 
     // (Largely same as your version, ensuring QPointer safety and clearing new maps)
     QList<QPointer<QThread>> videoThreadsToClean = m_videoProcessorThreads;

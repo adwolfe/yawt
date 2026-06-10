@@ -882,7 +882,6 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         return;
     }
 
-    int signedId = -1 * m_wormId ? getDirection() == TrackingDirection::Backward : m_wormId;
     int originalFrameNumber = (m_direction == TrackingDirection::Forward) ?
                                   m_videoKeyFrameNum + m_currFrameNum :
                                   m_videoKeyFrameNum - 1 - m_currFrameNum;
