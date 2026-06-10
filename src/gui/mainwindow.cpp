@@ -29,7 +29,6 @@
 #include "colordelegate.h"
 #include "itemtypedelegate.h"
 // #include "retrackingdialog.h" // Deprecated: retracking dialog removed; references commented out to allow build
-#include "analysisdialog.h"
 #include "analysispanel.h"
 #include "trackingprogressdialog.h"
 #include "../core/appcontroller.h"
@@ -1525,8 +1524,6 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
         }
     }
 
-    if (m_analysisDialog)
-        m_analysisDialog->setVideoFps(m_videoFps);
     if (m_analysisPanel) {
         m_analysisPanel->setVideoFps(m_videoFps);
         // Trigger a (re-)scan of the yawt directory so the Analysis tree reflects

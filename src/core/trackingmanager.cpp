@@ -2532,31 +2532,6 @@ void TrackingManager::populateMergeHistoryInStorage() {
 }
 
 
-// OUTPUT: {processingOutputDir}/thresh_settings.json
-// FORMAT: JSON
-// DATA:   Same threshold parameter set as thresholding.json; written to a separate file
-//           used by the UI to restore settings when a prior run is loaded.
-// TRIGGER: Written at tracking completion alongside other finalization outputs.
-void TrackingManager::saveThresholdSettings(const QString& directoryPath, const Thresholding::ThresholdSettings& settings) {
-    if (directoryPath.isEmpty()) {
-        qWarning() << "TrackingManager: Cannot save threshold settings - empty directory path";
-        return;
-    }
-
-    QJsonObject jsonObj = thresholdSettingsToJson(settings);
-    QJsonDocument doc(jsonObj);
-
-    QString filePath = QDir(directoryPath).absoluteFilePath("thresh_settings.json");
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly)) {
-        file.write(doc.toJson());
-        file.close();
-        TRACKING_DEBUG() << "TrackingManager: Saved threshold settings to:" << filePath;
-    } else {
-        qWarning() << "TrackingManager: Failed to save threshold settings to:" << filePath;
-    }
-}
-
 // OUTPUT: {processingOutputDir}/thresholding.json
 // FORMAT: JSON
 // DATA:   Thresholding parameters used for this tracking run:

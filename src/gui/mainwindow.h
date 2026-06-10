@@ -20,7 +20,6 @@ class ItemTypeDelegate;
 class ItemTypeFilterProxyModel;
 class TrackingDataStorage;
 class AppController; // Application controller (owns core non-UI components)
-class AnalysisDialog;
 class AnalysisPanel;
 class CapturePanel;
 
@@ -240,7 +239,6 @@ private:
      */
     TrackingDataStorage *m_trackingDataStorage;
 
-    QPointer<AnalysisDialog> m_analysisDialog;
     AnalysisPanel* m_analysisPanel = nullptr;
     CapturePanel* m_capturePanel = nullptr;  // QObject controller, not a widget
 

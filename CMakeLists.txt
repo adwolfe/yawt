@@ -56,7 +56,6 @@ set(SOURCES
 
     # GUI (top-level)
     src/gui/mainwindow.cpp
-    src/gui/analysisdialog.cpp
     src/gui/analysisgroupwidgets.cpp
     src/gui/analysissessionmodel.cpp
     src/gui/analysispanel.cpp
@@ -126,7 +125,6 @@ set(HEADERS
 
     # GUI
     src/gui/mainwindow.h
-    src/gui/analysisdialog.h
     src/gui/analysisgroupwidgets.h
     src/gui/analysissessionmodel.h
     src/gui/analysispanel.h
