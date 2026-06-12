@@ -1,5 +1,6 @@
 #include "pluginplotwidget.h"
 #include "plotcolors.h"
+#include "../gui/plotpainting.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -262,33 +263,6 @@ void PluginPlotWidget::paintStatus(QPainter& p, const QRect& area, const QString
     p.drawText(area, Qt::AlignCenter | Qt::TextWordWrap, msg);
 }
 
-// ── Y-axis helpers shared by box and bar ──────────────────────────────────
-
-static void drawYAxis(QPainter& p, const QRect& plotArea, const QRect& fullArea,
-                      double yMin, double yMax, const QString& yLabel,
-                      const QFontMetrics& fm)
-{
-    const int labelH = fm.height();
-    const int nTicks = 5;
-    p.setPen(QPen(p.device() ? QColor(160,160,160) : QColor(160,160,160), 1));
-    for (int i = 0; i <= nTicks; ++i) {
-        const double v = yMin + (yMax - yMin) * i / nTicks;
-        const int y = plotArea.bottom()
-                      - static_cast<int>((v - yMin) / (yMax - yMin) * plotArea.height());
-        p.drawLine(plotArea.left() - 4, y, plotArea.right(), y);
-        p.drawText(QRect(fullArea.left(), y - labelH/2, plotArea.left() - 6, labelH),
-                   Qt::AlignRight | Qt::AlignVCenter, QString::number(v, 'g', 3));
-    }
-    if (!yLabel.isEmpty()) {
-        p.save();
-        p.translate(fullArea.left() + labelH, fullArea.top() + fullArea.height() / 2);
-        p.rotate(-90);
-        p.drawText(QRect(-fullArea.height()/2, -labelH, fullArea.height(), labelH),
-                   Qt::AlignCenter, yLabel);
-        p.restore();
-    }
-}
-
 // ── Box plot ───────────────────────────────────────────────────────────────
 
 void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
@@ -327,7 +301,7 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
         return plotArea.bottom() - static_cast<int>((v - yMin) / (yMax - yMin) * plotArea.height());
     };
 
-    drawYAxis(p, plotArea, area, yMin, yMax, yLabel, fm);
+    PlotPainting::drawYAxis(p, plotArea, area, yMin, yMax, yLabel);
 
     const int nGroups = groups.size();
     const bool singleGroup = (nGroups == 1);
@@ -390,9 +364,7 @@ void PluginPlotWidget::paintBox(QPainter& p, const QRect& area)
                    Qt::AlignCenter, gr.name);
     }
 
-    p.setPen(QPen(QColor(160,160,160), 1));
-    p.drawLine(plotArea.left(), plotArea.top(), plotArea.left(), plotArea.bottom());
-    p.drawLine(plotArea.left(), plotArea.bottom(), plotArea.right(), plotArea.bottom());
+    PlotPainting::drawAxisFrame(p, plotArea);
 }
 
 // ── Bar plot ───────────────────────────────────────────────────────────────
@@ -436,7 +408,7 @@ void PluginPlotWidget::paintBar(QPainter& p, const QRect& area)
         return plotArea.bottom() - static_cast<int>(v / yMax * plotArea.height());
     };
 
-    drawYAxis(p, plotArea, area, 0, yMax, yLabel, fm);
+    PlotPainting::drawYAxis(p, plotArea, area, 0, yMax, yLabel);
 
     const int nGroups = gstats.size();
     const int slotW = plotArea.width() / std::max(nGroups, 1);
@@ -466,9 +438,7 @@ void PluginPlotWidget::paintBar(QPainter& p, const QRect& area)
                    Qt::AlignCenter, gs.name);
     }
 
-    p.setPen(QPen(QColor(160,160,160), 1));
-    p.drawLine(plotArea.left(), plotArea.top(), plotArea.left(), plotArea.bottom());
-    p.drawLine(plotArea.left(), plotArea.bottom(), plotArea.right(), plotArea.bottom());
+    PlotPainting::drawAxisFrame(p, plotArea);
 }
 
 // ── Line plot ──────────────────────────────────────────────────────────────
@@ -507,22 +477,8 @@ void PluginPlotWidget::paintLine(QPainter& p, const QRect& area)
         return plotArea.bottom() - static_cast<int>((v - yMin) / (yMax - yMin) * plotArea.height());
     };
 
-    // Y axis
-    p.setPen(QPen(QColor(160,160,160), 1));
-    for (int i = 0; i <= 4; ++i) {
-        const double v = yMin + (yMax - yMin) * i / 4;
-        const int y = toY(v);
-        p.drawLine(plotArea.left() - 4, y, plotArea.right(), y);
-        p.drawText(QRect(area.left(), y - labelH/2, plotArea.left() - 6, labelH),
-                   Qt::AlignRight | Qt::AlignVCenter, QString::number(v, 'g', 3));
-    }
-    if (!yLabel.isEmpty()) {
-        p.save();
-        p.translate(area.left() + labelH, area.top() + area.height() / 2);
-        p.rotate(-90);
-        p.drawText(QRect(-area.height()/2, -labelH, area.height(), labelH), Qt::AlignCenter, yLabel);
-        p.restore();
-    }
+    PlotPainting::drawYAxis(p, plotArea, area, yMin, yMax, yLabel, 4);
+
     if (!xLabel.isEmpty()) {
         p.setPen(palette().windowText().color());
         p.drawText(QRect(plotArea.left(), plotArea.bottom() + labelH + 4, plotArea.width(), labelH),
@@ -569,7 +525,5 @@ void PluginPlotWidget::paintLine(QPainter& p, const QRect& area)
     }
     p.setClipping(false);
 
-    p.setPen(QPen(QColor(160,160,160), 1));
-    p.drawLine(plotArea.left(), plotArea.top(), plotArea.left(), plotArea.bottom());
-    p.drawLine(plotArea.left(), plotArea.bottom(), plotArea.right(), plotArea.bottom());
+    PlotPainting::drawAxisFrame(p, plotArea);
 }

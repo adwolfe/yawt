@@ -59,6 +59,7 @@ set(SOURCES
     src/gui/analysisgroupwidgets.cpp
     src/gui/analysissessionmodel.cpp
     src/gui/analysispanel.cpp
+    src/gui/plotpainting.cpp
     src/gui/scaledialog.cpp
     src/gui/trackingprogressdialog.cpp
 
@@ -129,6 +130,7 @@ set(HEADERS
     src/gui/analysisgroupwidgets.h
     src/gui/analysissessionmodel.h
     src/gui/analysispanel.h
+    src/gui/plotpainting.h
     src/gui/scaledialog.h
     src/gui/trackingprogressdialog.h
 

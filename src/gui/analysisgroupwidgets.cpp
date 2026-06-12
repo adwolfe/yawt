@@ -1,6 +1,7 @@
 #include "analysisgroupwidgets.h"
 #include "analysissessionmodel.h"
 #include "plotcolors.h"
+#include "plotpainting.h"
 #include "trackingcommon.h"
 
 #include <QPainter>
@@ -166,31 +167,12 @@ static BoxStats computeBox(QList<double> vals)
 // Common drawing helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Draw a labelled Y-axis with ticks and a horizontal zero line. */
+/** Draw the Y-axis (plugin-plot style) plus the axis frame lines. */
 static void drawYAxis(QPainter& p, const QRectF& plot, double maxVal,
-                      const QString& label, int ticks = 4)
+                      const QString& label, const QRectF& fullArea)
 {
-    const QColor tc = p.pen().color();
-    p.setPen(QPen(tc, 1));
-    p.drawLine(plot.bottomLeft().toPoint(), plot.topLeft().toPoint());
-    p.drawLine(plot.bottomLeft().toPoint(), plot.bottomRight().toPoint());
-
-    QFont sf = p.font(); sf.setPointSizeF(sf.pointSizeF() * 0.75); p.setFont(sf);
-    for (int t = 0; t <= ticks; ++t) {
-        const double val = maxVal * t / ticks;
-        const qreal  y   = plot.bottom() - (val / maxVal) * plot.height();
-        p.drawLine(QPointF(plot.left()-4, y), QPointF(plot.left(), y));
-        p.drawText(QRectF(0, y-8, plot.left()-6, 16),
-                   Qt::AlignRight|Qt::AlignVCenter, QString::number(val,'g',3));
-    }
-
-    // Y-axis label (rotated)
-    p.save();
-    p.translate(10, plot.center().y());
-    p.rotate(-90);
-    QFont lf = p.font(); lf.setPointSizeF(lf.pointSizeF() / 0.75 * 0.85); p.setFont(lf);
-    p.drawText(QRect(-60, -10, 120, 20), Qt::AlignCenter, label);
-    p.restore();
+    PlotPainting::drawAxisFrame(p, plot);
+    PlotPainting::drawYAxis(p, plot, fullArea, 0.0, maxVal, label);
 }
 
 /** Draw a single box-and-whisker centred at x within the plot area. */
@@ -491,7 +473,7 @@ void GroupSpeedTimelineWidget::paintEvent(QPaintEvent*)
     if (plot.width() <= 0 || plot.height() <= 0) return;
 
     drawYAxis(p, plot, maxSpd,
-              m_fps > 0 ? "Speed (µm/s)" : "Speed (px/s)");
+              m_fps > 0 ? "Speed (µm/s)" : "Speed (px/s)", rect());
 
     // X-axis label
     {
@@ -605,7 +587,7 @@ void GroupSpeedBoxWidget::paintEvent(QPaintEvent*)
     if (plot.width() <= 0 || plot.height() <= 0) return;
 
     const QString yLabel = m_fps > 0 ? "Avg Speed (µm/s)" : "Avg Speed (px/s)";
-    drawYAxis(p, plot, maxVal, yLabel);
+    drawYAxis(p, plot, maxVal, yLabel, rect());
 
     const int    n      = gs.size();
     const qreal  spacing = plot.width() / n;
@@ -700,7 +682,7 @@ void GroupReversalWidget::paintEvent(QPaintEvent*)
     QRectF plot(lm, tm, width()-lm-rm, height()-tm-bm);
     if (plot.width() <= 0 || plot.height() <= 0) return;
 
-    drawYAxis(p, plot, maxVal, "Reversals");
+    drawYAxis(p, plot, maxVal, "Reversals", rect());
 
     const int   n       = gs.size();
     const qreal spacing = plot.width() / n;
