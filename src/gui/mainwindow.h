@@ -244,10 +244,6 @@ private:
     int m_lastMiniLoaderFrame = -1;
     bool m_startEndSelectionActive = false;
     TableItems::ItemType m_nextStartEndPointType = TableItems::ItemType::StartPoint;
-    bool m_hasPendingHeadClick = false;
-    Tracking::DetectedBlob m_pendingHeadBlob;
-    QPointF m_pendingHeadPoint;
-    int m_pendingHeadFrame = -1;
 
     /** Backing value for the ROI size multiplier spinbox. Pure UI state. */
     double roiFactorSpinBoxD;
