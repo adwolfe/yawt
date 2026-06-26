@@ -102,7 +102,7 @@ public:
         PanZoom,        // For panning and zooming the video
         DrawROI,        // For drawing a Region of Interest
         Point,          // For selecting a single point marker
-        Crop,           // For defining a crop area (uses DrawROI mechanics initially)
+        Crop,           // For defining a circular crop area
         EditBlobs,      // For selecting/clicking blobs on the thresholded image to add to BlobTableModel
         EditTracks      // For interacting with displayed tracks (e.g., selecting, merging - future)
     };
@@ -276,6 +276,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
@@ -292,6 +293,8 @@ private:
     QPointF mapPointFromVideo(const QPointF& videoPoint) const;
     void updateCursorShape();
     void clampPanOffset();
+    QRectF constrainCropCircleToFrame(const QRectF& cropCircleRect) const;
+    QRectF cropCircleFromCenterAndRadius(const QPointF& center, qreal radius) const;
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
     bool performVideoCrop(const QRectF& cropRectVideoCoords, QString& outCroppedFilePath);
     void applyThresholding(); // Applies thresholding to currentCvFrame, stores in m_thresholdedFrame_mono
@@ -339,10 +342,21 @@ private:
     QPointF m_lastMousePos;
 
     // --- ROI & Crop Selection Members ---
+    enum class CropCircleEditMode {
+        None,
+        Creating,
+        Moving,
+        Resizing
+    };
+
     QRectF m_activeRoiRect;         // The general purpose ROI (e.g., for processing or display)
+    QRectF m_activeCropCircleRect;  // Crop circle bounding square in video coordinates
     QPoint m_roiStartPointWidget;   // For drawing ROI interactively
     QPoint m_roiEndPointWidget;     // For drawing ROI interactively
     bool m_isDefiningRoi;           // True when user is dragging to define an ROI
+    CropCircleEditMode m_cropCircleEditMode;
+    QPointF m_cropDragStartVideo;
+    QRectF m_cropDragStartRect;
 
     // --- Data for Display (received from models) ---
     QList<TableItems::ClickedItem> m_itemsToDisplay; // List of blobs/worms to display (from BlobTableModel)

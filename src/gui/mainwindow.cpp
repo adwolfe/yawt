@@ -807,6 +807,7 @@ void MainWindow::roiModeButtonClicked() {
 }
 void MainWindow::cropModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::Crop);
+    statusBar()->showMessage("Crop Mode: drag to create a circle, drag inside to move, drag the edge to resize, double-click to crop.", 7000);
 }
 void MainWindow::editBlobsModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditBlobs);
