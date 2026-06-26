@@ -2015,7 +2015,7 @@ void TrackingManager::launchWormTrackers() { /* ... same as your version ... */
             m_wormTrackersList.append(trk); m_wormIdToForwardTrackerInstanceMap[wId] = trk; m_individualTrackerProgress[trk] = 0;
             thr->start(); m_expectedTrackersToFinish++;
         }
-        if (!m_finalProcessedReversedFrames.empty() || m_keyFrameNum == 0) {
+        if (!m_finalProcessedReversedFrames.empty()) {
             WormTracker* trk = new WormTracker(wId, iRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
             trk->setFrames(&m_finalProcessedReversedFrames); QThread* thr = new QThread(); trk->moveToThread(thr);
             trk->setProperty("wormId", wId); trk->setProperty("direction", "Backward"); m_trackerThreads.append(thr);
