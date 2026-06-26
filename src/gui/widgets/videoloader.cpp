@@ -191,7 +191,7 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_lastPreloadCenter(-1),
     m_pendingSeekFrame(-1),
     m_cacheStreamNextFrame(-1),
-    m_trackDisplayMode(TrackDisplayMode::CenterlineMidpoint) {
+    m_trackDisplayMode(TrackDisplayMode::Centroid) {
     setAutoFillBackground(true);
     QPalette pal = palette();
     pal.setColor(QPalette::Window, Qt::black);
