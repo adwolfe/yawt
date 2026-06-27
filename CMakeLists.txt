@@ -150,27 +150,33 @@ set(RESOURCES
     resources.qrc
 )
 
-# macOS app bundle icon (keep same behavior as before)
-set(MACOSX_BUNDLE_ICON_FILE icon.icns)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/resources/icon.icns PROPERTIES
-    MACOSX_PACKAGE_LOCATION "Resources")
-
-set(APP_ICON_MAC ${CMAKE_SOURCE_DIR}/resources/icon.icns)
+if(APPLE)
+    set(MACOSX_BUNDLE_ICON_FILE icon.icns)
+    set(APP_ICON_MAC ${CMAKE_SOURCE_DIR}/resources/icon.icns)
+    set_source_files_properties(${APP_ICON_MAC} PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
+endif()
 
 # Create the executable
 if(WIN32)
-    set(APP_ICON_RESOURCE_WINDOWS resources/icon_tr.ico)
-    add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_RESOURCE_WINDOWS})
-else()
+    add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES})
+elseif(APPLE)
     add_executable(${PROJECT_NAME} MACOSX_BUNDLE
         ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_MAC}
     )
+else()
+    add_executable(${PROJECT_NAME}
+        ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES}
+    )
 endif()
 
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    MACOSX_BUNDLE TRUE
-    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/Info.plist
-)
+if(APPLE)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/Info.plist
+        MACOSX_BUNDLE_ICON_FILE icon.icns
+    )
+endif()
 
 # Link Qt and OpenCV
 target_link_libraries(${PROJECT_NAME}
