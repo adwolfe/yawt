@@ -139,6 +139,10 @@ if not "%COPIED_OPENCV%"=="1" (
     exit /b 1
 )
 
+call :print_step "Copying OpenCV video codec/runtime DLLs"
+call :copy_optional_runtime_pattern "OpenCV FFmpeg video I/O backend" "opencv_videoio_ffmpeg*.dll" "%APP_DIR%"
+call :copy_optional_runtime_pattern "OpenH264 codec runtime" "openh264*.dll" "%APP_DIR%"
+
 call :print_step "Copying MSVC runtime DLLs found on PATH"
 for %%D in (vcruntime140.dll vcruntime140_1.dll msvcp140.dll concrt140.dll) do (
     call :copy_from_path "%%D" "%APP_DIR%"
@@ -319,6 +323,54 @@ for %%P in ("%DLL_NAME%") do (
         copy /y "%%~$PATH:P" "%DEST_DIR%\" >nul
         echo Copied %%~nxP
         exit /b 0
+    )
+)
+exit /b 0
+
+:copy_optional_runtime_pattern
+set "RUNTIME_LABEL=%~1"
+set "RUNTIME_PATTERN=%~2"
+set "DEST_DIR=%~3"
+set "COPIED_RUNTIME=0"
+
+for %%D in (
+    "%OPENCV_BIN_DIR%"
+    "%OpenCV_DIR%"
+    "%OpenCV_DIR%\.."
+    "%OpenCV_DIR%\..\.."
+    "%OpenCV_DIR%\..\..\.."
+    "%OPENCV_BASE_A%"
+    "%OPENCV_BASE_A%\bin"
+    "%OPENCV_BASE_A%\x64\vc17\bin"
+    "%OPENCV_BASE_A%\x64\vc16\bin"
+    "%OPENCV_BASE_A%\x64\vc15\bin"
+    "%OPENCV_BASE_B%"
+    "%OPENCV_BASE_B%\bin"
+    "%OPENCV_BASE_B%\x64\vc17\bin"
+    "%OPENCV_BASE_B%\x64\vc16\bin"
+    "%OPENCV_BASE_B%\x64\vc15\bin"
+) do (
+    call :copy_pattern_from_dir "%%~fD" "%RUNTIME_PATTERN%" "%DEST_DIR%"
+)
+
+if "%COPIED_RUNTIME%"=="1" (
+    echo Included %RUNTIME_LABEL%.
+) else (
+    echo [WARN] Did not find %RUNTIME_LABEL% ^(%RUNTIME_PATTERN%^).
+    echo        Crop/video export may fail for H264/MP4 unless this DLL is installed beside %APP_NAME%.exe.
+)
+exit /b 0
+
+:copy_pattern_from_dir
+set "SEARCH_DIR=%~1"
+set "SEARCH_PATTERN=%~2"
+set "DEST_DIR=%~3"
+if not exist "%SEARCH_DIR%" exit /b 0
+for %%F in ("%SEARCH_DIR%\%SEARCH_PATTERN%") do (
+    if exist "%%~fF" (
+        copy /y "%%~fF" "%DEST_DIR%\" >nul
+        set "COPIED_RUNTIME=1"
+        echo Copied %%~nxF
     )
 )
 exit /b 0

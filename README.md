@@ -40,4 +40,6 @@ scripts\package_windows_msvc.cmd --clean
 ```
 
 The packaged app is written to `dist\windows\yawt`, with a zip archive beside it.
+
+The packaging script copies OpenCV runtime DLLs and explicitly looks for `opencv_videoio_ffmpeg*.dll` and `openh264*.dll`. Those are needed for OpenCV MP4/H264 video I/O, including crop export. If the script prints a warning for either DLL, copy the missing DLL from your OpenCV install next to `yawt.exe`, or use an OpenCV build that includes the FFmpeg video I/O backend.
   
