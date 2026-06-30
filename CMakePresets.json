@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-ninja",
+      "displayName": "Windows MSVC Ninja",
+      "description": "Windows build using Qt and OpenCV paths from QT_DIR and OpenCV_DIR environment variables.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-msvc-ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_PREFIX_PATH": "$env{QT_DIR}",
+        "OpenCV_DIR": "$env{OpenCV_DIR}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-ninja",
+      "configurePreset": "windows-msvc-ninja"
+    }
+  ]
+}

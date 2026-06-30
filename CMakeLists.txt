@@ -30,19 +30,29 @@ include_directories(
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent)
 
 # Include OpenCV
-# Prefer standard OpenCV discovery; allow overriding via -DOpenCV_DIR
-find_package(OpenCV REQUIRED)
-
-# Optional: Basler Pylon SDK
-# Install the SDK from https://www.baslerweb.com/en/downloads/software-downloads/
-# Point CMake at it with:
-#   cmake -Dpylon_DIR=/Library/Frameworks/pylon.framework/Versions/Current/lib/cmake/pylon ..
-find_package(pylon QUIET)
-if(pylon_FOUND)
-    message(STATUS "Pylon SDK found — Basler camera support enabled")
-else()
-    message(STATUS "Pylon SDK not found — Basler camera support disabled")
+# Prefer standard OpenCV discovery; allow overriding via -DOpenCV_DIR.
+# On Windows, OpenCV's installer/build tree commonly exposes its package config
+# under paths such as C:/opencv/build/x64/vc16/lib.
+if(WIN32)
+    if(NOT OpenCV_DIR AND DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
+        set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "Path to OpenCVConfig.cmake")
+    endif()
+    if(DEFINED ENV{OpenCV_ROOT} AND NOT "$ENV{OpenCV_ROOT}" STREQUAL "")
+        list(APPEND CMAKE_PREFIX_PATH "$ENV{OpenCV_ROOT}")
+    endif()
 endif()
+
+set(YAWT_OPENCV_COMPONENTS core imgproc imgcodecs videoio)
+find_package(OpenCV QUIET COMPONENTS ${YAWT_OPENCV_COMPONENTS})
+if(NOT OpenCV_FOUND)
+    message(FATAL_ERROR
+        "OpenCV was not found. Set OpenCV_DIR to the directory containing "
+        "OpenCVConfig.cmake. On Windows this is often something like "
+        "C:/opencv/build/x64/vc16/lib, or the matching lib directory from "
+        "your own OpenCV build. Example: cmake -S . -B build "
+        "-DOpenCV_DIR=C:/opencv/build/x64/vc16/lib")
+endif()
+message(STATUS "OpenCV ${OpenCV_VERSION} found: ${OpenCV_DIR}")
 
 # List of sources (updated to reflect new organization under src/)
 set(SOURCES
@@ -73,7 +83,6 @@ set(SOURCES
     src/gui/widgets/videoloader.cpp
     src/gui/widgets/liveview.cpp
     src/gui/widgets/opencvcamerasource.cpp
-    src/gui/widgets/pyloncamerasource.cpp
     src/gui/widgets/cameraenumerator.cpp
     src/gui/widgets/captureworker.cpp
     src/gui/widgets/capturepanel.cpp
@@ -145,7 +154,6 @@ set(HEADERS
     src/gui/widgets/liveview.h
     src/gui/widgets/icamerasource.h
     src/gui/widgets/opencvcamerasource.h
-    src/gui/widgets/pyloncamerasource.h
     src/gui/widgets/cameraenumerator.h
     src/gui/widgets/captureworker.h
     src/gui/widgets/capturepanel.h
@@ -254,12 +262,6 @@ target_link_libraries(${PROJECT_NAME}
     Qt6::Concurrent
     ${OpenCV_LIBS}
 )
-
-# Link Pylon if found
-if(pylon_FOUND)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE YAWT_HAS_PYLON)
-    target_link_libraries(${PROJECT_NAME} pylon::pylon)
-endif()
 
 # Generate version header into the build directory
 configure_file(
