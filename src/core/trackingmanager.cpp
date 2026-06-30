@@ -1722,17 +1722,7 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
         } else {
             m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
             emit allTracksUpdated(m_finalTracks);
-            QString outputPath;
-            if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
-                outputPath = QDir(m_processingOutputDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
-            } else if (m_videoPath.isEmpty()) {
-                outputPath = "tracks.xlsx";
-            } else if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
-                outputPath = QDir(m_videoSpecificDirectory).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
-            } else {
-                // Fallback to video directory if video-specific directory is not available
-                outputPath = QDir(QFileInfo(m_videoPath).absolutePath()).filePath(QFileInfo(m_videoPath).completeBaseName() + "_tracks.xlsx");
-            }
+            QString outputPath = trackWorkbookOutputPath();
             if (outputTracksToWorkbook(m_finalTracks, outputPath)) {
                 emit trackingStatusUpdate("Tracks saved: " + outputPath);
 
@@ -1791,6 +1781,26 @@ void TrackingManager::handleWormTrackerProgress(int, int percentDone) { /* ... s
     if (m_cancelRequested || !m_isTrackingRunning) return; WormTracker* trk = qobject_cast<WormTracker*>(sender());
     QMutexLocker locker(&m_dataMutex); if (trk && m_wormTrackersList.contains(trk)) { m_individualTrackerProgress[trk] = percentDone; locker.unlock(); updateOverallProgress(); }
 }
+QString TrackingManager::trackWorkbookOutputPath() const
+{
+    const QString baseName = QFileInfo(m_videoPath).completeBaseName();
+    const QString workbookName = baseName.isEmpty()
+        ? QStringLiteral("tracks.xlsx")
+        : baseName + QStringLiteral("_tracks.xlsx");
+
+    if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
+        return QDir(m_processingOutputDirectory).filePath(workbookName);
+    }
+    if (m_videoPath.isEmpty()) {
+        return QStringLiteral("tracks.xlsx");
+    }
+    if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
+        return QDir(m_videoSpecificDirectory).filePath(workbookName);
+    }
+    // Fallback to video directory if video-specific directory is not available.
+    return QDir(QFileInfo(m_videoPath).absolutePath()).filePath(workbookName);
+}
+
 // OUTPUT: {processingOutputDir}/{basename}_tracks.xlsx
 // FORMAT: XLSX (Office Open XML, written as a ZIP with hand-built XML)
 // DATA:   Four sheets:
@@ -1801,7 +1811,7 @@ void TrackingManager::handleWormTrackerProgress(int, int percentDone) { /* ... s
 //   "Parameters"      — Capture Rate (fps) and Pixel Size (pixels/µm).
 //   "Centerlines"     — one row per (worm, frame): WormID, SourceItemID, Frame,
 //                        TipToTipDistance, Point1..10 X/Y (10 resampled centerline points).
-// TRIGGER: Written once at tracking finalization.
+// TRIGGER: Written at tracking finalization, then rewritten after centerline finalization.
 bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const {
     if (outputFilePath.isEmpty()) {
         return false;
@@ -3292,6 +3302,15 @@ void TrackingManager::handleCenterlineFinished() {
     if (!dir.isEmpty()) {
         if (!saveWormsJson(dir)) {
             emit trackingStatusUpdate("Warning: Failed to save final worms.json");
+        }
+    }
+
+    const QString workbookPath = trackWorkbookOutputPath();
+    if (!workbookPath.isEmpty()) {
+        if (outputTracksToWorkbook(m_finalTracks, workbookPath)) {
+            emit trackingStatusUpdate("Tracks saved with centerlines: " + workbookPath);
+        } else {
+            emit trackingStatusUpdate("Warning: Failed to save final workbook with centerlines: " + workbookPath);
         }
     }
 

@@ -298,6 +298,7 @@ private:
     void launchWormTrackers();
     void updateOverallProgress();
     void checkForAllTrackersFinished();
+    QString trackWorkbookOutputPath() const;
     bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData, const QString& outputPath) const;
     void exportProcessingSummary(const QString& outputPath) const;
