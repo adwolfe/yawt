@@ -350,7 +350,7 @@ MainWindow::MainWindow(QWidget *parent)
                 });
 
         connect(m_analysisPanel, &AnalysisPanel::wormSelectionChanged,
-                this, [this](const QSet<int>& ids) { 
+                this, [this](const QSet<int>& ids) {
                     if (m_analysisTabActive) {
                         // Sync wormTableView selection without re-entering the analysis-tab handler
                         m_analysisTabActive = false;
@@ -646,18 +646,21 @@ void MainWindow::setupConnections() {
 
         QAction* centroidAction = trackMenu->addAction("Centroid track");
         centroidAction->setCheckable(true);
+        centroidAction->setChecked(true);
         trackModeGroup->addAction(centroidAction);
 
         QAction* clMidAction = trackMenu->addAction("Centerline midpoint track");
         clMidAction->setCheckable(true);
-        clMidAction->setChecked(true);
+        //clMidAction->setChecked(true);
         trackModeGroup->addAction(clMidAction);
 
         ui->viewTracksButton->setMenu(trackMenu);
         ui->viewTracksButton->setPopupMode(QToolButton::DelayedPopup);
 
         connect(centroidAction, &QAction::triggered, this, [this]() {
-            ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::Centroid);
+            ui->videoLoader->
+
+                (VideoLoader::TrackDisplayMode::Centroid);
         });
         connect(clMidAction, &QAction::triggered, this, [this]() {
             ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::CenterlineMidpoint);
