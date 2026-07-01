@@ -631,6 +631,33 @@ void MainWindow::setupConnections() {
     connect(ui->selectionModeButton, &QToolButton::clicked, this, &MainWindow::editBlobsModeButtonClicked);
    // connect(ui->resultsButton, &QToolButton::clicked, this, &MainWindow::resultsButtonClicked);
 
+    {
+        QMenu* cropMenu = new QMenu(ui->cropModeButton);
+        QActionGroup* cropShapeGroup = new QActionGroup(cropMenu);
+        cropShapeGroup->setExclusive(true);
+
+        QAction* rectangleAction = cropMenu->addAction("Rectangle crop");
+        rectangleAction->setCheckable(true);
+        rectangleAction->setChecked(true);
+        cropShapeGroup->addAction(rectangleAction);
+
+        QAction* circleAction = cropMenu->addAction("Circle crop");
+        circleAction->setCheckable(true);
+        cropShapeGroup->addAction(circleAction);
+
+        ui->cropModeButton->setMenu(cropMenu);
+        ui->cropModeButton->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(rectangleAction, &QAction::triggered, this, [this]() {
+            ui->videoLoader->setCropShape(VideoLoader::CropShape::Rectangle);
+            cropModeButtonClicked();
+        });
+        connect(circleAction, &QAction::triggered, this, [this]() {
+            ui->videoLoader->setCropShape(VideoLoader::CropShape::Circle);
+            cropModeButtonClicked();
+        });
+    }
+
     // View Mode Option Buttons (Checkable QToolButtons or QCheckBoxes) -> VideoLoader
     // Assuming ui->showThreshButton is checkable
     connect(ui->viewThreshButton, &QToolButton::toggled, this, &MainWindow::onViewThresholdToggled);
@@ -1081,6 +1108,11 @@ void MainWindow::roiModeButtonClicked() {
 }
 void MainWindow::cropModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::Crop);
+    if (ui->videoLoader->getCropShape() == VideoLoader::CropShape::Circle) {
+        statusBar()->showMessage("Circle Crop Mode: drag to create a circle, drag inside to move, drag the edge to resize, double-click inside to crop.", 7000);
+    } else {
+        statusBar()->showMessage("Crop Mode: drag to select a rectangular ROI, then confirm crop.", 5000);
+    }
 }
 void MainWindow::editBlobsModeButtonClicked() {
     ui->videoLoader->setInteractionMode(VideoLoader::InteractionMode::EditBlobs);

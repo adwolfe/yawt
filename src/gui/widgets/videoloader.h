@@ -131,6 +131,11 @@ public:
         CenterlineMidpoint  // Draw track using centerline midpoint positions
     };
 
+    enum class CropShape {
+        Rectangle,
+        Circle
+    };
+
     // --- Public Methods ---
     void setTrackingDataStorage(TrackingDataStorage* storage);
     bool isVideoLoaded() const;
@@ -161,6 +166,7 @@ public:
     double getPlaybackSpeed() const;
     QString getCurrentVideoPath() const;
     QString getDataDirectory() const;
+    CropShape getCropShape() const;
 
     // Frame cache management
     void setCacheSize(int maxFrames);
@@ -237,6 +243,7 @@ public slots:
 
     void clearDisplayedTracks(); // Clears m_allTracksToDisplay and m_visibleTrackIDs
     void setTrackDisplayMode(TrackDisplayMode mode);
+    void setCropShape(CropShape shape);
 
     // Slot for per-item Worm Color Updates removed.
     // Consumers should use the bulk `itemsChanged(const QList<TableItems::ClickedItem>&)` signal
@@ -288,6 +295,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
@@ -304,10 +312,14 @@ private:
     QPointF mapPointFromVideo(const QPointF& videoPoint) const;
     void updateCursorShape();
     void clampPanOffset();
+    QRectF constrainCropCircleToFrame(const QRectF& cropCircleRect) const;
+    QRectF cropCircleFromCenterAndRadius(const QPointF& center, qreal radius) const;
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
     static bool performVideoCrop(const QString& sourceFilePath,
                                  double fallbackFps,
                                  const QRectF& cropRectVideoCoords,
+                                 CropShape cropShape,
+                                 bool circularOutsideWhite,
                                  QString& outCroppedFilePath,
                                  QString& outErrorMessage,
                                  const std::function<void(int, int, const QString&)>& progressCallback = {});
@@ -356,10 +368,22 @@ private:
     QPointF m_lastMousePos;
 
     // --- ROI & Crop Selection Members ---
+    enum class CropCircleEditMode {
+        None,
+        Creating,
+        Moving,
+        Resizing
+    };
+
     QRectF m_activeRoiRect;         // The general purpose ROI (e.g., for processing or display)
+    QRectF m_activeCropCircleRect;  // Crop circle bounding square in video coordinates
     QPoint m_roiStartPointWidget;   // For drawing ROI interactively
     QPoint m_roiEndPointWidget;     // For drawing ROI interactively
     bool m_isDefiningRoi;           // True when user is dragging to define an ROI
+    CropShape m_cropShape;
+    CropCircleEditMode m_cropCircleEditMode;
+    QPointF m_cropDragStartVideo;
+    QRectF m_cropDragStartRect;
 
     // --- Data for Display (received from models) ---
     QList<TableItems::ClickedItem> m_itemsToDisplay; // List of blobs/worms to display (from BlobTableModel)

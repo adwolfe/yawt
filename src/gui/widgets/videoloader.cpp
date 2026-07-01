@@ -20,6 +20,33 @@
 #define DEFAULT_CROP_EXTENSION ".mp4"
 #define DEFAULT_CROP_FOURCC cv::VideoWriter::fourcc('H', '2', '6', '4')
 
+namespace {
+QRectF squareFromDiagonal(const QPointF& start, const QPointF& end) {
+    const qreal dx = end.x() - start.x();
+    const qreal dy = end.y() - start.y();
+    const qreal side = qMax(qAbs(dx), qAbs(dy));
+    if (side <= 0.0) {
+        return QRectF();
+    }
+
+    const QPointF topLeft(start.x() + (dx < 0.0 ? -side : 0.0),
+                          start.y() + (dy < 0.0 ? -side : 0.0));
+    return QRectF(topLeft, QSizeF(side, side)).normalized();
+}
+
+bool pointInCircleRect(const QPointF& point, const QRectF& circleRect) {
+    if (circleRect.isNull() || !circleRect.isValid()) {
+        return false;
+    }
+
+    const QPointF center = circleRect.center();
+    const qreal radius = circleRect.width() / 2.0;
+    const qreal dx = point.x() - center.x();
+    const qreal dy = point.y() - center.y();
+    return (dx * dx + dy * dy) <= radius * radius;
+}
+}
+
 // ============================================================================
 // FrameCache Implementation
 // ============================================================================
@@ -148,6 +175,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     m_activeViewModes(ViewModeOption::None),
     m_isPanning(false),
     m_isDefiningRoi(false),
+    m_cropShape(CropShape::Rectangle),
+    m_cropCircleEditMode(CropCircleEditMode::None),
     m_zoomFactor(1.0),
     m_panOffset(0.0, 0.0),
     m_storage(nullptr),
@@ -238,6 +267,8 @@ QString VideoLoader::getCurrentVideoPath() const { return currentFilePath; }
 
 QString VideoLoader::getDataDirectory() const { return m_dataDirectory; }
 
+VideoLoader::CropShape VideoLoader::getCropShape() const { return m_cropShape; }
+
 Thresholding::ThresholdSettings VideoLoader::getCurrentThresholdSettings() const {
     Thresholding::ThresholdSettings settings;
     settings.assumeLightBackground = m_assumeLightBackground;
@@ -286,11 +317,13 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     m_zoomFactor = 1.0;
     m_panOffset = QPointF(0.0, 0.0);
     m_activeRoiRect = QRectF();
+    m_activeCropCircleRect = QRectF();
     m_itemsToDisplay.clear();
     clearDisplayedTracks();
 
     m_isPanning = false;
     m_isDefiningRoi = false;
+    m_cropCircleEditMode = CropCircleEditMode::None;
 
     m_currentInteractionMode = InteractionMode::PanZoom;
     m_activeViewModes = ViewModeOption::None;
@@ -474,6 +507,10 @@ void VideoLoader::setInteractionMode(InteractionMode mode) {
     m_currentInteractionMode = mode;
     m_isPanning = false;
     m_isDefiningRoi = false;
+    m_cropCircleEditMode = CropCircleEditMode::None;
+    if (mode != InteractionMode::Crop) {
+        m_activeCropCircleRect = QRectF();
+    }
     updateCursorShape();
     emit interactionModeChanged(m_currentInteractionMode);
     YAWT_INFO(lcGuiVideoLoader) << "Interaction mode set to:" << static_cast<int>(m_currentInteractionMode);
@@ -704,6 +741,15 @@ void VideoLoader::setTrackDisplayMode(TrackDisplayMode mode) {
         update();
 }
 
+void VideoLoader::setCropShape(CropShape shape) {
+    if (m_cropShape == shape) return;
+    m_cropShape = shape;
+    m_isDefiningRoi = false;
+    m_cropCircleEditMode = CropCircleEditMode::None;
+    m_activeCropCircleRect = QRectF();
+    update();
+}
+
 void VideoLoader::rebuildCenterlineMidpointCache() {
     m_centerlineMidpointCache.clear();
     if (!m_storage) return;
@@ -863,7 +909,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
     // Draw general purpose ROI if active
     if (!m_activeRoiRect.isNull() && m_activeRoiRect.isValid() &&
-        (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop)) {
+        m_currentInteractionMode == InteractionMode::DrawROI) {
         QPointF roiTopLeftWidget = mapPointFromVideo(m_activeRoiRect.topLeft());
         QPointF roiBottomRightWidget = mapPointFromVideo(m_activeRoiRect.bottomRight());
         if (roiTopLeftWidget.x() >= 0 && roiBottomRightWidget.x() >= 0) {
@@ -872,8 +918,27 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
     }
 
+    if (m_currentInteractionMode == InteractionMode::Crop &&
+        m_cropShape == CropShape::Circle &&
+        !m_activeCropCircleRect.isNull() && m_activeCropCircleRect.isValid()) {
+        const QPointF cropTopLeftWidget = mapPointFromVideo(m_activeCropCircleRect.topLeft());
+        const QPointF cropBottomRightWidget = mapPointFromVideo(m_activeCropCircleRect.bottomRight());
+        if (cropTopLeftWidget.x() >= 0 && cropBottomRightWidget.x() >= 0) {
+            const QRectF cropCircleWidget = QRectF(cropTopLeftWidget, cropBottomRightWidget).normalized();
+            painter.setPen(QPen(Qt::red, 2, Qt::DashLine));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(cropCircleWidget);
+
+            const QPointF handlePoint(cropCircleWidget.right(), cropCircleWidget.center().y());
+            painter.setPen(QPen(Qt::cyan, 2, Qt::SolidLine));
+            painter.drawRect(QRectF(handlePoint.x() - 4.0, handlePoint.y() - 4.0, 8.0, 8.0));
+        }
+    }
+
     // Draw temporary ROI during definition
-    if ((m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) && m_isDefiningRoi) {
+    if ((m_currentInteractionMode == InteractionMode::DrawROI ||
+         (m_currentInteractionMode == InteractionMode::Crop && m_cropShape == CropShape::Rectangle)) &&
+        m_isDefiningRoi) {
         painter.setPen(QPen(Qt::cyan, 1, Qt::SolidLine));
         painter.drawRect(QRect(m_roiStartPointWidget, m_roiEndPointWidget).normalized());
     }
@@ -1333,8 +1398,42 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
     }
 
     if (event->button() == Qt::LeftButton) {
-        // ROI/Crop remain exclusive drawing modes
-        if (m_currentInteractionMode == InteractionMode::DrawROI || m_currentInteractionMode == InteractionMode::Crop) {
+        if (m_currentInteractionMode == InteractionMode::Crop && m_cropShape == CropShape::Circle) {
+            const QPointF videoCoords = mapPointToVideo(event->position());
+            if (videoCoords.x() >= 0) {
+                m_cropCircleEditMode = CropCircleEditMode::Creating;
+                if (!m_activeCropCircleRect.isNull() && m_activeCropCircleRect.isValid()) {
+                    const QPointF center = m_activeCropCircleRect.center();
+                    const qreal radius = m_activeCropCircleRect.width() / 2.0;
+                    const qreal dx = videoCoords.x() - center.x();
+                    const qreal dy = videoCoords.y() - center.y();
+                    const qreal distance = qSqrt(dx * dx + dy * dy);
+                    const qreal edgeTolerance = qMax(8.0 / qMax(m_zoomFactor, 0.001), radius * 0.05);
+                    if (qAbs(distance - radius) <= edgeTolerance) {
+                        m_cropCircleEditMode = CropCircleEditMode::Resizing;
+                    } else if (distance < radius) {
+                        m_cropCircleEditMode = CropCircleEditMode::Moving;
+                    } else {
+                        m_activeCropCircleRect = QRectF();
+                    }
+                }
+
+                m_cropDragStartVideo = videoCoords;
+                m_cropDragStartRect = m_activeCropCircleRect;
+                m_roiStartPointWidget = event->pos();
+                m_roiEndPointWidget = event->pos();
+                m_isDefiningRoi = true;
+                update();
+                event->accept();
+            } else {
+                m_isDefiningRoi = false;
+                m_cropCircleEditMode = CropCircleEditMode::None;
+            }
+            return;
+        }
+
+        if (m_currentInteractionMode == InteractionMode::DrawROI ||
+            (m_currentInteractionMode == InteractionMode::Crop && m_cropShape == CropShape::Rectangle)) {
             QPointF videoCoords = mapPointToVideo(event->position());
             if (videoCoords.x() >= 0) {
                 m_roiStartPointWidget = event->pos(); m_roiEndPointWidget = event->pos();
@@ -1463,13 +1562,35 @@ void VideoLoader::mouseMoveEvent(QMouseEvent* event) {
         event->accept();
         return;
     }
-    if (m_isPanning && (event->buttons() & Qt::LeftButton)) {
+    if (m_currentInteractionMode == InteractionMode::Crop &&
+        m_cropShape == CropShape::Circle &&
+        m_isDefiningRoi && (event->buttons() & Qt::LeftButton)) {
+        const QPointF videoCoords = mapPointToVideo(event->position());
+        if (videoCoords.x() >= 0) {
+            m_roiEndPointWidget = event->pos();
+            if (m_cropCircleEditMode == CropCircleEditMode::Creating) {
+                m_activeCropCircleRect = constrainCropCircleToFrame(
+                    squareFromDiagonal(m_cropDragStartVideo, videoCoords));
+            } else if (m_cropCircleEditMode == CropCircleEditMode::Moving) {
+                const QPointF videoDelta = videoCoords - m_cropDragStartVideo;
+                m_activeCropCircleRect = constrainCropCircleToFrame(
+                    m_cropDragStartRect.translated(videoDelta));
+            } else if (m_cropCircleEditMode == CropCircleEditMode::Resizing) {
+                const QPointF center = m_cropDragStartRect.center();
+                const qreal dx = videoCoords.x() - center.x();
+                const qreal dy = videoCoords.y() - center.y();
+                m_activeCropCircleRect = cropCircleFromCenterAndRadius(center, qSqrt(dx * dx + dy * dy));
+            }
+            update();
+        }
+        event->accept();
+    } else if (m_isPanning && (event->buttons() & Qt::LeftButton)) {
         m_panOffset += delta;
         clampPanOffset();
         update();
         event->accept();
     } else if ((m_currentInteractionMode == InteractionMode::DrawROI ||
-                m_currentInteractionMode == InteractionMode::Crop) &&
+                (m_currentInteractionMode == InteractionMode::Crop && m_cropShape == CropShape::Rectangle)) &&
                m_isDefiningRoi && (event->buttons() & Qt::LeftButton)) {
         m_roiEndPointWidget = event->pos();
         update();
@@ -1489,8 +1610,19 @@ void VideoLoader::mouseReleaseEvent(QMouseEvent* event) {
             updateCursorShape();
             event->accept();
         } else if (m_isDefiningRoi &&
+                   m_currentInteractionMode == InteractionMode::Crop &&
+                   m_cropShape == CropShape::Circle) {
+            m_isDefiningRoi = false;
+            if (m_activeCropCircleRect.width() < 5.0 || m_activeCropCircleRect.height() < 5.0) {
+                m_activeCropCircleRect = QRectF();
+            }
+            m_cropCircleEditMode = CropCircleEditMode::None;
+            update();
+            updateCursorShape();
+            event->accept();
+        } else if (m_isDefiningRoi &&
                    (m_currentInteractionMode == InteractionMode::DrawROI ||
-                    m_currentInteractionMode == InteractionMode::Crop)) {
+                    (m_currentInteractionMode == InteractionMode::Crop && m_cropShape == CropShape::Rectangle))) {
             m_roiEndPointWidget = event->pos();
             m_isDefiningRoi = false;
             QPointF vs = mapPointToVideo(m_roiStartPointWidget),
@@ -1517,6 +1649,27 @@ void VideoLoader::mouseReleaseEvent(QMouseEvent* event) {
     } else {
         QWidget::mouseReleaseEvent(event);
     }
+}
+
+void VideoLoader::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (!isVideoLoaded()) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
+
+    if (event->button() == Qt::LeftButton &&
+        m_currentInteractionMode == InteractionMode::Crop &&
+        m_cropShape == CropShape::Circle &&
+        !m_activeCropCircleRect.isNull() && m_activeCropCircleRect.isValid()) {
+        const QPointF videoCoords = mapPointToVideo(event->position());
+        if (videoCoords.x() >= 0 && pointInCircleRect(videoCoords, m_activeCropCircleRect)) {
+            handleRoiDefinedForCrop(m_activeCropCircleRect);
+            event->accept();
+            return;
+        }
+    }
+
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 
@@ -1708,30 +1861,74 @@ void VideoLoader::clampPanOffset() {
         m_panOffset.setY(qBound(minPanY, m_panOffset.y(), maxPanY));
     }
 }
+
+QRectF VideoLoader::constrainCropCircleToFrame(const QRectF& cropCircleRect) const {
+    if (cropCircleRect.isNull() || !cropCircleRect.isValid()) {
+        return QRectF();
+    }
+
+    const qreal frameWidth = static_cast<qreal>(originalFrameSize.width());
+    const qreal frameHeight = static_cast<qreal>(originalFrameSize.height());
+    if (frameWidth <= 0.0 || frameHeight <= 0.0) {
+        return QRectF();
+    }
+
+    qreal side = qMin(cropCircleRect.width(), cropCircleRect.height());
+    side = qMin(side, qMin(frameWidth, frameHeight));
+    if (side <= 0.0) {
+        return QRectF();
+    }
+
+    const qreal x = qBound(0.0, cropCircleRect.x(), frameWidth - side);
+    const qreal y = qBound(0.0, cropCircleRect.y(), frameHeight - side);
+    return QRectF(x, y, side, side);
+}
+
+QRectF VideoLoader::cropCircleFromCenterAndRadius(const QPointF& center, qreal radius) const {
+    const qreal frameWidth = static_cast<qreal>(originalFrameSize.width());
+    const qreal frameHeight = static_cast<qreal>(originalFrameSize.height());
+    if (frameWidth <= 0.0 || frameHeight <= 0.0) {
+        return QRectF();
+    }
+
+    const qreal maxRadius = qMin(qMin(center.x(), frameWidth - center.x()),
+                                 qMin(center.y(), frameHeight - center.y()));
+    radius = qBound(2.5, radius, maxRadius);
+    return QRectF(center.x() - radius, center.y() - radius,
+                  radius * 2.0, radius * 2.0);
+}
+
 void VideoLoader::handleRoiDefinedForCrop(
     const QRectF& cropRoiVideoCoords) {
     if (cropRoiVideoCoords.isNull() || !cropRoiVideoCoords.isValid()) {
         setInteractionMode(InteractionMode::PanZoom);
         return;
     }
-    if (QMessageBox::question(this, "Confirm Crop", "Crop video to ROI?",
+    const CropShape cropShape = m_cropShape;
+    const QString confirmMessage = cropShape == CropShape::Circle
+        ? QStringLiteral("Crop video to circular ROI?")
+        : QStringLiteral("Crop video to ROI?");
+    if (QMessageBox::question(this, "Confirm Crop", confirmMessage,
                               QMessageBox::Yes | QMessageBox::No) ==
         QMessageBox::Yes) {
         const QString sourceFilePath = currentFilePath;
         const double fallbackFps = framesPerSecond;
         const QRectF cropRect = cropRoiVideoCoords;
+        const bool circularOutsideWhite = m_assumeLightBackground;
         QPointer<VideoLoader> self(this);
 
         emit videoProcessingStarted("Cropping video...");
         emit videoProcessingProgress(0, totalFramesCount, "Preparing crop...");
 
-        QThread* cropThread = QThread::create([self, sourceFilePath, fallbackFps, cropRect]() {
+        QThread* cropThread = QThread::create([self, sourceFilePath, fallbackFps, cropRect, cropShape, circularOutsideWhite]() {
             QString croppedFilePath;
             QString cropError;
             const bool success = VideoLoader::performVideoCrop(
                 sourceFilePath,
                 fallbackFps,
                 cropRect,
+                cropShape,
+                circularOutsideWhite,
                 croppedFilePath,
                 cropError,
                 [self](int current, int total, const QString& message) {
@@ -1744,6 +1941,7 @@ void VideoLoader::handleRoiDefinedForCrop(
                 if (!self) return;
                 if (success && !croppedFilePath.isEmpty()) {
                     emit self->videoProcessingFinished("Video cropped.", true);
+                    self->m_activeCropCircleRect = QRectF();
                     self->loadVideo(croppedFilePath);
                 } else {
                     emit self->videoProcessingFinished("Crop failed.", false);
@@ -1766,6 +1964,8 @@ bool VideoLoader::performVideoCrop(
     const QString& sourceFilePath,
     double fallbackFps,
     const QRectF& cropRectVideoCoords,
+    CropShape cropShape,
+    bool circularOutsideWhite,
     QString& outCroppedFilePath,
     QString& outErrorMessage,
     const std::function<void(int, int, const QString&)>& progressCallback) {
@@ -1817,6 +2017,15 @@ bool VideoLoader::performVideoCrop(
     cvCR.width = qMin(cvCR.width, firstFrame.cols - cvCR.x);
     cvCR.height = qMin(cvCR.height, firstFrame.rows - cvCR.y);
 
+    if (cropShape == CropShape::Circle) {
+        int side = qMin(cvCR.width, cvCR.height);
+        side = qMin(side, qMin(firstFrame.cols, firstFrame.rows));
+        cvCR.width = side;
+        cvCR.height = side;
+        cvCR.x = qBound(0, cvCR.x, firstFrame.cols - cvCR.width);
+        cvCR.y = qBound(0, cvCR.y, firstFrame.rows - cvCR.height);
+    }
+
     if (cvCR.width <= 0 || cvCR.height <= 0) {
         origVid.release();
         outErrorMessage = QStringLiteral("The selected crop rectangle is outside the video frame. Video frame is %1x%2; crop is x=%3, y=%4, width=%5, height=%6.")
@@ -1838,6 +2047,13 @@ bool VideoLoader::performVideoCrop(
         --cvCR.height;
         notes.append(QStringLiteral("Crop height was odd and was reduced by 1 pixel for video encoder compatibility."));
     }
+    if (cropShape == CropShape::Circle && cvCR.width != cvCR.height) {
+        const int side = qMin(cvCR.width, cvCR.height);
+        cvCR.width = side;
+        cvCR.height = side;
+        notes.append(QStringLiteral("Circular crop was adjusted to a square bounding box."));
+    }
+
     if (cvCR.width <= 1 || cvCR.height <= 1) {
         origVid.release();
         outErrorMessage = QStringLiteral("The crop rectangle is too small after encoder-compatible sizing: %1x%2.")
@@ -1906,6 +2122,16 @@ bool VideoLoader::performVideoCrop(
         return false;
     }
 
+    cv::Mat circleMask;
+    if (cropShape == CropShape::Circle) {
+        circleMask = cv::Mat(cvCR.height, cvCR.width, CV_8UC1, cv::Scalar(0));
+        cv::circle(circleMask,
+                   cv::Point(cvCR.width / 2, cvCR.height / 2),
+                   qMin(cvCR.width, cvCR.height) / 2,
+                   cv::Scalar(255),
+                   cv::FILLED);
+    }
+
     auto writeCroppedFrame = [&](const cv::Mat& frame, QString& error) -> bool {
         if (frame.empty()) return true;
         if (cvCR.x < 0 || cvCR.y < 0 || cvCR.x + cvCR.width > frame.cols || cvCR.y + cvCR.height > frame.rows) {
@@ -1921,12 +2147,25 @@ bool VideoLoader::performVideoCrop(
 
         try {
             cv::Mat croppedFrame = frame(cvCR);
+            cv::Mat outputFrame;
             if (croppedFrame.channels() == 1) {
-                cv::cvtColor(croppedFrame, croppedFrame, cv::COLOR_GRAY2BGR);
+                cv::cvtColor(croppedFrame, outputFrame, cv::COLOR_GRAY2BGR);
             } else if (croppedFrame.channels() == 4) {
-                cv::cvtColor(croppedFrame, croppedFrame, cv::COLOR_BGRA2BGR);
+                cv::cvtColor(croppedFrame, outputFrame, cv::COLOR_BGRA2BGR);
+            } else {
+                outputFrame = croppedFrame;
             }
-            writer.write(croppedFrame);
+
+            if (cropShape == CropShape::Circle) {
+                const cv::Scalar outsideFill = circularOutsideWhite
+                    ? cv::Scalar::all(255)
+                    : cv::Scalar::all(0);
+                cv::Mat circularFrame(outputFrame.size(), outputFrame.type(), outsideFill);
+                outputFrame.copyTo(circularFrame, circleMask);
+                outputFrame = circularFrame;
+            }
+
+            writer.write(outputFrame);
             return true;
         } catch (const cv::Exception& e) {
             error = QStringLiteral("OpenCV exception while writing cropped frame: %1")
