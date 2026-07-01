@@ -581,6 +581,40 @@ void MainWindow::setupConnections() {
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
     connect(ui->videoLoader, &VideoLoader::pointDefined, this, &MainWindow::handlePointDefined);
     connect(ui->videoLoader, &VideoLoader::playbackStateChanged, this, &MainWindow::onPlaybackStateChanged);
+    connect(ui->videoLoader, &VideoLoader::videoProcessingStarted,
+            this, [this](const QString& message) {
+                if (m_directoryScanProgressBar) {
+                    m_directoryScanProgressBar->setRange(0, 0);
+                    m_directoryScanProgressBar->setFormat(QStringLiteral("Processing"));
+                    m_directoryScanProgressBar->setVisible(true);
+                }
+                statusBar()->showMessage(message);
+            });
+    connect(ui->videoLoader, &VideoLoader::videoProcessingProgress,
+            this, [this](int currentStep, int totalSteps, const QString& message) {
+                if (m_directoryScanProgressBar) {
+                    if (totalSteps > 0) {
+                        m_directoryScanProgressBar->setRange(0, totalSteps);
+                        m_directoryScanProgressBar->setValue(qBound(0, currentStep, totalSteps));
+                        m_directoryScanProgressBar->setFormat(QStringLiteral("Cropping %p%"));
+                    } else {
+                        m_directoryScanProgressBar->setRange(0, 0);
+                        m_directoryScanProgressBar->setFormat(QStringLiteral("Cropping"));
+                    }
+                    m_directoryScanProgressBar->setVisible(true);
+                }
+                statusBar()->showMessage(message.isEmpty() ? QStringLiteral("Cropping video...") : message);
+            });
+    connect(ui->videoLoader, &VideoLoader::videoProcessingFinished,
+            this, [this](const QString& message, bool success) {
+                if (m_directoryScanProgressBar) {
+                    if (m_directoryScanProgressBar->maximum() > 0) {
+                        m_directoryScanProgressBar->setValue(m_directoryScanProgressBar->maximum());
+                    }
+                    m_directoryScanProgressBar->setVisible(false);
+                }
+                statusBar()->showMessage(message, success ? 3000 : 6000);
+            });
 
     // Playback controls
     connect(ui->playPauseButton, &QToolButton::toggled, this, [this](bool checked) { setPlayButtonsState(checked); });

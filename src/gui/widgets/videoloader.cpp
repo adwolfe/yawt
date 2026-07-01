@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPainterPath>
+#include <QPointer>
 #include <QRandomGenerator>
 #include <QResizeEvent>
 #include <QWheelEvent>
@@ -1716,39 +1717,67 @@ void VideoLoader::handleRoiDefinedForCrop(
     if (QMessageBox::question(this, "Confirm Crop", "Crop video to ROI?",
                               QMessageBox::Yes | QMessageBox::No) ==
         QMessageBox::Yes) {
+        const QString sourceFilePath = currentFilePath;
+        const double fallbackFps = framesPerSecond;
+        const QRectF cropRect = cropRoiVideoCoords;
+        QPointer<VideoLoader> self(this);
+
         emit videoProcessingStarted("Cropping video...");
-        QString croppedFilePath;
-        QString cropError;
-        if (performVideoCrop(cropRoiVideoCoords, croppedFilePath, cropError) &&
-            !croppedFilePath.isEmpty()) {
-            emit videoProcessingFinished("Video cropped.", true);
-            loadVideo(croppedFilePath);
-        } else {
-            emit videoProcessingFinished("Crop failed.", false);
-            QMessageBox::critical(this,
-                                  "Crop Error",
-                                  cropError.isEmpty()
-                                      ? QStringLiteral("Failed to crop video.")
-                                      : QStringLiteral("Failed to crop video.\n\n%1").arg(cropError));
-        }
+        emit videoProcessingProgress(0, totalFramesCount, "Preparing crop...");
+
+        QThread* cropThread = QThread::create([self, sourceFilePath, fallbackFps, cropRect]() {
+            QString croppedFilePath;
+            QString cropError;
+            const bool success = VideoLoader::performVideoCrop(
+                sourceFilePath,
+                fallbackFps,
+                cropRect,
+                croppedFilePath,
+                cropError,
+                [self](int current, int total, const QString& message) {
+                    if (!self) return;
+                    emit self->videoProcessingProgress(current, total, message);
+                });
+
+            if (!self) return;
+            QMetaObject::invokeMethod(self, [self, success, croppedFilePath, cropError]() {
+                if (!self) return;
+                if (success && !croppedFilePath.isEmpty()) {
+                    emit self->videoProcessingFinished("Video cropped.", true);
+                    self->loadVideo(croppedFilePath);
+                } else {
+                    emit self->videoProcessingFinished("Crop failed.", false);
+                    QMessageBox::critical(self,
+                                          "Crop Error",
+                                          cropError.isEmpty()
+                                              ? QStringLiteral("Failed to crop video.")
+                                              : QStringLiteral("Failed to crop video.\n\n%1").arg(cropError));
+                }
+            }, Qt::QueuedConnection);
+        });
+        connect(cropThread, &QThread::finished, cropThread, &QObject::deleteLater);
+        cropThread->start();
     }
     setInteractionMode(InteractionMode::PanZoom);
     m_isDefiningRoi = false;
     update();
 }
 bool VideoLoader::performVideoCrop(
+    const QString& sourceFilePath,
+    double fallbackFps,
     const QRectF& cropRectVideoCoords,
     QString& outCroppedFilePath,
-    QString& outErrorMessage) {
+    QString& outErrorMessage,
+    const std::function<void(int, int, const QString&)>& progressCallback) {
     outCroppedFilePath.clear();
     outErrorMessage.clear();
 
-    if (currentFilePath.isEmpty()) {
-        outErrorMessage = QStringLiteral("No current video file path is set.");
-        return false;
-    }
-    if (!videoCapture.isOpened()) {
-        outErrorMessage = QStringLiteral("The current video capture is not open.");
+    auto reportProgress = [&progressCallback](int current, int total, const QString& message) {
+        if (progressCallback) progressCallback(current, total, message);
+    };
+
+    if (sourceFilePath.isEmpty()) {
+        outErrorMessage = QStringLiteral("No source video file path is set.");
         return false;
     }
     if (cropRectVideoCoords.isNull() || !cropRectVideoCoords.isValid() ||
@@ -1761,14 +1790,16 @@ bool VideoLoader::performVideoCrop(
         return false;
     }
 
+    reportProgress(0, 0, QStringLiteral("Opening source video..."));
     cv::VideoCapture origVid;
-    if (!origVid.open(currentFilePath.toStdString())) {
-        outErrorMessage = QStringLiteral("OpenCV could not reopen the source video:\n%1").arg(currentFilePath);
+    if (!origVid.open(sourceFilePath.toStdString())) {
+        outErrorMessage = QStringLiteral("OpenCV could not reopen the source video:\n%1").arg(sourceFilePath);
         return false;
     }
 
+    const int totalFrames = static_cast<int>(origVid.get(cv::CAP_PROP_FRAME_COUNT));
     double origFps = origVid.get(cv::CAP_PROP_FPS);
-    if (origFps <= 0) origFps = framesPerSecond > 0 ? framesPerSecond : 25.0;
+    if (origFps <= 0) origFps = fallbackFps > 0 ? fallbackFps : 25.0;
 
     cv::Mat firstFrame;
     if (!origVid.read(firstFrame) || firstFrame.empty()) {
@@ -1816,7 +1847,7 @@ bool VideoLoader::performVideoCrop(
     }
 
     const cv::Size cropFrameSize(cvCR.width, cvCR.height);
-    const QFileInfo sourceInfo(currentFilePath);
+    const QFileInfo sourceInfo(sourceFilePath);
     const QString outputBase = QDir(sourceInfo.absolutePath()).filePath(sourceInfo.completeBaseName() + QStringLiteral("_cropped"));
 
     struct CropWriterAttempt {
@@ -1831,6 +1862,8 @@ bool VideoLoader::performVideoCrop(
         {QStringLiteral("MP4V / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('m','p','4','v')},
         {QStringLiteral("MJPG / .avi"), QStringLiteral("avi"), cv::VideoWriter::fourcc('M','J','P','G')}
     };
+
+    reportProgress(0, totalFrames, QStringLiteral("Opening crop writer..."));
 
     QStringList attemptErrors;
     cv::VideoWriter writer;
@@ -1906,6 +1939,9 @@ bool VideoLoader::performVideoCrop(
     QString writeError;
     if (writeCroppedFrame(firstFrame, writeError)) {
         ++frameCount;
+        reportProgress(frameCount, totalFrames, QStringLiteral("Cropping frame %1 of %2...")
+                                          .arg(frameCount)
+                                          .arg(totalFrames > 0 ? QString::number(totalFrames) : QStringLiteral("?")));
     } else {
         origVid.release();
         writer.release();
@@ -1920,6 +1956,13 @@ bool VideoLoader::performVideoCrop(
             break;
         }
         ++frameCount;
+        if (totalFrames <= 0 || frameCount == totalFrames || frameCount % 10 == 0) {
+            reportProgress(frameCount,
+                           totalFrames,
+                           QStringLiteral("Cropping frame %1 of %2...")
+                               .arg(frameCount)
+                               .arg(totalFrames > 0 ? QString::number(totalFrames) : QStringLiteral("?")));
+        }
     }
 
     origVid.release();
@@ -1937,6 +1980,10 @@ bool VideoLoader::performVideoCrop(
         }
         return false;
     }
+
+    reportProgress(totalFrames > 0 ? totalFrames : frameCount,
+                   totalFrames > 0 ? totalFrames : frameCount,
+                   QStringLiteral("Crop complete."));
 
     outCroppedFilePath = selectedPath;
     if (!notes.isEmpty()) {

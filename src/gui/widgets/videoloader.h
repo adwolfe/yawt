@@ -27,6 +27,8 @@
 #include <QDateTime>
 #include <QAtomicInt>
 
+#include <functional>
+
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
@@ -246,6 +248,7 @@ signals:
     void videoLoaded(const QString& filePath, int totalFrames, double fps, QSize frameSize);
     void videoLoadFailed(const QString& filePath, const QString& errorMessage);
     void videoProcessingStarted(const QString& message);
+    void videoProcessingProgress(int currentStep, int totalSteps, const QString& message);
     void videoProcessingFinished(const QString& message, bool success);
     void frameChanged(int currentFrameNumber, const QImage& currentFrame); // QImage is current frame (raw or thresholded based on ViewMode)
     void playbackStateChanged(bool isPlaying, double currentSpeed);
@@ -302,9 +305,12 @@ private:
     void updateCursorShape();
     void clampPanOffset();
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
-    bool performVideoCrop(const QRectF& cropRectVideoCoords,
-                          QString& outCroppedFilePath,
-                          QString& outErrorMessage);
+    static bool performVideoCrop(const QString& sourceFilePath,
+                                 double fallbackFps,
+                                 const QRectF& cropRectVideoCoords,
+                                 QString& outCroppedFilePath,
+                                 QString& outErrorMessage,
+                                 const std::function<void(int, int, const QString&)>& progressCallback = {});
     void applyThresholding(); // Applies thresholding to currentCvFrame, stores in m_thresholdedFrame_mono
     void updateTimerInterval();
     void emitThresholdParametersChanged();
