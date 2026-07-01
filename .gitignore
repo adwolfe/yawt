@@ -1,7 +1,8 @@
 # This file is used to ignore files which are generated
 # ----------------------------------------------------------------------------
 .claude/
-.dist/
+CMakeFiles/
+dist/
 .github/
 .vscode/
 .zed/
