@@ -658,9 +658,7 @@ void MainWindow::setupConnections() {
         ui->viewTracksButton->setPopupMode(QToolButton::DelayedPopup);
 
         connect(centroidAction, &QAction::triggered, this, [this]() {
-            ui->videoLoader->
-
-                (VideoLoader::TrackDisplayMode::Centroid);
+            ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::Centroid);
         });
         connect(clMidAction, &QAction::triggered, this, [this]() {
             ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::CenterlineMidpoint);

@@ -35,6 +35,7 @@ qrc_*.cpp
 Thumbs.db
 *.res
 *.rc
+!yawt.rc
 /.qmake.cache
 /.qmake.stash
 /.cache

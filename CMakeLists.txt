@@ -34,18 +34,18 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent)
 # On Windows, OpenCV's installer/build tree commonly exposes its package config
 # under paths such as C:/opencv/build/x64/vc16/lib.
 if(WIN32)
-    if(NOT OpenCV_DIR AND DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
-        set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "Path to OpenCVConfig.cmake")
-    endif()
-    if(DEFINED ENV{OpenCV_ROOT} AND NOT "$ENV{OpenCV_ROOT}" STREQUAL "")
-        list(APPEND CMAKE_PREFIX_PATH "$ENV{OpenCV_ROOT}")
-    endif()
+  if(NOT OpenCV_DIR AND DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
+    set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH "Path to OpenCVConfig.cmake")
+  endif()
+  if(DEFINED ENV{OpenCV_ROOT} AND NOT "$ENV{OpenCV_ROOT}" STREQUAL "")
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{OpenCV_ROOT}")
+  endif()
 endif()
 
 set(YAWT_OPENCV_COMPONENTS core imgproc imgcodecs videoio)
 find_package(OpenCV QUIET COMPONENTS ${YAWT_OPENCV_COMPONENTS})
 if(NOT OpenCV_FOUND)
-    message(FATAL_ERROR
+  message(FATAL_ERROR
         "OpenCV was not found. Set OpenCV_DIR to the directory containing "
         "OpenCVConfig.cmake. On Windows this is often something like "
         "C:/opencv/build/x64/vc16/lib, or the matching lib directory from "
@@ -240,10 +240,12 @@ set(APP_ICON_MAC ${CMAKE_SOURCE_DIR}/resources/icon.icns)
 
 # Create the executable
 if(WIN32)
-    set(APP_ICON_RESOURCE_WINDOWS resources/icon_tr.ico)
-    add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_RESOURCE_WINDOWS})
+  set(APP_ICON_RESOURCE_WINDOWS ${CMAKE_SOURCE_DIR}/yawt.rc)
+  add_executable(${PROJECT_NAME} WIN32
+        ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_RESOURCE_WINDOWS}
+    )
 else()
-    add_executable(${PROJECT_NAME} MACOSX_BUNDLE
+  add_executable(${PROJECT_NAME} MACOSX_BUNDLE
         ${SOURCES} ${HEADERS} ${UIS} ${RESOURCES} ${APP_ICON_MAC} ${BUNDLED_PLUGINS}
     )
 endif()
@@ -276,15 +278,15 @@ install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
 # Custom deployment target for macOS app bundle
 if(APPLE)
-    add_custom_target(deploy
+  add_custom_target(deploy
         COMMAND ${CMAKE_SOURCE_DIR}/scripts/package_mac.sh -n --no-archive --no-macdeployqt
         DEPENDS ${PROJECT_NAME}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Deploying macOS app bundle with all dependencies"
     )
 
-    # Additional bundle properties for better deployment
-    set_target_properties(${PROJECT_NAME} PROPERTIES
+  # Additional bundle properties for better deployment
+  set_target_properties(${PROJECT_NAME} PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "YAWT"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
