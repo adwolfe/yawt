@@ -2,8 +2,10 @@
 #include "videometadatastore.h"
 #include "../utils/yawtjsonio.h"
 
+#include <QCoreApplication>
 #include <QDataStream>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -318,6 +320,8 @@ void AnalysisSessionModel::loadAndMergeState(
 
     // Track which disk videos have been placed somewhere
     QSet<QString> placed;
+    int processedVideos = 0;
+    const int totalVideos = qMax(1, diskVideos.size());
 
     if (!root.isEmpty()) {
         // ── Restore groups from state ─────────────────────────────────────────
@@ -340,6 +344,10 @@ void AnalysisSessionModel::loadAndMergeState(
 
                 const auto& [diskProcDir, diskStamp] = diskVideos[baseName];
                 placed.insert(baseName);
+                emit directoryScanProgress(++processedVideos,
+                                           totalVideos,
+                                           QStringLiteral("Loading %1").arg(baseName));
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
 
                 // Load the worms.json for the current (possibly updated) proc
                 const QString wormsJson = QDir(diskProcDir).absoluteFilePath("worms.json");
@@ -350,7 +358,6 @@ void AnalysisSessionModel::loadAndMergeState(
                 vid.baseName  = baseName;
                 vid.procDir   = diskProcDir;
                 vid.procStamp = diskStamp;
-                vid.tracks    = loadTracksFromJson(wormsJson);
                 VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
                 VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
                 vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
@@ -396,6 +403,10 @@ void AnalysisSessionModel::loadAndMergeState(
         const QString& baseName   = it.key();
         const QString& diskProcDir = it.value().first;
         const QString& diskStamp  = it.value().second;
+        emit directoryScanProgress(++processedVideos,
+                                   totalVideos,
+                                   QStringLiteral("Loading %1").arg(baseName));
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
 
         const QString wormsJson = QDir(diskProcDir).absoluteFilePath("worms.json");
         const QList<int> wormIds = parseWormIds(wormsJson);
@@ -405,7 +416,6 @@ void AnalysisSessionModel::loadAndMergeState(
         vid.baseName  = baseName;
         vid.procDir   = diskProcDir;
         vid.procStamp = diskStamp;
-        vid.tracks    = loadTracksFromJson(wormsJson);
         VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
         VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
         vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
@@ -447,13 +457,22 @@ void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
     const QStringList videoDirs = QDir(yawtDir).entryList(
         QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 
+    emit directoryScanStarted(qMax(1, videoDirs.size()));
+    int scannedDirs = 0;
     for (const QString& baseName : videoDirs) {
+        emit directoryScanProgress(++scannedDirs,
+                                   qMax(1, videoDirs.size()),
+                                   QStringLiteral("Scanning %1").arg(baseName));
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
+
         const QString subDir  = QDir(yawtDir).absoluteFilePath(baseName);
         const QString procDir = findMostRecentProc(subDir);
         if (procDir.isEmpty()) continue;
         const QString stamp   = QFileInfo(procDir).fileName().mid(5); // strip "PROC_"
         diskVideos[baseName]  = {procDir, stamp};
     }
+
+    emit directoryScanStarted(qMax(1, diskVideos.size()));
 
     // ── Merge with saved state (preserves group assignments) ─────────────────
     beginResetModel();
@@ -465,6 +484,7 @@ void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
 
     ++m_dataRevision;
     endResetModel();
+    emit directoryScanFinished();
 
     // Persist the (possibly updated) state immediately
     saveState();
@@ -520,6 +540,12 @@ AnalysisSessionModel::getGroupedData() const
         gd.name = g.name;
 
         for (const auto& vid : g.videos) {
+            if (!vid.tracksLoaded) {
+                const QString wormsJson = QDir(vid.procDir).absoluteFilePath("worms.json");
+                vid.tracks = loadTracksFromJson(wormsJson);
+                vid.tracksLoaded = true;
+            }
+
             for (const auto& worm : vid.worms) {
                 if (!worm.checked) continue;
 

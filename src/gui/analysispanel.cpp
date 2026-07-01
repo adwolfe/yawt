@@ -149,7 +149,7 @@ void AnalysisPanel::setup(const Widgets& widgets)
     if (w.refreshBtn) {
         connect(w.refreshBtn, &QPushButton::clicked, this, [this]() {
             if (!m_yawtDir.isEmpty())
-                setYawtDirectory(m_yawtDir);
+                setYawtDirectory(m_yawtDir, true);
         });
     }
 
@@ -170,6 +170,13 @@ void AnalysisPanel::setup(const Widgets& widgets)
             }
         });
     }
+
+    connect(m_sessionModel, &AnalysisSessionModel::directoryScanStarted,
+            this, &AnalysisPanel::directoryScanStarted);
+    connect(m_sessionModel, &AnalysisSessionModel::directoryScanProgress,
+            this, &AnalysisPanel::directoryScanProgress);
+    connect(m_sessionModel, &AnalysisSessionModel::directoryScanFinished,
+            this, &AnalysisPanel::directoryScanFinished);
 
     // When any worm's check state changes, forward to plots
     connect(m_sessionModel, &AnalysisSessionModel::checkedWormIdsChanged,
@@ -213,9 +220,11 @@ void AnalysisPanel::setup(const Widgets& widgets)
                 this, propagateAll);
 }
 
-void AnalysisPanel::setYawtDirectory(const QString& yawtDir)
+void AnalysisPanel::setYawtDirectory(const QString& yawtDir, bool forceRescan)
 {
     if (yawtDir.isEmpty() || !m_sessionModel) return;
+    if (!forceRescan && yawtDir == m_yawtDir) return;
+
     m_yawtDir = yawtDir;
     m_sessionModel->scanYawtDirectory(yawtDir);
     if (w.wormListView) {

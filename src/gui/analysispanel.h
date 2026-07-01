@@ -62,13 +62,16 @@ public:
     void setVideoFps(double fps);
 
     /** Scan (or re-scan) all proc runs found under the given yawt directory. */
-    void setYawtDirectory(const QString& yawtDir);
+    void setYawtDirectory(const QString& yawtDir, bool forceRescan = false);
 
 public slots:
     void setSelectedWormIds(const QSet<int>& ids);
 
 signals:
     void wormSelectionChanged(const QSet<int>& ids);
+    void directoryScanStarted(int totalSteps);
+    void directoryScanProgress(int currentStep, int totalSteps, const QString& message);
+    void directoryScanFinished();
 
 private slots:
     void onSessionCheckedChanged();

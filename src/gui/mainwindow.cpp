@@ -71,6 +71,7 @@
 #include <QJsonObject>
 #include <QMenu>
 #include <QMenuBar>
+#include <QProgressBar>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -85,6 +86,14 @@ MainWindow::MainWindow(QWidget *parent)
     , roiFactorSpinBoxD(1.5) // Initialize ROI factor to default value 1.5
 {
     ui->setupUi(this);
+
+    m_directoryScanProgressBar = new QProgressBar(this);
+    m_directoryScanProgressBar->setRange(0, 100);
+    m_directoryScanProgressBar->setValue(0);
+    m_directoryScanProgressBar->setFixedWidth(180);
+    m_directoryScanProgressBar->setTextVisible(true);
+    m_directoryScanProgressBar->setVisible(false);
+    ui->statusbar->addPermanentWidget(m_directoryScanProgressBar);
 
     // Capture tab: wire the QObject controller to the widgets defined in mainwindow.ui.
     {
@@ -313,8 +322,35 @@ MainWindow::MainWindow(QWidget *parent)
 
         connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
                 m_analysisPanel, &AnalysisPanel::setPixelSizeUmPerPixel);
+        connect(m_analysisPanel, &AnalysisPanel::directoryScanStarted,
+                this, [this](int totalSteps) {
+                    if (!m_directoryScanProgressBar) return;
+                    m_directoryScanProgressBar->setRange(0, qMax(1, totalSteps));
+                    m_directoryScanProgressBar->setValue(0);
+                    m_directoryScanProgressBar->setFormat(QStringLiteral("Scanning %p%"));
+                    m_directoryScanProgressBar->setVisible(true);
+                    ui->statusbar->showMessage(QStringLiteral("Scanning analysis directory..."));
+                });
+        connect(m_analysisPanel, &AnalysisPanel::directoryScanProgress,
+                this, [this](int currentStep, int totalSteps, const QString& message) {
+                    if (!m_directoryScanProgressBar) return;
+                    m_directoryScanProgressBar->setRange(0, qMax(1, totalSteps));
+                    m_directoryScanProgressBar->setValue(qBound(0, currentStep, qMax(1, totalSteps)));
+                    ui->statusbar->showMessage(message.isEmpty()
+                                                   ? QStringLiteral("Scanning analysis directory...")
+                                                   : message);
+                });
+        connect(m_analysisPanel, &AnalysisPanel::directoryScanFinished,
+                this, [this]() {
+                    if (m_directoryScanProgressBar) {
+                        m_directoryScanProgressBar->setValue(m_directoryScanProgressBar->maximum());
+                        m_directoryScanProgressBar->setVisible(false);
+                    }
+                    ui->statusbar->showMessage(QStringLiteral("Analysis directory scan complete."), 2000);
+                });
+
         connect(m_analysisPanel, &AnalysisPanel::wormSelectionChanged,
-                this, [this](const QSet<int>& ids) {
+                this, [this](const QSet<int>& ids) { 
                     if (m_analysisTabActive) {
                         // Sync wormTableView selection without re-entering the analysis-tab handler
                         m_analysisTabActive = false;
@@ -514,7 +550,7 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onPixelSizeSpinEditingFinished);
 
     // Processing tab ruler calibration
-    connect(ui->measureButton, &QToolButton::clicked,
+    connect(ui->setScaleAgainButton, &QToolButton::clicked,
             this, &MainWindow::onMeasureButtonClicked);
     connect(ui->videoLoader,   &VideoLoader::scaleMeasured,
             this, &MainWindow::onVideoScaleMeasured);
@@ -1972,7 +2008,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
 
     // Re-scan the yawt directory so the Analysis tree picks up the new proc folder.
     if (m_analysisPanel && !m_currentVideoDataDir.isEmpty())
-        m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
+        m_analysisPanel->setYawtDirectory(m_currentVideoDataDir, true);
 
     statusBar()->showMessage("Tracking completed", 4000);
 

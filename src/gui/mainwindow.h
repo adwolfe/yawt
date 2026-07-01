@@ -22,6 +22,7 @@ class TrackingDataStorage;
 class AppController; // Application controller (owns core non-UI components)
 class AnalysisPanel;
 class CapturePanel;
+class QProgressBar;
 
 // Include VideoLoader header for enums and QFlags type
 #include "widgets/videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
@@ -241,6 +242,7 @@ private:
 
     AnalysisPanel* m_analysisPanel = nullptr;
     CapturePanel* m_capturePanel = nullptr;  // QObject controller, not a widget
+    QProgressBar* m_directoryScanProgressBar = nullptr;
 
     // Tracks the currently-loaded video so pixel-size edits can be saved to JSON.
     QString m_currentVideoDataDir;

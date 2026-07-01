@@ -625,25 +625,27 @@
                </property>
               </widget>
              </item>
+
              <item>
-              <widget class="QToolButton" name="measureButton">
+              <widget class="QToolButton" name="setScaleAgainButton">
                <property name="enabled">
                 <bool>true</bool>
                </property>
                <property name="toolTip">
-                <string>Show/Hide Tracks</string>
+                <string>Set scale again by drawing a known-length line on the loaded video</string>
                </property>
                <property name="statusTip">
-                <string>Show/hide Results</string>
+                <string>Recalibrate pixel scale for processing and analysis</string>
                </property>
                <property name="text">
                 <string>...</string>
                </property>
                <property name="icon">
-                <iconset theme="QIcon::ThemeIcon::DialogError"/>
+                <iconset resource="../../resources.qrc">
+                 <normaloff>:/resources/ruler.svg</normaloff>:/resources/ruler.svg</iconset>
                </property>
                <property name="checkable">
-                <bool>true</bool>
+                <bool>false</bool>
                </property>
               </widget>
              </item>

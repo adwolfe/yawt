@@ -56,8 +56,10 @@ public:
         QString       procStamp;   // the "yyyy-MM-dd-HHmmss" part of the folder name
         QList<WormItem> worms;
 
-        // Track data loaded from worms.json — available for analysis plots
-        Tracking::AllWormTracks tracks;
+        // Track data is loaded lazily from worms.json when analysis plots request it.
+        // Scanning a project folder only needs worm IDs/metadata and should stay fast.
+        mutable bool tracksLoaded = false;
+        mutable Tracking::AllWormTracks tracks;
         double umPerPixel = 0.0;   // µm/pixel from _metadata.json (0 if unknown)
         double fps        = 0.0;   // frames/s from _metadata.json (0 if unknown)
 
@@ -167,6 +169,11 @@ public:
 signals:
     /** Emitted whenever any worm's checked state changes. */
     void checkedWormIdsChanged();
+
+    /** Emitted while scanning the yawt analysis directory. */
+    void directoryScanStarted(int totalSteps);
+    void directoryScanProgress(int currentStep, int totalSteps, const QString& message);
+    void directoryScanFinished();
 
 private:
     // ── Internal helpers ──────────────────────────────────────────────────────

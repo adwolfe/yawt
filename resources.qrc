@@ -14,5 +14,6 @@
         <file>resources/points.svg</file>
         <file>resources/trax_alt-arrow.svg</file>
         <file>resources/centerline.svg</file>
+        <file>resources/ruler.svg</file>
     </qresource>
 </RCC>
