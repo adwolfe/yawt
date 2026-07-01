@@ -6,7 +6,7 @@ This was written to process C. elegans chemotaxis behavior and follows a simple 
 
 ## Build notes
 
-YAWT uses CMake with Qt 6 and OpenCV. Basler Pylon support is not part of the current build.
+YAWT uses CMake with >= Qt 6.10 and OpenCV. Basler Pylon support is not part of the current build.
 
 ### Windows
 

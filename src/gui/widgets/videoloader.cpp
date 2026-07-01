@@ -1718,13 +1718,18 @@ void VideoLoader::handleRoiDefinedForCrop(
         QMessageBox::Yes) {
         emit videoProcessingStarted("Cropping video...");
         QString croppedFilePath;
-        if (performVideoCrop(cropRoiVideoCoords, croppedFilePath) &&
+        QString cropError;
+        if (performVideoCrop(cropRoiVideoCoords, croppedFilePath, cropError) &&
             !croppedFilePath.isEmpty()) {
             emit videoProcessingFinished("Video cropped.", true);
             loadVideo(croppedFilePath);
         } else {
             emit videoProcessingFinished("Crop failed.", false);
-            QMessageBox::critical(this, "Crop Error", "Failed to crop video.");
+            QMessageBox::critical(this,
+                                  "Crop Error",
+                                  cropError.isEmpty()
+                                      ? QStringLiteral("Failed to crop video.")
+                                      : QStringLiteral("Failed to crop video.\n\n%1").arg(cropError));
         }
     }
     setInteractionMode(InteractionMode::PanZoom);
@@ -1733,58 +1738,215 @@ void VideoLoader::handleRoiDefinedForCrop(
 }
 bool VideoLoader::performVideoCrop(
     const QRectF& cropRectVideoCoords,
-    QString& outCroppedFilePath) {
-    if (currentFilePath.isEmpty() || !videoCapture.isOpened() ||
-        cropRectVideoCoords.isNull() || !cropRectVideoCoords.isValid() ||
-        cropRectVideoCoords.width() <= 0 || cropRectVideoCoords.height() <= 0)
+    QString& outCroppedFilePath,
+    QString& outErrorMessage) {
+    outCroppedFilePath.clear();
+    outErrorMessage.clear();
+
+    if (currentFilePath.isEmpty()) {
+        outErrorMessage = QStringLiteral("No current video file path is set.");
         return false;
+    }
+    if (!videoCapture.isOpened()) {
+        outErrorMessage = QStringLiteral("The current video capture is not open.");
+        return false;
+    }
+    if (cropRectVideoCoords.isNull() || !cropRectVideoCoords.isValid() ||
+        cropRectVideoCoords.width() <= 0 || cropRectVideoCoords.height() <= 0) {
+        outErrorMessage = QStringLiteral("The selected crop rectangle is invalid: x=%1, y=%2, width=%3, height=%4.")
+                              .arg(cropRectVideoCoords.x())
+                              .arg(cropRectVideoCoords.y())
+                              .arg(cropRectVideoCoords.width())
+                              .arg(cropRectVideoCoords.height());
+        return false;
+    }
+
     cv::VideoCapture origVid;
-    if (!origVid.open(currentFilePath.toStdString())) return false;
+    if (!origVid.open(currentFilePath.toStdString())) {
+        outErrorMessage = QStringLiteral("OpenCV could not reopen the source video:\n%1").arg(currentFilePath);
+        return false;
+    }
+
     double origFps = origVid.get(cv::CAP_PROP_FPS);
     if (origFps <= 0) origFps = framesPerSecond > 0 ? framesPerSecond : 25.0;
+
+    cv::Mat firstFrame;
+    if (!origVid.read(firstFrame) || firstFrame.empty()) {
+        origVid.release();
+        outErrorMessage = QStringLiteral("OpenCV opened the source video, but could not read the first frame.");
+        return false;
+    }
+
     cv::Rect cvCR(static_cast<int>(qRound(cropRectVideoCoords.x())),
                   static_cast<int>(qRound(cropRectVideoCoords.y())),
                   static_cast<int>(qRound(cropRectVideoCoords.width())),
                   static_cast<int>(qRound(cropRectVideoCoords.height())));
     cvCR.x = qMax(0, cvCR.x);
     cvCR.y = qMax(0, cvCR.y);
-    if (originalFrameSize.width() > 0 && originalFrameSize.height() > 0) {
-        cvCR.width = qMin(cvCR.width, originalFrameSize.width() - cvCR.x);
-        cvCR.height = qMin(cvCR.height, originalFrameSize.height() - cvCR.y);
-    }
+    cvCR.width = qMin(cvCR.width, firstFrame.cols - cvCR.x);
+    cvCR.height = qMin(cvCR.height, firstFrame.rows - cvCR.y);
+
     if (cvCR.width <= 0 || cvCR.height <= 0) {
         origVid.release();
+        outErrorMessage = QStringLiteral("The selected crop rectangle is outside the video frame. Video frame is %1x%2; crop is x=%3, y=%4, width=%5, height=%6.")
+                              .arg(firstFrame.cols)
+                              .arg(firstFrame.rows)
+                              .arg(cvCR.x)
+                              .arg(cvCR.y)
+                              .arg(cvCR.width)
+                              .arg(cvCR.height);
         return false;
     }
-    cv::Size cfs(cvCR.width, cvCR.height);
-    QFileInfo ofi(currentFilePath);
-    QString bn = ofi.completeBaseName(),
-        suff = ofi.suffix().isEmpty()
-                   ? QString(DEFAULT_CROP_EXTENSION).remove(0, 1)
-                   : ofi.suffix();
-    outCroppedFilePath = ofi.absolutePath() + "/" + bn + "_cropped." + suff;
-    cv::VideoWriter writer;
-    int fourcc = DEFAULT_CROP_FOURCC;
-    if (!writer.open(outCroppedFilePath.toStdString(), fourcc, origFps, cfs,
-                     true)) {
+
+    QStringList notes;
+    if (cvCR.width % 2 != 0) {
+        --cvCR.width;
+        notes.append(QStringLiteral("Crop width was odd and was reduced by 1 pixel for video encoder compatibility."));
+    }
+    if (cvCR.height % 2 != 0) {
+        --cvCR.height;
+        notes.append(QStringLiteral("Crop height was odd and was reduced by 1 pixel for video encoder compatibility."));
+    }
+    if (cvCR.width <= 1 || cvCR.height <= 1) {
         origVid.release();
+        outErrorMessage = QStringLiteral("The crop rectangle is too small after encoder-compatible sizing: %1x%2.")
+                              .arg(cvCR.width)
+                              .arg(cvCR.height);
         return false;
     }
-    cv::Mat frame, croppedF;
-    int fCount = 0;
+
+    const cv::Size cropFrameSize(cvCR.width, cvCR.height);
+    const QFileInfo sourceInfo(currentFilePath);
+    const QString outputBase = QDir(sourceInfo.absolutePath()).filePath(sourceInfo.completeBaseName() + QStringLiteral("_cropped"));
+
+    struct CropWriterAttempt {
+        QString label;
+        QString suffix;
+        int fourcc;
+    };
+
+    const QList<CropWriterAttempt> attempts{
+        {QStringLiteral("H264 / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('H','2','6','4')},
+        {QStringLiteral("AVC1 / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('a','v','c','1')},
+        {QStringLiteral("MP4V / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('m','p','4','v')},
+        {QStringLiteral("MJPG / .avi"), QStringLiteral("avi"), cv::VideoWriter::fourcc('M','J','P','G')}
+    };
+
+    QStringList attemptErrors;
+    cv::VideoWriter writer;
+    QString selectedPath;
+    QString selectedAttempt;
+    for (const CropWriterAttempt& attempt : attempts) {
+        const QString candidatePath = outputBase + QStringLiteral(".") + attempt.suffix;
+        QFile::remove(candidatePath);
+
+        try {
+            if (writer.open(candidatePath.toStdString(), attempt.fourcc, origFps, cropFrameSize, true)) {
+                selectedPath = candidatePath;
+                selectedAttempt = attempt.label;
+                break;
+            }
+        } catch (const cv::Exception& e) {
+            attemptErrors.append(QStringLiteral("%1: OpenCV exception while opening writer: %2")
+                                     .arg(attempt.label, QString::fromLocal8Bit(e.what())));
+            writer.release();
+            continue;
+        }
+
+        attemptErrors.append(QStringLiteral("%1: VideoWriter did not open for %2, fps=%3, size=%4x%5.")
+                                 .arg(attempt.label,
+                                      candidatePath,
+                                      QString::number(origFps, 'f', 3),
+                                      QString::number(cropFrameSize.width),
+                                      QString::number(cropFrameSize.height)));
+        writer.release();
+    }
+
+    if (!writer.isOpened()) {
+        origVid.release();
+        outErrorMessage = QStringLiteral(
+                              "OpenCV could not open a VideoWriter for any supported crop format.\n\n"
+                              "Tried:\n%1\n\n"
+                              "On Windows, H264/MP4 usually requires opencv_videoio_ffmpeg*.dll and a compatible openh264*.dll beside yawt.exe. "
+                              "If those are present and this still fails, the OpenCV build may not include an encoder for H264/MP4. The MJPG/AVI fallback also failed.")
+                              .arg(attemptErrors.join(QStringLiteral("\n")));
+        return false;
+    }
+
+    auto writeCroppedFrame = [&](const cv::Mat& frame, QString& error) -> bool {
+        if (frame.empty()) return true;
+        if (cvCR.x < 0 || cvCR.y < 0 || cvCR.x + cvCR.width > frame.cols || cvCR.y + cvCR.height > frame.rows) {
+            error = QStringLiteral("Frame size changed or crop is out of bounds. Frame=%1x%2, crop x=%3, y=%4, width=%5, height=%6.")
+                        .arg(frame.cols)
+                        .arg(frame.rows)
+                        .arg(cvCR.x)
+                        .arg(cvCR.y)
+                        .arg(cvCR.width)
+                        .arg(cvCR.height);
+            return false;
+        }
+
+        try {
+            cv::Mat croppedFrame = frame(cvCR);
+            if (croppedFrame.channels() == 1) {
+                cv::cvtColor(croppedFrame, croppedFrame, cv::COLOR_GRAY2BGR);
+            } else if (croppedFrame.channels() == 4) {
+                cv::cvtColor(croppedFrame, croppedFrame, cv::COLOR_BGRA2BGR);
+            }
+            writer.write(croppedFrame);
+            return true;
+        } catch (const cv::Exception& e) {
+            error = QStringLiteral("OpenCV exception while writing cropped frame: %1")
+                        .arg(QString::fromLocal8Bit(e.what()));
+            return false;
+        }
+    };
+
+    int frameCount = 0;
+    QString writeError;
+    if (writeCroppedFrame(firstFrame, writeError)) {
+        ++frameCount;
+    } else {
+        origVid.release();
+        writer.release();
+        outErrorMessage = writeError;
+        return false;
+    }
+
+    cv::Mat frame;
     while (origVid.read(frame)) {
         if (frame.empty()) continue;
-        try {
-            croppedF = frame(cvCR);
-            writer.write(croppedF);
-            fCount++;
-        } catch (const cv::Exception&) {
+        if (!writeCroppedFrame(frame, writeError)) {
             break;
         }
+        ++frameCount;
     }
+
     origVid.release();
     writer.release();
-    return fCount > 0;
+
+    const QFileInfo outputInfo(selectedPath);
+    if (frameCount <= 0 || !outputInfo.exists() || outputInfo.size() <= 0) {
+        outErrorMessage = QStringLiteral("Crop writer opened using %1, but produced no usable output. Frames written=%2, output=%3, file size=%4 bytes.")
+                              .arg(selectedAttempt)
+                              .arg(frameCount)
+                              .arg(selectedPath)
+                              .arg(outputInfo.exists() ? outputInfo.size() : -1);
+        if (!writeError.isEmpty()) {
+            outErrorMessage += QStringLiteral("\n\nWrite error: %1").arg(writeError);
+        }
+        return false;
+    }
+
+    outCroppedFilePath = selectedPath;
+    if (!notes.isEmpty()) {
+        YAWT_INFO(lcGuiVideoLoader) << "Crop export notes:" << notes.join(" ");
+    }
+    YAWT_INFO(lcGuiVideoLoader) << "Crop exported" << selectedPath
+                                << "using" << selectedAttempt
+                                << "frames" << frameCount
+                                << "size" << cropFrameSize.width << "x" << cropFrameSize.height;
+    return true;
 }
 
 void VideoLoader::applyThresholding() {

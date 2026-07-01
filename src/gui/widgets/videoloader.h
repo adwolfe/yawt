@@ -302,7 +302,9 @@ private:
     void updateCursorShape();
     void clampPanOffset();
     void handleRoiDefinedForCrop(const QRectF& cropRoiVideoCoords);
-    bool performVideoCrop(const QRectF& cropRectVideoCoords, QString& outCroppedFilePath);
+    bool performVideoCrop(const QRectF& cropRectVideoCoords,
+                          QString& outCroppedFilePath,
+                          QString& outErrorMessage);
     void applyThresholding(); // Applies thresholding to currentCvFrame, stores in m_thresholdedFrame_mono
     void updateTimerInterval();
     void emitThresholdParametersChanged();
