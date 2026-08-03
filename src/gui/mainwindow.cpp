@@ -621,6 +621,7 @@ void MainWindow::setupConnections() {
     connect(ui->firstFrameButton, &QToolButton::clicked, this, &MainWindow::goToFirstFrame);
     connect(ui->lastFrameButton, &QToolButton::clicked, this, &MainWindow::goToLastFrame);
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
+    connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateVideoTimeLabel);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
 
     // Interaction Mode Buttons -> VideoLoader (via slots that call VideoLoader)
@@ -1611,6 +1612,7 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
     ui->videoNameLabel->setText(QFileInfo(filePath).fileName());
     updateWormTimeline();
+    updateVideoTimeLabel(0);
 
     // Load pixel size from this video's metadata JSON (or reset to 0 if absent).
     // VideoLoader has already created the data directory before emitting videoLoaded.
@@ -1635,6 +1637,14 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
         if (!m_currentVideoDataDir.isEmpty())
             m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
     }
+}
+
+void MainWindow::updateVideoTimeLabel(int frameNumber) {
+    int totalSeconds = (m_videoFps > 0.0) ? static_cast<int>(frameNumber / m_videoFps) : 0;
+    int hours   = totalSeconds / 3600;
+    int minutes = (totalSeconds % 3600) / 60;
+    int seconds = totalSeconds % 60;
+    ui->videoTimeLabel->setText(QString::asprintf("%02d:%02d:%02d", hours, minutes, seconds));
 }
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {

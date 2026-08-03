@@ -192,6 +192,8 @@ private:
     void setupInteractionModeButtonGroup(); // Renamed for clarity
     void resizeTableColumns(); // Resize WormTableView columns to fit contents
     void updateWormTimeline();
+    // Updates the hh:mm:ss label next to framePosition based on m_videoFps.
+    void updateVideoTimeLabel(int frameNumber);
     bool applyThresholdSettingsFromJsonFile(const QString& filePath);
     bool loadRunFromDirectoryInternal(const QString& directoryPath);
     void populateDebugImageTable(const QString& dir);

@@ -970,6 +970,13 @@ QToolButton#lastFrameButton {
               </spacer>
              </item>
              <item>
+              <widget class="QLabel" name="videoTimeLabel">
+               <property name="text">
+                <string>00:00:00</string>
+               </property>
+              </widget>
+             </item>
+             <item>
               <widget class="QSpinBox" name="framePosition">
                <property name="minimumSize">
                 <size>
