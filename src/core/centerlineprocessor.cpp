@@ -7,6 +7,7 @@
 #include <limits>
 #include <queue>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/geometry.hpp>
 
 namespace Centerline {
 
