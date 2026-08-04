@@ -2000,6 +2000,7 @@ bool VideoLoader::performVideoCrop(
     const int totalFrames = static_cast<int>(origVid.get(cv::CAP_PROP_FRAME_COUNT));
     double origFps = origVid.get(cv::CAP_PROP_FPS);
     if (origFps <= 0) origFps = fallbackFps > 0 ? fallbackFps : 25.0;
+    const int srcFourcc = static_cast<int>(origVid.get(cv::CAP_PROP_FOURCC));
 
     cv::Mat firstFrame;
     if (!origVid.read(firstFrame) || firstFrame.empty()) {
@@ -2072,12 +2073,23 @@ bool VideoLoader::performVideoCrop(
         int fourcc;
     };
 
-    const QList<CropWriterAttempt> attempts{
-        {QStringLiteral("H264 / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('H','2','6','4')},
-        {QStringLiteral("AVC1 / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('a','v','c','1')},
-        {QStringLiteral("MP4V / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('m','p','4','v')},
-        {QStringLiteral("MJPG / .avi"), QStringLiteral("avi"), cv::VideoWriter::fourcc('M','J','P','G')}
-    };
+    QList<CropWriterAttempt> attempts;
+    if (srcFourcc != 0) {
+        const char fc[5] = {
+            static_cast<char>(srcFourcc & 0xFF),
+            static_cast<char>((srcFourcc >> 8) & 0xFF),
+            static_cast<char>((srcFourcc >> 16) & 0xFF),
+            static_cast<char>((srcFourcc >> 24) & 0xFF),
+            '\0'
+        };
+        const QString srcSuffix = sourceInfo.suffix().isEmpty() ? QStringLiteral("avi") : sourceInfo.suffix().toLower();
+        attempts.append({QStringLiteral("Source codec (%1) / .%2").arg(QString::fromLatin1(fc, 4), srcSuffix),
+                          srcSuffix, srcFourcc});
+    }
+    attempts.append({QStringLiteral("H264 / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('H','2','6','4')});
+    attempts.append({QStringLiteral("AVC1 / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('a','v','c','1')});
+    attempts.append({QStringLiteral("MP4V / .mp4"), QStringLiteral("mp4"), cv::VideoWriter::fourcc('m','p','4','v')});
+    attempts.append({QStringLiteral("MJPG / .avi"), QStringLiteral("avi"), cv::VideoWriter::fourcc('M','J','P','G')});
 
     reportProgress(0, totalFrames, QStringLiteral("Opening crop writer..."));
 
