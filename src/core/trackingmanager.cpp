@@ -2672,46 +2672,36 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
             roiObj["height"] = p.roi.height();
             pObj["roi"] = roiObj;
 
-            // Blob-derived data from the detected-blob store
-            const auto blobsForFrame = m_storage->getDetectedBlobsForFrame(p.frameNumberOriginal);
-            const auto blobIt = blobsForFrame.constFind(wormId);
-            if (blobIt != blobsForFrame.constEnd()) {
-                const Tracking::DetectedBlob& blob = blobIt.value();
-                pObj["detectedBlob"] = storageDetectedBlobToJson(blob);
+            // Morphology and head/tail come off the track point itself; storage
+            // joined them in from the blob store when the track was stored.
+            if (p.area > 0.f)        pObj["area"]        = static_cast<double>(p.area);
+            if (p.aspectRatio > 0.f) pObj["aspectRatio"] = static_cast<double>(p.aspectRatio);
 
-                // Centerline points
+            if (p.hasTips) {
+                QJsonObject headObj;
+                headObj["x"] = static_cast<double>(p.headTip.x);
+                headObj["y"] = static_cast<double>(p.headTip.y);
+                QJsonObject tailObj;
+                tailObj["x"] = static_cast<double>(p.tailTip.x);
+                tailObj["y"] = static_cast<double>(p.tailTip.y);
+                QJsonObject tips;
+                tips["head"] = headObj;
+                tips["tail"] = tailObj;
+                pObj["tips"] = tips;
+            }
+
+            if (const Tracking::DetectedBlob* blob =
+                    m_storage->findDetectedBlob(p.frameNumberOriginal, wormId)) {
+                pObj["detectedBlob"] = storageDetectedBlobToJson(*blob);
+
                 QJsonArray clArr;
-                for (const cv::Point2f& pt : blob.centerlinePoints) {
+                for (const cv::Point2f& pt : blob->centerlinePoints) {
                     QJsonArray a;
                     a.append(static_cast<double>(pt.x));
                     a.append(static_cast<double>(pt.y));
                     clArr.append(a);
                 }
                 if (!clArr.isEmpty()) pObj["centerlinePoints"] = clArr;
-
-                // Morphology
-                if (blob.area > 0)
-                    pObj["area"] = blob.area;
-                if (blob.boundingBox.width() > 0 && blob.boundingBox.height() > 0) {
-                    double ar = blob.boundingBox.width() / blob.boundingBox.height();
-                    pObj["aspectRatio"] = ar < 1.0 ? 1.0 / ar : ar;
-                }
-
-                // Head/tail tip positions
-                const bool hasHead = blob.assignedHeadTipIdx >= 0
-                                     && blob.assignedHeadTipIdx < static_cast<int>(blob.tipCandidates.size());
-                const bool hasTail = blob.assignedTailTipIdx >= 0
-                                     && blob.assignedTailTipIdx < static_cast<int>(blob.tipCandidates.size());
-                if (hasHead && hasTail) {
-                    const cv::Point2f& h = blob.tipCandidates[blob.assignedHeadTipIdx].point;
-                    const cv::Point2f& t = blob.tipCandidates[blob.assignedTailTipIdx].point;
-                    QJsonObject tips;
-                    QJsonObject headObj; headObj["x"] = static_cast<double>(h.x); headObj["y"] = static_cast<double>(h.y);
-                    QJsonObject tailObj; tailObj["x"] = static_cast<double>(t.x); tailObj["y"] = static_cast<double>(t.y);
-                    tips["head"] = headObj;
-                    tips["tail"] = tailObj;
-                    pObj["tips"] = tips;
-                }
             }
 
             pointsArr.append(pObj);
@@ -3291,6 +3281,10 @@ void TrackingManager::handleCenterlineFinished() {
     m_totalCenterlineWorkers = 0;
     emit trackingStatusUpdate("Centerline computation complete.");
     emit centerlineProgress(100);
+
+    // The centerline workers rewrote head/tail assignments in the blob store;
+    // push that back onto the in-memory tracks before anything reads them.
+    if (m_storage) m_storage->refreshDerivedTrackData();
 
     const QString dir = !m_processingOutputDirectory.isEmpty()
         ? m_processingOutputDirectory

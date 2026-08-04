@@ -328,6 +328,36 @@ public:
      */
     QMap<int, Tracking::DetectedBlob> getDetectedBlobsForFrame(int frameNumber) const;
 
+    /**
+     * @brief Look up a single detected blob without copying the frame's map.
+     * @param frameNumber The frame index
+     * @param wormId The conceptual worm ID
+     * @return Pointer to the stored blob, or nullptr if none exists.
+     *         The pointer is invalidated by any mutation of the blob store.
+     */
+    const Tracking::DetectedBlob* findDetectedBlob(int frameNumber, int wormId) const;
+
+    /**
+     * @brief Populate the blob-derived fields of stored track points (area,
+     *        aspectRatio, bodyLength, head/tail tips) from the detected-blob store.
+     *
+     * Track points arrive from the trackers carrying only position/ROI/quality;
+     * the geometry that the centerline pass derives lands in the blob store.
+     * This joins the two in memory so consumers never have to save and reload
+     * a session to see head/tail assignments.
+     *
+     * Called automatically by setTrackForItem() and after loading a session.
+     * Call it explicitly when the blob store changes underneath unchanged
+     * tracks — most importantly after the post-tracking centerline pass, which
+     * reassigns head/tail.
+     *
+     * Frames with no stored blob keep whatever the track point already held, so
+     * this never discards data restored from a legacy session file.
+     *
+     * @param itemId Restrict the refresh to one item, or -1 for all items.
+     */
+    void refreshDerivedTrackData(int itemId = -1);
+
     // --- Merge history API (per-frame groups)
     /**
      * @brief Store merge groups for a specific frame.
@@ -494,6 +524,8 @@ private:
     void recalculateGlobalMetricsAndROIs();                // Update metrics and ROIs
     void updateIdToIndexMap();                             // Rebuild ID-to-index map
     void purgeProcessingDataForItem(int itemId);           // Remove tracks/blobs/merge refs/baselines for one item
+    void applyBlobDerivedFields(Tracking::WormTrackPoint& point,
+                                const Tracking::DetectedBlob& blob) const;
     void buildFrameIndex();                                // Build frame index for fast lookups
     
     // Merge history API

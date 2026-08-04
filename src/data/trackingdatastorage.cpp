@@ -219,7 +219,11 @@ void TrackingDataStorage::setTrackForItem(int itemId, const std::vector<Tracking
     
     bool isNewTrack = !m_tracks.count(itemId);
     m_tracks[itemId] = trackPoints;
-    
+
+    // Trackers supply position/ROI/quality only; join in the blob-derived
+    // geometry so the track is complete in memory, not just once serialized.
+    refreshDerivedTrackData(itemId);
+
     // Rebuild frame index for fast lookups
     buildFrameIndex();
     
@@ -551,6 +555,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
         }
     }
 
+    refreshDerivedTrackData();
     updateIdToIndexMap();
     buildFrameIndex();
 
@@ -673,6 +678,64 @@ void TrackingDataStorage::setDetectedBlobForFrame(int frameNumber, int wormId, c
 
 QMap<int, Tracking::DetectedBlob> TrackingDataStorage::getDetectedBlobsForFrame(int frameNumber) const {
     return m_detectedBlobsByFrame.value(frameNumber);
+}
+
+const Tracking::DetectedBlob* TrackingDataStorage::findDetectedBlob(int frameNumber, int wormId) const {
+    const auto frameIt = m_detectedBlobsByFrame.constFind(frameNumber);
+    if (frameIt == m_detectedBlobsByFrame.constEnd()) return nullptr;
+    const auto wormIt = frameIt->constFind(wormId);
+    if (wormIt == frameIt->constEnd()) return nullptr;
+    return &wormIt.value();
+}
+
+void TrackingDataStorage::applyBlobDerivedFields(Tracking::WormTrackPoint& point,
+                                                 const Tracking::DetectedBlob& blob) const {
+    if (blob.area > 0.0)
+        point.area = static_cast<float>(blob.area);
+
+    const QRectF& box = blob.boundingBox;
+    if (box.width() > 0.0 && box.height() > 0.0) {
+        const double ratio = box.width() / box.height();
+        point.aspectRatio = static_cast<float>(ratio < 1.0 ? 1.0 / ratio : ratio);
+    }
+
+    if (blob.centerlinePoints.size() >= 2) {
+        double arcLength = 0.0;
+        for (size_t i = 1; i < blob.centerlinePoints.size(); ++i) {
+            const cv::Point2f d = blob.centerlinePoints[i] - blob.centerlinePoints[i - 1];
+            arcLength += std::sqrt(d.x * d.x + d.y * d.y);
+        }
+        point.bodyLength = static_cast<float>(arcLength);
+    }
+
+    // Head/tail is authoritative when a blob exists: the centerline pass may
+    // have swapped or withdrawn an assignment, and that has to show through.
+    const int tipCount = static_cast<int>(blob.tipCandidates.size());
+    const bool hasHead = blob.assignedHeadTipIdx >= 0 && blob.assignedHeadTipIdx < tipCount;
+    const bool hasTail = blob.assignedTailTipIdx >= 0 && blob.assignedTailTipIdx < tipCount;
+    if (hasHead && hasTail) {
+        point.headTip = blob.tipCandidates[blob.assignedHeadTipIdx].point;
+        point.tailTip = blob.tipCandidates[blob.assignedTailTipIdx].point;
+        point.hasTips = true;
+    } else {
+        point.hasTips = false;
+    }
+}
+
+void TrackingDataStorage::refreshDerivedTrackData(int itemId) {
+    if (m_detectedBlobsByFrame.isEmpty()) return;
+
+    for (auto& entry : m_tracks) {
+        const int wormId = entry.first;
+        if (itemId >= 0 && wormId != itemId) continue;
+
+        for (Tracking::WormTrackPoint& point : entry.second) {
+            if (const Tracking::DetectedBlob* blob =
+                    findDetectedBlob(point.frameNumberOriginal, wormId)) {
+                applyBlobDerivedFields(point, *blob);
+            }
+        }
+    }
 }
 
 // --- Per-worm tip-feature baselines (Phase A) ---
