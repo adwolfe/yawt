@@ -34,7 +34,6 @@
 //                      by the crop origin. Transient.
 
 // Forward declaration
-//class WormObject; // If WormObject needs to be referenced here, though likely not for these structs
 
 
 namespace TableItems {

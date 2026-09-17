@@ -849,12 +849,9 @@ void TrackingManager::startFullTrackingProcess(
     m_splitResolutionMap.clear();
     m_wormToPhysicalBlobIdMap.clear();
 
-    qDeleteAll(m_wormObjectsMap);
-    m_wormObjectsMap.clear();
+    m_trackHistory.clear();
     for (const auto& info : m_initialWormInfos) {
-        if (!m_wormObjectsMap.contains(info.id)) {
-            m_wormObjectsMap[info.id] = new WormObject(info.id, info.initialSearchWindow);
-        }
+        m_trackHistory[info.id];  // create an (empty) history for every conceptual worm
         m_wormToPhysicalBlobIdMap[info.id] = -1; // Forward tracker
         m_wormToPhysicalBlobIdMap[-info.id] = -1; // Backward tracker
     }
@@ -1014,10 +1011,8 @@ void TrackingManager::cleanupThreadsAndObjects() {
     m_wormIdToForwardTrackerInstanceMap.clear();
     m_wormIdToBackwardTrackerInstanceMap.clear();
 
-    // Clear WormObject map with explicit deletion and memory hints
-    qDeleteAll(m_wormObjectsMap);
-    m_wormObjectsMap.clear();
-    QMap<int, WormObject*>().swap(m_wormObjectsMap); // Force deallocation
+    // Release the per-worm track history
+    QMap<int, std::map<int, Tracking::WormTrackPoint>>().swap(m_trackHistory);
 
     // Aggressively clear processed video memory
     clearProcessedVideoMemory();
@@ -1127,6 +1122,16 @@ void TrackingManager::handleVideoChunkProcessingError(int chunkId, const QString
 }
 
 // --- Helper function for signed worm IDs ---
+void TrackingManager::rebuildFinalTracks() {
+    m_finalTracks.clear();
+    for (auto it = m_trackHistory.constBegin(); it != m_trackHistory.constEnd(); ++it) {
+        std::vector<Tracking::WormTrackPoint> points;
+        points.reserve(it.value().size());
+        for (const auto& kv : it.value()) points.push_back(kv.second);  // std::map: frame order
+        m_finalTracks[it.key()] = std::move(points);
+    }
+}
+
 int TrackingManager::getSignedWormId(int conceptualWormId, WormTracker::TrackingDirection direction) {
     return (direction == WormTracker::TrackingDirection::Forward) ? conceptualWormId : -conceptualWormId;
 }
@@ -1159,9 +1164,8 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
 
     QString dmsg = QString("TM: WT %1 FN%2 | ").arg(signedWormId).arg(frameNumber);
     TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** PROCESSING FRAME UPDATE *** State:").arg(signedWormId).arg(frameNumber) << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid << "SplitCandidates:" << splitCandidates.size();
-    // Note: WormObject update uses primaryBlob
-    WormObject* wormObject = m_wormObjectsMap.value(reportingConceptualWormId, nullptr);
-    if (wormObject) {
+    // Record this frame's point in the manager-owned track history (anchored on primaryBlob).
+    if (m_trackHistory.contains(reportingConceptualWormId)) {
         Tracking::WormTrackPoint point;
         point.frameNumber = frameNumber;
         point.searchWindow = searchWindowUsed;
@@ -1173,7 +1177,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
         }
         point.quality = Tracking::qualityForFrame(currentState, primaryBlob.isValid);
 
-        wormObject->updateTrackPoint(point);
+        m_trackHistory[reportingConceptualWormId][point.frameNumber] = point;
     }
 
     //QString dmsg = QString("TM: WT %1 FN%2 | ").arg(reportingConceptualWormId).arg(frameNumber);
@@ -1594,8 +1598,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
         m_splitResolutionMap[frameNumber][signedWormId] = blobToAssign;
         // Annotate this worm's track point for this frame as a Split for downstream storage/visualization
         int unsignedWormId = getUnsignedWormId(signedWormId);
-        WormObject* wobj = m_wormObjectsMap.value(unsignedWormId, nullptr);
-        if (wobj) {
+        if (m_trackHistory.contains(unsignedWormId)) {
             Tracking::WormTrackPoint splitPoint;
             splitPoint.frameNumber = frameNumber;
             splitPoint.position = cv::Point2f(static_cast<float>(blobToAssign.centroid.x()), static_cast<float>(blobToAssign.centroid.y()));
@@ -1603,7 +1606,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
             splitPoint.quality = Tracking::qualityForFrame(Tracking::TrackerState::PausedForSplit,
                                                            /*hasValidBlob=*/true,
                                                            /*splitResolvedThisFrame=*/true);
-            wobj->updateTrackPoint(splitPoint);
+            m_trackHistory[unsignedWormId][splitPoint.frameNumber] = splitPoint;
         }
     } else {
         TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** NO VALID BLOB - GOING LOST ***").arg(signedWormId).arg(frameNumber);
@@ -1718,11 +1721,11 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
 
         locker.unlock();
         if (wasCancelled) {
-            m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
+            rebuildFinalTracks();
             if (!m_finalTracks.empty()) emit allTracksUpdated(m_finalTracks);
             emit trackingStatusUpdate("Tracking cancelled."); emit trackingCancelled();
         } else {
-            m_finalTracks.clear(); for (WormObject* w : m_wormObjectsMap.values()) { if(w) m_finalTracks[w->getId()] = w->getTrackHistory(); }
+            rebuildFinalTracks();
             emit allTracksUpdated(m_finalTracks);
             QString outputPath = trackWorkbookOutputPath();
             if (outputTracksToWorkbook(m_finalTracks, outputPath)) {

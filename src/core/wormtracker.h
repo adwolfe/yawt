@@ -82,9 +82,6 @@
 
 #include "trackingcommon.h" // Defines Tracking::DetectedBlob
 
-// Forward declaration
-// class WormObject; // Not directly used in this header's public interface
-
 class WormTracker : public QObject {
     Q_OBJECT
 

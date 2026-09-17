@@ -29,7 +29,7 @@
  * Key data structures:
  *  - FrameSpecificPhysicalBlob — per-frame merged-blob record used for merge/split logic.
  *  - m_frameMergeRecords, m_splitResolutionMap — per-frame maps for merge/split tracking.
- *  - m_wormObjectsMap, m_wormTrackersList — track history ownership and live workers.
+ *  - m_trackHistory, m_wormTrackersList — per-worm frame-keyed track history and live workers.
  */
  // trackingmanager.h
 #ifndef TRACKINGMANAGER_H
@@ -56,7 +56,7 @@
 #include <opencv2/videoio.hpp>
 
 #include "../data/trackingcommon.h"
-#include "../data/wormobject.h"
+#include <map>
 #include "processing/videoprocessor.h" // For VideoProcessor type, not direct instantiation here
 #include "wormtracker.h"    // For WormTracker type and enums
 #include "../data/trackingdatastorage.h" // Central data storage
@@ -300,6 +300,7 @@ private:
     void launchWormTrackers();
     void updateOverallProgress();
     void checkForAllTrackersFinished();
+    void rebuildFinalTracks();   // m_trackHistory -> m_finalTracks (sorted by frame)
     QString trackWorkbookOutputPath() const;
     bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
     void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData, const QString& outputPath) const;
@@ -349,7 +350,10 @@ private:
     cv::Size m_videoFrameSize;
 
     // Worm object and tracker management
-    QMap<int, WormObject*> m_wormObjectsMap; // Stores track history for each conceptual worm
+    // Track history while a run is in progress: conceptual wormId -> (frameNumber -> point).
+    // Keyed by frame so the forward and backward trackers can interleave and overwrite,
+    // and std::map yields the points in frame order when the final tracks are built.
+    QMap<int, std::map<int, Tracking::WormTrackPoint>> m_trackHistory;
     QList<WormTracker*> m_wormTrackersList;  // List of active tracker instances
     QMap<int, WormTracker*> m_wormIdToForwardTrackerInstanceMap;
     QMap<int, WormTracker*> m_wormIdToBackwardTrackerInstanceMap;
