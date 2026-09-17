@@ -33,7 +33,7 @@
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "../../data/trackingcommon.h" // Contains TrackedItem, DetectedBlob, etc.
+#include "../../data/trackingcommon.h" // Contains TableItems::ClickedItem, Tracking::DetectedBlob, etc.
 #include "../../data/trackingdatastorage.h" // Central data storage
 
 // Forward declarations
@@ -223,7 +223,7 @@ public slots:
 
     // --- Slots for Data Display from Models ---
     /**
-     * @brief Sets or updates the list of TrackedItems (blobs/worms) to be displayed.
+     * @brief Sets or updates the list of ClickedItems (worms, ROIs, reference points) to be displayed.
      * Called by MainWindow when the BlobTableModel changes.
      * @param items The list of items to display.
      */

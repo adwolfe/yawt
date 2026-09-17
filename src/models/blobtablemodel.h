@@ -7,7 +7,7 @@
 #include <QRectF>
 #include <QColor>
 #include <QSizeF> // Added for QSizeF
-#include "trackingcommon.h" // Contains TrackedItem and ItemType
+#include "trackingcommon.h" // Contains TableItems::ClickedItem and ItemType
 #include "trackingdatastorage.h" // Central data storage
 #include <limits> // For std::numeric_limits, good to have explicitly
 
@@ -66,14 +66,14 @@ public:
     bool removeRows(int position, int rows, const QModelIndex &parent = QModelIndex()) override;
 
     /**
-     * @brief Gets the TrackedItem at a specific row.
+     * @brief Gets the ClickedItem at a specific row.
      * @param row The row index.
-     * @return Const reference to TrackedItem. Throws std::out_of_range if row is invalid.
+     * @return Const reference to ClickedItem. Throws std::out_of_range if row is invalid.
      */
     const TableItems::ClickedItem& getItem(int row) const;
 
     /**
-     * @brief Gets a list of all TrackedItems.
+     * @brief Gets a list of all ClickedItems.
      * @return Const reference to the internal list of items.
      */
     const QList<TableItems::ClickedItem>& getAllItems() const;
@@ -102,7 +102,7 @@ signals:
     /**
      * @brief Emitted when the list of items in the model changes (add, remove, data modification).
      * This is the primary signal VideoLoader should connect to for display updates.
-     * @param allItems The complete current list of TrackedItems in the model.
+     * @param allItems The complete current list of ClickedItems in the model.
      *
      * NOTE: Color changes are now propagated via this bulk signal (itemsChanged) rather than a per-item
      * itemColorChanged signal. Consumers should rebuild any id->color maps from the supplied list.

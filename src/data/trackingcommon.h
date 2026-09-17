@@ -387,7 +387,7 @@ QList<QPointF> resampleCenterlinePoints(const std::vector<cv::Point2f>& points, 
  */
 QList<QPointF> extractResampledCenterlinePoints(const DetectedBlob& blob, int pointCount = 10);
 
-} // namespace TrackingHelper
+} // namespace Tracking
 
 
 
