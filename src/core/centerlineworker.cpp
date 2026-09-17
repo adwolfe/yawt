@@ -572,8 +572,8 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
     m_debugStore->setCenterlineFrame(record);
 }
 
-// 2-sweep / 5-step pipeline. See CENTERLINE_REWRITE_PLAN.md for the
-// full design. Structure:
+// 2-sweep / 5-step pipeline. docs/centerline_pipeline.md defines the
+// vocabulary (Phase A/B/C, Sweep, Step, D-1..D-4). Structure:
 //
 //   Sweep 0 — read-only walk over all non-merged, non-lost frames; build a
 //             throwaway skeleton centerline per frame; collect arc lengths;
