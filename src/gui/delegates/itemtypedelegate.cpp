@@ -22,10 +22,8 @@ QWidget *ItemTypeDelegate::createEditor(QWidget *parent,
         currentType == TableItems::ItemType::EndPoint) {
         types << itemTypeToString(TableItems::ItemType::StartPoint)
               << itemTypeToString(TableItems::ItemType::EndPoint);
-    } else if (currentType == TableItems::ItemType::Worm ||
-               currentType == TableItems::ItemType::Fix) {
-        types << itemTypeToString(TableItems::ItemType::Worm)
-              << itemTypeToString(TableItems::ItemType::Fix);
+    } else if (currentType == TableItems::ItemType::Worm) {
+        types << itemTypeToString(TableItems::ItemType::Worm);
     } else {
         types << currentTypeStr;
     }

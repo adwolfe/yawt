@@ -45,9 +45,7 @@ enum class ItemType {
     ROI,
     StartPoint,
     EndPoint,
-    ControlPoint,
     CenterPoint,
-    Fix, // For manual retracking of lost worms
     Undefined // Default or unassigned
 };
 
@@ -58,9 +56,7 @@ inline QString itemTypeToString(ItemType type) {
     case ItemType::ROI: return "ROI";
     case ItemType::StartPoint: return "Start Point";
     case ItemType::EndPoint: return "End Point";
-    case ItemType::ControlPoint: return "Control Point";
     case ItemType::CenterPoint: return "Center";
-    case ItemType::Fix: return "Fix";
     case ItemType::Undefined: return "Undefined";
     default: return "Unknown";
     }
@@ -71,9 +67,9 @@ inline ItemType stringToItemType(const QString& typeStr) {
     if (typeStr == "ROI") return ItemType::ROI;
     if (typeStr == "Start Point") return ItemType::StartPoint;
     if (typeStr == "End Point") return ItemType::EndPoint;
-    if (typeStr == "Control Point") return ItemType::ControlPoint;
+    if (typeStr == "Control Point") return ItemType::CenterPoint; // legacy name for the center reference point
     if (typeStr == "Center") return ItemType::CenterPoint;
-    if (typeStr == "Fix") return ItemType::Fix;
+    if (typeStr == "Fix") return ItemType::Worm;                // legacy: Fix items were tracked worms
     return ItemType::Undefined;
 }
 

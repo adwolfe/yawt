@@ -75,12 +75,7 @@ int TrackingDataStorage::addItem(const QPointF& centroid, const QRectF& bounding
     TableItems::ClickedItem newItem;
     newItem.id = m_nextId++;
     
-    // Assign special colors for Fix type blobs
-    if (type == TableItems::ItemType::Fix) {
-        newItem.color = QColor(255, 0, 0, 180); // Semi-transparent red for Fix blobs
-    } else {
-        newItem.color = getNextColor();
-    }
+    newItem.color = getNextColor();
     
     newItem.type = type;
     newItem.initialCentroid = centroid;
@@ -347,7 +342,6 @@ static bool isRoiPointType(TableItems::ItemType type) {
     return type == TableItems::ItemType::ROI ||
            type == TableItems::ItemType::StartPoint ||
            type == TableItems::ItemType::EndPoint ||
-           type == TableItems::ItemType::ControlPoint ||
            type == TableItems::ItemType::CenterPoint;
 }
 

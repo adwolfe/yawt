@@ -168,8 +168,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_wormProxyModel = new ItemTypeFilterProxyModel(this);
     m_wormProxyModel->setSourceModel(m_blobTableModel);
     m_wormProxyModel->setAllowedTypes(QSet<TableItems::ItemType>{
-        TableItems::ItemType::Worm,
-        TableItems::ItemType::Fix
+        TableItems::ItemType::Worm
     });
     ui->wormTableView->setModel(m_wormProxyModel);
 
@@ -179,7 +178,6 @@ MainWindow::MainWindow(QWidget *parent)
         TableItems::ItemType::ROI,
         TableItems::ItemType::StartPoint,
         TableItems::ItemType::EndPoint,
-        TableItems::ItemType::ControlPoint,
         TableItems::ItemType::CenterPoint
     });
     ui->roiTableView->setModel(m_referenceItemsProxy);
@@ -894,8 +892,7 @@ void MainWindow::setupConnections() {
             [this, toggleVisibilityForTypes](int logicalIndex) {
         if (logicalIndex != BlobTableModel::Column::Show) return;
         toggleVisibilityForTypes(QSet<TableItems::ItemType>{
-            TableItems::ItemType::Worm,
-            TableItems::ItemType::Fix
+            TableItems::ItemType::Worm
         });
     });
 
@@ -906,7 +903,7 @@ void MainWindow::setupConnections() {
             TableItems::ItemType::ROI,
             TableItems::ItemType::StartPoint,
             TableItems::ItemType::EndPoint,
-            TableItems::ItemType::ControlPoint
+            TableItems::ItemType::CenterPoint
         });
     });
 
@@ -955,7 +952,7 @@ void MainWindow::setupConnections() {
     // Initial call to setVisibleTrackIDs with all item IDs
     QSet<int> initialItemIDs;
     for (const auto& item : m_blobTableModel->getAllItems()) {
-        if (item.type == TableItems::ItemType::Worm || item.type == TableItems::ItemType::Fix) {
+        if (item.type == TableItems::ItemType::Worm) {
             initialItemIDs.insert(item.id);
         }
     }
@@ -1072,7 +1069,7 @@ void MainWindow::updateWormTimeline()
     QMap<int, QColor> idColors;
     const QList<TableItems::ClickedItem> items = m_blobTableModel->getAllItems();
     for (const auto& item : items) {
-        if (item.type == TableItems::ItemType::Worm || item.type == TableItems::ItemType::Fix) {
+        if (item.type == TableItems::ItemType::Worm) {
             idColors.insert(item.id, item.color);
         }
     }
@@ -2244,14 +2241,14 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
     if (m_trackingDataStorage) {
         const QList<TableItems::ClickedItem>& allItems = m_trackingDataStorage->getAllItems();
         for (const auto& item : allItems) {
-            if (item.type == TableItems::ItemType::Worm || item.type == TableItems::ItemType::Fix) {
+            if (item.type == TableItems::ItemType::Worm) {
                 wormItemIDs.insert(item.id);
             }
         }
     } else if (m_blobTableModel) {
         const QList<TableItems::ClickedItem>& allItems = m_blobTableModel->getAllItems();
         for (const auto& item : allItems) {
-            if (item.type == TableItems::ItemType::Worm || item.type == TableItems::ItemType::Fix) {
+            if (item.type == TableItems::ItemType::Worm) {
                 wormItemIDs.insert(item.id);
             }
         }

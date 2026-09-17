@@ -959,8 +959,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
     auto isPointItem = [](const TableItems::ClickedItem& item) {
         if (item.type == TableItems::ItemType::StartPoint ||
-            item.type == TableItems::ItemType::EndPoint ||
-            item.type == TableItems::ItemType::ControlPoint) {
+            item.type == TableItems::ItemType::EndPoint) {
             return true;
         }
         if (item.type == TableItems::ItemType::ROI) {

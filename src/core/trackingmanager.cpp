@@ -2613,7 +2613,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
     QJsonArray itemsArr;
     const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
     for (const TableItems::ClickedItem& item : items) {
-        if (item.type != TableItems::ItemType::Worm && item.type != TableItems::ItemType::Fix) {
+        if (item.type != TableItems::ItemType::Worm) {
             continue;
         }
         QJsonObject itemObj;
@@ -2847,7 +2847,7 @@ bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
         if (item.type != TableItems::ItemType::ROI &&
             item.type != TableItems::ItemType::StartPoint &&
             item.type != TableItems::ItemType::EndPoint &&
-            item.type != TableItems::ItemType::ControlPoint) {
+            item.type != TableItems::ItemType::CenterPoint) {
             continue;
         }
         QJsonObject itemObj;
@@ -3079,56 +3079,6 @@ void TrackingManager::clearProcessedVideoMemory() {
     emit trackingStatusUpdate(statusMessage);
 }
 
-
-bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath,
-                                           int wormId,
-                                           const QRectF& initialROI,
-                                           int startFrame,
-                                           int endFrame,
-                                           bool replaceExisting,
-                                           bool extendTrack) {
-    TRACKING_DEBUG() << "TrackingManager: Starting retracking process for Fix blob" << wormId
-                     << "from frame" << startFrame << "to" << endFrame
-                     << "using video:" << thresholdedVideoPath;
-
-    // Check if tracking is already running
-    if (m_isTrackingRunning) {
-        qWarning() << "TrackingManager: Cannot start retracking while main tracking is running";
-        return false;
-    }
-
-    // Validate parameters
-    if (thresholdedVideoPath.isEmpty() || !QFileInfo::exists(thresholdedVideoPath)) {
-        qWarning() << "TrackingManager: Thresholded video file does not exist:" << thresholdedVideoPath;
-        return false;
-    }
-
-    if (startFrame >= endFrame || startFrame < 0) {
-        qWarning() << "TrackingManager: Invalid frame range for retracking:" << startFrame << "to" << endFrame;
-        return false;
-    }
-
-    if (initialROI.isEmpty()) {
-        qWarning() << "TrackingManager: Invalid ROI for retracking";
-        return false;
-    }
-
-    // TODO: Implement the actual retracking logic here
-    // This would involve:
-    // 1. Opening the saved thresholded video
-    // 2. Creating a specialized tracker for the frame range
-    // 3. Running tracking on the specified frames
-    // 4. Integrating results with existing track data
-
-    // For now, provide placeholder feedback
-    qDebug() << "TrackingManager: Retracking process prepared but not yet fully implemented";
-    qDebug() << "TrackingManager: Parameters - ROI:" << initialROI
-             << "Replace:" << replaceExisting << "Extend:" << extendTrack;
-
-    emit trackingStatusUpdate(QString("Retracking for Fix Blob ID %1 completed (placeholder)").arg(wormId));
-
-    return true;
-}
 
 void TrackingManager::setCenterlineSnakeParams(const Centerline::CenterlineSnakeParams& params)
 {

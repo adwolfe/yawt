@@ -141,26 +141,6 @@ public:
      */
     ~TrackingManager();
     
-    // Retracking functionality
-    /**
-     * @brief Start a focused retracking on a pre-thresholded video segment for a specific blob.
-     * @param thresholdedVideoPath Path to the pre-processed (thresholded) video.
-     * @param wormId Identifier of the blob/track to fix.
-     * @param initialROI Initial ROI for retracking.
-     * @param startFrame Start frame index (inclusive).
-     * @param endFrame End frame index (exclusive).
-     * @param replaceExisting Whether to replace existing track data for this blob.
-     * @param extendTrack Whether to extend the existing track instead of replacing.
-     * @return true if the retracking process was launched; false otherwise.
-     */
-    bool startRetrackingProcess(const QString& thresholdedVideoPath,
-                               int wormId,
-                               const QRectF& initialROI,
-                               int startFrame,
-                               int endFrame,
-                               bool replaceExisting,
-                               bool extendTrack);
-
     void setUmPerPixel(double umPerPixel);   // spatial scale in micrometres per pixel
 
     /**
