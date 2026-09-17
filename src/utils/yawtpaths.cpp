@@ -16,10 +16,10 @@ QString YawtPaths::userPluginDir()
     return QDir(userDataDir()).filePath("plugins");
 }
 
-QString YawtPaths::projectPluginDir(const QString& yawtProjectDir)
+QString YawtPaths::projectPluginDir(const QString& dataDir)
 {
-    if (yawtProjectDir.isEmpty()) return {};
-    return QDir(yawtProjectDir).filePath("plugins");
+    if (dataDir.isEmpty()) return {};
+    return QDir(dataDir).filePath("plugins");
 }
 
 QString YawtPaths::bundledPluginDir()
@@ -36,12 +36,12 @@ QString YawtPaths::bundledPluginDir()
     return {};
 }
 
-QStringList YawtPaths::pluginSearchDirs(const QString& yawtProjectDir)
+QStringList YawtPaths::pluginSearchDirs(const QString& dataDir)
 {
     QStringList dirs;
     // Priority: project-level > user-level > bundled (read-only examples)
-    if (!yawtProjectDir.isEmpty())
-        dirs << projectPluginDir(yawtProjectDir);
+    if (!dataDir.isEmpty())
+        dirs << projectPluginDir(dataDir);
     dirs << userPluginDir();
     const QString bundled = bundledPluginDir();
     if (!bundled.isEmpty())
@@ -54,8 +54,8 @@ bool YawtPaths::ensureUserDirsExist()
     return QDir().mkpath(userDataDir()) && QDir().mkpath(userPluginDir());
 }
 
-bool YawtPaths::ensureProjectPluginDir(const QString& yawtProjectDir)
+bool YawtPaths::ensureProjectPluginDir(const QString& dataDir)
 {
-    if (yawtProjectDir.isEmpty()) return false;
-    return QDir().mkpath(projectPluginDir(yawtProjectDir));
+    if (dataDir.isEmpty()) return false;
+    return QDir().mkpath(projectPluginDir(dataDir));
 }

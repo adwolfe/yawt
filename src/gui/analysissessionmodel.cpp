@@ -56,7 +56,7 @@ Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& 
  *  2. Start point or end point absent from roi_points.json
  */
 QStringList AnalysisSessionModel::buildWarnings(const QString& procDir,
-                                                const QString& yawtDir,
+                                                const QString& dataDir,
                                                 const QString& baseName,
                                                 double umPerPixel)
 {
@@ -89,7 +89,7 @@ QStringList AnalysisSessionModel::buildWarnings(const QString& procDir,
             warnings << "Missing end point";
     }
 
-    Q_UNUSED(yawtDir)
+    Q_UNUSED(dataDir)
     Q_UNUSED(baseName)
     return warnings;
 }
@@ -140,14 +140,14 @@ void AnalysisSessionModel::recalcGroupColors(int g)
 // Persistence helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-QString AnalysisSessionModel::stateFilePath(const QString& yawtDir)
+QString AnalysisSessionModel::stateFilePath(const QString& dataDir)
 {
-    return QDir(yawtDir).absoluteFilePath("analysis_state.json");
+    return QDir(dataDir).absoluteFilePath("analysis_state.json");
 }
 
 void AnalysisSessionModel::saveState() const
 {
-    if (m_yawtDir.isEmpty()) return;
+    if (m_dataDir.isEmpty()) return;
 
     QJsonArray groupsArr;
     for (const auto& g : m_groups) {
@@ -173,7 +173,7 @@ void AnalysisSessionModel::saveState() const
     root["version"] = 1;
     root["groups"]  = groupsArr;
 
-    QFile f(stateFilePath(m_yawtDir));
+    QFile f(stateFilePath(m_dataDir));
     if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
@@ -199,13 +199,13 @@ void AnalysisSessionModel::scheduleStateSave()
  *  - A disk video not in the state at all is added to "Unassigned".
  */
 void AnalysisSessionModel::loadAndMergeState(
-    const QString& yawtDir,
+    const QString& dataDir,
     const QMap<QString, QPair<QString,QString>>& diskVideos)
 {
     // ── Load state file ───────────────────────────────────────────────────────
     QJsonObject root;
     {
-        QFile f(stateFilePath(yawtDir));
+        QFile f(stateFilePath(dataDir));
         if (f.open(QIODevice::ReadOnly)) {
             QJsonParseError err;
             const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
@@ -254,9 +254,9 @@ void AnalysisSessionModel::loadAndMergeState(
                 vid.baseName  = baseName;
                 vid.procDir   = diskProcDir;
                 vid.procStamp = diskStamp;
-                VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
-                VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
-                vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
+                VideoMetadataStore::loadUmPerPixel(dataDir, baseName, vid.umPerPixel);
+                VideoMetadataStore::loadFps(dataDir, baseName, vid.fps);
+                vid.warnings  = buildWarnings(diskProcDir, dataDir, baseName, vid.umPerPixel);
                 loadRoiReferencePoints(vid);
 
                 const bool reprocessed = (diskStamp != savedStamp);
@@ -312,9 +312,9 @@ void AnalysisSessionModel::loadAndMergeState(
         vid.baseName  = baseName;
         vid.procDir   = diskProcDir;
         vid.procStamp = diskStamp;
-        VideoMetadataStore::loadUmPerPixel(yawtDir, baseName, vid.umPerPixel);
-        VideoMetadataStore::loadFps(yawtDir, baseName, vid.fps);
-        vid.warnings  = buildWarnings(diskProcDir, yawtDir, baseName, vid.umPerPixel);
+        VideoMetadataStore::loadUmPerPixel(dataDir, baseName, vid.umPerPixel);
+        VideoMetadataStore::loadFps(dataDir, baseName, vid.fps);
+        vid.warnings  = buildWarnings(diskProcDir, dataDir, baseName, vid.umPerPixel);
         loadRoiReferencePoints(vid);
 
         for (int i = 0; i < wormIds.size(); ++i) {
@@ -344,13 +344,13 @@ AnalysisSessionModel::AnalysisSessionModel(QObject* parent)
     connect(m_saveTimer, &QTimer::timeout, this, &AnalysisSessionModel::saveState);
 }
 
-void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
+void AnalysisSessionModel::scanDataDirectory(const QString& dataDir)
 {
-    m_yawtDir = yawtDir;
+    m_dataDir = dataDir;
 
     // ── Build disk inventory: baseName → (procDir, procStamp) ────────────────
     QMap<QString, QPair<QString,QString>> diskVideos;
-    const QStringList videoDirs = QDir(yawtDir).entryList(
+    const QStringList videoDirs = QDir(dataDir).entryList(
         QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 
     emit directoryScanStarted(qMax(1, videoDirs.size()));
@@ -361,7 +361,7 @@ void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
                                    QStringLiteral("Scanning %1").arg(baseName));
         QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
 
-        const QString subDir  = QDir(yawtDir).absoluteFilePath(baseName);
+        const QString subDir  = QDir(dataDir).absoluteFilePath(baseName);
         const QString procDir = findMostRecentProc(subDir);
         if (procDir.isEmpty()) continue;
         const QString stamp   = QFileInfo(procDir).fileName().mid(5); // strip "PROC_"
@@ -372,7 +372,7 @@ void AnalysisSessionModel::scanYawtDirectory(const QString& yawtDir)
 
     // ── Merge with saved state (preserves group assignments) ─────────────────
     beginResetModel();
-    loadAndMergeState(yawtDir, diskVideos);
+    loadAndMergeState(dataDir, diskVideos);
 
     // Recalculate colors for every group
     for (int g = 0; g < m_groups.size(); ++g)

@@ -7,7 +7,7 @@
  * YawtPaths — canonical filesystem paths for user-level and per-project YAWT data.
  *
  * User-level dir (macOS): ~/Library/Application Support/yawt/
- * Per-project dir:        <yawtProjectDir>/plugins/
+ * Per-project dir:        <dataDir>/plugins/
  *
  * All ensure* helpers create the directory if it does not exist and return
  * true on success. Callers should check the return value before writing files.
@@ -24,20 +24,20 @@ public:
     static QString userPluginDir();
 
     /** Directory for plot plugins scoped to a specific yawt project. */
-    static QString projectPluginDir(const QString& yawtProjectDir);
+    static QString projectPluginDir(const QString& dataDir);
 
     /**
      * All plugin directories, in search order: project-level first (higher priority),
      * then user-level. Directories that do not yet exist are still included so callers
      * can display them even before the first plugin is installed.
      */
-    static QStringList pluginSearchDirs(const QString& yawtProjectDir = {});
+    static QStringList pluginSearchDirs(const QString& dataDir = {});
 
     /** Create the user data and user plugin directories. Returns true if both exist. */
     static bool ensureUserDirsExist();
 
     /** Create the project plugin directory. Returns true if it exists afterwards. */
-    static bool ensureProjectPluginDir(const QString& yawtProjectDir);
+    static bool ensureProjectPluginDir(const QString& dataDir);
 
     /**
      * Plugins bundled inside the macOS .app bundle (Contents/Resources/plugins/).

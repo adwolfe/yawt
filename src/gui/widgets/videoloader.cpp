@@ -2651,38 +2651,38 @@ double VideoLoader::getCacheHitRate() const {
 QString VideoLoader::createDataDirectory(const QString& videoFilePath) {
     QFileInfo videoInfo(videoFilePath);
     QString videoDirectory = videoInfo.absolutePath();
-    QString yawtDirPath = QDir(videoDirectory).absoluteFilePath("yawt");
+    QString dataDirPath = QDir(videoDirectory).absoluteFilePath("yawt");
 
     // Try to create the directory in the same folder as the video
-    QDir yawtDir(yawtDirPath);
-    if (!yawtDir.exists()) {
-        if (QDir().mkpath(yawtDirPath)) {
-            qDebug() << "Created yawt data directory:" << yawtDirPath;
-            return yawtDirPath;
+    QDir dataDir(dataDirPath);
+    if (!dataDir.exists()) {
+        if (QDir().mkpath(dataDirPath)) {
+            qDebug() << "Created data directory:" << dataDirPath;
+            return dataDirPath;
         } else {
-            qWarning() << "Failed to create yawt directory in video folder:" << yawtDirPath;
+            qWarning() << "Failed to create data directory in video folder:" << dataDirPath;
             qWarning() << "Falling back to user's home directory";
 
             // Fallback to user's home directory
             QString homeDirectory = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
-            QString fallbackYawtDir = QDir(homeDirectory).absoluteFilePath("yawt");
+            QString fallbackDataDir = QDir(homeDirectory).absoluteFilePath("yawt");
 
-            QDir fallbackDir(fallbackYawtDir);
+            QDir fallbackDir(fallbackDataDir);
             if (!fallbackDir.exists()) {
-                if (QDir().mkpath(fallbackYawtDir)) {
-                    qDebug() << "Created yawt data directory in home:" << fallbackYawtDir;
-                    return fallbackYawtDir;
+                if (QDir().mkpath(fallbackDataDir)) {
+                    qDebug() << "Created data directory in home:" << fallbackDataDir;
+                    return fallbackDataDir;
                 } else {
-                    qWarning() << "Failed to create yawt directory in home folder:" << fallbackYawtDir;
+                    qWarning() << "Failed to create data directory in home folder:" << fallbackDataDir;
                     return QString(); // Return empty string if all attempts fail
                 }
             } else {
-                qDebug() << "Using existing yawt data directory in home:" << fallbackYawtDir;
-                return fallbackYawtDir;
+                qDebug() << "Using existing data directory in home:" << fallbackDataDir;
+                return fallbackDataDir;
             }
         }
     } else {
-        qDebug() << "Using existing yawt data directory:" << yawtDirPath;
-        return yawtDirPath;
+        qDebug() << "Using existing data directory:" << dataDirPath;
+        return dataDirPath;
     }
 }

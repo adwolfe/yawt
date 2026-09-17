@@ -61,8 +61,8 @@ public:
     void setUmPerPixel(double umPerPixel);
     void setVideoFps(double fps);
 
-    /** Scan (or re-scan) all proc runs found under the given yawt directory. */
-    void setYawtDirectory(const QString& yawtDir, bool forceRescan = false);
+    /** Scan (or re-scan) all proc runs found under the given data directory (the yawt/ folder). */
+    void setDataDirectory(const QString& dataDir, bool forceRescan = false);
 
 public slots:
     void setSelectedWormIds(const QSet<int>& ids);
@@ -99,7 +99,7 @@ private:
     QSet<int>            m_selectedWormIds;
     double               m_umPerPixel  = 0.0;
     double               m_videoFps    = 0.0;
-    QString              m_yawtDir;
+    QString              m_dataDir;
 
     // Plugin plots — items beyond the built-in kPlotCount entries in the selector
     QList<PlotPluginSpec>                    m_plugins;

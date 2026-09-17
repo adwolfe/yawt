@@ -284,7 +284,7 @@ signals:
 
     /**
      * @brief Emitted when the data directory is created or changed.
-     * @param directoryPath The path to the yawt data directory.
+     * @param directoryPath The path to the data directory.
      */
     void dataDirectoryChanged(const QString& directoryPath);
 

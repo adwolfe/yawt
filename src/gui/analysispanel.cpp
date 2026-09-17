@@ -110,7 +110,7 @@ AnalysisPanel::AnalysisPanel(TrackingDataStorage* storage, QObject* parent)
 {
     // The Analysis tab is intentionally decoupled from the Processing tab's
     // real-time storage signals.  The session model is populated from disk only
-    // at well-defined moments (setYawtDirectory), never on every worm-click.
+    // at well-defined moments (setDataDirectory), never on every worm-click.
 }
 
 void AnalysisPanel::setup(const Widgets& widgets)
@@ -145,11 +145,11 @@ void AnalysisPanel::setup(const Widgets& widgets)
         w.wormListView->setItemDelegate(new AnalysisWarningDelegate(w.wormListView));
     }
 
-    // ↻ button → force rescan of the yawt directory
+    // ↻ button → force rescan of the data directory
     if (w.refreshBtn) {
         connect(w.refreshBtn, &QPushButton::clicked, this, [this]() {
-            if (!m_yawtDir.isEmpty())
-                setYawtDirectory(m_yawtDir, true);
+            if (!m_dataDir.isEmpty())
+                setDataDirectory(m_dataDir, true);
         });
     }
 
@@ -220,13 +220,13 @@ void AnalysisPanel::setup(const Widgets& widgets)
                 this, propagateAll);
 }
 
-void AnalysisPanel::setYawtDirectory(const QString& yawtDir, bool forceRescan)
+void AnalysisPanel::setDataDirectory(const QString& dataDir, bool forceRescan)
 {
-    if (yawtDir.isEmpty() || !m_sessionModel) return;
-    if (!forceRescan && yawtDir == m_yawtDir) return;
+    if (dataDir.isEmpty() || !m_sessionModel) return;
+    if (!forceRescan && dataDir == m_dataDir) return;
 
-    m_yawtDir = yawtDir;
-    m_sessionModel->scanYawtDirectory(yawtDir);
+    m_dataDir = dataDir;
+    m_sessionModel->scanDataDirectory(dataDir);
     if (w.wormListView) {
         w.wormListView->collapseAll();
         const int groupCount = m_sessionModel->rowCount();
@@ -252,7 +252,7 @@ void AnalysisPanel::loadPlugins()
         delete w.plotSelector->takeItem(kPlotCount);
 
     // Load plugins from all search dirs (project > user > bundled)
-    const QStringList searchDirs = YawtPaths::pluginSearchDirs(m_yawtDir);
+    const QStringList searchDirs = YawtPaths::pluginSearchDirs(m_dataDir);
     const QList<PlotPluginSpec> loadedPlugins = PluginLoader::loadAll(searchDirs);
     m_plugins.clear();
 

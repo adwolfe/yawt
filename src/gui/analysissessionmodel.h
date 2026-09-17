@@ -95,8 +95,8 @@ public:
     // ── Construction / population ─────────────────────────────────────────────
     explicit AnalysisSessionModel(QObject* parent = nullptr);
 
-    /** Scan a yawt directory, populate "Unassigned" with all found proc runs. */
-    void scanYawtDirectory(const QString& yawtDir);
+    /** Scan a data directory (the yawt/ folder beside the videos), populate "Unassigned" with all found proc runs. */
+    void scanDataDirectory(const QString& dataDir);
 
     /** Add a user-named group at the end of the group list. */
     void addGroup(const QString& name);
@@ -150,7 +150,7 @@ signals:
     /** Emitted whenever any worm's checked state changes. */
     void checkedWormIdsChanged();
 
-    /** Emitted while scanning the yawt analysis directory. */
+    /** Emitted while scanning the data directory. */
     void directoryScanStarted(int totalSteps);
     void directoryScanProgress(int currentStep, int totalSteps, const QString& message);
     void directoryScanFinished();
@@ -188,7 +188,7 @@ private:
     static Tracking::AllWormTracks   loadTracksFromJson(const QString& wormsJsonPath);
     static QString                   findMostRecentProc(const QString& videoSubDir);
     static QStringList               buildWarnings(const QString& procDir,
-                                                   const QString& yawtDir,
+                                                   const QString& dataDir,
                                                    const QString& baseName,
                                                    double umPerPixel);
     static void                      loadRoiReferencePoints(VideoItem& vid);
@@ -196,15 +196,15 @@ private:
     static QIcon      makeColorIcon(const QColor& c);
 
     // Persistence helpers
-    static QString    stateFilePath(const QString& yawtDir);
+    static QString    stateFilePath(const QString& dataDir);
     void              saveState() const;
     void              loadAndMergeState(
-                          const QString& yawtDir,
+                          const QString& dataDir,
                           const QMap<QString, QPair<QString,QString>>& diskVideos);
     void              scheduleStateSave();   // debounced, for check-state changes
 
     QList<GroupItem> m_groups;
-    QString          m_yawtDir;              // set during scan, used for auto-save
+    QString          m_dataDir;              // set during scan, used for auto-save
     QTimer*          m_saveTimer = nullptr;  // debounce timer for check-state saves
     quint64          m_dataRevision = 1;
     quint64          m_checkRevision = 1;

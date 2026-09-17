@@ -559,9 +559,9 @@ void MainWindow::setupConnections() {
     connect(ui->dirSelected, &QLineEdit::textChanged,
             this, [this](const QString& dir) {
         if (!m_analysisPanel || dir.isEmpty()) return;
-        const QString yawtDir = QDir(dir).absoluteFilePath("yawt");
-        if (QDir(yawtDir).exists())
-            m_analysisPanel->setYawtDirectory(yawtDir);
+        const QString dataDir = QDir(dir).absoluteFilePath("yawt");
+        if (QDir(dataDir).exists())
+            m_analysisPanel->setDataDirectory(dataDir);
     });
 
     // VideoLoader basic signals
@@ -1516,12 +1516,12 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
         return false;
     }
 
-    QDir yawtDir(yawtPath);
-    if (!yawtDir.cdUp()) {
+    QDir dataDir(yawtPath);
+    if (!dataDir.cdUp()) {
         QMessageBox::warning(this, "Load Run", "Could not locate the video directory above 'yawt'.");
         return false;
     }
-    QString videoDirPath = yawtDir.absolutePath();
+    QString videoDirPath = dataDir.absolutePath();
 
     QString videoBaseName = QFileInfo(procDir.absolutePath()).dir().dirName();
     QDir videoDir(videoDirPath);
@@ -1627,10 +1627,10 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
 
     if (m_analysisPanel) {
         m_analysisPanel->setVideoFps(m_videoFps);
-        // Trigger a (re-)scan of the yawt directory so the Analysis tree reflects
+        // Trigger a (re-)scan of the data directory so the Analysis tree reflects
         // all available proc runs for this video's sibling videos.
         if (!m_currentVideoDataDir.isEmpty())
-            m_analysisPanel->setYawtDirectory(m_currentVideoDataDir);
+            m_analysisPanel->setDataDirectory(m_currentVideoDataDir);
     }
 }
 
@@ -2078,9 +2078,9 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     // Mark that we have completed tracking
     m_hasCompletedTracking = true;
 
-    // Re-scan the yawt directory so the Analysis tree picks up the new proc folder.
+    // Re-scan the data directory so the Analysis tree picks up the new proc folder.
     if (m_analysisPanel && !m_currentVideoDataDir.isEmpty())
-        m_analysisPanel->setYawtDirectory(m_currentVideoDataDir, true);
+        m_analysisPanel->setDataDirectory(m_currentVideoDataDir, true);
 
     statusBar()->showMessage("Tracking completed", 4000);
 
@@ -2387,7 +2387,7 @@ void MainWindow::runDebugExport(bool silent)
     const QString dataDir = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
     if (dataDir.isEmpty()) {
         if (!silent) QMessageBox::warning(this, "Export Process",
-            "No yawt data directory available. Load a video first.");
+            "No data directory available. Load a video first.");
         return;
     }
 
