@@ -63,7 +63,7 @@ struct Document {
     QString videoPath;
     int     keyFrame = -1;
     Metrics metrics;
-    QList<TableItems::ClickedItem> items;                        // worm items
+    QList<TableItems::AnnotationItem> items;                        // worm items
     Tracking::AllWormTracks tracks;                              // sorted by frame after read
     QMap<int, QMap<int, Tracking::DetectedBlob>> blobsByFrame;   // frame -> wormId -> blob (filled on read)
     QMap<int, QList<QList<int>>> mergeGroupsByFrame;
@@ -79,8 +79,8 @@ struct Document {
 };
 
 // ── Element codecs (shared by worms.json and roi_points.json) ────────────────
-QJsonObject itemToJson(const TableItems::ClickedItem& item);
-TableItems::ClickedItem itemFromJson(const QJsonObject& obj);
+QJsonObject itemToJson(const TableItems::AnnotationItem& item);
+TableItems::AnnotationItem itemFromJson(const QJsonObject& obj);
 
 QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
                              const Tracking::DetectedBlob* blob);
@@ -103,8 +103,8 @@ bool read(const QString& filePath, Document& outDoc, QString* error = nullptr);
 
 // ── roi_points.json ──────────────────────────────────────────────────────────
 bool writeRoiPoints(const QString& filePath, const QString& videoPath, int keyFrame,
-                    const QList<TableItems::ClickedItem>& items, QString* error = nullptr);
-QList<TableItems::ClickedItem> readRoiPoints(const QString& filePath);
+                    const QList<TableItems::AnnotationItem>& items, QString* error = nullptr);
+QList<TableItems::AnnotationItem> readRoiPoints(const QString& filePath);
 
 // ── Light readers for the Analysis tab ───────────────────────────────────────
 QList<int>              readWormIds(const QString& filePath);

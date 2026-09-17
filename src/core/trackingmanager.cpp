@@ -1871,11 +1871,11 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         stringCell("PositionY")
     });
 
-    const TableItems::ClickedItem* startPoint = nullptr;
-    const TableItems::ClickedItem* endPoint = nullptr;
+    const TableItems::AnnotationItem* startPoint = nullptr;
+    const TableItems::AnnotationItem* endPoint = nullptr;
     if (m_storage) {
-        const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
-        for (const TableItems::ClickedItem& item : items) {
+        const QList<TableItems::AnnotationItem>& items = m_storage->getAllItems();
+        for (const TableItems::AnnotationItem& item : items) {
             if (item.type == TableItems::ItemType::StartPoint) {
                 startPoint = &item;
             } else if (item.type == TableItems::ItemType::EndPoint) {
@@ -1884,7 +1884,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         }
     }
 
-    const auto appendPointRow = [&startEndRows](const TableItems::ClickedItem* item) {
+    const auto appendPointRow = [&startEndRows](const TableItems::AnnotationItem* item) {
         if (!item) {
             return;
         }
@@ -2677,7 +2677,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
     doc.metrics.minObservedAspectRatio = m_storage->getMinObservedAspectRatio();
     doc.metrics.maxObservedAspectRatio = m_storage->getMaxObservedAspectRatio();
 
-    for (const TableItems::ClickedItem& item : m_storage->getAllItems()) {
+    for (const TableItems::AnnotationItem& item : m_storage->getAllItems()) {
         if (item.type == TableItems::ItemType::Worm) doc.items.append(item);
     }
     doc.tracks = m_storage->getAllTracks();
@@ -2713,8 +2713,8 @@ bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
         return false;
     }
 
-    QList<TableItems::ClickedItem> referenceItems;
-    for (const TableItems::ClickedItem& item : m_storage->getAllItems()) {
+    QList<TableItems::AnnotationItem> referenceItems;
+    for (const TableItems::AnnotationItem& item : m_storage->getAllItems()) {
         if (item.type == TableItems::ItemType::ROI ||
             item.type == TableItems::ItemType::StartPoint ||
             item.type == TableItems::ItemType::EndPoint ||

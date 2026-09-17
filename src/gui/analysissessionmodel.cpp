@@ -97,7 +97,7 @@ QStringList AnalysisSessionModel::buildWarnings(const QString& runDir,
 void AnalysisSessionModel::loadRoiReferencePoints(RunItem& vid)
 {
     const QString roiPath = QDir(vid.runDir).absoluteFilePath("roi_points.json");
-    for (const TableItems::ClickedItem& item : WormsJson::readRoiPoints(roiPath)) {
+    for (const TableItems::AnnotationItem& item : WormsJson::readRoiPoints(roiPath)) {
         const QPointF pt = item.initialCentroid;
         switch (item.type) {
         case TableItems::ItemType::StartPoint:  vid.hasStartPoint  = true; vid.startPoint  = pt; break;

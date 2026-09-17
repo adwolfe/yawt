@@ -10,7 +10,7 @@
  *
  * Typical flows:
  *  1) Direct start:
- *     - beginTrackingFromModel(...) builds InitialWormInfo from BlobTableModel
+ *     - beginTrackingFromModel(...) builds InitialWormInfo from AnnotationTableModel
  *       (optionally filtering items already tracked) and invokes TrackingManager.
  *  2) Dialog-driven:
  *     - showTrackingDialog(...) creates a controller-owned dialog, connects its
@@ -31,8 +31,8 @@
 #include "trackingmanager.h"
 #include "../data/trackingdatastorage.h"
 #include "../debug/debugdatastore.h"
-#include "../models/blobtablemodel.h"
 #include "../models/annotationtablemodel.h"
+#include "../models/lostsegmenttablemodel.h"
 #include "../gui/trackingprogressdialog.h"
 #include <QWidget>
 #include <QMessageBox>
@@ -59,8 +59,8 @@ AppController::AppController(TrackingDataStorage* storage, QObject* parent)
     }
     // Ensure manager/models are created if they weren't created by initWithNewStorage
     if (!m_storage) initWithNewStorage();
-    if (!m_blobModel) m_blobModel = new BlobTableModel(m_storage, this);
     if (!m_annotationModel) m_annotationModel = new AnnotationTableModel(m_storage, this);
+    if (!m_lostSegmentModel) m_lostSegmentModel = new LostSegmentTableModel(m_storage, this);
     if (!m_manager) {
         if (!m_debugStore) {
             m_debugStore = new Debug::DebugDataStore();
@@ -72,7 +72,7 @@ AppController::AppController(TrackingDataStorage* storage, QObject* parent)
 
 AppController::~AppController()
 {
-    // QObject parent-child will delete owned children (m_manager, m_blobModel, m_annotationModel, m_storage if created with 'this' parent).
+    // QObject parent-child will delete owned children (m_manager, m_annotationModel, m_lostSegmentModel, m_storage if created with 'this' parent).
     // If m_storage was provided by caller, we do not delete it here (it may not be parented to us).
     delete m_debugStore;
     YAWT_DEBUG(lcCoreAppController) << "AppController destroyed";
@@ -94,11 +94,11 @@ void AppController::initWithNewStorage()
     }
 
     // Create application models that adapt the storage to views
-    if (!m_blobModel) {
-        m_blobModel = new BlobTableModel(m_storage, this);
-    }
     if (!m_annotationModel) {
         m_annotationModel = new AnnotationTableModel(m_storage, this);
+    }
+    if (!m_lostSegmentModel) {
+        m_lostSegmentModel = new LostSegmentTableModel(m_storage, this);
     }
 }
 
@@ -130,14 +130,14 @@ void AppController::connectTrackingManagerSignals()
             this, &AppController::onTrackingManagerAllTracksUpdated);
 }
 
-BlobTableModel* AppController::blobTableModel() const
-{
-    return m_blobModel;
-}
-
 AnnotationTableModel* AppController::annotationTableModel() const
 {
     return m_annotationModel;
+}
+
+LostSegmentTableModel* AppController::lostSegmentTableModel() const
+{
+    return m_lostSegmentModel;
 }
 
 TrackingDataStorage* AppController::trackingDataStorage() const
@@ -150,17 +150,17 @@ Debug::DebugDataStore* AppController::debugDataStore() const
     return m_debugStore;
 }
 
-void AppController::addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame)
+void AppController::addItemFromBlob(const Tracking::DetectedBlob& blob, int frame)
 {
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "addBlobFromVideo: blob model not available";
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "addItemFromBlob: annotation model not available";
         return;
     }
 
     // Use the same semantics as MainWindow: add as Worm item
-    bool added = m_blobModel->addItem(blob.centroid, blob.boundingBox, frame, TableItems::ItemType::Worm);
+    bool added = m_annotationModel->addItem(blob.centroid, blob.boundingBox, frame, TableItems::ItemType::Worm);
     if (!added) {
-        qWarning() << "AppController::addBlobFromVideo: addItem returned false";
+        qWarning() << "AppController::addItemFromBlob: addItem returned false";
     } else {
         // Optionally notify consumers that storage changed (UI uses model signals, so this is not strictly necessary)
         // emit trackingStatusMessage(QString("Added worm blob at frame %1").arg(frame));
@@ -169,59 +169,59 @@ void AppController::addBlobFromVideo(const Tracking::DetectedBlob& blob, int fra
 
 void AppController::addRoi(const QRectF& roi, int frame)
 {
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "addRoi: blob model not available";
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "addRoi: annotation model not available";
         return;
     }
 
-    bool added = m_blobModel->addItem(QPointF(roi.x() + roi.width() / 2.0, roi.y() + roi.height() / 2.0),
+    bool added = m_annotationModel->addItem(QPointF(roi.x() + roi.width() / 2.0, roi.y() + roi.height() / 2.0),
                                       roi, frame, TableItems::ItemType::ROI);
     if (!added) {
         qWarning() << "AppController::addRoi: addItem(ROI) returned false";
     }
 }
 
-void AppController::removeAllBlobs()
+void AppController::removeAllItems()
 {
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "removeAllBlobs: blob model not available";
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "removeAllItems: annotation model not available";
         return;
     }
 
     // Remove all rows from the model. Use model API to ensure proper notifications.
-    int rowCount = m_blobModel->rowCount();
+    int rowCount = m_annotationModel->rowCount();
     if (rowCount > 0) {
-        m_blobModel->removeRows(0, rowCount);
+        m_annotationModel->removeRows(0, rowCount);
     }
 }
 
-void AppController::deleteBlobById(int id)
+void AppController::deleteItemById(int id)
 {
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "deleteBlobById: blob model not available";
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "deleteItemById: annotation model not available";
         return;
     }
 
     // Find the row index matching the given id
-    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
+    const QList<TableItems::AnnotationItem>& items = m_annotationModel->getAllItems();
     for (int i = 0; i < items.size(); ++i) {
         if (items[i].id == id) {
-            if (!m_blobModel->removeRows(i, 1)) {
-                YAWT_WARN(lcCoreAppController) << "deleteBlobById: failed to remove row" << i;
+            if (!m_annotationModel->removeRows(i, 1)) {
+                YAWT_WARN(lcCoreAppController) << "deleteItemById: failed to remove row" << i;
             }
             return;
         }
     }
-    qWarning() << "AppController::deleteBlobById: item id" << id << "not found";
+    qWarning() << "AppController::deleteItemById: item id" << id << "not found";
 }
 
 void AppController::setRoiSizeMultiplier(double factor)
 {
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "setRoiSizeMultiplier: blob model not available";
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "setRoiSizeMultiplier: annotation model not available";
         return;
     }
-    m_blobModel->updateRoiSizeMultiplier(factor);
+    m_annotationModel->updateRoiSizeMultiplier(factor);
 }
 
 void AppController::setUmPerPixel(double umPerPixel)
@@ -325,12 +325,12 @@ void AppController::onTrackingManagerCenterlineFinished()
     emit centerlineFinished();
 }
 
-// Build vector<InitialWormInfo> from BlobTableModel, optionally filtering out items that already have tracks.
+// Build vector<InitialWormInfo> from AnnotationTableModel, optionally filtering out items that already have tracks.
 std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel(bool onlyTrackMissing) const
 {
     std::vector<Tracking::InitialWormInfo> result;
-    if (!m_blobModel) {
-        qWarning() << "AppController::buildInitialWormsFromModel: blob model not available";
+    if (!m_annotationModel) {
+        qWarning() << "AppController::buildInitialWormsFromModel: annotation model not available";
         return result;
     }
 
@@ -340,9 +340,9 @@ std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel
         itemsWithTracks = m_storage->getWormsWithTracks();
     }
 
-    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
+    const QList<TableItems::AnnotationItem>& items = m_annotationModel->getAllItems();
     result.reserve(items.size());
-    for (const TableItems::ClickedItem& it : items) {
+    for (const TableItems::AnnotationItem& it : items) {
         if (it.type != TableItems::ItemType::Worm) continue;
         if (onlyTrackMissing && itemsWithTracks.contains(it.id)) continue;
 
@@ -360,8 +360,8 @@ bool AppController::validateAndGetSharedKeyframe(bool onlyTrackMissing, int& out
     outKeyFrame = -1;
     outError.clear();
 
-    if (!m_blobModel) {
-        outError = "Internal error: blob model missing.";
+    if (!m_annotationModel) {
+        outError = "Internal error: annotation model missing.";
         return false;
     }
 
@@ -369,11 +369,11 @@ bool AppController::validateAndGetSharedKeyframe(bool onlyTrackMissing, int& out
     if (onlyTrackMissing && m_storage)
         itemsWithTracks = m_storage->getWormsWithTracks();
 
-    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
+    const QList<TableItems::AnnotationItem>& items = m_annotationModel->getAllItems();
     int sharedKeyframe = -2; // sentinel: no worm seen yet
     QStringList conflictDesc;
 
-    for (const TableItems::ClickedItem& it : items) {
+    for (const TableItems::AnnotationItem& it : items) {
         if (it.type != TableItems::ItemType::Worm) continue;
         if (onlyTrackMissing && itemsWithTracks.contains(it.id)) continue;
 
@@ -413,9 +413,9 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
         emit trackingFailed("Internal error: TrackingManager missing");
         return;
     }
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "beginTrackingFromModel: BlobTableModel not available";
-        emit trackingFailed("Internal error: Blob model missing");
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "beginTrackingFromModel: AnnotationTableModel not available";
+        emit trackingFailed("Internal error: Annotation model missing");
         return;
     }
 
@@ -439,10 +439,10 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
 
 int AppController::countWormItems() const
 {
-    if (!m_blobModel) return 0;
+    if (!m_annotationModel) return 0;
     int cnt = 0;
-    const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
-    for (const TableItems::ClickedItem& it : items) {
+    const QList<TableItems::AnnotationItem>& items = m_annotationModel->getAllItems();
+    for (const TableItems::AnnotationItem& it : items) {
         if (it.type == TableItems::ItemType::Worm) ++cnt;
     }
     return cnt;
@@ -529,10 +529,10 @@ void AppController::onDialogBeginRequested()
         if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: TrackingManager missing");
         return;
     }
-    if (!m_blobModel) {
-        YAWT_WARN(lcCoreAppController) << "onDialogBeginRequested: BlobTableModel not available";
-        emit trackingFailed("Internal error: Blob model missing");
-        if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: Blob model missing");
+    if (!m_annotationModel) {
+        YAWT_WARN(lcCoreAppController) << "onDialogBeginRequested: AnnotationTableModel not available";
+        emit trackingFailed("Internal error: Annotation model missing");
+        if (m_trackingDialog) m_trackingDialog->onTrackingFailed("Internal error: Annotation model missing");
         return;
     }
 

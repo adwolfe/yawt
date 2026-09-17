@@ -1,264 +1,392 @@
 #include "annotationtablemodel.h"
-#include "../data/trackingdatastorage.h"
+#include <stdexcept> // For std::out_of_range
 #include <QDebug>
+#include <QtMath> // For qMax, qMin, qSqrt, etc.
+#include <limits> // For std::numeric_limits
+
+// Adjusted includes for refactored layout
+#include "../data/trackingdatastorage.h"
+#include "../data/trackingcommon.h"
 #include "../utils/loggingcategories.h"
-#include <algorithm>
 
-AnnotationTableModel::AnnotationTableModel(TrackingDataStorage* storage, QObject* parent)
-    : QAbstractTableModel(parent), m_storage(nullptr)
+AnnotationTableModel::AnnotationTableModel(TrackingDataStorage* storage, QObject *parent)
+    : QAbstractTableModel(parent),
+    m_storage(storage)
 {
-    setStorage(storage);
-}
-
-void AnnotationTableModel::setStorage(TrackingDataStorage* storage) {
-    if (m_storage == storage) {
-        return; // No change
-    }
-    
-    beginResetModel();
-    
-    // Disconnect from old storage
-    disconnectStorageSignals();
-    
-    m_storage = storage;
-    m_annotations.clear();
-    
-    // Connect to new storage and populate data
-    if (m_storage) {
-        connectStorageSignals();
-        populateLostAnnotations();
-    }
-    
-    endResetModel();
-}
-
-void AnnotationTableModel::connectStorageSignals() {
-    if (!m_storage) return;
-    
-    connect(m_storage, &TrackingDataStorage::trackAdded, 
-            this, &AnnotationTableModel::onTrackingDataChanged);
-    connect(m_storage, &TrackingDataStorage::trackRemoved, 
-            this, &AnnotationTableModel::onTrackingDataChanged);
-    connect(m_storage, &TrackingDataStorage::allDataChanged, 
-            this, &AnnotationTableModel::onAllDataChanged);
-}
-
-void AnnotationTableModel::disconnectStorageSignals() {
-    if (!m_storage) return;
-    
-    disconnect(m_storage, &TrackingDataStorage::trackAdded, 
-               this, &AnnotationTableModel::onTrackingDataChanged);
-    disconnect(m_storage, &TrackingDataStorage::trackRemoved, 
-               this, &AnnotationTableModel::onTrackingDataChanged);
-    disconnect(m_storage, &TrackingDataStorage::allDataChanged, 
-               this, &AnnotationTableModel::onAllDataChanged);
-}
-
-void AnnotationTableModel::refreshAnnotations() {
-    if (!m_storage) {
-        clearAnnotations();
-        return;
-    }
-    
-    beginResetModel();
-    m_annotations.clear();
-    populateLostAnnotations();
-    endResetModel();
-}
-
-void AnnotationTableModel::clearAnnotations() {
-    beginResetModel();
-    m_annotations.clear();
-    endResetModel();
-}
-
-void AnnotationTableModel::populateLostAnnotations() {
-    if (!m_storage) return;
-    
-    // Get all worm IDs that have tracks
-    QSet<int> wormIds = m_storage->getWormsWithTracks();
-    
-    for (int wormId : wormIds) {
-        // Get lost tracking segments for this worm
-        QList<QPair<int, int>> lostSegments = m_storage->getLostTrackingSegments(wormId);
-        
-        for (const auto& segment : lostSegments) {
-            m_annotations.append(AnnotationEntry(wormId, AnnotationType::Lost, 
-                                               segment.first, segment.second));
-        }
-    }
-    
-    // Sort annotations by worm ID, then by start frame
-    std::sort(m_annotations.begin(), m_annotations.end());
-    
-    YAWT_DEBUG(lcModelsAnnotationTable) << "AnnotationTableModel: Populated" << m_annotations.size() << "lost tracking annotations";
-}
-
-// QAbstractTableModel interface implementation
-int AnnotationTableModel::rowCount(const QModelIndex& parent) const {
-    Q_UNUSED(parent)
-    return m_annotations.size();
-}
-
-int AnnotationTableModel::columnCount(const QModelIndex& parent) const {
-    Q_UNUSED(parent)
-    return ColumnCount;
-}
-
-QVariant AnnotationTableModel::data(const QModelIndex& index, int role) const {
-    if (!index.isValid() || index.row() >= m_annotations.size()) {
-        return QVariant();
-    }
-    
-    const AnnotationEntry& annotation = m_annotations.at(index.row());
-    
-    switch (role) {
-    case Qt::DisplayRole:
-        switch (index.column()) {
-        case ID:
-            return annotation.wormId;
-        case Type:
-            return annotationTypeToString(annotation.type);
-        case Frames:
-            return formatFrameRange(annotation.startFrame, annotation.endFrame);
-        default:
-            return QVariant();
-        }
-        
-    case Qt::TextAlignmentRole:
-        switch (index.column()) {
-        case ID:
-            return Qt::AlignCenter;
-        case Type:
-            return Qt::AlignCenter;
-        case Frames:
-            return Qt::AlignCenter;
-        default:
-            return Qt::AlignLeft;
-        }
-        
-    case Qt::ToolTipRole:
-        switch (index.column()) {
-        case ID:
-            return QString("Worm/Track ID: %1\nClick row to navigate to frame %2")
-                   .arg(annotation.wormId).arg(annotation.startFrame);
-        case Type:
-            return QString("Type of tracking annotation: %1\nClick row to navigate to frame %2")
-                   .arg(annotationTypeToString(annotation.type)).arg(annotation.startFrame);
-        case Frames:
-            if (annotation.startFrame == annotation.endFrame) {
-                return QString("Lost tracking on frame %1\nClick to navigate to this frame")
-                       .arg(annotation.startFrame);
-            } else {
-                return QString("Lost tracking from frame %1 to %2 (%3 frames)\nClick to navigate to frame %1")
-                       .arg(annotation.startFrame)
-                       .arg(annotation.endFrame)
-                       .arg(annotation.endFrame - annotation.startFrame + 1);
-            }
-        default:
-            return QVariant();
-        }
-    case Qt::BackgroundRole:
-        // Provide subtle background colors for different annotation types
-        switch (annotation.type) {
-        case AnnotationType::Lost:
-            // Light red background for lost tracking
-            return QColor(255, 240, 240); // Very light red
-        default:
-            return QVariant();
-        }
-        
-    default:
-        return QVariant();
-    }
+    // Connect to storage signals
+    connect(m_storage, &TrackingDataStorage::itemAdded, this, &AnnotationTableModel::onStorageItemAdded);
+    connect(m_storage, &TrackingDataStorage::itemRemoved, this, &AnnotationTableModel::onStorageItemRemoved);
+    connect(m_storage, &TrackingDataStorage::itemChanged, this, &AnnotationTableModel::onStorageItemChanged);
+    connect(m_storage, &TrackingDataStorage::itemVisibilityChanged, this, &AnnotationTableModel::onStorageItemVisibilityChanged);
+    // Per-item color signal removed; consumers receive color updates via bulk itemsChanged emitted by storage.
+    connect(m_storage, &TrackingDataStorage::allDataChanged, this, &AnnotationTableModel::onStorageAllDataChanged);
+    connect(m_storage, &TrackingDataStorage::globalMetricsUpdated, this, &AnnotationTableModel::onStorageGlobalMetricsUpdated);
 }
 
 QVariant AnnotationTableModel::headerData(int section, Qt::Orientation orientation, int role) const {
     if (orientation != Qt::Horizontal) {
         return QVariant();
     }
+
+    if (role == Qt::DisplayRole) {
+        switch (static_cast<Column>(section)) {
+        case Column::Show:      return "Show";
+        case Column::ID:        return "ID";
+        case Column::Color:     return "Color";
+        case Column::Type:      return "Type";
+        case Column::Frame:     return "Frame";
+        case Column::CentroidX: return "X";
+        case Column::CentroidY: return "Y";
+        default:                return QVariant();
+        }
+    } else if (role == Qt::CheckStateRole && static_cast<Column>(section) == Column::Show) {
+        // Support checkbox in header for the Show column
+        // Count how many items are visible to determine header check state
+        const QList<TableItems::AnnotationItem>& items = m_storage->getAllItems();
+        int visibleCount = 0;
+        for (const auto& item : items) {
+            if (item.visible) {
+                visibleCount++;
+            }
+        }
+        
+        if (items.isEmpty()) {
+            return QVariant(); // No items, no checkbox state
+        } else if (visibleCount == 0) {
+            return Qt::Unchecked;
+        } else if (visibleCount == items.count()) {
+            return Qt::Checked;
+        } else {
+            return Qt::PartiallyChecked;
+        }
+    }
     
-    switch (role) {
-    case Qt::DisplayRole:
-        switch (section) {
-        case ID:
-            return "ID";
-        case Type:
-            return "Type";
-        case Frames:
-            return "Frames";
-        default:
-            return QVariant();
-        }
-        
-    case Qt::ToolTipRole:
-        switch (section) {
-        case ID:
-            return "Worm/Track identifier";
-        case Type:
-            return "Type of annotation (Lost, Merge, etc.)";
-        case Frames:
-            return "Frame range where the annotation applies";
-        default:
-            return QVariant();
-        }
-        
-    default:
+    return QVariant();
+}
+
+int AnnotationTableModel::rowCount(const QModelIndex &parent) const {
+    return parent.isValid() ? 0 : m_storage->getItemCount();
+}
+
+int AnnotationTableModel::columnCount(const QModelIndex &parent) const {
+    return parent.isValid() ? 0 : 7; // Show, ID, Color, Type, Frame, CentroidX, CentroidY
+}
+
+QVariant AnnotationTableModel::data(const QModelIndex &index, int role) const {
+    if (!index.isValid() || index.row() >= m_storage->getItemCount() || index.row() < 0) {
         return QVariant();
     }
-}
 
-// Data access methods
-const AnnotationTableModel::AnnotationEntry* AnnotationTableModel::getAnnotationAtRow(int row) const {
-    if (row < 0 || row >= m_annotations.size()) {
-        return nullptr;
+    try {
+        const TableItems::AnnotationItem &item = m_storage->getItemByIndex(index.row());
+        
+        // Handle checkbox for Show column
+        if (static_cast<Column>(index.column()) == Column::Show) {
+            if (role == Qt::CheckStateRole) {
+                return item.visible ? Qt::Checked : Qt::Unchecked;
+            }
+            // No display text for checkbox column
+            return QVariant();
+        }
+
+        if (role == Qt::DisplayRole || role == Qt::EditRole) {
+            switch (static_cast<Column>(index.column())) {
+            case Column::ID:
+                return item.id;
+            case Column::Color:
+                return item.color; // Delegate handles QColor directly for display and edit
+            case Column::Type:
+                return TableItems::itemTypeToString(item.type); // For display, delegate might use enum for edit
+            case Column::Frame:
+                return item.frameOfSelection;
+            case Column::CentroidX:
+                return QString::number(item.initialCentroid.x(), 'f', 2);
+            case Column::CentroidY:
+                return QString::number(item.initialCentroid.y(), 'f', 2);
+            default:
+                return QVariant();
+            }
+        } else if (role == Qt::DecorationRole) {
+            if (static_cast<Column>(index.column()) == Column::Color) {
+                return item.color; // Provide color for basic swatch if no delegate or for other roles
+            }
+        }
+    } catch (const std::out_of_range& e) {
+        YAWT_WARN(lcModelsBlobTable) << "Error accessing item at index" << index.row() << ":" << e.what();
     }
-    return &m_annotations.at(row);
+    
+    return QVariant();
 }
 
-int AnnotationTableModel::getTotalLostFrames() const {
-    int total = 0;
-    for (const auto& annotation : m_annotations) {
-        if (annotation.type == AnnotationType::Lost) {
-            total += (annotation.endFrame - annotation.startFrame + 1);
+bool AnnotationTableModel::setData(const QModelIndex &index, const QVariant &value, int role) {
+    if (!index.isValid() || index.row() >= m_storage->getItemCount() || index.row() < 0) {
+        return false;
+    }
+
+    try {
+        const TableItems::AnnotationItem &item = m_storage->getItemByIndex(index.row());
+        int itemId = item.id;
+        
+        // Handle checkbox for Show column
+        if (static_cast<Column>(index.column()) == Column::Show && role == Qt::CheckStateRole) {
+            Qt::CheckState checkState = static_cast<Qt::CheckState>(value.toInt());
+            bool newVisible = (checkState == Qt::Checked);
+            if (item.visible != newVisible) {
+                m_storage->setItemVisibility(itemId, newVisible);
+                return true;
+            }
+        } else if (role == Qt::EditRole) {
+            switch (static_cast<Column>(index.column())) {
+            case Column::Color:
+                if (value.canConvert<QColor>()) {
+                    QColor newColor = value.value<QColor>();
+                    if (item.color != newColor) {
+                        m_storage->setItemColor(itemId, newColor);
+                        return true;
+                    }
+                }
+                break;
+            case Column::Type: {
+                QString typeStr = value.toString();
+                TableItems::ItemType newType = TableItems::stringToItemType(typeStr);
+                if (item.type != newType) {
+                    const bool oldTypeIsStartEnd =
+                        item.type == TableItems::ItemType::StartPoint ||
+                        item.type == TableItems::ItemType::EndPoint;
+                    const bool newTypeIsStartEnd =
+                        newType == TableItems::ItemType::StartPoint ||
+                        newType == TableItems::ItemType::EndPoint;
+
+                    if (oldTypeIsStartEnd && newTypeIsStartEnd) {
+                        const auto pointColorForType = [](TableItems::ItemType pointType) {
+                            return pointType == TableItems::ItemType::StartPoint ? QColor(Qt::green)
+                                                                                 : QColor(Qt::red);
+                        };
+
+                        int swappedItemId = -1;
+                        const QList<TableItems::AnnotationItem>& allItems = m_storage->getAllItems();
+                        for (const TableItems::AnnotationItem& otherItem : allItems) {
+                            if (otherItem.id != itemId && otherItem.type == newType) {
+                                swappedItemId = otherItem.id;
+                                break;
+                            }
+                        }
+
+                        if (swappedItemId >= 0) {
+                            m_storage->setItemType(swappedItemId, item.type);
+                            m_storage->setItemColor(swappedItemId, pointColorForType(item.type));
+                        }
+
+                        m_storage->setItemType(itemId, newType);
+                        m_storage->setItemColor(itemId, pointColorForType(newType));
+                        return true;
+                    }
+
+                    m_storage->setItemType(itemId, newType);
+                    return true;
+                }
+                break;
+            }
+            case Column::ID:
+            case Column::Frame:
+            case Column::CentroidX:
+            case Column::CentroidY:
+            case Column::Show: // Already handled above with CheckStateRole
+            default:
+                return false;
+            }
+        }
+    } catch (const std::out_of_range& e) {
+        YAWT_WARN(lcModelsBlobTable) << "Error accessing item at index" << index.row() << ":" << e.what();
+    }
+    
+    return false;
+}
+
+Qt::ItemFlags AnnotationTableModel::flags(const QModelIndex& index) const {
+    if (!index.isValid()) {
+        return Qt::NoItemFlags;
+    }
+    Qt::ItemFlags defaultFlags = QAbstractTableModel::flags(index);
+    
+    Column col = static_cast<Column>(index.column());
+    if (col == Column::Type || col == Column::Color) {
+        return defaultFlags | Qt::ItemIsEditable;
+    } else if (col == Column::Show) {
+        return defaultFlags | Qt::ItemIsUserCheckable;
+    }
+    
+    return defaultFlags;
+}
+
+bool AnnotationTableModel::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type) {
+    // Delegate to storage
+    int newId = m_storage->addItem(centroid, boundingBox, frameNumber, type);
+    return (newId > 0);
+}
+
+bool AnnotationTableModel::removeRows(int position, int rows, const QModelIndex &parent) {
+    Q_UNUSED(parent);
+    if (position < 0 || position + rows > m_storage->getItemCount() || rows <= 0) {
+        return false;
+    }
+    
+    // We need to remove items one by one by their IDs
+    bool success = true;
+    QList<int> itemsToRemove;
+    
+    // First collect all the item IDs to remove
+    for (int i = 0; i < rows; ++i) {
+        try {
+            const TableItems::AnnotationItem &item = m_storage->getItemByIndex(position + i);
+            itemsToRemove.append(item.id);
+        } catch (const std::out_of_range& e) {
+            YAWT_WARN(lcModelsBlobTable) << "Error accessing item at index" << (position + i) << ":" << e.what();
+            success = false;
         }
     }
-    return total;
-}
-
-int AnnotationTableModel::getAnnotationCountForWorm(int wormId) const {
-    int count = 0;
-    for (const auto& annotation : m_annotations) {
-        if (annotation.wormId == wormId) {
-            ++count;
+    
+    // Then remove them from storage
+    for (int id : itemsToRemove) {
+        if (!m_storage->removeItem(id)) {
+            success = false;
         }
     }
-    return count;
+    
+    return success;
 }
 
-// Slots for storage updates
-void AnnotationTableModel::onTrackingDataChanged() {
-    refreshAnnotations();
+bool AnnotationTableModel::setHeaderData(int section, Qt::Orientation orientation, const QVariant &value, int role) {
+    // Only handle the Show column header for CheckStateRole
+    if (orientation == Qt::Horizontal && 
+        static_cast<Column>(section) == Column::Show && 
+        role == Qt::CheckStateRole) {
+        
+        Qt::CheckState newState = static_cast<Qt::CheckState>(value.toInt());
+        bool checked = (newState == Qt::Checked);
+        
+        // Toggle all items visibility
+        toggleAllVisibility(checked);
+        
+        return true;
+    }
+    
+    return QAbstractTableModel::setHeaderData(section, orientation, value, role);
 }
 
-void AnnotationTableModel::onAllDataChanged() {
-    refreshAnnotations();
+void AnnotationTableModel::toggleAllVisibility(bool checked) {
+    m_storage->setAllItemsVisibility(checked);
 }
 
-// Helper methods
-QString AnnotationTableModel::formatFrameRange(int startFrame, int endFrame) const {
-    if (startFrame == endFrame) {
-        return QString::number(startFrame);
-    } else {
-        return QString("%1-%2").arg(startFrame).arg(endFrame);
+const TableItems::AnnotationItem& AnnotationTableModel::getItem(int row) const {
+    return m_storage->getItemByIndex(row);
+}
+
+const QList<TableItems::AnnotationItem>& AnnotationTableModel::getAllItems() const {
+    return m_storage->getAllItems();
+}
+
+// --- Public Getters for Metrics (now from storage) ---
+double AnnotationTableModel::getMinObservedArea() const {
+    return m_storage->getMinObservedArea();
+}
+
+double AnnotationTableModel::getMaxObservedArea() const {
+    return m_storage->getMaxObservedArea();
+}
+
+double AnnotationTableModel::getMinObservedAspectRatio() const {
+    return m_storage->getMinObservedAspectRatio();
+}
+
+double AnnotationTableModel::getMaxObservedAspectRatio() const {
+    return m_storage->getMaxObservedAspectRatio();
+}
+
+QSizeF AnnotationTableModel::getCurrentFixedRoiSize() const {
+    return m_storage->getCurrentFixedRoiSize();
+}
+
+double AnnotationTableModel::getRoiSizeMultiplier() const {
+    return m_storage->getRoiSizeMultiplier();
+}
+
+void AnnotationTableModel::updateRoiSizeMultiplier(double newMultiplier) {
+    m_storage->setRoiSizeMultiplier(newMultiplier);
+}
+
+// --- Private slots to handle storage signals ---
+
+void AnnotationTableModel::onStorageItemAdded(int itemId) {
+    Q_UNUSED(itemId);
+    // Full model reset is simplest but we could optimize with beginInsertRows
+    beginResetModel();
+    endResetModel();
+}
+
+void AnnotationTableModel::onStorageItemRemoved(int itemId) {
+    Q_UNUSED(itemId);
+    // Full model reset is simplest but we could optimize with beginRemoveRows
+    beginResetModel();
+    endResetModel();
+}
+
+void AnnotationTableModel::onStorageItemChanged(int itemId) {
+    // Find the row for this item ID
+    int row = -1;
+    for (int i = 0; i < m_storage->getItemCount(); ++i) {
+        if (m_storage->getItemByIndex(i).id == itemId) {
+            row = i;
+            break;
+        }
+    }
+    
+    if (row >= 0) {
+        QModelIndex topLeft = index(row, 0);
+        QModelIndex bottomRight = index(row, columnCount() - 1);
+        emit dataChanged(topLeft, bottomRight);
     }
 }
 
-QString AnnotationTableModel::annotationTypeToString(AnnotationType type) const {
-    switch (type) {
-    case AnnotationType::Lost:
-        return "Lost";
-    default:
-        return "Unknown";
+void AnnotationTableModel::onStorageItemVisibilityChanged(int itemId, bool visible) {
+    // Forward the signal
+    emit itemVisibilityChanged(itemId, visible);
+    
+    // Update header checkbox state
+    emit headerDataChanged(Qt::Horizontal, Column::Show, Column::Show);
+    
+    // Find the row and update the checkbox cell
+    int row = -1;
+    for (int i = 0; i < m_storage->getItemCount(); ++i) {
+        if (m_storage->getItemByIndex(i).id == itemId) {
+            row = i;
+            break;
+        }
     }
+    
+    if (row >= 0) {
+        QModelIndex checkboxIndex = index(row, Column::Show);
+        emit dataChanged(checkboxIndex, checkboxIndex, {Qt::CheckStateRole});
+    }
+}
+
+/* Per-item color slot removed.
+   TrackingDataStorage now emits the bulk `itemsChanged(...)` when colors change.
+   Consumers should rebuild their id->color maps from the supplied list.
+*/
+
+void AnnotationTableModel::onStorageAllDataChanged() {
+    // Full model reset
+    beginResetModel();
+    endResetModel();
+    
+    // Forward the signal to connected components
+    emit itemsChanged(m_storage->getAllItems());
+}
+
+void AnnotationTableModel::onStorageGlobalMetricsUpdated(double minArea, double maxArea,
+                                                double minAspectRatio, double maxAspectRatio,
+                                                const QSizeF& fixedRoiSize) {
+    // Forward the signal
+    emit globalMetricsUpdated(minArea, maxArea, minAspectRatio, maxAspectRatio, fixedRoiSize);
 }

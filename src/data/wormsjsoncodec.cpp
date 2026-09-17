@@ -95,7 +95,7 @@ bool readRoot(const QString& filePath, QJsonObject& root, QString* error)
 
 // ── Items ────────────────────────────────────────────────────────────────────
 
-QJsonObject itemToJson(const TableItems::ClickedItem& item)
+QJsonObject itemToJson(const TableItems::AnnotationItem& item)
 {
     QJsonObject o;
     o["id"] = item.id;
@@ -117,9 +117,9 @@ QJsonObject itemToJson(const TableItems::ClickedItem& item)
     return o;
 }
 
-TableItems::ClickedItem itemFromJson(const QJsonObject& obj)
+TableItems::AnnotationItem itemFromJson(const QJsonObject& obj)
 {
-    TableItems::ClickedItem item;
+    TableItems::AnnotationItem item;
     item.id = obj.value("id").toInt();
     item.type = TableItems::stringToItemType(obj.value("type").toString());
     item.visible = obj.value("visible").toBool(true);
@@ -270,7 +270,7 @@ QJsonObject toJson(const Document& doc)
     }
 
     QJsonArray items;
-    for (const TableItems::ClickedItem& item : doc.items) items.append(itemToJson(item));
+    for (const TableItems::AnnotationItem& item : doc.items) items.append(itemToJson(item));
     root["items"] = items;
     root["itemsCount"] = items.size();
 
@@ -431,11 +431,11 @@ bool read(const QString& filePath, Document& outDoc, QString* error)
 // ── roi_points.json ──────────────────────────────────────────────────────────
 
 bool writeRoiPoints(const QString& filePath, const QString& videoPath, int keyFrame,
-                    const QList<TableItems::ClickedItem>& items, QString* error)
+                    const QList<TableItems::AnnotationItem>& items, QString* error)
 {
     QJsonObject root = headerJson(videoPath, keyFrame);
     QJsonArray arr;
-    for (const TableItems::ClickedItem& item : items) arr.append(itemToJson(item));
+    for (const TableItems::AnnotationItem& item : items) arr.append(itemToJson(item));
     root["items"] = arr;
     root["itemsCount"] = arr.size();
 
@@ -448,9 +448,9 @@ bool writeRoiPoints(const QString& filePath, const QString& videoPath, int keyFr
     return true;
 }
 
-QList<TableItems::ClickedItem> readRoiPoints(const QString& filePath)
+QList<TableItems::AnnotationItem> readRoiPoints(const QString& filePath)
 {
-    QList<TableItems::ClickedItem> items;
+    QList<TableItems::AnnotationItem> items;
     QJsonObject root;
     if (!readRoot(filePath, root, nullptr)) return items;
     for (const QJsonValue& v : root.value("items").toArray()) {

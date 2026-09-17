@@ -57,12 +57,12 @@ void MiniLoader::setTrackingDataStorage(TrackingDataStorage* storage)
  * and trigger a repaint.
  *
  * This slot is intended to be connected to TrackingDataStorage::itemsChanged /
- * BlobTableModel::itemsChanged so the MiniLoader uses the canonical colors.
+ * AnnotationTableModel::itemsChanged so the MiniLoader uses the canonical colors.
  */
-void MiniLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& items)
+void MiniLoader::updateItemsToDisplay(const QList<TableItems::AnnotationItem>& items)
 {
     m_idColors.clear();
-    for (const TableItems::ClickedItem& item : items) {
+    for (const TableItems::AnnotationItem& item : items) {
         if (item.color.isValid()) {
             m_idColors.insert(item.id, item.color);
         }
@@ -79,7 +79,7 @@ void MiniLoader::setShowOverlays(bool show)
     update();
 }
 
-void MiniLoader::onWormSelectionChanged(const QList<TableItems::ClickedItem>& selectedItems)
+void MiniLoader::onWormSelectionChanged(const QList<TableItems::AnnotationItem>& selectedItems)
 {
     if (selectedItems.isEmpty()) {
         clearSelection();
@@ -87,7 +87,7 @@ void MiniLoader::onWormSelectionChanged(const QList<TableItems::ClickedItem>& se
     }
 
     // Use the first selected item (assuming single selection for mini view)
-    const TableItems::ClickedItem& selectedItem = selectedItems.first();
+    const TableItems::AnnotationItem& selectedItem = selectedItems.first();
     setSelectedWorm(selectedItem.id);
 }
 
@@ -491,7 +491,7 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
             c.setAlpha(120);
             fillColor = c;
         } else {
-            const TableItems::ClickedItem* item = nullptr;
+            const TableItems::AnnotationItem* item = nullptr;
             if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(wormId);
             if (item) {
                 QColor c = item->color;
@@ -765,7 +765,7 @@ for (int id : unionSet) {
     if (m_idColors.contains(id)) {
         idColors.insert(id, m_idColors.value(id));
     } else {
-        const TableItems::ClickedItem* item = nullptr;
+        const TableItems::AnnotationItem* item = nullptr;
         if (m_trackingDataStorage) item = m_trackingDataStorage->getItem(id);
         if (item) {
             idColors.insert(id, item->color);

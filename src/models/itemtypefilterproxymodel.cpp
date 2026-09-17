@@ -1,5 +1,5 @@
 #include "itemtypefilterproxymodel.h"
-#include "blobtablemodel.h"
+#include "annotationtablemodel.h"
 
 ItemTypeFilterProxyModel::ItemTypeFilterProxyModel(QObject *parent)
     : QSortFilterProxyModel(parent) {}
@@ -17,7 +17,7 @@ bool ItemTypeFilterProxyModel::filterAcceptsRow(int source_row, const QModelInde
     if (!sourceModel()) {
         return false;
     }
-    const int typeColumn = static_cast<int>(BlobTableModel::Column::Type);
+    const int typeColumn = static_cast<int>(AnnotationTableModel::Column::Type);
     QModelIndex typeIdx = sourceModel()->index(source_row, typeColumn, source_parent);
     QString typeStr = sourceModel()->data(typeIdx, Qt::DisplayRole).toString();
     TableItems::ItemType type = TableItems::stringToItemType(typeStr);

@@ -683,11 +683,11 @@ void VideoLoader::setBlurSigmaX(double sigmaX) {
 }
 
 // --- Slots for Data Display from Models ---
-void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& items) {
+void VideoLoader::updateItemsToDisplay(const QList<TableItems::AnnotationItem>& items) {
     // For backward compatibility - simply store in our local cache
     // In the future, this won't be needed as we'll get items directly from storage
     m_itemsToDisplay = items;
-    for (const TableItems::ClickedItem& item : items) {
+    for (const TableItems::AnnotationItem& item : items) {
         if (item.color.isValid()) {
             m_trackColors[item.id] = item.color;
         }
@@ -772,8 +772,8 @@ void VideoLoader::rebuildCenterlineMidpointCache() {
 
 /* Per-item color update slot removed.
  *
- * Color updates are now propagated via the bulk `itemsChanged(const QList<TableItems::ClickedItem>&)`
- * signal emitted by `TrackingDataStorage` / `BlobTableModel`. Consumers (including VideoLoader)
+ * Color updates are now propagated via the bulk `itemsChanged(const QList<TableItems::AnnotationItem>&)`
+ * signal emitted by `TrackingDataStorage` / `AnnotationTableModel`. Consumers (including VideoLoader)
  * should rebuild their id->color maps from that list (see setTrackingDataStorage() where the
  * `itemsChanged` connection triggers updates/repaints).
  *
@@ -957,7 +957,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                          QPointF(centerWidget.x(), centerWidget.y() + plusHalf));
     };
 
-    auto isPointItem = [](const TableItems::ClickedItem& item) {
+    auto isPointItem = [](const TableItems::AnnotationItem& item) {
         if (item.type == TableItems::ItemType::StartPoint ||
             item.type == TableItems::ItemType::EndPoint) {
             return true;
@@ -970,10 +970,10 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     };
 
     auto drawPersistentPointItems = [&]() {
-        const QList<TableItems::ClickedItem>& itemsToDisplay =
+        const QList<TableItems::AnnotationItem>& itemsToDisplay =
             m_storage ? m_storage->getAllItems() : m_itemsToDisplay;
 
-        for (const TableItems::ClickedItem& item : std::as_const(itemsToDisplay)) {
+        for (const TableItems::AnnotationItem& item : std::as_const(itemsToDisplay)) {
             if (!item.visible || !isPointItem(item)) {
                 continue;
             }
@@ -995,13 +995,13 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     bool isVisible = false;
                     if (m_storage) {
                         // Get item from storage if available
-                        const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+                        const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
                         if (item) {
                             isVisible = item->visible;
                         }
                     } else {
                         // Fallback to legacy method
-                        for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                        for (const TableItems::AnnotationItem& item : std::as_const(m_itemsToDisplay)) {
                             if (item.id == wormId) {
                                 isVisible = item.visible;
                                 break;
@@ -1046,10 +1046,10 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             // Fallback: Tracking not run or no tracks, display initial blob selections
 
             // If storage is available, use it
-            const QList<TableItems::ClickedItem>& itemsToDisplay =
+            const QList<TableItems::AnnotationItem>& itemsToDisplay =
                 m_storage ? m_storage->getAllItems() : m_itemsToDisplay;
 
-            for (const TableItems::ClickedItem& item : std::as_const(itemsToDisplay)) {
+            for (const TableItems::AnnotationItem& item : std::as_const(itemsToDisplay)) {
                 // Only show items with visible checkbox checked
                 if (!item.visible) continue;
 
@@ -1097,7 +1097,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
 
         for (int wormId : std::as_const(centerlineIds)) {
-            const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+            const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
             if (!item || !item->visible) {
                 continue;
             }
@@ -1189,7 +1189,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
 
         for (int wormId : std::as_const(tipIds)) {
-            const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+            const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
             if (!item || !item->visible) continue;
 
             const Tracking::DetectedBlob blob = tipBlobs.value(wormId);
@@ -1260,13 +1260,13 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             bool isVisible = false;
             if (m_storage) {
                 // Get item from storage if available
-                const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+                const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
                 if (item) {
                     isVisible = item->visible;
                 }
             } else {
                 // Fallback to legacy method
-                for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                for (const TableItems::AnnotationItem& item : std::as_const(m_itemsToDisplay)) {
                     if (item.id == wormId) {
                         isVisible = item.visible;
                         break;
@@ -1490,13 +1490,13 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 bool isVisible = false;
                 if (m_storage) {
                     // Get item from storage if available
-                    const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+                    const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
                     if (item) {
                         isVisible = item->visible;
                     }
                 } else {
                     // Fallback to legacy method
-                    for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
+                    for (const TableItems::AnnotationItem& item : std::as_const(m_itemsToDisplay)) {
                         if (item.id == wormId) {
                             isVisible = item.visible;
                             break;
@@ -2336,7 +2336,7 @@ void VideoLoader::emitThresholdParametersChanged() {
 QColor VideoLoader::getTrackColor(int wormId) const {
     // First check if the item exists in storage
     if (m_storage) {
-        const TableItems::ClickedItem* item = m_storage->getItem(wormId);
+        const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
         if (item && item->color.isValid()) {
             return item->color;
         }

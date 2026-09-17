@@ -3,77 +3,159 @@
 
 #include <QAbstractTableModel>
 #include <QList>
-#include <QPair>
-#include <QString>
+#include <QPointF>
+#include <QRectF>
+#include <QColor>
+#include <QSizeF> // Added for QSizeF
+#include "trackingcommon.h" // Contains TableItems::AnnotationItem and ItemType
+#include "trackingdatastorage.h" // Central data storage
+#include <limits> // For std::numeric_limits, good to have explicitly
 
-// Forward declarations
+// Forward declaration
 class TrackingDataStorage;
+
+
 
 class AnnotationTableModel : public QAbstractTableModel {
     Q_OBJECT
 
 public:
-    enum Column {
-        ID = 0,
-        Type,
-        Frames,
-        ColumnCount
-    };
+    explicit AnnotationTableModel(TrackingDataStorage* storage, QObject *parent = nullptr);
 
-    enum class AnnotationType {
-        Lost
-        // Future: Merge, Split, etc.
-    };
-
-    struct AnnotationEntry {
-        int wormId;
-        AnnotationType type;
-        int startFrame;
-        int endFrame;
-        
-        AnnotationEntry(int id, AnnotationType t, int start, int end)
-            : wormId(id), type(t), startFrame(start), endFrame(end) {}
-            
-        // For sorting by worm ID first, then by start frame
-        bool operator<(const AnnotationEntry& other) const {
-            if (wormId != other.wormId) {
-                return wormId < other.wormId;
-            }
-            return startFrame < other.startFrame;
-        }
-    };
-
-    explicit AnnotationTableModel(TrackingDataStorage* storage = nullptr, QObject* parent = nullptr);
-    
-    // Storage management
-    void setStorage(TrackingDataStorage* storage);
-    void refreshAnnotations();
-    void clearAnnotations();
-    
-    // QAbstractTableModel interface
-    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
-    int columnCount(const QModelIndex& parent = QModelIndex()) const override;
-    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    // Header:
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
     
-    // Data access
-    const AnnotationEntry* getAnnotationAtRow(int row) const;
-    int getTotalLostFrames() const;
-    int getAnnotationCountForWorm(int wormId) const;
+    // ROI size factor getter
+    double getRoiSizeMultiplier() const;
+
+    // Basic functionality:
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
+    int columnCount(const QModelIndex &parent = QModelIndex()) const override;
+    
+    // Override for checkbox handling
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    
+    // Header click handling
+    bool setHeaderData(int section, Qt::Orientation orientation, const QVariant &value, int role = Qt::EditRole) override;
+
+    // Data handling:
+    QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
+    bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
+
+    // Editing:
+    // Already declared the flags method above
+
+    // Custom methods for model manipulation:
+    /**
+     * @brief Adds a new item to the model and assigns it a color.
+     * The item's initialBoundingBox will be updated based on global metrics.
+     * @param centroid The centroid of the blob in video coordinates.
+     * @param boundingBox The original bounding box of the blob as clicked.
+     * @param frameNumber The frame number on which the blob was selected.
+     * @param type The initial type of the item (defaults to Worm).
+     * @return True if added successfully, false otherwise.
+     */
+    bool addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type = TableItems::ItemType::Worm);
+
+    /**
+     * @brief Removes rows from the model.
+     * @param position The starting row index.
+     * @param rows The number of rows to remove.
+     * @return True if removal was successful, false otherwise.
+     */
+    bool removeRows(int position, int rows, const QModelIndex &parent = QModelIndex()) override;
+
+    /**
+     * @brief Gets the AnnotationItem at a specific row.
+     * @param row The row index.
+     * @return Const reference to AnnotationItem. Throws std::out_of_range if row is invalid.
+     */
+    const TableItems::AnnotationItem& getItem(int row) const;
+
+    /**
+     * @brief Gets a list of all AnnotationItems.
+     * @return Const reference to the internal list of items.
+     */
+    const QList<TableItems::AnnotationItem>& getAllItems() const;
+
+    // --- New Public Getters for Metrics ---
+    double getMinObservedArea() const;
+    double getMaxObservedArea() const;
+    double getMinObservedAspectRatio() const;
+    double getMaxObservedAspectRatio() const;
+    QSizeF getCurrentFixedRoiSize() const;
+
+
+    // Enum for column indices for clarity
+    enum Column {
+        Show = 0,       // Show/Hide checkbox
+        ID = 1,
+        Color = 2,
+        Type = 3,
+        Frame = 4,      // Frame of selection
+        CentroidX = 5,  // Optional: display centroid X
+        CentroidY = 6   // Optional: display centroid Y
+        // Add more columns if needed, e.g., for bounding box details
+    };
+
+signals:
+    /**
+     * @brief Emitted when the list of items in the model changes (add, remove, data modification).
+     * This is the primary signal VideoLoader should connect to for display updates.
+     * @param allItems The complete current list of AnnotationItems in the model.
+     *
+     * NOTE: Color changes are now propagated via this bulk signal (itemsChanged) rather than a per-item
+     * itemColorChanged signal. Consumers should rebuild any id->color maps from the supplied list.
+     */
+    void itemsChanged(const QList<TableItems::AnnotationItem>& allItems);
+
+    /**
+     * @brief Emitted when an item's visibility is changed.
+     * Useful for components that need to update visibility without refreshing all items.
+     * @param itemId The ID of the item.
+     * @param visible The new visibility state of the item.
+     */
+    void itemVisibilityChanged(int itemId, bool visible);
+
+    /**
+     * @brief Emitted when the calculated global metrics (min/max area, aspect ratio, fixed ROI size) change.
+     * This can be used by UI elements to display these values.
+     * @param minArea Minimum observed area of worms.
+     * @param maxArea Maximum observed area of worms.
+     * @param minAspectRatio Minimum observed aspect ratio of worms.
+     * @param maxAspectRatio Maximum observed aspect ratio of worms.
+     * @param fixedRoiSize The calculated QSizeF for standardized ROIs.
+     */
+    void globalMetricsUpdated(double minArea, double maxArea,
+                              double minAspectRatio, double maxAspectRatio,
+                              const QSizeF& fixedRoiSize);
 
 public slots:
-    void onTrackingDataChanged();
-    void onAllDataChanged();
+    /**
+     * @brief Updates the ROI size multiplier when the user adjusts the spinbox
+     * @param newMultiplier The new multiplier value
+     */
+    void updateRoiSizeMultiplier(double newMultiplier);
+    
+    /**
+     * @brief Toggles visibility for all items in the model
+     * @param checked If true, all items will be visible; if false, all will be hidden
+     */
+    void toggleAllVisibility(bool checked);
 
 private:
-    void populateLostAnnotations();
-    void connectStorageSignals();
-    void disconnectStorageSignals();
-    QString formatFrameRange(int startFrame, int endFrame) const;
-    QString annotationTypeToString(AnnotationType type) const;
+    TrackingDataStorage* m_storage; // Pointer to the central data storage
     
-    TrackingDataStorage* m_storage;
-    QList<AnnotationEntry> m_annotations;
+    // Private slots to handle storage signals
+    private slots:
+        void onStorageItemAdded(int itemId);
+        void onStorageItemRemoved(int itemId);
+        void onStorageItemChanged(int itemId);
+        void onStorageItemVisibilityChanged(int itemId, bool visible);
+        void onStorageAllDataChanged();
+        void onStorageGlobalMetricsUpdated(double minArea, double maxArea,
+                                          double minAspectRatio, double maxAspectRatio,
+                                          const QSizeF& fixedRoiSize);
 };
 
 #endif // ANNOTATIONTABLEMODEL_H

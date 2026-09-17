@@ -72,7 +72,7 @@ QColor TrackingDataStorage::getNextColor() {
 // --- Item Management Methods ---
 
 int TrackingDataStorage::addItem(const QPointF& centroid, const QRectF& boundingBox, int frameNumber, TableItems::ItemType type) {
-    TableItems::ClickedItem newItem;
+    TableItems::AnnotationItem newItem;
     newItem.id = m_nextId++;
     
     newItem.color = getNextColor();
@@ -370,7 +370,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
 
     if (!doc.items.isEmpty()) {
         int maxId = 0;
-        for (const TableItems::ClickedItem& item : doc.items) {
+        for (const TableItems::AnnotationItem& item : doc.items) {
             maxId = qMax(maxId, item.id);
             m_items.append(item);
         }
@@ -410,7 +410,7 @@ bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
         existingIds.insert(item.id);
     }
 
-    for (TableItems::ClickedItem item : WormsJson::readRoiPoints(filePath)) {
+    for (TableItems::AnnotationItem item : WormsJson::readRoiPoints(filePath)) {
         if (!isRoiPointType(item.type)) continue;
 
         if (item.id <= 0 || existingIds.contains(item.id)) {
@@ -571,11 +571,11 @@ void TrackingDataStorage::clearAllTipBaselines() {
 
 // --- Data Access Methods ---
 
-const QList<TableItems::ClickedItem>& TrackingDataStorage::getAllItems() const {
+const QList<TableItems::AnnotationItem>& TrackingDataStorage::getAllItems() const {
     return m_items;
 }
 
-const TableItems::ClickedItem* TrackingDataStorage::getItem(int itemId) const {
+const TableItems::AnnotationItem* TrackingDataStorage::getItem(int itemId) const {
     int index = getIndexFromId(itemId);
     if (index < 0 || index >= m_items.count()) {
         return nullptr; // Item not found or index out of range
@@ -583,7 +583,7 @@ const TableItems::ClickedItem* TrackingDataStorage::getItem(int itemId) const {
     return &m_items[index];
 }
 
-const TableItems::ClickedItem& TrackingDataStorage::getItemByIndex(int index) const {
+const TableItems::AnnotationItem& TrackingDataStorage::getItemByIndex(int index) const {
     if (index < 0 || index >= m_items.count()) {
         throw std::out_of_range("Index out of range in TrackingDataStorage::getItemByIndex");
     }
@@ -622,8 +622,8 @@ QSet<int> TrackingDataStorage::getWormsWithTracks() const {
 }
 
 bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outSearchWindow) const {
-    // First, check if we can get the initial position from the ClickedItem (for keyframe)
-    const TableItems::ClickedItem* item = getItem(wormId);
+    // First, check if we can get the initial position from the AnnotationItem (for keyframe)
+    const TableItems::AnnotationItem* item = getItem(wormId);
     if (item && item->frameOfSelection == frameNumber) {
         outPosition = item->initialCentroid;
         outSearchWindow = item->initialBoundingBox;
@@ -681,8 +681,8 @@ bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame
         }
     }
     
-    // If no valid tracking data found, try to use initial position from ClickedItem
-    const TableItems::ClickedItem* item = getItem(wormId);
+    // If no valid tracking data found, try to use initial position from AnnotationItem
+    const TableItems::AnnotationItem* item = getItem(wormId);
     if (item) {
         outPosition = item->initialCentroid;
         outSearchWindow = item->initialBoundingBox;
@@ -798,7 +798,7 @@ void TrackingDataStorage::recalculateGlobalMetricsAndROIs() {
     double maxObservedDimensionL = 0.0;
     int wormCount = 0;
 
-    for (const TableItems::ClickedItem &item : std::as_const(m_items)) {
+    for (const TableItems::AnnotationItem &item : std::as_const(m_items)) {
         if (item.type == TableItems::ItemType::Worm) {
             wormCount++;
             const QRectF& originalBox = item.originalClickedBoundingBox;
@@ -859,7 +859,7 @@ void TrackingDataStorage::recalculateGlobalMetricsAndROIs() {
 
     // Update initialBoundingBox for all items
     bool itemROIsChanged = false;
-    for (TableItems::ClickedItem &item : m_items) {
+    for (TableItems::AnnotationItem &item : m_items) {
         QRectF oldItemRoi = item.initialBoundingBox;
         QPointF center = item.initialCentroid;
         double w = m_currentFixedRoiSize.width();

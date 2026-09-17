@@ -33,7 +33,7 @@
 #include <opencv2/videoio.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "../../data/trackingcommon.h" // Contains TableItems::ClickedItem, Tracking::DetectedBlob, etc.
+#include "../../data/trackingcommon.h" // Contains TableItems::AnnotationItem, Tracking::DetectedBlob, etc.
 #include "../../data/trackingdatastorage.h" // Central data storage
 
 // Forward declarations
@@ -105,7 +105,7 @@ public:
         DrawROI,        // For drawing a Region of Interest
         Point,          // For selecting a single point marker
         Crop,           // For defining a crop area (uses DrawROI mechanics initially)
-        EditBlobs,      // For selecting/clicking blobs on the thresholded image to add to BlobTableModel
+        EditBlobs,      // For selecting/clicking blobs on the thresholded image to add to AnnotationTableModel
         EditTracks      // For interacting with displayed tracks (e.g., selecting, merging - future)
     };
     /**
@@ -223,11 +223,11 @@ public slots:
 
     // --- Slots for Data Display from Models ---
     /**
-     * @brief Sets or updates the list of ClickedItems (worms, ROIs, reference points) to be displayed.
-     * Called by MainWindow when the BlobTableModel changes.
+     * @brief Sets or updates the list of AnnotationItems (worms, ROIs, reference points) to be displayed.
+     * Called by MainWindow when the AnnotationTableModel changes.
      * @param items The list of items to display.
      */
-    void updateItemsToDisplay(const QList<TableItems::ClickedItem>& items);
+    void updateItemsToDisplay(const QList<TableItems::AnnotationItem>& items);
 
     /**
      * @brief Sets the tracks to be displayed.
@@ -246,8 +246,8 @@ public slots:
     void setCropShape(CropShape shape);
 
     // Slot for per-item Worm Color Updates removed.
-    // Consumers should use the bulk `itemsChanged(const QList<TableItems::ClickedItem>&)` signal
-    // from `TrackingDataStorage` / `BlobTableModel` and rebuild id->color maps from that list.
+    // Consumers should use the bulk `itemsChanged(const QList<TableItems::AnnotationItem>&)` signal
+    // from `TrackingDataStorage` / `AnnotationTableModel` and rebuild id->color maps from that list.
 
 
 signals:
@@ -275,7 +275,7 @@ signals:
 
     /**
      * @brief Emitted when a blob is clicked by the user in EditBlobs mode,
-     * suggesting it should be added to the BlobTableModel.
+     * suggesting it should be added to the AnnotationTableModel.
      * @param blobData The data of the clicked blob (centroid, bounding box in video coordinates).
      */
     void blobClickedForAddition(const Tracking::DetectedBlob& blobData);
@@ -386,7 +386,7 @@ private:
     QRectF m_cropDragStartRect;
 
     // --- Data for Display (received from models) ---
-    QList<TableItems::ClickedItem> m_itemsToDisplay; // List of blobs/worms to display (from BlobTableModel)
+    QList<TableItems::AnnotationItem> m_itemsToDisplay; // List of blobs/worms to display (from AnnotationTableModel)
     Tracking::AllWormTracks m_allTracksToDisplay;  // All tracks data
     QSet<int> m_visibleTrackIDs;         // IDs of tracks that should be currently rendered
     mutable QMap<int, QColor> m_trackColors; // Cache for track/item colors

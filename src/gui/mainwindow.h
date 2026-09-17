@@ -13,8 +13,8 @@
 
 // Forward declarations
 namespace Ui { class MainWindow; }
-class BlobTableModel;
 class AnnotationTableModel;
+class LostSegmentTableModel;
 class ColorDelegate;
 class ItemTypeDelegate;
 class ItemTypeFilterProxyModel;
@@ -41,7 +41,7 @@ QT_END_NAMESPACE
  *
  * Responsibilities:
  *  - Manage and wire UI widgets (VideoLoader, MiniLoader, table views, delegates).
- *  - Bind to controller-provided models (BlobTableModel, AnnotationTableModel).
+ *  - Bind to controller-provided models (AnnotationTableModel, LostSegmentTableModel).
  *  - Handle user interactions: file selection, playback, ROI creation, threshold controls.
  *  - Keep UI in sync with VideoLoader interaction/view modes and visible tracks.
  *
@@ -58,7 +58,7 @@ QT_END_NAMESPACE
  *  - AppController: requests to start/cancel tracking; obtains models/storage; receives progress
  *    and final tracks via signals.
  *  - VideoLoader/MiniLoader: frame navigation, ROI gestures, visible-worm updates.
- *  - Models: BlobTableModel and AnnotationTableModel are set on their respective views.
+ *  - Models: AnnotationTableModel and LostSegmentTableModel are set on their respective views.
  *
  * Signals/slots overview:
  *  - Slots cover file/directory selection, playback/navigation, ROI creation, threshold updates,
@@ -146,8 +146,8 @@ public slots:
 
     // Blob/Item Handling
     void handleBlobClickedForAddition(const Tracking::DetectedBlob& blobData);
-    void handleRemoveBlobsClicked();
-    void handleDeleteSelectedBlobClicked();
+    void handleRemoveItemsClicked();
+    void handleDeleteSelectedItemClicked();
 
     // Tracking Process (UI entry points)
     // MainWindow triggers tracking flows via AppController. These slots exist so the
@@ -167,7 +167,7 @@ public slots:
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);
     /** 
      * Handle a newly drawn ROI from the VideoLoader.
-     * Adds the ROI as a worm candidate in the BlobTableModel for the current keyframe.
+     * Adds the ROI as a worm candidate in the AnnotationTableModel for the current keyframe.
      * @param roi Rectangle in video coordinates drawn by the user.
      */
     void handleRoiDefined(const QRectF& roi);
@@ -217,10 +217,10 @@ private:
     Ui::MainWindow *ui;
 
     // Models & delegates
-    /** Non-owning pointer to the blob model (owned by AppController). Bound via proxy models to views. */
-    BlobTableModel *m_blobTableModel;
-    /** Non-owning pointer to the annotation model (owned by AppController). Bound to annotation view. */
+    /** Non-owning pointer to the annotation model (owned by AppController). Bound via proxy models to views. */
     AnnotationTableModel *m_annotationTableModel;
+    /** Non-owning pointer to the annotation model (owned by AppController). Bound to annotation view. */
+    LostSegmentTableModel *m_lostSegmentTableModel;
     /** Color cell delegate created/parented to MainWindow; owned by MainWindow unless reparented. */
     ColorDelegate *m_colorDelegate;
     /** Item type delegate created/parented to MainWindow; owned by MainWindow unless reparented. */

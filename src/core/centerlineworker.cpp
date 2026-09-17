@@ -762,7 +762,7 @@ void CenterlineWorker::doWork()
 
         // Per-worm keyframe (the user-clicked frame).
         int keyframe = -1;
-        if (const TableItems::ClickedItem* item = m_storage->getItem(wormId))
+        if (const TableItems::AnnotationItem* item = m_storage->getItem(wormId))
             keyframe = item->frameOfSelection;
 
         // ── Sweep 0 — body length learning ──────────────────────────────

@@ -20,7 +20,7 @@
  *
  * What this is:
  * - Authoritative store for items (blobs/ROIs), tracks, detected blobs per frame, and per-frame merge groups.
- * - Backing data for UI models (BlobTableModel, AnnotationTableModel) and visual components (VideoLoader/MiniLoader).
+ * - Backing data for UI models (AnnotationTableModel, LostSegmentTableModel) and visual components (VideoLoader/MiniLoader).
  * - The place where final tracks and merge histories are persisted during/after tracking runs.
  *
  * Responsibilities:
@@ -186,14 +186,14 @@ public:
      * @brief Get all items
      * @return Const reference to the list of all items
      */
-    const QList<TableItems::ClickedItem>& getAllItems() const;
+    const QList<TableItems::AnnotationItem>& getAllItems() const;
     
     /**
      * @brief Get a specific item by ID
      * @param itemId The ID of the item
      * @return Pointer to the item, or nullptr if not found
      */
-    const TableItems::ClickedItem* getItem(int itemId) const;
+    const TableItems::AnnotationItem* getItem(int itemId) const;
     
     /**
      * @brief Get a specific item by index
@@ -201,7 +201,7 @@ public:
      * @return Const reference to the item
      * @throws std::out_of_range if index is invalid
      */
-    const TableItems::ClickedItem& getItemByIndex(int index) const;
+    const TableItems::AnnotationItem& getItemByIndex(int index) const;
     
     /**
      * @brief Get all track data
@@ -441,7 +441,7 @@ signals:
      * @brief Per-item color change signal removed.
      *
      * Color changes are now propagated via the bulk
-     * `itemsChanged(const QList<TableItems::ClickedItem>& allItems)` signal.
+     * `itemsChanged(const QList<TableItems::AnnotationItem>& allItems)` signal.
      * Consumers should rebuild any id->color maps from the supplied list.
      *
      * The per-item `itemColorChanged` signal previously declared here was
@@ -450,10 +450,10 @@ signals:
      */
     
     /**
-     * @brief Emitted when the list of items changes (for compatibility with BlobTableModel)
+     * @brief Emitted when the list of items changes (for compatibility with AnnotationTableModel)
      * @param allItems The complete current list of items
      */
-    void itemsChanged(const QList<TableItems::ClickedItem>& allItems);
+    void itemsChanged(const QList<TableItems::AnnotationItem>& allItems);
     
     /**
      * @brief Emitted when track data is added for an item
@@ -486,7 +486,7 @@ signals:
                              const QSizeF& fixedRoiSize);
 
 private:
-    QList<TableItems::ClickedItem> m_items;                // List of all blob items
+    QList<TableItems::AnnotationItem> m_items;                // List of all blob items
     QMap<int, int> m_idToIndexMap;                         // Maps item ID to index in m_items
     Tracking::AllWormTracks m_tracks;                      // Maps item ID to track points
     
@@ -495,11 +495,11 @@ private:
     
     int m_nextId;                                          // Next available ID
     
-    // Color management (from BlobTableModel)
+    // Color management (from AnnotationTableModel)
     QList<QColor> m_predefinedColors;                      // List of predefined colors
     int m_currentColorIndex;                               // Current index in color list
     
-    // Global metrics (from BlobTableModel)
+    // Global metrics (from AnnotationTableModel)
     double m_minObservedArea;                             
     double m_maxObservedArea;
     double m_minObservedAspectRatio;

@@ -3,7 +3,7 @@
  * @brief Non-UI application controller that owns storage, models, and TrackingManager; exposes high-level APIs and forwards signals for UI consumption.
  *
  * Responsibilities:
- *  - Create and own TrackingDataStorage, TrackingManager, BlobTableModel, and AnnotationTableModel.
+ *  - Create and own TrackingDataStorage, TrackingManager, AnnotationTableModel, and LostSegmentTableModel.
  *  - Expose models to the GUI so views can bind to them.
  *  - Provide high-level operations to manipulate models and to start/cancel tracking (e.g., beginTrackingFromModel, requestStartTracking, showTrackingDialog, cancelTracking).
  *  - Translate TrackingManager signals into controller-level signals suitable for UI.
@@ -27,8 +27,8 @@
 // Keep GUI-only headers out of this file.
 class TrackingManager;
 class TrackingDataStorage;
-class BlobTableModel;
 class AnnotationTableModel;
+class LostSegmentTableModel;
 class TrackingProgressDialog;
 class QWidget;
 namespace Debug { class DebugDataStore; }
@@ -41,7 +41,7 @@ namespace Debug { class DebugDataStore; }
  *
  * Responsibilities (summary):
  *  - Create and own TrackingDataStorage, TrackingManager, and application models
- *    such as BlobTableModel and AnnotationTableModel.
+ *    such as AnnotationTableModel and LostSegmentTableModel.
  *  - Expose models to the GUI (MainWindow) so views can bind to them.
  *  - Provide high-level operations to manipulate models and to start/cancel tracking.
  *  - Translate TrackingManager signals into controller-level signals suitable for UI.
@@ -55,7 +55,7 @@ namespace Debug { class DebugDataStore; }
  * @class AppController
  * @brief Non-UI controller that owns storage, models, and TrackingManager; exposes high-level APIs and forwards progress/status signals to the UI.
  *
- * Creates and owns TrackingDataStorage, TrackingManager, BlobTableModel, and AnnotationTableModel.
+ * Creates and owns TrackingDataStorage, TrackingManager, AnnotationTableModel, and LostSegmentTableModel.
  * Provides high-level operations (beginTrackingFromModel, requestStartTracking, showTrackingDialog, cancelTracking)
  * and forwards TrackingManager signals as controller-level signals for UI consumption.
  */
@@ -70,16 +70,16 @@ public:
     ~AppController() override;
 
     // Accessors for UI to bind models
-    BlobTableModel* blobTableModel() const;
     AnnotationTableModel* annotationTableModel() const;
+    LostSegmentTableModel* lostSegmentTableModel() const;
     TrackingDataStorage* trackingDataStorage() const;
     Debug::DebugDataStore* debugDataStore() const;
 
     // Model-manipulation commands (can be invoked from UI)
-    Q_INVOKABLE void addBlobFromVideo(const Tracking::DetectedBlob& blob, int frame);
+    Q_INVOKABLE void addItemFromBlob(const Tracking::DetectedBlob& blob, int frame);
     Q_INVOKABLE void addRoi(const QRectF& roi, int frame);
-    Q_INVOKABLE void removeAllBlobs();
-    Q_INVOKABLE void deleteBlobById(int id);
+    Q_INVOKABLE void removeAllItems();
+    Q_INVOKABLE void deleteItemById(int id);
     Q_INVOKABLE void setRoiSizeMultiplier(double factor);
     Q_INVOKABLE void setUmPerPixel(double umPerPixel);   // spatial scale in micrometres per pixel
 
@@ -101,7 +101,7 @@ public:
                                           const QString& dataDirectory);
     Q_INVOKABLE void cancelTracking();
 
-    // Higher-level orchestration: start tracking using the current BlobTableModel contents.
+    // Higher-level orchestration: start tracking using the current AnnotationTableModel contents.
     // The keyframe is not a parameter: it is each worm's own frameOfSelection, which
     // validateAndGetSharedKeyframe() requires to agree across the worms being tracked.
     // If onlyTrackMissing is true, any items that already have tracks in storage will be skipped.
@@ -113,7 +113,7 @@ public:
                                             const QString& dataDirectory);
 
     // Helper queries for UI
-    // - Returns the number of items currently marked as worms in the blob model
+    // - Returns the number of items currently marked as worms in the annotation model
     Q_INVOKABLE int countWormItems() const;
     // - Returns the number of distinct items that already have tracks stored
     Q_INVOKABLE int countWormsWithTracks() const;
@@ -239,9 +239,9 @@ private:
     void connectTrackingManagerSignals();
 
     /**
-     * @brief Build initial worm list from the blob model.
+     * @brief Build initial worm list from the annotation model.
      * @param onlyTrackMissing When true, skip items that already have tracks in storage.
-     * @return Vector of InitialWormInfo constructed from current BlobTableModel contents.
+     * @return Vector of InitialWormInfo constructed from current AnnotationTableModel contents.
      *
      * Thread affinity: GUI thread (reads model/storage).
      */
@@ -262,8 +262,8 @@ private:
     TrackingDataStorage* m_storage = nullptr;         // owned unless injected
     Debug::DebugDataStore* m_debugStore = nullptr;    // owned
     TrackingManager* m_manager = nullptr;             // owned
-    BlobTableModel* m_blobModel = nullptr;            // owned
-    AnnotationTableModel* m_annotationModel = nullptr;// owned
+    AnnotationTableModel* m_annotationModel = nullptr;            // owned
+    LostSegmentTableModel* m_lostSegmentModel = nullptr;// owned
 
     // Dialog parameters cached for controller-owned dialog orchestration (UI thread only)
     QString m_dialogVideoPath;

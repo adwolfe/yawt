@@ -4,7 +4,7 @@
  *
  * Responsibilities:
  *  - Manage and wire UI widgets (VideoLoader, MiniLoader, table views, delegates).
- *  - Bind controller-provided models (BlobTableModel, AnnotationTableModel) to views.
+ *  - Bind controller-provided models (AnnotationTableModel, LostSegmentTableModel) to views.
  *  - Handle user interactions: file selection, playback, ROI creation, threshold controls.
  *  - Keep UI in sync with VideoLoader interaction/view modes and visible tracks.
  *
@@ -23,8 +23,8 @@
 #include "debugutils.h"
 #include "ui_mainwindow.h"
 #include "miniloader.h"
+#include "lostsegmenttablemodel.h"
 #include "annotationtablemodel.h"
-#include "blobtablemodel.h"
 #include "itemtypefilterproxymodel.h"
 #include "colordelegate.h"
 #include "itemtypedelegate.h"
@@ -76,7 +76,7 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
-    , m_blobTableModel(nullptr)
+    , m_annotationTableModel(nullptr)
     , m_colorDelegate(nullptr)
     , m_itemTypeDelegate(nullptr)
     , m_appController(nullptr)
@@ -163,17 +163,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_appController->setUmPerPixel(ui->pixelSizeSpinBoxD->value());
 
     // Obtain models and storage from the controller (controller manages lifetimes).
-    m_blobTableModel = m_appController->blobTableModel();
+    m_annotationTableModel = m_appController->annotationTableModel();
 
     m_wormProxyModel = new ItemTypeFilterProxyModel(this);
-    m_wormProxyModel->setSourceModel(m_blobTableModel);
+    m_wormProxyModel->setSourceModel(m_annotationTableModel);
     m_wormProxyModel->setAllowedTypes(QSet<TableItems::ItemType>{
         TableItems::ItemType::Worm
     });
     ui->wormTableView->setModel(m_wormProxyModel);
 
     m_referenceItemsProxy = new ItemTypeFilterProxyModel(this);
-    m_referenceItemsProxy->setSourceModel(m_blobTableModel);
+    m_referenceItemsProxy->setSourceModel(m_annotationTableModel);
     m_referenceItemsProxy->setAllowedTypes(QSet<TableItems::ItemType>{
         TableItems::ItemType::ROI,
         TableItems::ItemType::StartPoint,
@@ -182,12 +182,12 @@ MainWindow::MainWindow(QWidget *parent)
     });
     ui->roiTableView->setModel(m_referenceItemsProxy);
 
-    m_annotationTableModel = m_appController->annotationTableModel();
-    // ui->annoTableView->setModel(m_annotationTableModel);
+    m_lostSegmentTableModel = m_appController->lostSegmentTableModel();
+    // ui->annoTableView->setModel(m_lostSegmentTableModel);
 
     m_trackingDataStorage = m_appController->trackingDataStorage();
     connect(m_trackingDataStorage, &TrackingDataStorage::itemsChanged,
-            this, [this](const QList<TableItems::ClickedItem>&) { updateWormTimeline(); });
+            this, [this](const QList<TableItems::AnnotationItem>&) { updateWormTimeline(); });
 
     // Set up MiniLoader instances
     ui->miniLoader->setTrackingDataStorage(m_trackingDataStorage);
@@ -201,7 +201,7 @@ MainWindow::MainWindow(QWidget *parent)
                     seekFrame(frame);
                     if (!wormIds.isEmpty() && m_wormProxyModel) {
                         int chosenId = *std::min_element(wormIds.begin(), wormIds.end());
-                        const int idCol = static_cast<int>(BlobTableModel::Column::ID);
+                        const int idCol = static_cast<int>(AnnotationTableModel::Column::ID);
                         for (int row = 0; row < m_wormProxyModel->rowCount(); ++row) {
                             QModelIndex idx = m_wormProxyModel->index(row, idCol);
                             if (m_wormProxyModel->data(idx, Qt::DisplayRole).toInt() == chosenId) {
@@ -216,12 +216,12 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     m_itemTypeDelegate = new ItemTypeDelegate(this);
-    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
-    ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Type, m_itemTypeDelegate);
+    ui->wormTableView->setItemDelegateForColumn(AnnotationTableModel::Column::Type, m_itemTypeDelegate);
+    ui->roiTableView->setItemDelegateForColumn(AnnotationTableModel::Column::Type, m_itemTypeDelegate);
 
     m_colorDelegate = new ColorDelegate(this);
-    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
-    ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Color, m_colorDelegate);
+    ui->wormTableView->setItemDelegateForColumn(AnnotationTableModel::Column::Color, m_colorDelegate);
+    ui->roiTableView->setItemDelegateForColumn(AnnotationTableModel::Column::Color, m_colorDelegate);
 
     ui->wormTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
     // Don't stretch last section - we'll handle column widths in resizeTableColumns()
@@ -239,10 +239,10 @@ MainWindow::MainWindow(QWidget *parent)
                                        QAbstractItemView::EditKeyPressed);
 
     // Configure Show/Hide column with checkboxes
-    ui->wormTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
+    ui->wormTableView->setItemDelegateForColumn(AnnotationTableModel::Column::Show, nullptr); // Use default delegate for checkboxes
     // Allow checking checkboxes in the header
     ui->wormTableView->horizontalHeader()->setSectionsClickable(true);
-    ui->wormTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
+    ui->wormTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Column::Show, QHeaderView::ResizeToContents);
 
     ui->roiTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
     ui->roiTableView->horizontalHeader()->setStretchLastSection(false);
@@ -253,10 +253,10 @@ MainWindow::MainWindow(QWidget *parent)
     ui->roiTableView->setEditTriggers(QAbstractItemView::DoubleClicked |
                                       QAbstractItemView::SelectedClicked |
                                       QAbstractItemView::EditKeyPressed);
-    ui->roiTableView->setItemDelegateForColumn(BlobTableModel::Column::Show, nullptr);
+    ui->roiTableView->setItemDelegateForColumn(AnnotationTableModel::Column::Show, nullptr);
     ui->roiTableView->horizontalHeader()->setSectionsClickable(true);
-    ui->roiTableView->horizontalHeader()->setSectionResizeMode(BlobTableModel::Column::Show, QHeaderView::ResizeToContents);
-    ui->roiTableView->setColumnHidden(BlobTableModel::Column::Frame, true);
+    ui->roiTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Column::Show, QHeaderView::ResizeToContents);
+    ui->roiTableView->setColumnHidden(AnnotationTableModel::Column::Frame, true);
 
     // Configure annotation table view
     // ui->annoTableView->setSizeAdjustPolicy(QAbstractScrollArea::AdjustToContents);
@@ -267,9 +267,9 @@ MainWindow::MainWindow(QWidget *parent)
     // ui->annoTableView->setSelectionMode(QAbstractItemView::SingleSelection);
 
     // Set column resize modes for annotation table
-    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::ID, QHeaderView::ResizeToContents);
-    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Type, QHeaderView::ResizeToContents);
-    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(AnnotationTableModel::Frames, QHeaderView::Stretch);
+    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(LostSegmentTableModel::ID, QHeaderView::ResizeToContents);
+    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(LostSegmentTableModel::Type, QHeaderView::ResizeToContents);
+    // ui->annoTableView->horizontalHeader()->setSectionResizeMode(LostSegmentTableModel::Frames, QHeaderView::Stretch);
 
     // Add hover effects and cursor styling to indicate clickability
     // ui->annoTableView->setMouseTracking(true);
@@ -358,7 +358,7 @@ MainWindow::MainWindow(QWidget *parent)
                             QModelIndex srcIdx = m_wormProxyModel->mapToSource(
                                 m_wormProxyModel->index(row, 0));
                             if (srcIdx.isValid()) {
-                                const int id = m_blobTableModel->getItem(srcIdx.row()).id;
+                                const int id = m_annotationTableModel->getItem(srcIdx.row()).id;
                                 if (ids.contains(id))
                                     sel.select(m_wormProxyModel->index(row, 0),
                                                m_wormProxyModel->index(row, nCols - 1));
@@ -534,9 +534,9 @@ void MainWindow::onVideoScaleMeasured(double pixelLength)
 }
 
 void MainWindow::setupConnections() {
-    // Connect ROI factor spinbox to BlobTableModel
+    // Connect ROI factor spinbox to AnnotationTableModel
     connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
+            m_annotationTableModel, &AnnotationTableModel::updateRoiSizeMultiplier);
     connect(ui->pixelSizeSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double umPerPixel) {
                 m_appController->setUmPerPixel(umPerPixel);
@@ -573,7 +573,7 @@ void MainWindow::setupConnections() {
     });
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
-    // When an ROI is drawn in VideoLoader, add it as an ROI item in the BlobTableModel
+    // When an ROI is drawn in VideoLoader, add it as an ROI item in the AnnotationTableModel
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);
     connect(ui->videoLoader, &VideoLoader::pointDefined, this, &MainWindow::handlePointDefined);
     connect(ui->videoLoader, &VideoLoader::playbackStateChanged, this, &MainWindow::onPlaybackStateChanged);
@@ -707,22 +707,22 @@ void MainWindow::setupConnections() {
     // VideoLoader -> MainWindow (for adding blobs)
     connect(ui->videoLoader, &VideoLoader::blobClickedForAddition, this, &MainWindow::handleBlobClickedForAddition);
 
-    // BlobTableModel -> VideoLoader
-    connect(m_blobTableModel, &BlobTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
-    connect(m_blobTableModel, &BlobTableModel::itemVisibilityChanged,
+    // AnnotationTableModel -> VideoLoader
+    connect(m_annotationTableModel, &AnnotationTableModel::itemsChanged, ui->videoLoader, &VideoLoader::updateItemsToDisplay);
+    connect(m_annotationTableModel, &AnnotationTableModel::itemVisibilityChanged,
             [this](int id, bool visible) {
                 // When an item's visibility changes, update the VideoLoader with current items
-                ui->videoLoader->updateItemsToDisplay(m_blobTableModel->getAllItems());
+                ui->videoLoader->updateItemsToDisplay(m_annotationTableModel->getAllItems());
             });
-    connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveBlobsClicked);
-    connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedBlobClicked);
+    connect(ui->clearAllButton, &QPushButton::clicked, this, &MainWindow::handleRemoveItemsClicked);
+    connect(ui->deleteButton, &QPushButton::clicked, this, &MainWindow::handleDeleteSelectedItemClicked);
 
     // Retracking UI removed - no connections
 
     // Auto-resize table columns when model data changes
-    connect(m_blobTableModel, &BlobTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
-    connect(m_blobTableModel, &BlobTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
-    connect(m_blobTableModel, &BlobTableModel::rowsRemoved, this, &MainWindow::resizeTableColumns);
+    connect(m_annotationTableModel, &AnnotationTableModel::dataChanged, this, &MainWindow::resizeTableColumns);
+    connect(m_annotationTableModel, &AnnotationTableModel::rowsInserted, this, &MainWindow::resizeTableColumns);
+    connect(m_annotationTableModel, &AnnotationTableModel::rowsRemoved, this, &MainWindow::resizeTableColumns);
 
     // Retracking combo removed
 
@@ -758,7 +758,7 @@ void MainWindow::setupConnections() {
                 QModelIndex proxyIdx = selectedIndexes.first();
                 QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
                 if (srcIdx.isValid()) {
-                    const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(srcIdx.row());
+                    const TableItems::AnnotationItem& selectedItem = m_annotationTableModel->getItem(srcIdx.row());
 
                     // Auto-center video on worm position if zoomed in
                     double currentZoom = ui->videoLoader->getZoomFactor();
@@ -873,7 +873,7 @@ void MainWindow::setupConnections() {
         if (!m_trackingDataStorage) return;
         int total = 0;
         int visibleCount = 0;
-        const QList<TableItems::ClickedItem>& items = m_trackingDataStorage->getAllItems();
+        const QList<TableItems::AnnotationItem>& items = m_trackingDataStorage->getAllItems();
         for (const auto& item : items) {
             if (!types.contains(item.type)) continue;
             total++;
@@ -890,7 +890,7 @@ void MainWindow::setupConnections() {
 
     connect(ui->wormTableView->horizontalHeader(), &QHeaderView::sectionClicked,
             [this, toggleVisibilityForTypes](int logicalIndex) {
-        if (logicalIndex != BlobTableModel::Column::Show) return;
+        if (logicalIndex != AnnotationTableModel::Column::Show) return;
         toggleVisibilityForTypes(QSet<TableItems::ItemType>{
             TableItems::ItemType::Worm
         });
@@ -898,7 +898,7 @@ void MainWindow::setupConnections() {
 
     connect(ui->roiTableView->horizontalHeader(), &QHeaderView::sectionClicked,
             [this, toggleVisibilityForTypes](int logicalIndex) {
-        if (logicalIndex != BlobTableModel::Column::Show) return;
+        if (logicalIndex != AnnotationTableModel::Column::Show) return;
         toggleVisibilityForTypes(QSet<TableItems::ItemType>{
             TableItems::ItemType::ROI,
             TableItems::ItemType::StartPoint,
@@ -940,9 +940,9 @@ void MainWindow::setupConnections() {
     // connect(ui->annoTableView, &QTableView::clicked, this, &MainWindow::onAnnotationTableClicked);
 
     // Connect header data changes to trigger UI update
-    connect(m_blobTableModel, &QAbstractItemModel::headerDataChanged,
+    connect(m_annotationTableModel, &QAbstractItemModel::headerDataChanged,
             this, [this](Qt::Orientation orientation, int first, int last) {
-        if (orientation == Qt::Horizontal && first <= BlobTableModel::Column::Show && last >= BlobTableModel::Column::Show) {
+        if (orientation == Qt::Horizontal && first <= AnnotationTableModel::Column::Show && last >= AnnotationTableModel::Column::Show) {
             // Update the table view when header checkbox state changes
             ui->wormTableView->update();
             ui->roiTableView->update();
@@ -951,7 +951,7 @@ void MainWindow::setupConnections() {
 
     // Initial call to setVisibleTrackIDs with all item IDs
     QSet<int> initialItemIDs;
-    for (const auto& item : m_blobTableModel->getAllItems()) {
+    for (const auto& item : m_annotationTableModel->getAllItems()) {
         if (item.type == TableItems::ItemType::Worm) {
             initialItemIDs.insert(item.id);
         }
@@ -1014,21 +1014,21 @@ void MainWindow::initializeUIStates() {
     ui->roiFactorSpinBoxD->setValue(roiFactorSpinBoxD);
     ui->roiFactorSpinBoxD->setSingleStep(0.05);
     // Set initial value in the model
-    m_blobTableModel->updateRoiSizeMultiplier(roiFactorSpinBoxD);
+    m_annotationTableModel->updateRoiSizeMultiplier(roiFactorSpinBoxD);
 
     // Initial button states will be set by sync slots when VideoLoader emits initial modes
 }
 
 void MainWindow::resizeTableColumns()
 {
-    if (!m_blobTableModel || m_blobTableModel->columnCount() == 0) {
+    if (!m_annotationTableModel || m_annotationTableModel->columnCount() == 0) {
         return;
     }
 
     auto resizeView = [this](QTableView* view) {
         if (!view) return;
         int viewportWidth = view->viewport()->width();
-        int columnCount = m_blobTableModel->columnCount();
+        int columnCount = m_annotationTableModel->columnCount();
 
         view->horizontalHeader()->setVisible(true);
         view->horizontalHeader()->setStretchLastSection(false);
@@ -1064,10 +1064,10 @@ void MainWindow::resizeTableColumns()
 
 void MainWindow::updateWormTimeline()
 {
-    if (!ui->wormTimeline || !m_blobTableModel || !m_trackingDataStorage) return;
+    if (!ui->wormTimeline || !m_annotationTableModel || !m_trackingDataStorage) return;
 
     QMap<int, QColor> idColors;
-    const QList<TableItems::ClickedItem> items = m_blobTableModel->getAllItems();
+    const QList<TableItems::AnnotationItem> items = m_annotationTableModel->getAllItems();
     for (const auto& item : items) {
         if (item.type == TableItems::ItemType::Worm) {
             idColors.insert(item.id, item.color);
@@ -1274,16 +1274,16 @@ void MainWindow::handleBlobClickedForAddition(const Tracking::DetectedBlob& blob
     TableItems::ItemType itemType = TableItems::ItemType::Worm;
 
     // Now adding through the data storage via the model
-    bool added = m_blobTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, itemType);
+    bool added = m_annotationTableModel->addItem(blobData.centroid, blobData.boundingBox, currentFrame, itemType);
 
     if (added) {
         // Enable the delete button since we now have an item
         ui->deleteButton->setEnabled(true);
 
         // Select the newly added row
-        int lastRow = m_blobTableModel->rowCount() - 1;
+        int lastRow = m_annotationTableModel->rowCount() - 1;
         if (m_wormProxyModel) {
-            QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
+            QModelIndex srcIndex = m_annotationTableModel->index(lastRow, 0);
             QModelIndex proxyIndex = m_wormProxyModel->mapFromSource(srcIndex);
             if (proxyIndex.isValid()) {
                 ui->wormTableView->setCurrentIndex(proxyIndex);
@@ -1314,13 +1314,13 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
     QRectF boundingBox = roi;
 
     // Add as ROI type to the model
-    bool added = m_blobTableModel->addItem(centroid, boundingBox, currentFrame, TableItems::ItemType::ROI);
+    bool added = m_annotationTableModel->addItem(centroid, boundingBox, currentFrame, TableItems::ItemType::ROI);
 
     if (added) {
         ui->deleteButton->setEnabled(true);
-        int lastRow = m_blobTableModel->rowCount() - 1;
+        int lastRow = m_annotationTableModel->rowCount() - 1;
         if (m_referenceItemsProxy) {
-            QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
+            QModelIndex srcIndex = m_annotationTableModel->index(lastRow, 0);
             QModelIndex proxyIndex = m_referenceItemsProxy->mapFromSource(srcIndex);
             if (proxyIndex.isValid()) {
                 ui->roiTableView->setCurrentIndex(proxyIndex);
@@ -1341,8 +1341,8 @@ void MainWindow::handlePointDefined(const QPointF& point) {
 
     const auto removeExistingPointType = [this](TableItems::ItemType type) {
         QList<int> idsToRemove;
-        const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
-        for (const TableItems::ClickedItem& item : items) {
+        const QList<TableItems::AnnotationItem>& items = m_annotationTableModel->getAllItems();
+        for (const TableItems::AnnotationItem& item : items) {
             if (item.type == type) {
                 idsToRemove.append(item.id);
             }
@@ -1363,7 +1363,7 @@ void MainWindow::handlePointDefined(const QPointF& point) {
             return;
         }
 
-        const QModelIndex sourceIndex = m_blobTableModel->index(sourceRow, 0);
+        const QModelIndex sourceIndex = m_annotationTableModel->index(sourceRow, 0);
         const QModelIndex proxyIndex = m_referenceItemsProxy->mapFromSource(sourceIndex);
         if (!proxyIndex.isValid()) {
             return;
@@ -1399,13 +1399,13 @@ void MainWindow::handlePointDefined(const QPointF& point) {
     statusBar()->showMessage("Start/End points updated.", 3000);
 }
 
-void MainWindow::handleRemoveBlobsClicked() {
+void MainWindow::handleRemoveItemsClicked() {
     if (m_trackingDataStorage) {
         m_trackingDataStorage->clearAllData();
     }
     ui->deleteButton->setEnabled(false); // Disable delete button after clearing all items
     // VideoLoader will get updates from storage, but keep these for backward compatibility.
-    ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
+    ui->videoLoader->updateItemsToDisplay(QList<TableItems::AnnotationItem>());
     ui->videoLoader->setTracksToDisplay(Tracking::AllWormTracks());
     ui->videoLoader->setVisibleTrackIDs(QSet<int>());
     updateWormTimeline();
@@ -1414,7 +1414,7 @@ void MainWindow::handleRemoveBlobsClicked() {
 }
 
 
-void MainWindow::handleDeleteSelectedBlobClicked() {
+void MainWindow::handleDeleteSelectedItemClicked() {
     QTableView* activeView = nullptr;
     ItemTypeFilterProxyModel* activeProxy = nullptr;
 
@@ -1436,7 +1436,7 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
     if (!srcIndex.isValid()) return;
 
     const int selectedProxyRow = proxyIndex.row();
-    if (!m_blobTableModel->removeRows(srcIndex.row(), 1)) return;
+    if (!m_annotationTableModel->removeRows(srcIndex.row(), 1)) return;
 
     if (m_trackingDataStorage) {
         ui->videoLoader->setTracksToDisplay(m_trackingDataStorage->getAllTracks());
@@ -1546,7 +1546,7 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
         m_trackingDataStorage->clearAllData();
     }
     if (ui->videoLoader) {
-        ui->videoLoader->updateItemsToDisplay(QList<TableItems::ClickedItem>());
+        ui->videoLoader->updateItemsToDisplay(QList<TableItems::AnnotationItem>());
         ui->videoLoader->setTracksToDisplay(Tracking::AllWormTracks());
         ui->videoLoader->setVisibleTrackIDs(QSet<int>());
     }
@@ -1658,7 +1658,7 @@ void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& curren
         if (!selectedIndexes.isEmpty() && m_wormProxyModel) {
             QModelIndex srcIdx = m_wormProxyModel->mapToSource(selectedIndexes.first());
             if (srcIdx.isValid()) {
-                const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(srcIdx.row());
+                const TableItems::AnnotationItem& selectedItem = m_annotationTableModel->getItem(srcIdx.row());
                 QPointF wormPosition;
                 QRectF wormRoi;
                 bool found = m_trackingDataStorage->getWormDataForFrame(selectedItem.id, currentFrameNumber, wormPosition, wormRoi);
@@ -1697,8 +1697,8 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         m_lastMiniLoaderFrame = currentFrameNumber;
     }
 
-    // Get the crop size from BlobTableModel
-    QSizeF cropSize = m_blobTableModel->getCurrentFixedRoiSize();
+    // Get the crop size from AnnotationTableModel
+    QSizeF cropSize = m_annotationTableModel->getCurrentFixedRoiSize();
     if (cropSize.isEmpty()) {
         cropSize = QSizeF(100, 100); // fallback size
     }
@@ -1713,7 +1713,7 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         QModelIndex proxyIdx = selectedIndexes.first();
         QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
         if (srcIdx.isValid()) {
-            const TableItems::ClickedItem& selectedItem = m_blobTableModel->getItem(srcIdx.row());
+            const TableItems::AnnotationItem& selectedItem = m_annotationTableModel->getItem(srcIdx.row());
             int wormId = selectedItem.id;
 
             QPointF wormPosition;
@@ -1983,8 +1983,8 @@ void MainWindow::onStartTrackingActionTriggered() {
     }
 
     std::vector<Tracking::InitialWormInfo> initialWorms;
-    const QList<TableItems::ClickedItem>& items = m_blobTableModel->getAllItems();
-    for(const TableItems::ClickedItem& item : items) {
+    const QList<TableItems::AnnotationItem>& items = m_annotationTableModel->getAllItems();
+    for(const TableItems::AnnotationItem& item : items) {
         if(item.type == TableItems::ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
             Tracking::InitialWormInfo info;
             info.id = item.id;
@@ -2046,9 +2046,9 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     YAWT_DEBUG(lcGuiMainWindow) << "TrackingDataStorage now has" << m_trackingDataStorage->getAllTracks().size() << "tracks";
 
     // Refresh annotation table to show lost tracking events
-    if (m_annotationTableModel) {
-        m_annotationTableModel->refreshAnnotations();
-        YAWT_DEBUG(lcGuiMainWindow) << "Refreshed annotation table with" << m_annotationTableModel->rowCount() << "annotations";
+    if (m_lostSegmentTableModel) {
+        m_lostSegmentTableModel->refreshAnnotations();
+        YAWT_DEBUG(lcGuiMainWindow) << "Refreshed annotation table with" << m_lostSegmentTableModel->rowCount() << "annotations";
     }
 
     // VideoLoader still needs direct track data for backward compatibility
@@ -2150,11 +2150,11 @@ void MainWindow::updatePlaybackSpeedComboBox(double speedMultiplier) {
 }
 
 void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
-    if (!index.isValid() || !m_annotationTableModel) {
+    if (!index.isValid() || !m_lostSegmentTableModel) {
         return;
     }
 
-    const AnnotationTableModel::AnnotationEntry* annotation = m_annotationTableModel->getAnnotationAtRow(index.row());
+    const LostSegmentTableModel::AnnotationEntry* annotation = m_lostSegmentTableModel->getAnnotationAtRow(index.row());
     if (!annotation) {
         qWarning() << "MainWindow: Could not get annotation for row" << index.row();
         return;
@@ -2197,7 +2197,7 @@ void MainWindow::onAnnotationTableClicked(const QModelIndex& index) {
     qDebug() << "MainWindow: Before blob selection - zoom factor:" << zoomBeforeBlobSelection;
 
     if (m_wormProxyModel) {
-        const int idCol = static_cast<int>(BlobTableModel::Column::ID);
+        const int idCol = static_cast<int>(AnnotationTableModel::Column::ID);
         for (int i = 0; i < m_wormProxyModel->rowCount(); ++i) {
             QModelIndex idx = m_wormProxyModel->index(i, idCol);
             if (m_wormProxyModel->data(idx, Qt::DisplayRole).toInt() == targetWormId) {
@@ -2239,14 +2239,14 @@ void MainWindow::updateVisibleTracksInVideoLoader(const QItemSelection &selected
 
     QSet<int> wormItemIDs;
     if (m_trackingDataStorage) {
-        const QList<TableItems::ClickedItem>& allItems = m_trackingDataStorage->getAllItems();
+        const QList<TableItems::AnnotationItem>& allItems = m_trackingDataStorage->getAllItems();
         for (const auto& item : allItems) {
             if (item.type == TableItems::ItemType::Worm) {
                 wormItemIDs.insert(item.id);
             }
         }
-    } else if (m_blobTableModel) {
-        const QList<TableItems::ClickedItem>& allItems = m_blobTableModel->getAllItems();
+    } else if (m_annotationTableModel) {
+        const QList<TableItems::AnnotationItem>& allItems = m_annotationTableModel->getAllItems();
         for (const auto& item : allItems) {
             if (item.type == TableItems::ItemType::Worm) {
                 wormItemIDs.insert(item.id);
@@ -2363,13 +2363,13 @@ void MainWindow::runDebugExport(bool silent)
 {
     // Resolve selected worm
     int wormId = -1;
-    if (ui->wormTableView->selectionModel() && m_wormProxyModel && m_blobTableModel) {
+    if (ui->wormTableView->selectionModel() && m_wormProxyModel && m_annotationTableModel) {
         const QModelIndexList sel = ui->wormTableView->selectionModel()->selectedIndexes();
         if (!sel.isEmpty()) {
             const QModelIndex proxyIdx = m_wormProxyModel->index(sel.first().row(), 0);
             const QModelIndex srcIdx = m_wormProxyModel->mapToSource(proxyIdx);
             if (srcIdx.isValid())
-                wormId = m_blobTableModel->getItem(srcIdx.row()).id;
+                wormId = m_annotationTableModel->getItem(srcIdx.row()).id;
         }
     }
     if (wormId < 0) {

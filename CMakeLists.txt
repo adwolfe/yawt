@@ -59,8 +59,8 @@ set(SOURCES
     main.cpp
 
     # Models
+    src/models/lostsegmenttablemodel.cpp
     src/models/annotationtablemodel.cpp
-    src/models/blobtablemodel.cpp
     src/models/folderfirstsortproxymodel.cpp
     src/models/itemtypefilterproxymodel.cpp
 
@@ -129,8 +129,8 @@ set(SOURCES
 # List of headers (updated to new locations)
 set(HEADERS
     # Models
+    src/models/lostsegmenttablemodel.h
     src/models/annotationtablemodel.h
-    src/models/blobtablemodel.h
     src/models/folderfirstsortproxymodel.h
     src/models/itemtypefilterproxymodel.h
 

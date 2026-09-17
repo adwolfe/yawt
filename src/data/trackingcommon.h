@@ -10,7 +10,7 @@
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
 #include <cmath>  // For std::sqrt (TipFeatureBaseline accessors)
-#include <QColor> // For ClickedItem color
+#include <QColor> // For AnnotationItem color
 #include <QString> // For typeToString and stringToType
 #include <QJsonObject>
 #include <map>     // For AllWormTracks
@@ -22,7 +22,7 @@
 // Coordinate frames used throughout YAWT
 // --------------------------------------
 //  video coordinates   Pixels of the source video frame: origin top-left, x right, y down.
-//                      Every position stored on a DetectedBlob, WormTrackPoint, ClickedItem
+//                      Every position stored on a DetectedBlob, WormTrackPoint, AnnotationItem
 //                      or reference point is in this frame. This is the only frame that is
 //                      persisted.
 //  local coordinates   Pixels relative to a blob's padded bounding box
@@ -37,7 +37,9 @@
 
 
 namespace TableItems {
-// These are used within the BlobTableModel, for user interaction with blobs prior to tracking.
+// Annotations: the items the user marks on the video (worms to track, ROI rectangles,
+// Start/End/Center reference points). Shown in the annotation tables and persisted in
+// worms.json / roi_points.json.
 
 // Enum for the type of tracked item
 enum class ItemType {
@@ -73,8 +75,8 @@ inline ItemType stringToItemType(const QString& typeStr) {
     return ItemType::Undefined;
 }
 
-// Structure to hold data for each item in the table
-struct ClickedItem {
+// One user annotation. Called a "blob" in older code because worms are picked by clicking a blob.
+struct AnnotationItem {
     int id;                         // Unique auto-generated ID
     QColor color;                   // Color for worm ROI and track
     ItemType type;                  // Type of the item

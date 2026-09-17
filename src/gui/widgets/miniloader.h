@@ -92,20 +92,20 @@ public:
 
 public slots:
     /**
-     * @brief Handles worm selection changes from the BlobTableModel.
+     * @brief Handles worm selection changes from the AnnotationTableModel.
      * @param selectedItems List of currently selected items
      */
-    void onWormSelectionChanged(const QList<TableItems::ClickedItem>& selectedItems);
+    void onWormSelectionChanged(const QList<TableItems::AnnotationItem>& selectedItems);
 
     /**
      * @brief Updates the MiniLoader's id->color map and triggers a repaint.
      * This slot accepts the bulk item list emitted by TrackingDataStorage::itemsChanged
-     * / BlobTableModel::itemsChanged and rebuilds the internal color mapping so overlays
+     * / AnnotationTableModel::itemsChanged and rebuilds the internal color mapping so overlays
      * use the authoritative colors.
      *
-     * @param items List of all ClickedItem objects (complete current list)
+     * @param items List of all AnnotationItem objects (complete current list)
      */
-    void updateItemsToDisplay(const QList<TableItems::ClickedItem>& items);
+    void updateItemsToDisplay(const QList<TableItems::AnnotationItem>& items);
 
     /**
      * @brief Sets the selected worm directly by ID.
@@ -218,7 +218,7 @@ private:
     QMap<int, QSet<int>> m_visibleWormsByFrame;
 
     // Cache of item colors (worm ID -> QColor) rebuilt from the authoritative items list
-    // supplied by TrackingDataStorage::itemsChanged / BlobTableModel::itemsChanged.
+    // supplied by TrackingDataStorage::itemsChanged / AnnotationTableModel::itemsChanged.
     QMap<int, QColor> m_idColors;
 };
 
