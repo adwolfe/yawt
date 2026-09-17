@@ -8,11 +8,15 @@
  *  - Detect and react to merges/splits/lost-tracking scenarios; pause on split for external resolution.
  *  - Emit lifecycle and progress signals suitable for cross-thread consumption.
  *
- * State machine notes:
- *  - TrackingNormally: tracking a single worm-sized blob.
- *  - TrackingAsMerged: blob likely represents multiple worms (merged entity).
- *  - PausedForSplit: split detected; tracker pauses and emits candidates, awaiting assignment.
- *  - Lost: target not found; attempt recovery using last-known position/ROI heuristics.
+ * State machine notes (Tracking::TrackerState, declared in trackingcommon.h):
+ *  - Idle: constructed; startTracking() not yet called. Never re-entered.
+ *  - TrackingSingle: tracking a single worm-sized blob.
+ *  - TrackingMerged: blob likely represents multiple worms (merged entity).
+ *  - PausedForSplit: split detected; the tracker stops advancing frames and reports the candidate blobs
+ *    via positionUpdated(). TrackingManager resolves the split synchronously in its frame-update handler
+ *    and queues resumeTrackingWithAssignedTarget(), which returns the tracker to TrackingSingle or
+ *    TrackingLost.
+ *  - TrackingLost: target not found; attempt recovery using last-known position/ROI heuristics.
  *  - Transitions are driven by helpers such as updateTrackingState(), detectSplitByAreaReduction(),
  *    detectMergeByAreaIncrease(), and boundary/area plausibility checks.
  *
