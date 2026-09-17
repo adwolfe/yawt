@@ -81,7 +81,11 @@ struct ClickedItem {
     QPointF initialCentroid;        // Centroid in video coordinates at selection
     QRectF initialBoundingBox;      // Bounding box in video coordinates at selection. THIS WILL BECOME THE STANDARDIZED ROI.
     QRectF originalClickedBoundingBox; // The actual bounding box of the blob when it was clicked. Used for metrics.
-    int frameOfSelection;           // Frame number where this item was selected
+    int frameOfSelection;           // Frame the item was placed on. For a Worm this is its KEYFRAME: tracking
+                                    // runs outward from it, and every worm in one run must share it
+                                    // (AppController::validateAndGetSharedKeyframe). Worms added later can be
+                                    // tracked from a different frame in a later run. For reference items it is
+                                    // informational only.
     bool visible = true;            // Whether this item's track/ROI should be displayed
     // Add other relevant data as needed
 };

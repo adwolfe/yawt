@@ -403,7 +403,6 @@ bool AppController::validateAndGetSharedKeyframe(bool onlyTrackMissing, int& out
 }
 
 void AppController::beginTrackingFromModel(const QString& videoPath,
-                                          int keyFrame,
                                           const Thresholding::ThresholdSettings& settings,
                                           bool onlyTrackMissing,
                                           int totalFrames,
@@ -463,7 +462,6 @@ bool AppController::hasWormItems() const
 // ---- Dialog orchestration: controller-owned TrackingProgressDialog ----
 
 void AppController::showTrackingDialog(const QString& videoPath,
-                                       int keyFrame,
                                        const Thresholding::ThresholdSettings& settings,
                                        bool onlyTrackMissing,
                                        int totalFrames,
@@ -481,7 +479,7 @@ void AppController::showTrackingDialog(const QString& videoPath,
     // Store provided parameters so the dialog begin handler can use them.
     // Use the per-worm derived keyframe rather than the video's current position.
     m_dialogVideoPath = videoPath;
-    m_dialogKeyFrame = (derivedKeyFrame >= 0) ? derivedKeyFrame : keyFrame;
+    m_dialogKeyFrame = derivedKeyFrame;   // the worms' shared frameOfSelection
     m_dialogSettings = settings;
     m_dialogOnlyTrackMissing = onlyTrackMissing;
     m_dialogTotalFrames = totalFrames;
@@ -550,7 +548,7 @@ void AppController::onDialogBeginRequested()
         if (m_trackingDialog) m_trackingDialog->onTrackingFailed(keyFrameError);
         return;
     }
-    m_dialogKeyFrame = (derivedKeyFrame >= 0) ? derivedKeyFrame : m_dialogKeyFrame;
+    m_dialogKeyFrame = derivedKeyFrame;
 
     // Build initial worm list from model, respecting the dialog's only-missing preference.
     std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(m_dialogOnlyTrackMissing);

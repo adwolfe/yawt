@@ -1997,15 +1997,16 @@ void MainWindow::onStartTrackingActionTriggered() {
         QMessageBox::information(this, "Tracking", "No items marked as 'Worm' in the table to track."); return;
     }
 
-    int keyFrame = ui->videoLoader->getCurrentFrameNumber();
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
+    // The keyframe is each worm's frameOfSelection (validated shared by AppController),
+    // not the frame currently displayed.
     // Delegate dialog creation and orchestration to AppController.
     if (m_appController) {
         bool onlyTrackMissing = true; // Default behavior; dialog can override when created by controller.
         QString dataDirectory = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
-        m_appController->showTrackingDialog(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames, dataDirectory, this);
+        m_appController->showTrackingDialog(videoPath, settings, onlyTrackMissing, totalFrames, dataDirectory, this);
     } else {
         QMessageBox::critical(this, "Error", "Internal error: AppController missing.");
     }
@@ -2018,7 +2019,6 @@ void MainWindow::handleBeginTrackingFromDialog() {
     }
 
     QString videoPath = ui->videoLoader->getCurrentVideoPath();
-    int keyFrame = ui->videoLoader->getCurrentFrameNumber();
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
     int totalFrames = ui->videoLoader->getTotalFrames();
 
@@ -2026,7 +2026,7 @@ void MainWindow::handleBeginTrackingFromDialog() {
     // Let the controller handle filtering (only-missing) and orchestration.
     bool onlyTrackMissing = true;
     QString dataDirectory = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
-    m_appController->beginTrackingFromModel(videoPath, keyFrame, settings, onlyTrackMissing, totalFrames, dataDirectory);
+    m_appController->beginTrackingFromModel(videoPath, settings, onlyTrackMissing, totalFrames, dataDirectory);
 }
 
 void MainWindow::handleCancelTrackingFromDialog() {

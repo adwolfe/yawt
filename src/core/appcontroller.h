@@ -102,10 +102,11 @@ public:
     Q_INVOKABLE void cancelTracking();
 
     // Higher-level orchestration: start tracking using the current BlobTableModel contents.
+    // The keyframe is not a parameter: it is each worm's own frameOfSelection, which
+    // validateAndGetSharedKeyframe() requires to agree across the worms being tracked.
     // If onlyTrackMissing is true, any items that already have tracks in storage will be skipped.
     // This lets the UI hand a lightweight request to the controller without building initialWorms itself.
     Q_INVOKABLE void beginTrackingFromModel(const QString& videoPath,
-                                            int keyFrame,
                                             const Thresholding::ThresholdSettings& settings,
                                             bool onlyTrackMissing,
                                             int totalFrames,
@@ -128,7 +129,6 @@ public:
     /**
      * @brief Create, wire, and execute the controller-owned tracking dialog.
      * @param videoPath Absolute path to the source video.
-     * @param keyFrame Frame index used as the keyframe.
      * @param settings Thresholding parameters snapshot for this session.
      * @param onlyTrackMissing When true, initial worms are built by skipping items already tracked in storage.
      * @param totalFrames Total number of frames in the video (for progress UI and bounds).
@@ -137,7 +137,6 @@ public:
      * The dialog emits begin/cancel requests; this controller responds by starting or cancelling tracking via TrackingManager.
      */
     Q_INVOKABLE void showTrackingDialog(const QString& videoPath,
-                                        int keyFrame,
                                         const Thresholding::ThresholdSettings& settings,
                                         bool onlyTrackMissing,
                                         int totalFrames,
