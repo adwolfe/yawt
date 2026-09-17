@@ -44,6 +44,7 @@
  *  - clearProcessedVideoMemory() frees accumulated processed frames early after save/cancel/fail and emits a status update to inform the UI.
   */
 #include "trackingmanager.h"
+#include "centerlinegeometry.h"
 #include "../data/videometadatastore.h"
 #include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
@@ -1949,7 +1950,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                     const auto blobIt = blobsForFrame.constFind(sourceItemId);
                     if (blobIt != blobsForFrame.constEnd()) {
                         centerlinePoints =
-                            Tracking::resampleCenterlinePoints(blobIt.value().centerlinePoints, 10);
+                            Centerline::resampleCenterlinePoints(blobIt.value().centerlinePoints, 10);
                     }
 
                 }

@@ -1093,7 +1093,7 @@ static bool selectZeroTipRingCutCenterline(
     std::vector<ScoredCandidate> scored;
     for (const CutCandidate& cut : cuts) {
         Tracking::DetectedBlob cutBlob = blob;
-        if (!Tracking::populateCenterlineFromContourWithCut(cutBlob, cut.a, cut.b, 3) ||
+        if (!Centerline::populateCenterlineFromContourWithCut(cutBlob, cut.a, cut.b, 3) ||
             cutBlob.centerlinePoints.size() < 2) {
             if (diagnostics) {
                 diagnostics->append(QStringLiteral("0-tip ring cut candidate %1 failed")
@@ -3314,7 +3314,7 @@ if (er.topology == Tracking::TopologyState::SelfCrossed && framePredictor.hasVel
                 cv::Point2f cutA = predictedHead - cv::Point2f(static_cast<float>(er.localBounds.x), static_cast<float>(er.localBounds.y));
                 cv::Point2f cutB = predictedTail - cv::Point2f(static_cast<float>(er.localBounds.x), static_cast<float>(er.localBounds.y));
 
-                if (Tracking::populateCenterlineFromContourWithCut(splitBlob, cutA, cutB, 2)) {
+                if (Centerline::populateCenterlineFromContourWithCut(splitBlob, cutA, cutB, 2)) {
 
                     // 4. Re-evaluate topology
                     Centerline::EndpointResult splitEr =
@@ -3949,7 +3949,7 @@ if (centerline.empty()) {
     debugRecord.fallbackUsed = true;
     debugRecord.branch = Debug::CenterlineBranch::D4FallbackContourSkeleton;
     Tracking::DetectedBlob fallback = blob;
-    if (Tracking::populateCenterlineFromContour(fallback) &&
+    if (Centerline::populateCenterlineFromContour(fallback) &&
         fallback.centerlinePoints.size() >= 2) {
         centerline.assign(fallback.centerlinePoints.begin(),
                           fallback.centerlinePoints.end());

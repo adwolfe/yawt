@@ -779,7 +779,7 @@ void CenterlineWorker::doWork()
             Tracking::DetectedBlob temp = frameBlobs[wormId];
             if (!temp.isValid || temp.contourPoints.empty()) continue;
             if (!temp.holeContourPoints.empty()) continue;
-            if (Tracking::populateCenterlineFromContour(temp) &&
+            if (Centerline::populateCenterlineFromContour(temp) &&
                 temp.centerlinePoints.size() >= 2) {
                 std::vector<cv::Point2f> p(temp.centerlinePoints.begin(),
                                            temp.centerlinePoints.end());

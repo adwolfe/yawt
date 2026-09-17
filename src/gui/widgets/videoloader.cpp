@@ -1,5 +1,6 @@
 #include "videoloader.h"
 #include "frameloader.h"
+#include "../../core/centerlinegeometry.h"
 
 #include <QDebug>
 #include <cmath>
@@ -1108,7 +1109,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             }
 
             const QList<QPointF> centerlinePoints =
-                Tracking::extractResampledCenterlinePoints(blob, 10);
+                Centerline::extractResampledCenterlinePoints(blob, 10);
             if (centerlinePoints.isEmpty()) {
                 continue;
             }

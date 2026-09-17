@@ -1,5 +1,8 @@
 #include "centerlinegeometry.h"
 
+#include <QList>
+#include <QPointF>
+#include <QtMath>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -330,6 +333,145 @@ cv::Rect buildCenterlineMask(const Tracking::DetectedBlob& blob, cv::Mat& mask)
     }
 
     return localBounds;
+}
+
+// ── Blob-level centerline helpers (moved from namespace Tracking) ──────────
+
+bool populateCenterlineFromContour(Tracking::DetectedBlob& blob)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3) {
+        return false;
+    }
+
+    cv::Mat mask;
+    cv::Rect localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) return false;
+
+    blob.centerlinePoints = extractCenterlineFromMask(
+        mask,
+        cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
+
+    return blob.centerlinePoints.size() >= 2;
+}
+
+bool populateCenterlineFromContourWithCut(Tracking::DetectedBlob& blob,
+                                          const cv::Point2f& cutStart,
+                                          const cv::Point2f& cutEnd,
+                                          int cutThickness)
+{
+    blob.centerlinePoints.clear();
+
+    if (!blob.isValid || blob.contourPoints.size() < 3 || blob.holeContourPoints.empty()) {
+        return false;
+    }
+
+    cv::Mat mask;
+    cv::Rect localBounds = buildCenterlineMask(blob, mask);
+    if (mask.empty()) return false;
+
+    const cv::Point localStart(qRound(cutStart.x - localBounds.x),
+                               qRound(cutStart.y - localBounds.y));
+    const cv::Point localEnd(qRound(cutEnd.x - localBounds.x),
+                             qRound(cutEnd.y - localBounds.y));
+    const int thickness = std::max(1, cutThickness);
+    cv::line(mask, localStart, localEnd, cv::Scalar(0), thickness, cv::LINE_8);
+
+    blob.centerlinePoints = extractCenterlineFromMask(
+        mask,
+        cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
+
+    return blob.centerlinePoints.size() >= 2;
+}
+
+QList<QPointF> extractOrderedCenterlinePoints(const Tracking::DetectedBlob& blob)
+{
+    QList<QPointF> centerlinePoints;
+    if (!blob.isValid) {
+        return centerlinePoints;
+    }
+
+    if (blob.centerlinePoints.empty()) {
+        return centerlinePoints;
+    }
+
+    centerlinePoints.reserve(static_cast<qsizetype>(blob.centerlinePoints.size()));
+    for (const cv::Point2f& point : blob.centerlinePoints) {
+        centerlinePoints.append(QPointF(point.x, point.y));
+    }
+
+    return centerlinePoints;
+}
+
+QList<QPointF> resampleCenterlinePoints(const QList<QPointF>& points, int pointCount)
+{
+    QList<QPointF> sampledPoints;
+    if (points.isEmpty() || pointCount <= 0) {
+        return sampledPoints;
+    }
+
+    sampledPoints.reserve(pointCount);
+    if (points.size() == 1 || pointCount == 1) {
+        for (int i = 0; i < pointCount; ++i) {
+            sampledPoints.append(points.first());
+        }
+        return sampledPoints;
+    }
+
+    std::vector<double> cumulativeDistance(static_cast<size_t>(points.size()), 0.0);
+    for (int i = 1; i < points.size(); ++i) {
+        const QPointF delta = points.at(i) - points.at(i - 1);
+        cumulativeDistance[static_cast<size_t>(i)] =
+            cumulativeDistance[static_cast<size_t>(i - 1)] + std::hypot(delta.x(), delta.y());
+    }
+
+    const double totalLength = cumulativeDistance.back();
+    if (qFuzzyIsNull(totalLength)) {
+        for (int i = 0; i < pointCount; ++i) {
+            sampledPoints.append(points.first());
+        }
+        return sampledPoints;
+    }
+
+    int segmentIndex = 1;
+    for (int sampleIndex = 0; sampleIndex < pointCount; ++sampleIndex) {
+        const double targetDistance =
+            totalLength * static_cast<double>(sampleIndex) / static_cast<double>(pointCount - 1);
+
+        while (segmentIndex < points.size() - 1 &&
+               cumulativeDistance[static_cast<size_t>(segmentIndex)] < targetDistance) {
+            ++segmentIndex;
+        }
+
+        const double previousDistance = cumulativeDistance[static_cast<size_t>(segmentIndex - 1)];
+        const double nextDistance = cumulativeDistance[static_cast<size_t>(segmentIndex)];
+        const double segmentLength = nextDistance - previousDistance;
+        const double t = qFuzzyIsNull(segmentLength)
+                             ? 0.0
+                             : (targetDistance - previousDistance) / segmentLength;
+
+        const QPointF a = points.at(segmentIndex - 1);
+        const QPointF b = points.at(segmentIndex);
+        sampledPoints.append(a + (b - a) * t);
+    }
+
+    return sampledPoints;
+}
+
+QList<QPointF> resampleCenterlinePoints(const std::vector<cv::Point2f>& points, int pointCount)
+{
+    QList<QPointF> convertedPoints;
+    convertedPoints.reserve(static_cast<qsizetype>(points.size()));
+    for (const cv::Point2f& point : points) {
+        convertedPoints.append(QPointF(point.x, point.y));
+    }
+    return resampleCenterlinePoints(convertedPoints, pointCount);
+}
+
+QList<QPointF> extractResampledCenterlinePoints(const Tracking::DetectedBlob& blob, int pointCount)
+{
+    return resampleCenterlinePoints(extractOrderedCenterlinePoints(blob), pointCount);
 }
 
 } // namespace Centerline
