@@ -3221,7 +3221,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
     };
 
     if (i < 0 || i >= static_cast<int>(points.size())) return result;
-    const Tracking::WormTrackPoint& tp = points[i];
+    const Tracking::TrackPoint& tp = points[i];
 
     if (tp.quality == Tracking::TrackPointQuality::Lost) {
         predictor = Centerline::HeadTailPredictor{};

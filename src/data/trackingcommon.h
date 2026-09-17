@@ -22,7 +22,7 @@
 // Coordinate frames used throughout YAWT
 // --------------------------------------
 //  video coordinates   Pixels of the source video frame: origin top-left, x right, y down.
-//                      Every position stored on a DetectedBlob, WormTrackPoint, AnnotationItem
+//                      Every position stored on a DetectedBlob, TrackPoint, AnnotationItem
 //                      or reference point is in this frame. This is the only frame that is
 //                      persisted.
 //  local coordinates   Pixels relative to a blob's padded bounding box
@@ -341,7 +341,7 @@ Q_ENUM_NS(TrackPointQuality)
 /**
  * @brief Represents a single point in a worm's track.
  */
-struct WormTrackPoint {
+struct TrackPoint {
     int frameNumber;              // Absolute frame index in the source video
     cv::Point2f position;           // Position (centroid) in video coordinates
     QRectF searchWindow;   // Fixed-size search window the tracker used on this frame (video coordinates)
@@ -357,7 +357,7 @@ struct WormTrackPoint {
 };
 
 /** @brief One worm's track: its points in ascending frame order. */
-using Track = std::vector<WormTrackPoint>;
+using Track = std::vector<TrackPoint>;
 
 /**
  * @brief All tracks of a run, keyed by worm ID.

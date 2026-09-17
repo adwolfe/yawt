@@ -1,6 +1,6 @@
 #pragma once
 
-#include "trackingcommon.h"   // Tracking::WormTrackPoint
+#include "trackingcommon.h"   // Tracking::TrackPoint
 
 #include <QColor>
 #include <QList>

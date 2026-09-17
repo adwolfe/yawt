@@ -46,7 +46,7 @@ static QList<int> refineHeadTailByMotion(
         cv::Point2f back;
     };
 
-    auto tryLoadClean = [&](const Tracking::WormTrackPoint& tp) -> std::optional<SegFrame> {
+    auto tryLoadClean = [&](const Tracking::TrackPoint& tp) -> std::optional<SegFrame> {
         QMap<int, Tracking::DetectedBlob> blobs;
         {
             QMutexLocker locker(storageMutex);
@@ -140,7 +140,7 @@ static QList<int> refineHeadTailByMotion(
 
     std::vector<SegFrame> currentSegment;
 
-    for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+    for (const Tracking::TrackPoint& tp : sortedPoints) {
         if (tp.quality == Tracking::TrackPointQuality::Lost) {
             finalizeSegment(currentSegment);
             currentSegment.clear();
@@ -298,7 +298,7 @@ static QList<int> refineHeadTailByGeometry(
     };
 
     // Load features for one track point; returns nullopt for non-Clean frames.
-    auto tryLoadGeom = [&](const Tracking::WormTrackPoint& tp)
+    auto tryLoadGeom = [&](const Tracking::TrackPoint& tp)
         -> std::optional<FrameGeom>
     {
         QMap<int, Tracking::DetectedBlob> blobs;
@@ -325,7 +325,7 @@ static QList<int> refineHeadTailByGeometry(
     std::vector<std::optional<FrameGeom>> perPoint;
     perPoint.reserve(sortedPoints.size());
     std::vector<FrameGeom> allFrameGeoms;
-    for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+    for (const Tracking::TrackPoint& tp : sortedPoints) {
         auto fg = tryLoadGeom(tp);
         if (fg) allFrameGeoms.push_back(*fg);
         perPoint.push_back(std::move(fg));
@@ -755,8 +755,8 @@ void CenterlineWorker::doWork()
 
         Tracking::Track sortedPoints = trackEntry.second;
         std::sort(sortedPoints.begin(), sortedPoints.end(),
-                  [](const Tracking::WormTrackPoint& a,
-                     const Tracking::WormTrackPoint& b) {
+                  [](const Tracking::TrackPoint& a,
+                     const Tracking::TrackPoint& b) {
                       return a.frameNumber < b.frameNumber;
                   });
 
@@ -770,7 +770,7 @@ void CenterlineWorker::doWork()
         // untouched. Only non-ring, non-merged, non-lost frames contribute.
         std::vector<float> validLengths;
         validLengths.reserve(sortedPoints.size());
-        for (const Tracking::WormTrackPoint& tp : sortedPoints) {
+        for (const Tracking::TrackPoint& tp : sortedPoints) {
             if (tp.quality == Tracking::TrackPointQuality::Merged ||
                 tp.quality == Tracking::TrackPointQuality::Lost) continue;
             QMap<int, Tracking::DetectedBlob> frameBlobs =

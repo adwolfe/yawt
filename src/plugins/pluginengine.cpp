@@ -663,7 +663,7 @@ static void updateVarMap(VarMap& v,
                          double umPerPixel,
                          double fps)
 {
-    const Tracking::WormTrackPoint& p = worm.points[idx];
+    const Tracking::TrackPoint& p = worm.points[idx];
     const double x  = static_cast<double>(p.position.x);
     const double y  = static_cast<double>(p.position.y);
     const double um = umPerPixel;
@@ -915,7 +915,7 @@ static void initSlotValues(QVector<double>& slotValues,
 static void updateSlotValues(QVector<double>& slotValues,
                              const CompiledPluginPlan& plan,
                              const AnalysisWormEntry& worm,
-                             const Tracking::WormTrackPoint& p,
+                             const Tracking::TrackPoint& p,
                              const ReferencePoints& refPts,
                              SpeedSlotState& speedState)
 {
@@ -1090,7 +1090,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
     result.usedUm = allHaveUm;
 
     auto runWormLoop = [&](const AnalysisWormEntry& worm,
-                           std::function<bool(const QVector<double>&, const Tracking::WormTrackPoint&)> frameCallback) -> bool
+                           std::function<bool(const QVector<double>&, const Tracking::TrackPoint&)> frameCallback) -> bool
     {
         const ReferencePoints refPts = effectiveReferencePointsForWorm(worm, referencePoints);
         QVector<double> slotValues(plan->slotCount, 0.0);
@@ -1103,7 +1103,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
         SpeedSlotState speedState;
         QVector<SmoothSlotState> smoothStates(plan->bindings.size());
 
-        for (const Tracking::WormTrackPoint& point : worm.points) {
+        for (const Tracking::TrackPoint& point : worm.points) {
             updateSlotValues(slotValues, *plan, worm, point, refPts, speedState);
 
             for (int bi = 0; bi < plan->bindings.size(); ++bi) {
@@ -1185,7 +1185,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
             gr.name = group.name;
             for (const auto& worm : group.worms) {
                 QVector<double> frameValues;
-                const bool ok = runWormLoop(worm, [&](const QVector<double>& slotValues, const Tracking::WormTrackPoint&) -> bool {
+                const bool ok = runWormLoop(worm, [&](const QVector<double>& slotValues, const Tracking::TrackPoint&) -> bool {
                     const double val = plan->formulaFn(slotValues);
                     if (!std::isnan(val) && std::isfinite(val))
                         frameValues.append(val);
@@ -1212,7 +1212,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
                 ws.label     = worm.label;
                 ws.color     = worm.color;
                 ws.groupName = group.name;
-                const bool ok = runWormLoop(worm, [&](const QVector<double>& slotValues, const Tracking::WormTrackPoint& point) -> bool {
+                const bool ok = runWormLoop(worm, [&](const QVector<double>& slotValues, const Tracking::TrackPoint& point) -> bool {
                     const double val = plan->formulaFn(slotValues);
                     if (!std::isnan(val) && std::isfinite(val))
                         ws.points.append(QPointF(worm.fps > 0.0

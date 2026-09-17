@@ -334,7 +334,7 @@ private:
     // Track history while a run is in progress: conceptual wormId -> (frameNumber -> point).
     // Keyed by frame so the forward and backward trackers can interleave and overwrite,
     // and std::map yields the points in frame order when the final tracks are built.
-    QMap<int, std::map<int, Tracking::WormTrackPoint>> m_trackHistory;
+    QMap<int, std::map<int, Tracking::TrackPoint>> m_trackHistory;
     QList<WormTracker*> m_wormTrackersList;  // List of active tracker instances
     QMap<int, WormTracker*> m_wormIdToForwardTrackerInstanceMap;
     QMap<int, WormTracker*> m_wormIdToBackwardTrackerInstanceMap;

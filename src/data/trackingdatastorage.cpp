@@ -494,7 +494,7 @@ const Tracking::DetectedBlob* TrackingDataStorage::findDetectedBlob(int frameNum
     return &wormIt.value();
 }
 
-void TrackingDataStorage::applyBlobDerivedFields(Tracking::WormTrackPoint& point,
+void TrackingDataStorage::applyBlobDerivedFields(Tracking::TrackPoint& point,
                                                  const Tracking::DetectedBlob& blob) const {
     if (blob.area > 0.0)
         point.area = static_cast<float>(blob.area);
@@ -535,7 +535,7 @@ void TrackingDataStorage::refreshDerivedTrackData(int onlyWormId) {
         const int wormId = entry.first;
         if (onlyWormId >= 0 && wormId != onlyWormId) continue;
 
-        for (Tracking::WormTrackPoint& point : entry.second) {
+        for (Tracking::TrackPoint& point : entry.second) {
             if (const Tracking::DetectedBlob* blob =
                     findDetectedBlob(point.frameNumber, wormId)) {
                 applyBlobDerivedFields(point, *blob);
@@ -599,7 +599,7 @@ bool TrackingDataStorage::getTrackPointQuality(int wormId, int frameNumber, Trac
     if (wormIndexIt == m_frameIndex.end()) return false;
     auto frameIt = wormIndexIt.value().find(frameNumber);
     if (frameIt == wormIndexIt.value().end()) return false;
-    const Tracking::WormTrackPoint* tp = frameIt.value();
+    const Tracking::TrackPoint* tp = frameIt.value();
     if (!tp) return false;
     outQuality = tp->quality;
     return true;
@@ -635,7 +635,7 @@ bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPoin
     if (wormIndexIt != m_frameIndex.end()) {
         auto frameIt = wormIndexIt.value().find(frameNumber);
         if (frameIt != wormIndexIt.value().end()) {
-            const Tracking::WormTrackPoint* trackPoint = frameIt.value();
+            const Tracking::TrackPoint* trackPoint = frameIt.value();
             // Don't return data for lost tracking points
             if (trackPoint->quality == Tracking::TrackPointQuality::Lost) {
                 return false;
@@ -671,7 +671,7 @@ bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame
     for (int frame = beforeFrame - 1; frame >= 0; frame--) {
         auto frameIt = frameMap.find(frame);
         if (frameIt != frameMap.end()) {
-            const Tracking::WormTrackPoint* trackPoint = frameIt.value();
+            const Tracking::TrackPoint* trackPoint = frameIt.value();
             // Only return positions with good tracking quality (not Lost)
             if (trackPoint->quality != Tracking::TrackPointQuality::Lost) {
                 outPosition = QPointF(trackPoint->position.x, trackPoint->position.y);
@@ -898,7 +898,7 @@ void TrackingDataStorage::buildFrameIndex() {
         int wormId = trackPair.first;
         const Tracking::Track& trackPoints = trackPair.second;
     
-        QMap<int, const Tracking::WormTrackPoint*> frameMap;
+        QMap<int, const Tracking::TrackPoint*> frameMap;
         for (const auto& trackPoint : trackPoints) {
             frameMap[trackPoint.frameNumber] = &trackPoint;
         }

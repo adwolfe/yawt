@@ -491,7 +491,7 @@ private:
     Tracking::AllWormTracks m_tracks;                      // Maps item ID to track points
     
     // Frame index for fast track point lookup: wormId -> frameNumber -> trackPoint pointer
-    QMap<int, QMap<int, const Tracking::WormTrackPoint*>> m_frameIndex;
+    QMap<int, QMap<int, const Tracking::TrackPoint*>> m_frameIndex;
     
     int m_nextId;                                          // Next available ID
     
@@ -524,7 +524,7 @@ private:
     void recalculateGlobalMetricsAndROIs();                // Update metrics and ROIs
     void updateIdToIndexMap();                             // Rebuild ID-to-index map
     void purgeProcessingDataForItem(int itemId);           // Remove tracks/blobs/merge refs/baselines for one item
-    void applyBlobDerivedFields(Tracking::WormTrackPoint& point,
+    void applyBlobDerivedFields(Tracking::TrackPoint& point,
                                 const Tracking::DetectedBlob& blob) const;
     void buildFrameIndex();                                // Build frame index for fast lookups
     

@@ -1,7 +1,7 @@
 #ifndef ANALYSISSESSIONMODEL_H
 #define ANALYSISSESSIONMODEL_H
 
-#include "trackingcommon.h"   // Tracking::AllWormTracks, WormTrackPoint
+#include "trackingcommon.h"   // Tracking::AllWormTracks, TrackPoint
 #include "../data/analysistypes.h"   // AnalysisWormEntry, AnalysisGroupData
 
 #include <QAbstractItemModel>

@@ -82,7 +82,7 @@ struct Document {
 QJsonObject itemToJson(const TableItems::AnnotationItem& item);
 TableItems::AnnotationItem itemFromJson(const QJsonObject& obj);
 
-QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
+QJsonObject trackPointToJson(const Tracking::TrackPoint& p,
                              const Tracking::DetectedBlob* blob);
 /**
  * Parse one track point. When @p outBlob is non-null and the point carries a
@@ -90,7 +90,7 @@ QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
  * and @p outHasBlob is set. bodyLength is taken from the file when present and
  * otherwise computed from the centerline so legacy files still yield it.
  */
-Tracking::WormTrackPoint trackPointFromJson(const QJsonObject& obj,
+Tracking::TrackPoint trackPointFromJson(const QJsonObject& obj,
                                             Tracking::DetectedBlob* outBlob = nullptr,
                                             bool* outHasBlob = nullptr);
 

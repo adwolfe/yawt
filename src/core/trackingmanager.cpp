@@ -965,7 +965,7 @@ void TrackingManager::cleanupThreadsAndObjects() {
     size_t memoryBefore = getProcessedVideoMemoryUsage();
     size_t tracksMemoryBefore = 0;
     for (const auto& [wormId, points] : m_finalTracks) {
-        tracksMemoryBefore += points.size() * sizeof(Tracking::WormTrackPoint);
+        tracksMemoryBefore += points.size() * sizeof(Tracking::TrackPoint);
     }
 
     // (Largely same as your version, ensuring QPointer safety and clearing new maps)
@@ -1007,7 +1007,7 @@ void TrackingManager::cleanupThreadsAndObjects() {
     m_wormIdToBackwardTrackerInstanceMap.clear();
 
     // Release the per-worm track history
-    QMap<int, std::map<int, Tracking::WormTrackPoint>>().swap(m_trackHistory);
+    QMap<int, std::map<int, Tracking::TrackPoint>>().swap(m_trackHistory);
 
     // Aggressively clear processed video memory
     clearProcessedVideoMemory();
@@ -1161,7 +1161,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
     TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** PROCESSING FRAME UPDATE *** State:").arg(signedWormId).arg(frameNumber) << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid << "SplitCandidates:" << splitCandidates.size();
     // Record this frame's point in the manager-owned track history (anchored on primaryBlob).
     if (m_trackHistory.contains(reportingConceptualWormId)) {
-        Tracking::WormTrackPoint point;
+        Tracking::TrackPoint point;
         point.frameNumber = frameNumber;
         point.searchWindow = searchWindowUsed;
 
@@ -1594,7 +1594,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
         // Annotate this worm's track point for this frame as a Split for downstream storage/visualization
         int unsignedWormId = getUnsignedWormId(signedWormId);
         if (m_trackHistory.contains(unsignedWormId)) {
-            Tracking::WormTrackPoint splitPoint;
+            Tracking::TrackPoint splitPoint;
             splitPoint.frameNumber = frameNumber;
             splitPoint.position = cv::Point2f(static_cast<float>(blobToAssign.centroid.x()), static_cast<float>(blobToAssign.centroid.y()));
             splitPoint.searchWindow = blobToAssign.boundingBox;
@@ -1842,11 +1842,11 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         const int exportWormId = sourceToExportId.value(sourceItemId);
         Tracking::Track sortedTrackPoints = it->second;
         std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
-                  [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
+                  [](const Tracking::TrackPoint& lhs, const Tracking::TrackPoint& rhs) {
                       return lhs.frameNumber < rhs.frameNumber;
                   });
 
-        for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+        for (const Tracking::TrackPoint& point : sortedTrackPoints) {
             trackRows.append(WorkbookRow{
                 numberCell(QString::number(exportWormId)),
                 numberCell(QString::number(sourceItemId)),
@@ -1937,11 +1937,11 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
             const int exportWormId = sourceToExportId.value(sourceItemId);
             Tracking::Track sortedTrackPoints = it->second;
             std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
-                      [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
+                      [](const Tracking::TrackPoint& lhs, const Tracking::TrackPoint& rhs) {
                           return lhs.frameNumber < rhs.frameNumber;
                       });
 
-            for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
+            for (const Tracking::TrackPoint& point : sortedTrackPoints) {
                 QList<QPointF> centerlinePoints;
                 if (point.quality != Tracking::TrackPointQuality::Lost) {
                     const QMap<int, Tracking::DetectedBlob> blobsForFrame =
@@ -2100,7 +2100,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
 
         Tracking::Track pts = rawPoints;
         std::sort(pts.begin(), pts.end(),
-                  [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
+                  [](const Tracking::TrackPoint& a, const Tracking::TrackPoint& b) {
                       return a.frameNumber < b.frameNumber;
                   });
 
@@ -2111,7 +2111,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
         double sumAspectRatio = 0.0;
         int nAreaSamples = 0, nBodyLenSamples = 0, nAspectSamples = 0;
 
-        for (const Tracking::WormTrackPoint& tp : pts) {
+        for (const Tracking::TrackPoint& tp : pts) {
             using Q = Tracking::TrackPointQuality;
             switch (tp.quality) {
             case Q::Single: ++nSingle; break;
@@ -2152,7 +2152,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
         // Distance: sum displacement between consecutive non-lost frames
         cv::Point2f prevPos{};
         bool hasPrev = false;
-        for (const Tracking::WormTrackPoint& tp : pts) {
+        for (const Tracking::TrackPoint& tp : pts) {
             if (tp.quality == Tracking::TrackPointQuality::Lost) { hasPrev = false; continue; }
             if (hasPrev) {
                 cv::Point2f d = tp.position - prevPos;
@@ -2165,7 +2165,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
         // Net displacement: first to last non-lost position
         cv::Point2f firstPos{}, lastPos{};
         bool hasFirst = false;
-        for (const Tracking::WormTrackPoint& tp : pts) {
+        for (const Tracking::TrackPoint& tp : pts) {
             if (tp.quality == Tracking::TrackPointQuality::Lost) continue;
             if (!hasFirst) { firstPos = tp.position; hasFirst = true; }
             lastPos = tp.position;
@@ -2297,8 +2297,8 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
         // Sort by frame number
         Tracking::Track pts = rawPoints;
         std::sort(pts.begin(), pts.end(),
-                  [](const Tracking::WormTrackPoint& a,
-                     const Tracking::WormTrackPoint& b) {
+                  [](const Tracking::TrackPoint& a,
+                     const Tracking::TrackPoint& b) {
                       return a.frameNumber < b.frameNumber;
                   });
 
@@ -2314,7 +2314,7 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
         int mergeRunCurrent = 0;
         bool inMergeRun = false;
 
-        for (const Tracking::WormTrackPoint& tp : pts) {
+        for (const Tracking::TrackPoint& tp : pts) {
             using Q = Tracking::TrackPointQuality;
             const bool isMerged = (tp.quality == Q::Merged);
             const bool isLost   = (tp.quality == Q::Lost);

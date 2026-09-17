@@ -1292,7 +1292,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             }
 
             bool firstPoint = true;
-            for (const Tracking::WormTrackPoint& pt : trackPoints) {
+            for (const Tracking::TrackPoint& pt : trackPoints) {
                 // Skip lost tracking points - they create gaps in the track display
                 if (pt.quality == Tracking::TrackPointQuality::Lost) {
                     continue;

@@ -149,7 +149,7 @@ TableItems::AnnotationItem itemFromJson(const QJsonObject& obj)
 
 // ── Track points ─────────────────────────────────────────────────────────────
 
-QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
+QJsonObject trackPointToJson(const Tracking::TrackPoint& p,
                              const Tracking::DetectedBlob* blob)
 {
     QJsonObject o;
@@ -180,13 +180,13 @@ QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
     return o;
 }
 
-Tracking::WormTrackPoint trackPointFromJson(const QJsonObject& obj,
+Tracking::TrackPoint trackPointFromJson(const QJsonObject& obj,
                                             Tracking::DetectedBlob* outBlob,
                                             bool* outHasBlob)
 {
     if (outHasBlob) *outHasBlob = false;
 
-    Tracking::WormTrackPoint p;
+    Tracking::TrackPoint p;
     p.frameNumber = obj.value("frame").toInt();
     if (obj.value("position").isObject()) {
         p.position = point2fFrom(obj["position"].toObject());
@@ -285,7 +285,7 @@ QJsonObject toJson(const Document& doc)
     QJsonObject tracks;
     for (const auto& [wormId, points] : doc.tracks) {
         QJsonArray arr;
-        for (const Tracking::WormTrackPoint& p : points) {
+        for (const Tracking::TrackPoint& p : points) {
             arr.append(trackPointToJson(p, lookupBlob(p.frameNumber, wormId)));
         }
         tracks[QString::number(wormId)] = arr;
@@ -366,12 +366,12 @@ Document fromJson(const QJsonObject& root)
             if (!pv.isObject()) continue;
             Tracking::DetectedBlob blob;
             bool hasBlob = false;
-            Tracking::WormTrackPoint p = trackPointFromJson(pv.toObject(), &blob, &hasBlob);
+            Tracking::TrackPoint p = trackPointFromJson(pv.toObject(), &blob, &hasBlob);
             if (hasBlob) doc.blobsByFrame[p.frameNumber][wormId] = std::move(blob);
             points.push_back(p);
         }
         std::sort(points.begin(), points.end(),
-                  [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
+                  [](const Tracking::TrackPoint& a, const Tracking::TrackPoint& b) {
                       return a.frameNumber < b.frameNumber;
                   });
         doc.tracks[wormId] = std::move(points);
@@ -498,7 +498,7 @@ Tracking::AllWormTracks readTracks(const QString& filePath)
         }
         if (points.empty()) continue;
         std::sort(points.begin(), points.end(),
-                  [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
+                  [](const Tracking::TrackPoint& a, const Tracking::TrackPoint& b) {
                       return a.frameNumber < b.frameNumber;
                   });
         tracks[wormId] = std::move(points);
