@@ -46,6 +46,7 @@
 #include "trackingmanager.h"
 #include "centerlinegeometry.h"
 #include "../data/videometadatastore.h"
+#include "../data/wormsjsoncodec.h"
 #include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
 #include "../utils/yawtjsonio.h"
@@ -115,19 +116,13 @@ static bool loadMergeStateFromWormsJson(
     QMap<int, int>& outWormToPhysicalBlobIdMap)
 {
     const QString path = QDir(procDir).absoluteFilePath("worms.json");
-    QFile f(path);
-    if (!f.exists()) return false;
+    if (!QFile::exists(path)) return false;
 
-    QJsonParseError err;
-    const QJsonDocument doc = YawtJsonIO::readJsonDocument(path, &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return false;
-
-    const QJsonObject root = doc.object();
-    if (!root.contains("mergeState") || !root["mergeState"].isObject()) {
+    const QJsonObject ms = WormsJson::readMergeState(path);
+    if (ms.isEmpty()) {
         qDebug() << "loadMergeStateFromWormsJson: no mergeState section in" << path;
         return false;
     }
-    const QJsonObject ms = root["mergeState"].toObject();
 
     outNextPhysicalBlobId = ms.value("nextPhysicalBlobId").toInt(outNextPhysicalBlobId);
 
@@ -2582,6 +2577,84 @@ void TrackingManager::saveThresholdingJson(const QString& directoryPath, const T
 //           mergeState (nextPhysicalBlobId, frameMergeRecords, splitResolutionMap,
 //                        wormToPhysicalBlobIdMap — used to resume tracking if settings match).
 // TRIGGER: Written once at tracking finalization.  Replaces frame_atomic_state.json.
+QJsonObject TrackingManager::mergeStateToJson() const {
+    QJsonObject ms;
+    ms["nextPhysicalBlobId"] = m_nextPhysicalBlobId;
+
+    // wormToPhysicalBlobIdMap
+    QJsonObject wormToPhysObj;
+    for (auto it = m_wormToPhysicalBlobIdMap.constBegin();
+         it != m_wormToPhysicalBlobIdMap.constEnd(); ++it)
+        wormToPhysObj[QString::number(it.key())] = it.value();
+    ms["wormToPhysicalBlobIdMap"] = wormToPhysObj;
+
+    // frameMergeRecords
+    QJsonObject fmObj;
+    for (auto fit = m_frameMergeRecords.constBegin();
+         fit != m_frameMergeRecords.constEnd(); ++fit) {
+        QJsonArray blobsArr;
+        for (const FrameSpecificPhysicalBlob& pb : fit.value()) {
+            QJsonObject pbObj;
+            pbObj["uniqueId"]    = pb.uniqueId;
+            pbObj["frameNumber"] = pb.frameNumber;
+            pbObj["currentArea"] = pb.currentArea;
+
+            QJsonObject cObj;
+            cObj["x"] = static_cast<double>(pb.currentCentroid.x);
+            cObj["y"] = static_cast<double>(pb.currentCentroid.y);
+            pbObj["currentCentroid"] = cObj;
+
+            QJsonObject bObj;
+            bObj["x"]      = pb.currentBoundingBox.x();
+            bObj["y"]      = pb.currentBoundingBox.y();
+            bObj["width"]  = pb.currentBoundingBox.width();
+            bObj["height"] = pb.currentBoundingBox.height();
+            pbObj["currentBoundingBox"] = bObj;
+
+            QJsonArray contourArr;
+            for (const cv::Point& pt : pb.contourPoints) {
+                QJsonArray a; a.append(pt.x); a.append(pt.y);
+                contourArr.append(a);
+            }
+            pbObj["contourPoints"] = contourArr;
+
+            QJsonArray holesArr;
+            for (const auto& hole : pb.holeContourPoints) {
+                QJsonArray holeArr;
+                for (const cv::Point& pt : hole) {
+                    QJsonArray a; a.append(pt.x); a.append(pt.y);
+                    holeArr.append(a);
+                }
+                holesArr.append(holeArr);
+            }
+            pbObj["holeContourPoints"] = holesArr;
+
+            QJsonArray partArr;
+            for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
+            pbObj["participatingWormTrackerIDs"] = partArr;
+            pbObj["selectedByWormTrackerId"] = pb.selectedByWormTrackerId;
+
+            blobsArr.append(pbObj);
+        }
+        fmObj[QString::number(fit.key())] = blobsArr;
+    }
+    ms["frameMergeRecords"] = fmObj;
+
+    // splitResolutionMap
+    QJsonObject splitObj;
+    for (auto sfit = m_splitResolutionMap.constBegin();
+         sfit != m_splitResolutionMap.constEnd(); ++sfit) {
+        QJsonObject wormMapObj;
+        for (auto wit = sfit.value().constBegin();
+             wit != sfit.value().constEnd(); ++wit)
+            wormMapObj[QString::number(wit.key())] = storageDetectedBlobToJson(wit.value());
+        splitObj[QString::number(sfit.key())] = wormMapObj;
+    }
+    ms["splitResolutionMap"] = splitObj;
+
+    return ms;
+}
+
 bool TrackingManager::saveWormsJson(const QString& directoryPath) {
     if (!m_storage) {
         qWarning() << "TrackingManager: Cannot save worms.json - storage missing";
@@ -2592,238 +2665,41 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
         return false;
     }
 
-    QJsonObject root;
-    root["version"] = 1;
-    root["videoPath"] = m_videoPath;
-    root["keyFrame"] = m_keyFrameNum;
+    WormsJson::Document doc;
+    doc.videoPath = m_videoPath;
+    doc.keyFrame  = m_keyFrameNum;
 
-    QJsonObject metricsObj;
-    metricsObj["roiSizeMultiplier"] = m_storage->getRoiSizeMultiplier();
-    QSizeF fixed = m_storage->getCurrentFixedRoiSize();
-    QJsonObject fixedObj;
-    fixedObj["width"] = fixed.width();
-    fixedObj["height"] = fixed.height();
-    metricsObj["currentFixedRoiSize"] = fixedObj;
-    metricsObj["minObservedArea"] = m_storage->getMinObservedArea();
-    metricsObj["maxObservedArea"] = m_storage->getMaxObservedArea();
-    metricsObj["minObservedAspectRatio"] = m_storage->getMinObservedAspectRatio();
-    metricsObj["maxObservedAspectRatio"] = m_storage->getMaxObservedAspectRatio();
-    root["metrics"] = metricsObj;
+    doc.metrics.valid = true;
+    doc.metrics.roiSizeMultiplier      = m_storage->getRoiSizeMultiplier();
+    doc.metrics.fixedRoiSize           = m_storage->getCurrentFixedRoiSize();
+    doc.metrics.minObservedArea        = m_storage->getMinObservedArea();
+    doc.metrics.maxObservedArea        = m_storage->getMaxObservedArea();
+    doc.metrics.minObservedAspectRatio = m_storage->getMinObservedAspectRatio();
+    doc.metrics.maxObservedAspectRatio = m_storage->getMaxObservedAspectRatio();
 
-    QJsonArray itemsArr;
-    const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
-    for (const TableItems::ClickedItem& item : items) {
-        if (item.type != TableItems::ItemType::Worm) {
-            continue;
-        }
-        QJsonObject itemObj;
-        itemObj["id"] = item.id;
-        itemObj["type"] = TableItems::itemTypeToString(item.type);
-        itemObj["visible"] = item.visible;
-        itemObj["frameOfSelection"] = item.frameOfSelection;
-
-        QJsonObject colorObj;
-        colorObj["r"] = item.color.red();
-        colorObj["g"] = item.color.green();
-        colorObj["b"] = item.color.blue();
-        colorObj["a"] = item.color.alpha();
-        colorObj["hex"] = item.color.name(QColor::HexArgb);
-        itemObj["color"] = colorObj;
-
-        QJsonObject centroidObj;
-        centroidObj["x"] = item.initialCentroid.x();
-        centroidObj["y"] = item.initialCentroid.y();
-        itemObj["initialCentroid"] = centroidObj;
-
-        QJsonObject bboxObj;
-        bboxObj["x"] = item.initialBoundingBox.x();
-        bboxObj["y"] = item.initialBoundingBox.y();
-        bboxObj["width"] = item.initialBoundingBox.width();
-        bboxObj["height"] = item.initialBoundingBox.height();
-        itemObj["initialBoundingBox"] = bboxObj;
-
-        QJsonObject origBoxObj;
-        origBoxObj["x"] = item.originalClickedBoundingBox.x();
-        origBoxObj["y"] = item.originalClickedBoundingBox.y();
-        origBoxObj["width"] = item.originalClickedBoundingBox.width();
-        origBoxObj["height"] = item.originalClickedBoundingBox.height();
-        itemObj["originalClickedBoundingBox"] = origBoxObj;
-
-        itemsArr.append(itemObj);
+    for (const TableItems::ClickedItem& item : m_storage->getAllItems()) {
+        if (item.type == TableItems::ItemType::Worm) doc.items.append(item);
     }
-    root["items"] = itemsArr;
-    root["itemsCount"] = itemsArr.size();
+    doc.tracks = m_storage->getAllTracks();
+    doc.mergeGroupsByFrame = m_storage->getAllMergeGroups();
+    doc.blobLookup = [this](int frameNumber, int wormId) {
+        return m_storage->findDetectedBlob(frameNumber, wormId);
+    };
+    doc.mergeState = mergeStateToJson();
 
-    // ── Tracks (with centerline points) ──────────────────────────────────────
-    QJsonObject tracksObj;
-    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        const int wormId = it->first;
-        QJsonArray pointsArr;
-        for (const Tracking::WormTrackPoint& p : it->second) {
-            QJsonObject pObj;
-            pObj["frame"]   = p.frameNumber;
-            pObj["quality"] = static_cast<int>(p.quality);
-
-            QJsonObject posObj;
-            posObj["x"] = static_cast<double>(p.position.x);
-            posObj["y"] = static_cast<double>(p.position.y);
-            pObj["position"] = posObj;
-
-            QJsonObject roiObj;
-            roiObj["x"]      = p.searchWindow.x();
-            roiObj["y"]      = p.searchWindow.y();
-            roiObj["width"]  = p.searchWindow.width();
-            roiObj["height"] = p.searchWindow.height();
-            pObj["roi"] = roiObj;
-
-            // Morphology and head/tail come off the track point itself; storage
-            // joined them in from the blob store when the track was stored.
-            if (p.area > 0.f)        pObj["area"]        = static_cast<double>(p.area);
-            if (p.aspectRatio > 0.f) pObj["aspectRatio"] = static_cast<double>(p.aspectRatio);
-
-            if (p.hasTips) {
-                QJsonObject headObj;
-                headObj["x"] = static_cast<double>(p.headTip.x);
-                headObj["y"] = static_cast<double>(p.headTip.y);
-                QJsonObject tailObj;
-                tailObj["x"] = static_cast<double>(p.tailTip.x);
-                tailObj["y"] = static_cast<double>(p.tailTip.y);
-                QJsonObject tips;
-                tips["head"] = headObj;
-                tips["tail"] = tailObj;
-                pObj["tips"] = tips;
-            }
-
-            if (const Tracking::DetectedBlob* blob =
-                    m_storage->findDetectedBlob(p.frameNumber, wormId)) {
-                pObj["detectedBlob"] = storageDetectedBlobToJson(*blob);
-
-                QJsonArray clArr;
-                for (const cv::Point2f& pt : blob->centerlinePoints) {
-                    QJsonArray a;
-                    a.append(static_cast<double>(pt.x));
-                    a.append(static_cast<double>(pt.y));
-                    clArr.append(a);
-                }
-                if (!clArr.isEmpty()) pObj["centerlinePoints"] = clArr;
-            }
-
-            pointsArr.append(pObj);
-        }
-        tracksObj[QString::number(wormId)] = pointsArr;
-    }
-    root["tracks"]      = tracksObj;
-    root["tracksCount"] = static_cast<int>(tracks.size());
-
-    // ── Merge groups (high-level, for display) ────────────────────────────────
-    QJsonObject mergeObj;
-    const QMap<int, QList<QList<int>>> mergeGroups = m_storage->getAllMergeGroups();
-    for (auto it = mergeGroups.constBegin(); it != mergeGroups.constEnd(); ++it) {
-        QJsonArray groupsArr;
-        for (const QList<int>& group : it.value()) {
-            QJsonArray groupArr;
-            for (int id : group) groupArr.append(id);
-            groupsArr.append(groupArr);
-        }
-        mergeObj[QString::number(it.key())] = groupsArr;
-    }
-    root["mergeGroupsByFrame"] = mergeObj;
-
-    // ── Merge state (for tracking resumption) ─────────────────────────────────
-    {
-        QJsonObject ms;
-        ms["nextPhysicalBlobId"] = m_nextPhysicalBlobId;
-
-        // wormToPhysicalBlobIdMap
-        QJsonObject wormToPhysObj;
-        for (auto it = m_wormToPhysicalBlobIdMap.constBegin();
-             it != m_wormToPhysicalBlobIdMap.constEnd(); ++it)
-            wormToPhysObj[QString::number(it.key())] = it.value();
-        ms["wormToPhysicalBlobIdMap"] = wormToPhysObj;
-
-        // frameMergeRecords
-        QJsonObject fmObj;
-        for (auto fit = m_frameMergeRecords.constBegin();
-             fit != m_frameMergeRecords.constEnd(); ++fit) {
-            QJsonArray blobsArr;
-            for (const FrameSpecificPhysicalBlob& pb : fit.value()) {
-                QJsonObject pbObj;
-                pbObj["uniqueId"]    = pb.uniqueId;
-                pbObj["frameNumber"] = pb.frameNumber;
-                pbObj["currentArea"] = pb.currentArea;
-
-                QJsonObject cObj;
-                cObj["x"] = static_cast<double>(pb.currentCentroid.x);
-                cObj["y"] = static_cast<double>(pb.currentCentroid.y);
-                pbObj["currentCentroid"] = cObj;
-
-                QJsonObject bObj;
-                bObj["x"]      = pb.currentBoundingBox.x();
-                bObj["y"]      = pb.currentBoundingBox.y();
-                bObj["width"]  = pb.currentBoundingBox.width();
-                bObj["height"] = pb.currentBoundingBox.height();
-                pbObj["currentBoundingBox"] = bObj;
-
-                QJsonArray contourArr;
-                for (const cv::Point& pt : pb.contourPoints) {
-                    QJsonArray a; a.append(pt.x); a.append(pt.y);
-                    contourArr.append(a);
-                }
-                pbObj["contourPoints"] = contourArr;
-
-                QJsonArray holesArr;
-                for (const auto& hole : pb.holeContourPoints) {
-                    QJsonArray holeArr;
-                    for (const cv::Point& pt : hole) {
-                        QJsonArray a; a.append(pt.x); a.append(pt.y);
-                        holeArr.append(a);
-                    }
-                    holesArr.append(holeArr);
-                }
-                pbObj["holeContourPoints"] = holesArr;
-
-                QJsonArray partArr;
-                for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
-                pbObj["participatingWormTrackerIDs"] = partArr;
-                pbObj["selectedByWormTrackerId"] = pb.selectedByWormTrackerId;
-
-                blobsArr.append(pbObj);
-            }
-            fmObj[QString::number(fit.key())] = blobsArr;
-        }
-        ms["frameMergeRecords"] = fmObj;
-
-        // splitResolutionMap
-        QJsonObject splitObj;
-        for (auto sfit = m_splitResolutionMap.constBegin();
-             sfit != m_splitResolutionMap.constEnd(); ++sfit) {
-            QJsonObject wormMapObj;
-            for (auto wit = sfit.value().constBegin();
-                 wit != sfit.value().constEnd(); ++wit)
-                wormMapObj[QString::number(wit.key())] = storageDetectedBlobToJson(wit.value());
-            splitObj[QString::number(sfit.key())] = wormMapObj;
-        }
-        ms["splitResolutionMap"] = splitObj;
-
-        root["mergeState"] = ms;
-    }
-
-    QJsonDocument doc(root);
-    QString filePath = QDir(directoryPath).absoluteFilePath("worms.json");
+    const QString filePath = QDir(directoryPath).absoluteFilePath("worms.json");
     QString error;
-    if (YawtJsonIO::writeCompressedJsonDocument(filePath, doc, &error)) {
+    if (WormsJson::write(filePath, doc, &error)) {
         TRACKING_DEBUG() << "TrackingManager: Saved compressed worms.json to:" << filePath;
         return true;
     }
-
     qWarning() << "TrackingManager: Failed to save worms.json to:" << filePath << error;
     return false;
 }
 
 // OUTPUT: {processingOutputDir}/roi_points.json
 // FORMAT: JSON (indented)
-// DATA:   All user-placed point items (ROI, StartPoint, EndPoint, ControlPoint):
+// DATA:   All user-placed reference items (ROI, StartPoint, EndPoint, CenterPoint):
 //           version, videoPath, keyFrame, items array mirroring the worms.json item structure.
 // TRIGGER: Written once at tracking finalization.
 bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
@@ -2836,69 +2712,23 @@ bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
         return false;
     }
 
-    QJsonObject root;
-    root["version"] = 1;
-    root["videoPath"] = m_videoPath;
-    root["keyFrame"] = m_keyFrameNum;
-
-    QJsonArray itemsArr;
-    const QList<TableItems::ClickedItem>& items = m_storage->getAllItems();
-    for (const TableItems::ClickedItem& item : items) {
-        if (item.type != TableItems::ItemType::ROI &&
-            item.type != TableItems::ItemType::StartPoint &&
-            item.type != TableItems::ItemType::EndPoint &&
-            item.type != TableItems::ItemType::CenterPoint) {
-            continue;
+    QList<TableItems::ClickedItem> referenceItems;
+    for (const TableItems::ClickedItem& item : m_storage->getAllItems()) {
+        if (item.type == TableItems::ItemType::ROI ||
+            item.type == TableItems::ItemType::StartPoint ||
+            item.type == TableItems::ItemType::EndPoint ||
+            item.type == TableItems::ItemType::CenterPoint) {
+            referenceItems.append(item);
         }
-        QJsonObject itemObj;
-        itemObj["id"] = item.id;
-        itemObj["type"] = TableItems::itemTypeToString(item.type);
-        itemObj["visible"] = item.visible;
-        itemObj["frameOfSelection"] = item.frameOfSelection;
-
-        QJsonObject colorObj;
-        colorObj["r"] = item.color.red();
-        colorObj["g"] = item.color.green();
-        colorObj["b"] = item.color.blue();
-        colorObj["a"] = item.color.alpha();
-        colorObj["hex"] = item.color.name(QColor::HexArgb);
-        itemObj["color"] = colorObj;
-
-        QJsonObject centroidObj;
-        centroidObj["x"] = item.initialCentroid.x();
-        centroidObj["y"] = item.initialCentroid.y();
-        itemObj["initialCentroid"] = centroidObj;
-
-        QJsonObject bboxObj;
-        bboxObj["x"] = item.initialBoundingBox.x();
-        bboxObj["y"] = item.initialBoundingBox.y();
-        bboxObj["width"] = item.initialBoundingBox.width();
-        bboxObj["height"] = item.initialBoundingBox.height();
-        itemObj["initialBoundingBox"] = bboxObj;
-
-        QJsonObject origBoxObj;
-        origBoxObj["x"] = item.originalClickedBoundingBox.x();
-        origBoxObj["y"] = item.originalClickedBoundingBox.y();
-        origBoxObj["width"] = item.originalClickedBoundingBox.width();
-        origBoxObj["height"] = item.originalClickedBoundingBox.height();
-        itemObj["originalClickedBoundingBox"] = origBoxObj;
-
-        itemsArr.append(itemObj);
     }
-    root["items"] = itemsArr;
-    root["itemsCount"] = itemsArr.size();
 
-    QJsonDocument doc(root);
-    QString filePath = QDir(directoryPath).absoluteFilePath("roi_points.json");
-    QFile file(filePath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.write(doc.toJson(QJsonDocument::Indented));
-        file.close();
+    const QString filePath = QDir(directoryPath).absoluteFilePath("roi_points.json");
+    QString error;
+    if (WormsJson::writeRoiPoints(filePath, m_videoPath, m_keyFrameNum, referenceItems, &error)) {
         TRACKING_DEBUG() << "TrackingManager: Saved roi_points.json to:" << filePath;
         return true;
     }
-
-    qWarning() << "TrackingManager: Failed to save roi_points.json to:" << filePath;
+    qWarning() << "TrackingManager: Failed to save roi_points.json to:" << filePath << error;
     return false;
 }
 

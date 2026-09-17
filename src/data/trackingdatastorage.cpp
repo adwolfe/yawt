@@ -20,7 +20,7 @@
 #include <stdexcept>
 #include <QtMath>
 #include "../utils/loggingcategories.h"
-#include "../utils/yawtjsonio.h"
+#include "wormsjsoncodec.h"
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -345,209 +345,41 @@ static bool isRoiPointType(TableItems::ItemType type) {
            type == TableItems::ItemType::CenterPoint;
 }
 
-static bool parseItemFromJsonObject(const QJsonObject& obj, TableItems::ClickedItem& item) {
-    item.id = obj.value("id").toInt();
-    item.type = TableItems::stringToItemType(obj.value("type").toString());
-    item.visible = obj.value("visible").toBool(true);
-    item.frameOfSelection = obj.value("frameOfSelection").toInt(0);
-
-    if (obj.contains("color") && obj["color"].isObject()) {
-        QJsonObject colorObj = obj["color"].toObject();
-        if (colorObj.contains("r") && colorObj.contains("g") && colorObj.contains("b")) {
-            int r = colorObj.value("r").toInt(0);
-            int g = colorObj.value("g").toInt(0);
-            int b = colorObj.value("b").toInt(0);
-            int a = colorObj.value("a").toInt(255);
-            item.color = QColor(r, g, b, a);
-        } else if (colorObj.contains("hex")) {
-            item.color = QColor(colorObj.value("hex").toString());
-        }
-    }
-
-    if (obj.contains("initialCentroid") && obj["initialCentroid"].isObject()) {
-        QJsonObject c = obj["initialCentroid"].toObject();
-        item.initialCentroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
-    }
-    if (obj.contains("initialBoundingBox") && obj["initialBoundingBox"].isObject()) {
-        QJsonObject b = obj["initialBoundingBox"].toObject();
-        item.initialBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
-                                         b.value("width").toDouble(), b.value("height").toDouble());
-    }
-    if (obj.contains("originalClickedBoundingBox") && obj["originalClickedBoundingBox"].isObject()) {
-        QJsonObject b = obj["originalClickedBoundingBox"].toObject();
-        item.originalClickedBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
-                                                 b.value("width").toDouble(), b.value("height").toDouble());
-    }
-    return true;
-}
-
 bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
-    QJsonParseError parseError;
-    QString ioError;
-    QJsonDocument doc = YawtJsonIO::readJsonDocument(filePath, &parseError, &ioError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        qWarning() << "TrackingDataStorage: JSON parse error in worms.json:"
-                   << parseError.errorString() << ioError;
+    WormsJson::Document doc;
+    QString error;
+    if (!WormsJson::read(filePath, doc, &error)) {
+        qWarning() << "TrackingDataStorage: cannot read worms.json:" << filePath << error;
         return false;
     }
-
-    QJsonObject root = doc.object();
 
     clearAllData();
 
     bool hasMetrics = false;
-    if (root.contains("metrics") && root["metrics"].isObject()) {
-        QJsonObject metricsObj = root["metrics"].toObject();
-        if (metricsObj.contains("roiSizeMultiplier")) {
-            m_roiSizeMultiplier = metricsObj.value("roiSizeMultiplier").toDouble(m_roiSizeMultiplier);
+    if (doc.metrics.valid) {
+        m_roiSizeMultiplier      = doc.metrics.roiSizeMultiplier;
+        m_minObservedArea        = doc.metrics.minObservedArea;
+        m_maxObservedArea        = doc.metrics.maxObservedArea;
+        m_minObservedAspectRatio = doc.metrics.minObservedAspectRatio;
+        m_maxObservedAspectRatio = doc.metrics.maxObservedAspectRatio;
+        if (doc.metrics.fixedRoiSize.isValid()) {
+            m_currentFixedRoiSize = doc.metrics.fixedRoiSize;
+            hasMetrics = true;
         }
-        if (metricsObj.contains("currentFixedRoiSize") && metricsObj["currentFixedRoiSize"].isObject()) {
-            QJsonObject fixedObj = metricsObj["currentFixedRoiSize"].toObject();
-            QSizeF fixedSize(fixedObj.value("width").toDouble(), fixedObj.value("height").toDouble());
-            if (fixedSize.isValid()) {
-                m_currentFixedRoiSize = fixedSize;
-                hasMetrics = true;
-            }
-        }
-        if (metricsObj.contains("minObservedArea")) m_minObservedArea = metricsObj.value("minObservedArea").toDouble(m_minObservedArea);
-        if (metricsObj.contains("maxObservedArea")) m_maxObservedArea = metricsObj.value("maxObservedArea").toDouble(m_maxObservedArea);
-        if (metricsObj.contains("minObservedAspectRatio")) m_minObservedAspectRatio = metricsObj.value("minObservedAspectRatio").toDouble(m_minObservedAspectRatio);
-        if (metricsObj.contains("maxObservedAspectRatio")) m_maxObservedAspectRatio = metricsObj.value("maxObservedAspectRatio").toDouble(m_maxObservedAspectRatio);
     }
 
-    if (root.contains("items") && root["items"].isArray()) {
-        QJsonArray itemsArr = root["items"].toArray();
+    if (!doc.items.isEmpty()) {
         int maxId = 0;
-        for (const QJsonValue& v : itemsArr) {
-            if (!v.isObject()) continue;
-            QJsonObject obj = v.toObject();
-            TableItems::ClickedItem item;
-            parseItemFromJsonObject(obj, item);
+        for (const TableItems::ClickedItem& item : doc.items) {
             maxId = qMax(maxId, item.id);
-
             m_items.append(item);
         }
         m_nextId = maxId + 1;
     }
 
-    if (root.contains("tracks") && root["tracks"].isObject()) {
-        QJsonObject tracksObj = root["tracks"].toObject();
-        for (auto it = tracksObj.constBegin(); it != tracksObj.constEnd(); ++it) {
-            bool ok = false;
-            int wormId = it.key().toInt(&ok);
-            if (!ok || !it.value().isArray()) continue;
-            QJsonArray pointsArr = it.value().toArray();
-            std::vector<Tracking::WormTrackPoint> points;
-            points.reserve(pointsArr.size());
-            for (const QJsonValue& pv : pointsArr) {
-                if (!pv.isObject()) continue;
-                QJsonObject pObj = pv.toObject();
-                Tracking::WormTrackPoint p;
-                p.frameNumber = pObj.value("frame").toInt();
-                if (pObj.contains("position") && pObj["position"].isObject()) {
-                    QJsonObject pos = pObj["position"].toObject();
-                    p.position = cv::Point2f(static_cast<float>(pos.value("x").toDouble()),
-                                             static_cast<float>(pos.value("y").toDouble()));
-                }
-                if (pObj.contains("roi") && pObj["roi"].isObject()) {
-                    QJsonObject r = pObj["roi"].toObject();
-                    p.searchWindow = QRectF(r.value("x").toDouble(), r.value("y").toDouble(),
-                                   r.value("width").toDouble(), r.value("height").toDouble());
-                }
-                p.quality = static_cast<Tracking::TrackPointQuality>(
-                    pObj.value("quality").toInt(static_cast<int>(p.quality)));
-
-                if (pObj.contains("area"))
-                    p.area = static_cast<float>(pObj.value("area").toDouble());
-                if (pObj.contains("aspectRatio"))
-                    p.aspectRatio = static_cast<float>(pObj.value("aspectRatio").toDouble());
-
-                if (pObj.contains("tips") && pObj["tips"].isObject()) {
-                    const QJsonObject tips = pObj["tips"].toObject();
-                    if (tips.contains("head") && tips.contains("tail")) {
-                        const QJsonObject h = tips["head"].toObject();
-                        const QJsonObject t = tips["tail"].toObject();
-                        p.headTip = cv::Point2f(static_cast<float>(h.value("x").toDouble()),
-                                                static_cast<float>(h.value("y").toDouble()));
-                        p.tailTip = cv::Point2f(static_cast<float>(t.value("x").toDouble()),
-                                                static_cast<float>(t.value("y").toDouble()));
-                        p.hasTips = true;
-                    }
-                }
-
-                if (pObj.contains("detectedBlob") && pObj["detectedBlob"].isObject()) {
-                    Tracking::DetectedBlob blob =
-                        Tracking::detectedBlobFromJson(pObj["detectedBlob"].toObject());
-                    if (!blob.isValid) {
-                        blob.isValid = true;
-                    }
-                    if (blob.centroid.isNull()) {
-                        blob.centroid = QPointF(static_cast<double>(p.position.x),
-                                                static_cast<double>(p.position.y));
-                    }
-                    if (blob.boundingBox.isNull()) {
-                        blob.boundingBox = p.searchWindow;
-                    }
-                    if (blob.centerlinePoints.size() >= 2) {
-                        double arcLen = 0.0;
-                        for (size_t i = 1; i < blob.centerlinePoints.size(); ++i) {
-                            const cv::Point2f d = blob.centerlinePoints[i] - blob.centerlinePoints[i - 1];
-                            arcLen += std::sqrt(d.x * d.x + d.y * d.y);
-                        }
-                        p.bodyLength = static_cast<float>(arcLen);
-                    }
-                    setDetectedBlobForFrame(p.frameNumber, wormId, blob);
-                } else if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
-                    // Legacy format: restore the minimal centerline-only blob.
-                    Tracking::DetectedBlob blob;
-                    blob.isValid   = true;
-                    blob.centroid  = QPointF(static_cast<double>(p.position.x),
-                                             static_cast<double>(p.position.y));
-                    blob.boundingBox = p.searchWindow;
-                    for (const QJsonValue& cv : pObj["centerlinePoints"].toArray()) {
-                        const QJsonArray a = cv.toArray();
-                        if (a.size() >= 2)
-                            blob.centerlinePoints.push_back(
-                                cv::Point2f(static_cast<float>(a[0].toDouble()),
-                                            static_cast<float>(a[1].toDouble())));
-                    }
-                    if (blob.centerlinePoints.size() >= 2) {
-                        double arcLen = 0.0;
-                        for (size_t i = 1; i < blob.centerlinePoints.size(); ++i) {
-                            const cv::Point2f d = blob.centerlinePoints[i] - blob.centerlinePoints[i - 1];
-                            arcLen += std::sqrt(d.x * d.x + d.y * d.y);
-                        }
-                        p.bodyLength = static_cast<float>(arcLen);
-                        setDetectedBlobForFrame(p.frameNumber, wormId, blob);
-                    }
-                }
-
-                points.push_back(p);
-            }
-            m_tracks[wormId] = points;
-        }
-    }
-
-    if (root.contains("mergeGroupsByFrame") && root["mergeGroupsByFrame"].isObject()) {
-        QJsonObject mergeObj = root["mergeGroupsByFrame"].toObject();
-        for (auto it = mergeObj.constBegin(); it != mergeObj.constEnd(); ++it) {
-            bool ok = false;
-            int frameNum = it.key().toInt(&ok);
-            if (!ok || !it.value().isArray()) continue;
-            QJsonArray groupsArr = it.value().toArray();
-            QList<QList<int>> groups;
-            for (const QJsonValue& gv : groupsArr) {
-                if (!gv.isArray()) continue;
-                QJsonArray groupArr = gv.toArray();
-                QList<int> group;
-                for (const QJsonValue& idv : groupArr) {
-                    group.append(idv.toInt());
-                }
-                groups.append(group);
-            }
-            m_mergeHistory.insert(frameNum, groups);
-        }
-    }
+    m_tracks = std::move(doc.tracks);
+    m_detectedBlobsByFrame = std::move(doc.blobsByFrame);
+    m_mergeHistory = std::move(doc.mergeGroupsByFrame);
 
     refreshDerivedTrackData();
     updateIdToIndexMap();
@@ -567,25 +399,9 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
 }
 
 bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
+    if (!QFile::exists(filePath)) {
         qWarning() << "TrackingDataStorage: Cannot read roi_points.json:" << filePath;
         return false;
-    }
-
-    QByteArray data = file.readAll();
-    file.close();
-
-    QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        qWarning() << "TrackingDataStorage: JSON parse error in roi_points.json:" << parseError.errorString();
-        return false;
-    }
-
-    QJsonObject root = doc.object();
-    if (!root.contains("items") || !root["items"].isArray()) {
-        return true;
     }
 
     QSet<int> existingIds;
@@ -593,12 +409,7 @@ bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
         existingIds.insert(item.id);
     }
 
-    QJsonArray itemsArr = root["items"].toArray();
-    for (const QJsonValue& v : itemsArr) {
-        if (!v.isObject()) continue;
-        QJsonObject obj = v.toObject();
-        TableItems::ClickedItem item;
-        parseItemFromJsonObject(obj, item);
+    for (TableItems::ClickedItem item : WormsJson::readRoiPoints(filePath)) {
         if (!isRoiPointType(item.type)) continue;
 
         if (item.id <= 0 || existingIds.contains(item.id)) {

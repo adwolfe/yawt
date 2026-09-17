@@ -1,5 +1,6 @@
 #include "analysissessionmodel.h"
 #include "videometadatastore.h"
+#include "../data/wormsjsoncodec.h"
 #include "../utils/yawtjsonio.h"
 
 #include <QCoreApplication>
@@ -38,101 +39,14 @@ QIcon AnalysisSessionModel::makeColorIcon(const QColor& c)
 /** Read worms.json and return the IDs of Worm and Fix items. */
 QList<int> AnalysisSessionModel::parseWormIds(const QString& wormsJsonPath)
 {
-    QJsonParseError err;
-    const QJsonDocument doc = YawtJsonIO::readJsonDocument(wormsJsonPath, &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return {};
-
-    QList<int> ids;
-    const QJsonArray items = doc.object().value("items").toArray();
-    for (const QJsonValue& v : items) {
-        if (!v.isObject()) continue;
-        const QJsonObject obj = v.toObject();
-        const QString type = obj.value("type").toString();
-        if (type == "Worm" || type == "Fix")
-            ids.append(obj.value("id").toInt());
-    }
-    return ids;
+    return WormsJson::readWormIds(wormsJsonPath);
 }
 
 /** Load the tracks section of worms.json into an AllWormTracks map. */
 Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& wormsJsonPath)
 {
-    Tracking::AllWormTracks tracks;
-
-    QJsonParseError err;
-    const QJsonDocument doc = YawtJsonIO::readJsonDocument(wormsJsonPath, &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return tracks;
-
-    const QJsonObject tracksObj = doc.object().value("tracks").toObject();
-    for (auto it = tracksObj.constBegin(); it != tracksObj.constEnd(); ++it) {
-        bool ok = false;
-        const int wormId = it.key().toInt(&ok);
-        if (!ok || !it.value().isArray()) continue;
-
-        std::vector<Tracking::WormTrackPoint> points;
-        for (const QJsonValue& pv : it.value().toArray()) {
-            if (!pv.isObject()) continue;
-            const QJsonObject pObj = pv.toObject();
-            Tracking::WormTrackPoint p;
-            p.frameNumber = pObj.value("frame").toInt();
-            if (pObj.contains("position") && pObj["position"].isObject()) {
-                const QJsonObject pos = pObj["position"].toObject();
-                p.position = cv::Point2f(static_cast<float>(pos.value("x").toDouble()),
-                                         static_cast<float>(pos.value("y").toDouble()));
-            }
-            p.quality = static_cast<Tracking::TrackPointQuality>(pObj.value("quality").toInt());
-
-            // Blob-derived morphology (optional, written post-centerline)
-            if (pObj.contains("area"))
-                p.area = static_cast<float>(pObj.value("area").toDouble());
-            if (pObj.contains("aspectRatio"))
-                p.aspectRatio = static_cast<float>(pObj.value("aspectRatio").toDouble());
-
-            // Body length from centerline points
-            if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
-                const QJsonArray clArr = pObj["centerlinePoints"].toArray();
-                float arcLen = 0.f;
-                cv::Point2f prev{};
-                bool hasPrev = false;
-                for (const QJsonValue& cv : clArr) {
-                    if (!cv.isArray() || cv.toArray().size() < 2) continue;
-                    cv::Point2f pt(static_cast<float>(cv.toArray()[0].toDouble()),
-                                   static_cast<float>(cv.toArray()[1].toDouble()));
-                    if (hasPrev) {
-                        cv::Point2f d = pt - prev;
-                        arcLen += std::sqrt(d.x*d.x + d.y*d.y);
-                    }
-                    prev = pt;
-                    hasPrev = true;
-                }
-                if (arcLen > 0.f) p.bodyLength = arcLen;
-            }
-
-            // Head/tail tips
-            if (pObj.contains("tips") && pObj["tips"].isObject()) {
-                const QJsonObject tips = pObj["tips"].toObject();
-                if (tips.contains("head") && tips.contains("tail")) {
-                    const QJsonObject h = tips["head"].toObject();
-                    const QJsonObject t = tips["tail"].toObject();
-                    p.headTip = cv::Point2f(static_cast<float>(h.value("x").toDouble()),
-                                            static_cast<float>(h.value("y").toDouble()));
-                    p.tailTip = cv::Point2f(static_cast<float>(t.value("x").toDouble()),
-                                            static_cast<float>(t.value("y").toDouble()));
-                    p.hasTips = true;
-                }
-            }
-
-            points.push_back(p);
-        }
-        if (!points.empty()) {
-            std::sort(points.begin(), points.end(),
-                [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
-                    return a.frameNumber < b.frameNumber;
-                });
-            tracks[wormId] = std::move(points);
-        }
-    }
-    return tracks;
+    // Sorted by frame; blob geometry is not materialised (see WormsJson::readTracks).
+    return WormsJson::readTracks(wormsJsonPath);
 }
 
 /**
@@ -183,31 +97,13 @@ QStringList AnalysisSessionModel::buildWarnings(const QString& procDir,
 void AnalysisSessionModel::loadRoiReferencePoints(VideoItem& vid)
 {
     const QString roiPath = QDir(vid.procDir).absoluteFilePath("roi_points.json");
-    QFile f(roiPath);
-    if (!f.open(QIODevice::ReadOnly)) return;
-
-    QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
-
-    const QJsonArray items = doc.object().value("items").toArray();
-    for (const QJsonValue& v : items) {
-        if (!v.isObject()) continue;
-        const QJsonObject obj = v.toObject();
-        const QString type = obj.value("type").toString();
-        const QJsonObject centroid = obj.value("initialCentroid").toObject();
-        const QPointF pt(centroid.value("x").toDouble(),
-                         centroid.value("y").toDouble());
-
-        if (type == "Start Point") {
-            vid.hasStartPoint = true;
-            vid.startPoint = pt;
-        } else if (type == "End Point") {
-            vid.hasEndPoint = true;
-            vid.endPoint = pt;
-        } else if (type == "Control Point" || type == "Center") {
-            vid.hasCenterPoint = true;
-            vid.centerPoint = pt;
+    for (const TableItems::ClickedItem& item : WormsJson::readRoiPoints(roiPath)) {
+        const QPointF pt = item.initialCentroid;
+        switch (item.type) {
+        case TableItems::ItemType::StartPoint:  vid.hasStartPoint  = true; vid.startPoint  = pt; break;
+        case TableItems::ItemType::EndPoint:    vid.hasEndPoint    = true; vid.endPoint    = pt; break;
+        case TableItems::ItemType::CenterPoint: vid.hasCenterPoint = true; vid.centerPoint = pt; break;  // legacy "Control Point" maps here
+        default: break;
         }
     }
 }

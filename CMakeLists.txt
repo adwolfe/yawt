@@ -104,6 +104,7 @@ set(SOURCES
 
     # Data
     src/data/trackingdatastorage.cpp
+    src/data/wormsjsoncodec.cpp
     src/data/trackingcommon.cpp
     src/data/videometadatastore.cpp
 
@@ -175,6 +176,7 @@ set(HEADERS
 
     # Data
     src/data/trackingdatastorage.h
+    src/data/wormsjsoncodec.h
     src/data/trackingcommon.h
     src/data/analysistypes.h
     src/data/videometadatastore.h

@@ -299,6 +299,7 @@ private:
     void saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms);
     bool saveWormsJson(const QString& directoryPath);
     bool saveRoiPointsJson(const QString& directoryPath) const;
+    QJsonObject mergeStateToJson() const;   // worms.json "mergeState" section
     void saveWormSummaryJson(const QString& directoryPath) const;
     bool compareThresholdSettings(const QString& filePath, const Thresholding::ThresholdSettings& currentSettings);
     QJsonObject thresholdSettingsToJson(const Thresholding::ThresholdSettings& settings) const;
