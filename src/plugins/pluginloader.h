@@ -10,12 +10,12 @@
  *   version: 1
  *   name: Speed
  *   description: Mean speed per worm per group
- *   aggregate: per_worm          # per_worm | per_frame | spatial
+ *   aggregate: per_worm          # per_worm | per_frame  (spatial parses but is not evaluated)
  *   formula: speed
  *   filter: quality != Lost && speed > 0
  *   reduce: mean                 # mean|median|sum|count|min|max|std|last
  *   plot:
- *     type: box                  # box|bar|line|scatter
+ *     type: box                  # box|bar|line  (scatter is accepted and drawn as line)
  *     y_label: Speed (px/s)
  *     y_label_um: Speed (µm/s)
  *     x_label: Group
@@ -46,6 +46,9 @@
  *   smooth(expr, seconds)               — rolling mean over a time window
  *   smooth(expr, seconds, sample_filter) — rolling mean that only admits samples
  *                                         where sample_filter is non-zero
+ *   prev_<binding>                      — value of a binding on the previous frame
+ *                                         (NaN on the first frame). Bindings only,
+ *                                         not standard variables.
  */
 class PluginLoader
 {

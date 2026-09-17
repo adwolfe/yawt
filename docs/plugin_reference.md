@@ -105,6 +105,19 @@ bindings:
   smooth_speed: smooth(raw_speed, 2, quality != Lost && diff(t) > 0)
 ```
 
+### `prev_<name>`
+
+Every binding `name` also defines `prev_<name>`: the value that binding had on the previous frame of the same worm. It is `NaN` on a worm's first frame and after a break in the series, so guard it in `filter` or with a comparison. `prev_` names can be used in later bindings and in `formula` and `filter`. They exist only for bindings, not for standard variables: bind `hx: xhead` first, then use `prev_hx`.
+
+`diff(expr)` is the shorthand for `expr - prev_expr` when only the difference matters. Use `prev_` when you need both the current and previous values, as `head_tail_flip_timeline.yaml` does.
+
+```yaml
+bindings:
+  hx: xhead
+  hy: yhead
+  step: sqrt((hx - prev_hx)^2 + (hy - prev_hy)^2)
+```
+
 ---
 
 ## Mathematical Functions
@@ -144,7 +157,7 @@ version: 1                     # required
 name: Plugin Name              # display name
 description: What it computes  # shown in the UI
 
-aggregate: per_worm            # per_worm | per_frame | spatial
+aggregate: per_worm            # per_worm | per_frame
 
 bindings:                      # optional intermediate values (evaluated in order)
   name: expr
@@ -155,7 +168,7 @@ filter: expr                   # optional — frames where this is 0 are exclude
 reduce: mean                   # per_worm only: mean|median|sum|count|min|max|std|last
 
 plot:
-  type: box                    # box | bar | line | scatter
+  type: box                    # box | bar | line   (scatter is accepted but drawn as line)
   y_label: "Label (px)"        # y-axis label for pixel units
   y_label_um: "Label (µm)"     # y-axis label for micrometer units
   x_label: "X axis label"      # x-axis label (line/scatter only)
@@ -167,7 +180,8 @@ plot:
 |---|---|
 | `per_worm` | Produces one scalar per worm; typically used with box or bar plots |
 | `per_frame` | Produces a time series per worm; typically used with line plots |
-| `spatial` | Produces a binned 2D grid; used for heatmaps |
+
+`spatial` is recognised by the loader for forward compatibility but is not evaluated; a plugin that uses it produces no plot.
 
 ### `reduce` functions (per_worm only)
 
@@ -198,6 +212,7 @@ plot:
 | `distance_from_start_timeline.yaml` | Distance from start point over time | per_frame | line |
 | `chemotaxis_index.yaml` | `(d_start − d_end) / (d_start + d_end)` directional bias | per_worm | box |
 | `reversals.yaml` | Reversal count via velocity dot-product sign changes | per_worm | box |
+| `head_tail_flip_timeline.yaml` | Head/tail continuity score over time (positive where swapping head and tail would better match the previous frame); uses `prev_` bindings | per_frame | line |
 
 ---
 

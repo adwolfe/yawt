@@ -30,7 +30,8 @@ struct PlotPluginSpec
      * Aggregation level:
      *   per_worm  — compute a scalar per worm (reduce across frames), then group
      *   per_frame — keep a value per frame per worm (time series)
-     *   spatial   — bin values into a 2D grid (heatmap)
+     *   spatial   — reserved. Parsed by PluginLoader but NOT evaluated by
+     *               PluginEngine; PluginResult has no spatial output.
      */
     enum class Aggregate { PerWorm, PerFrame, Spatial };
     Aggregate aggregate = Aggregate::PerWorm;
@@ -48,6 +49,8 @@ struct PlotPluginSpec
      *   "diff(x)"  → x[frame] - x[frame-1]   (skips on first frame)
      *   "diff(t)"  → 1.0 / fps
      * Other values are plain expressions evaluated from standard vocabulary.
+     * Every binding `name` also defines `prev_name`, its value on the previous
+     * frame (NaN on the first frame), usable in later bindings, formula, and filter.
      */
     QHash<QString, QString> bindings;
 
@@ -72,7 +75,8 @@ struct PlotPluginSpec
      *   box     — box-and-whisker, one box per group
      *   bar     — mean ± std, one bar per group
      *   line    — time series, one line per worm
-     *   scatter — 2D scatter (requires formula_x and formula_y; see extensions)
+     *   scatter — accepted for compatibility; currently rendered exactly like line
+     *             (PluginPlotWidget dispatches it to paintLine)
      */
     enum class PlotType { Box, Bar, Line, Scatter };
     PlotType plotType = PlotType::Box;
