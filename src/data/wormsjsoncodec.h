@@ -29,7 +29,7 @@
  *   tipBaselines        { "<wormId>": { meanAbsCurvature, m2AbsCurvature, curvatureSamples,
  *                         meanWidth, m2Width, widthSamples, meanBodyLength, m2BodyLength,
  *                         lengthSamples } }   present once the centerline pass has run
- *   mergeState          opaque TrackingManager section (physical blobs, split
+ *   mergeState          opaque TrackingManager section (shared blobs, split
  *                       resolutions); passed through untouched
  *
  * roi_points.json (version 1), indented:

@@ -456,7 +456,7 @@ void TrackingDataStorage::clearAndCompactTrackData() {
 
 /**
  * @brief Persist per-frame conceptual merge groups (for overlays and post-run analysis).
- * Each group is a list of conceptual worm IDs present in the same physical blob at that frame.
+ * Each group is a list of conceptual worm IDs present in the same shared blob at that frame.
  */
 void TrackingDataStorage::setMergeGroupsForFrame(int frameNumber, const QList<QList<int>>& groups) {
     if (frameNumber < 0) return; // silently ignore invalid frame numbers
