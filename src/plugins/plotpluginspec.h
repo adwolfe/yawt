@@ -53,7 +53,9 @@ struct PlotPluginSpec
 
     /**
      * Optional filter expression. Frames where this evaluates to 0 are excluded.
-     * Standard vocabulary is available. Example: "quality == 1"  (1 = Single)
+     * Standard vocabulary is available. Example: "quality != Lost"
+     * (quality codes: Single = 0, Merged = 1, Split = 2, Lost = 3; the names are
+     * exposed as constants, so prefer them over the integers).
      */
     QString filter;
 
