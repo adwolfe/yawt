@@ -9,6 +9,106 @@
 
 namespace Debug {
 
+/**
+ * @brief Per-tip debug snapshot of the bilateral cap midpoint computation.
+ *
+ * Populated inside detectEndpoints() for every skeleton endpoint and carried
+ * on Debug::EndpointDebug::tipCapDebug (parallel to EndpointResult::tips).
+ * Consumed only by the debug exporter — zero cost in release when unused.
+ *
+ * All point coordinates are in video space.
+ */
+struct TipCapDebug {
+    bool valid = false;
+
+    // Search window parameters (mirroring what detectEndpoints used).
+    cv::Point2f skelEndpoint;   // skeleton degree-1 node projected to contour snap
+    cv::Point2f outwardDir;     // normalised direction away from body interior
+    float dtAtEp    = 0.f;     // DT value at skeleton endpoint
+    float maxForward = 0.f;    // forward search limit (pixels)
+    float maxSide    = 0.f;    // lateral search limit (pixels)
+
+    // Contour points classified by which half-plane they fall in.
+    std::vector<cv::Point2f> leftCapPoints;    // fwd in window, left of outwardDir
+    std::vector<cv::Point2f> rightCapPoints;   // fwd in window, right of outwardDir
+    // (points outside the window are not stored — they are uncoloured on the canvas)
+
+    // Apex weighted centroids from the top-forward fraction of each side.
+    cv::Point2f leftApex;    // weighted centroid of top-forward left points
+    cv::Point2f rightApex;   // weighted centroid of top-forward right points
+    bool  hasLeft  = false;
+    bool  hasRight = false;
+    float leftPeakFwd  = 0.f;  // forward depth of the leftmost apex contour point
+    float rightPeakFwd = 0.f;  // forward depth of the rightmost apex contour point
+    bool  sanityPassed = false; // did the left/right apex depths agree well enough?
+
+    // Bilateral result.
+    cv::Point2f bilateralTip;
+    bool hasBilateral = false;
+
+    // Old-approach comparison points (for overlay in exporter).
+    cv::Point2f snapPoint;       // projectedEndpointContourIdx snap (= t.skelPoint)
+    cv::Point2f peakOrSnapPoint; // curvature peak if found, else same as snapPoint
+    bool hadPeak = false;        // true when a curvature peak was accepted
+};
+
+/**
+ * @brief Per-skeleton-endpoint audit trail for detectEndpoints().
+ *
+ * This records the exact handoff from a degree-1 skeleton node to contour snap,
+ * curvature-peak search, optional peak rejection, and final TrueTip output.
+ * It is debug/export data only; centerline decisions still consume TrueTip.
+ */
+struct EndpointCandidateDebug {
+    int rawEndpointOrder = -1;
+    int prunedEndpointOrder = -1;
+    int graphIndex = -1;
+    int graphDegree = 0;
+
+    cv::Point2f skeletonLocal = {0.f, 0.f};
+    cv::Point2f skeletonVideo = {0.f, 0.f};
+    cv::Point2f outwardDir = {0.f, 0.f};
+    float dtAtEndpoint = 0.f;
+    float maxForward = 0.f;
+    float maxSide = 0.f;
+
+    int snapContourIdx = -1;
+    cv::Point2f snapVideo = {0.f, 0.f};
+    float snapCurvature = 0.f;
+
+    int reachablePeakCount = 0;
+    int bestPeakContourIdx = -1;
+    float bestPeakScore = 0.f;
+    cv::Point2f bestPeakVideo = {-1.f, -1.f};
+    float bestPeakCurvature = 0.f;
+    float bestPeakDistanceFromSnap = 0.f;
+    float maxPeakShift = 0.f;
+    bool peakAccepted = false;
+    QString peakRejectReason;
+
+    int finalTipIdx = -1;
+    cv::Point2f finalTipVideo = {-1.f, -1.f};
+    bool finalExtended = false;
+    float finalCurvature = 0.f;
+    float finalWidth = 0.f;
+    bool finalHasBilateral = false;
+};
+
+/**
+ * @brief Everything detectEndpoints() records purely for the debug exporter.
+ *
+ * Passed to detectEndpoints() as an optional sink. When the caller passes
+ * nullptr (every non-debug path) none of this is computed or copied.
+ */
+struct EndpointDebug {
+    std::vector<int> rawSkeletonEndpointIndices;      // degree-1 nodes before pruning (graph indices)
+    std::vector<cv::Point2f> contourPoints;           // video coords, aligned with contourCurvatures
+    std::vector<float> contourCurvatures;             // signed curvature per contour point
+    std::vector<int> contourCurvaturePeaks;           // indices into contourPoints
+    std::vector<TipCapDebug> tipCapDebug;             // parallel to EndpointResult::tips
+    std::vector<EndpointCandidateDebug> endpointCandidateDebug;
+};
+
 enum class Pipeline {
     Tracking,
     Centerline
@@ -108,12 +208,12 @@ struct CenterlineFrameDebug {
     std::vector<cv::Point2f> contourCurvaturePoints;
     std::vector<float> contourCurvatures;
     std::vector<int> contourCurvaturePeaks;
-    std::vector<Centerline::EndpointCandidateDebug> endpointCandidateDebug;
+    std::vector<EndpointCandidateDebug> endpointCandidateDebug;
 
     // Bilateral cap-midpoint debug — one entry per tip (parallel to tipCandidates).
     // Populated whenever the new bilateral path ran (Clean frames primarily).
     // tipCapRoles[i] is "head" / "tail" / "" matching tipCandidates[i].
-    std::vector<Centerline::TipCapDebug> tipCapDebug;
+    std::vector<TipCapDebug> tipCapDebug;
     std::vector<QString>               tipCapRoles;
 
     std::vector<cv::Point2f> initialCenterline;

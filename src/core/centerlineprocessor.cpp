@@ -14,7 +14,8 @@ namespace Centerline {
 EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                                const HeadTailPredictor& predictor,
                                const TipFeatureBaseline& baseline,
-                               bool inMergeGroup)
+                               bool inMergeGroup,
+                               Debug::EndpointDebug* debugOut)
 {
     EndpointResult r;
 
@@ -55,7 +56,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         return r;
     }
     std::vector<int> rawEndpoints = r.skeleton.endpointIndices;
-    r.rawSkeletonEndpointIndices = rawEndpoints;
+    if (debugOut) debugOut->rawSkeletonEndpointIndices = rawEndpoints;
 
     // (c) ── Prune to ≤ 2 endpoints (longest-path pair) ─────────────────────
     int rawEndpointCount = static_cast<int>(rawEndpoints.size());
@@ -125,12 +126,15 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         }
         if (isLocalMax) curvaturePeakIdx.push_back(i);
     }
-    r.contourPoints.reserve(nContour);
-    r.contourCurvatures = curvature;
-    r.contourCurvaturePeaks = curvaturePeakIdx;
-    for (const cv::Point& p : contour) {
-        r.contourPoints.emplace_back(static_cast<float>(p.x),
-                                     static_cast<float>(p.y));
+    if (debugOut) {
+        debugOut->contourCurvatures = curvature;
+        debugOut->contourCurvaturePeaks = curvaturePeakIdx;
+        debugOut->contourPoints.clear();
+        debugOut->contourPoints.reserve(nContour);
+        for (const cv::Point& p : contour) {
+            debugOut->contourPoints.emplace_back(static_cast<float>(p.x),
+                                                 static_cast<float>(p.y));
+        }
     }
 
     // ── Width probe ────────────────────────────────────────────────────────
@@ -294,7 +298,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         float maxSide = 0.f;
         endpointSearchLimits(dtAtEp, maxForward, maxSide);
 
-        EndpointCandidateDebug endpointDbg;
+        Debug::EndpointCandidateDebug endpointDbg;
         endpointDbg.rawEndpointOrder = rawEndpointOrderForGraphIndex(epIdx);
         endpointDbg.prunedEndpointOrder = prunedEndpointOrder++;
         endpointDbg.graphIndex = epIdx;
@@ -422,7 +426,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
 
             // Debug snapshot — always populated so the exporter can show the
             // search window even when the bilateral computation falls through.
-            TipCapDebug capDbg;
+            Debug::TipCapDebug capDbg;
             capDbg.valid       = true;
             capDbg.skelEndpoint = snapVideo;
             capDbg.outwardDir  = outwardDir;
@@ -542,12 +546,12 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                         endpointDbg.finalCurvature = t.curvature;
                         endpointDbg.finalWidth = t.width;
                         endpointDbg.finalHasBilateral = t.hasBilateral;
-                        r.endpointCandidateDebug.push_back(endpointDbg);
+                        if (debugOut) debugOut->endpointCandidateDebug.push_back(endpointDbg);
                         if (t.extended) {
                             usedPeakIndices.push_back(bestPeak);
                         }
                         usedFinalTipPoints.push_back(t.point);
-                        r.tipCapDebug.push_back(capDbg);
+                        if (debugOut) debugOut->tipCapDebug.push_back(capDbg);
                         continue; // skip the fallback TrueTip construction below
                     }
                 }
@@ -560,7 +564,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                 capDbg.peakOrSnapPoint = peakWorld;
                 capDbg.hadPeak         = true;
             }
-            r.tipCapDebug.push_back(capDbg);
+            if (debugOut) debugOut->tipCapDebug.push_back(capDbg);
         }
 
         // Fallback (no valid bilateral): construct TrueTip with snap/peak only.
@@ -586,7 +590,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         endpointDbg.finalCurvature = t.curvature;
         endpointDbg.finalWidth = t.width;
         endpointDbg.finalHasBilateral = t.hasBilateral;
-        r.endpointCandidateDebug.push_back(endpointDbg);
+        if (debugOut) debugOut->endpointCandidateDebug.push_back(endpointDbg);
         if (t.extended) {
             usedPeakIndices.push_back(bestPeak);
         }
@@ -3030,18 +3034,19 @@ static bool buildSnakeMask(const Tracking::DetectedBlob& blob,
 
 // Copy endpoint-detection internals into a frame debug record for export.
 static void captureEndpointDebug(const Centerline::EndpointResult& er,
+                                 const Debug::EndpointDebug& dbg,
                                  Debug::CenterlineFrameDebug& record)
 {
     record.endpointLocalBounds = er.localBounds;
     record.skeletonPixels.clear();
     record.rawSkeletonEndpointPoints.clear();
-    record.rawSkeletonEndpointGraphIndices = er.rawSkeletonEndpointIndices;
+    record.rawSkeletonEndpointGraphIndices = dbg.rawSkeletonEndpointIndices;
     record.prunedSkeletonEndpointGraphIndices = er.skeleton.endpointIndices;
     record.skeletonEndpointPoints.clear();
-    record.contourCurvaturePoints = er.contourPoints;
-    record.contourCurvatures = er.contourCurvatures;
-    record.contourCurvaturePeaks = er.contourCurvaturePeaks;
-    record.endpointCandidateDebug = er.endpointCandidateDebug;
+    record.contourCurvaturePoints = dbg.contourPoints;
+    record.contourCurvatures = dbg.contourCurvatures;
+    record.contourCurvaturePeaks = dbg.contourCurvaturePeaks;
+    record.endpointCandidateDebug = dbg.endpointCandidateDebug;
 
     const cv::Point2f origin(static_cast<float>(er.localBounds.x),
                              static_cast<float>(er.localBounds.y));
@@ -3059,7 +3064,7 @@ static void captureEndpointDebug(const Centerline::EndpointResult& er,
         }
     }
 
-    for (int idx : er.rawSkeletonEndpointIndices) {
+    for (int idx : dbg.rawSkeletonEndpointIndices) {
         if (idx < 0 || idx >= static_cast<int>(er.skeleton.points.size())) {
             continue;
         }
@@ -3285,8 +3290,9 @@ debugRecord.predictedCenter = framePredictor.hasVelocity
     : framePredictor.lastCenterPos;
 debugRecord.decisions << QStringLiteral("loaded live predictor and previous-frame state");
 
+Debug::EndpointDebug epDebug;   // filled only when captureDebug
 Centerline::EndpointResult er = Centerline::detectEndpoints(
-        blob, framePredictor, baseline, inMerge);
+        blob, framePredictor, baseline, inMerge, captureDebug ? &epDebug : nullptr);
 
 // ── OMEGA UNZIPPER START ──────────────────────────────────────────
 if (er.topology == Tracking::TopologyState::SelfCrossed && framePredictor.hasVelocity) {
@@ -3317,12 +3323,15 @@ if (er.topology == Tracking::TopologyState::SelfCrossed && framePredictor.hasVel
                 if (Centerline::populateCenterlineFromContourWithCut(splitBlob, cutA, cutB, 2)) {
 
                     // 4. Re-evaluate topology
+                    Debug::EndpointDebug splitDebug;
                     Centerline::EndpointResult splitEr =
-                        Centerline::detectEndpoints(splitBlob, framePredictor, baseline, inMerge);
+                        Centerline::detectEndpoints(splitBlob, framePredictor, baseline, inMerge,
+                                                    captureDebug ? &splitDebug : nullptr);
 
                     if (splitEr.topology == Tracking::TopologyState::Clean) {
                         blob = splitBlob;
                         er = splitEr;
+                        epDebug = splitDebug;
                         debugRecord.decisions << QStringLiteral("Omega handle detected and unzipped via predictive DT");
                     }
                 }
@@ -3333,7 +3342,7 @@ if (er.topology == Tracking::TopologyState::SelfCrossed && framePredictor.hasVel
 // ── OMEGA UNZIPPER END ────────────────────────────────────────────
 
 if (captureDebug) {
-    captureEndpointDebug(er, debugRecord);
+    captureEndpointDebug(er, epDebug, debugRecord);
 }
 
 // Convert TrueTips → TipCandidates. Source = SkeletonEndpoint
@@ -3373,9 +3382,9 @@ debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
 debugRecord.tipCandidates = blob.centerline.tipCandidates;
 
 // Copy bilateral cap debug — parallel to tipCandidates, with role labels.
-debugRecord.tipCapDebug = er.tipCapDebug;
-debugRecord.tipCapRoles.resize(er.tipCapDebug.size());
-for (int ci = 0; ci < static_cast<int>(er.tipCapDebug.size()); ++ci) {
+debugRecord.tipCapDebug = epDebug.tipCapDebug;
+debugRecord.tipCapRoles.resize(epDebug.tipCapDebug.size());
+for (int ci = 0; ci < static_cast<int>(epDebug.tipCapDebug.size()); ++ci) {
     if (ci == blob.centerline.headTipIdx)      debugRecord.tipCapRoles[ci] = QStringLiteral("head");
     else if (ci == blob.centerline.tailTipIdx) debugRecord.tipCapRoles[ci] = QStringLiteral("tail");
     else                                    debugRecord.tipCapRoles[ci] = QString();
