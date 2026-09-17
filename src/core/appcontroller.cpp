@@ -224,14 +224,14 @@ void AppController::setRoiSizeMultiplier(double factor)
     m_blobModel->updateRoiSizeMultiplier(factor);
 }
 
-void AppController::setPixelSizePixelsPerUm(double value)
+void AppController::setUmPerPixel(double umPerPixel)
 {
     if (!m_manager) {
-        YAWT_WARN(lcCoreAppController) << "setPixelSizePixelsPerUm: TrackingManager not available";
+        YAWT_WARN(lcCoreAppController) << "setUmPerPixel: TrackingManager not available";
         return;
     }
 
-    m_manager->setPixelSizePixelsPerUm(value);
+    m_manager->setUmPerPixel(umPerPixel);
 }
 
 void AppController::requestStartTracking(const QString& videoPath,

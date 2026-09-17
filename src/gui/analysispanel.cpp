@@ -275,7 +275,7 @@ void AnalysisPanel::loadPlugins()
     }
 }
 
-void AnalysisPanel::setPixelSizeUmPerPixel(double v)
+void AnalysisPanel::setUmPerPixel(double v)
 {
     m_umPerPixel = v;
     if (!w.mdiArea) return;

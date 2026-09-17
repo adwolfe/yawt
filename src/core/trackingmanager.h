@@ -161,7 +161,7 @@ public:
                                bool replaceExisting,
                                bool extendTrack);
 
-    void setPixelSizePixelsPerUm(double value);
+    void setUmPerPixel(double umPerPixel);   // spatial scale in micrometres per pixel
 
     /**
      * @brief Set the active-contour parameters used by CenterlineWorker for ring/coiled
@@ -345,7 +345,7 @@ private:
     std::vector<cv::Mat> m_finalProcessedForwardFrames;
     std::vector<cv::Mat> m_finalProcessedReversedFrames;
     double m_videoFps;
-    double m_pixelSizePixelsPerUm = 0.0;
+    double m_umPerPixel = 0.0;
     cv::Size m_videoFrameSize;
 
     // Worm object and tracker management

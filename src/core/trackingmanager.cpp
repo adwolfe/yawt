@@ -773,9 +773,9 @@ TrackingManager::~TrackingManager() {
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
 }
 
-void TrackingManager::setPixelSizePixelsPerUm(double value)
+void TrackingManager::setUmPerPixel(double umPerPixel)
 {
-    m_pixelSizePixelsPerUm = std::max(0.0, value);
+    m_umPerPixel = std::max(0.0, umPerPixel);
 }
 
 // Main entry point for tracking
@@ -1914,8 +1914,8 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
     });
     parameterRows.append(WorkbookRow{
         stringCell("Pixel Size"),
-        numberCell(QString::number(m_pixelSizePixelsPerUm, 'f', 6)),
-        stringCell("pixels/um")
+        numberCell(QString::number(m_umPerPixel, 'f', 6)),
+        stringCell("um/pixel")
     });
 
     QList<WorkbookRow> centerlineRows;
@@ -2086,7 +2086,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
     if (directoryPath.isEmpty() || !m_storage) return;
 
     const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    const double umPerPixel = (m_pixelSizePixelsPerUm > 0) ? 1.0 / m_pixelSizePixelsPerUm : 0.0;
+    const double umPerPixel = m_umPerPixel;
 
     QJsonObject wormsObj;
 

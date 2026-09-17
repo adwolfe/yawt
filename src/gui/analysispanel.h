@@ -58,7 +58,7 @@ public:
     /** Wire the controller to the UI widgets. Call once, after setupUi(). */
     void setup(const Widgets& w);
 
-    void setPixelSizeUmPerPixel(double umPerPixel);
+    void setUmPerPixel(double umPerPixel);
     void setVideoFps(double fps);
 
     /** Scan (or re-scan) all proc runs found under the given yawt directory. */

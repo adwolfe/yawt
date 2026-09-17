@@ -160,7 +160,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Initialize AppController which owns storage, manager and models.
     m_appController = new AppController(this);
-    m_appController->setPixelSizePixelsPerUm(ui->pixelSizeSpinBoxD->value());
+    m_appController->setUmPerPixel(ui->pixelSizeSpinBoxD->value());
 
     // Obtain models and storage from the controller (controller manages lifetimes).
     m_blobTableModel = m_appController->blobTableModel();
@@ -317,11 +317,11 @@ MainWindow::MainWindow(QWidget *parent)
         aw.mdiArea            = ui->analysisMdiArea;
         aw.splitter           = ui->analysisSplitter;
         m_analysisPanel->setup(aw);
-        m_analysisPanel->setPixelSizeUmPerPixel(ui->pixelSizeSpinBoxD->value());
+        m_analysisPanel->setUmPerPixel(ui->pixelSizeSpinBoxD->value());
         m_analysisPanel->setVideoFps(m_videoFps);
 
         connect(ui->pixelSizeSpinBoxD, qOverload<double>(&QDoubleSpinBox::valueChanged),
-                m_analysisPanel, &AnalysisPanel::setPixelSizeUmPerPixel);
+                m_analysisPanel, &AnalysisPanel::setUmPerPixel);
         connect(m_analysisPanel, &AnalysisPanel::directoryScanStarted,
                 this, [this](int totalSteps) {
                     if (!m_directoryScanProgressBar) return;
@@ -539,11 +539,9 @@ void MainWindow::setupConnections() {
     // Connect ROI factor spinbox to BlobTableModel
     connect(ui->roiFactorSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             m_blobTableModel, &BlobTableModel::updateRoiSizeMultiplier);
-    // Spinbox now shows µm/pixel; AppController still takes pixels/µm — invert at boundary.
     connect(ui->pixelSizeSpinBoxD, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double umPerPixel) {
-                const double pixelsPerUm = (umPerPixel > 0.0) ? 1.0 / umPerPixel : 0.0;
-                m_appController->setPixelSizePixelsPerUm(pixelsPerUm);
+                m_appController->setUmPerPixel(umPerPixel);
             });
     // Save to video metadata JSON when the user manually finishes editing the spinbox.
     connect(ui->pixelSizeSpinBoxD, &QDoubleSpinBox::editingFinished,
