@@ -225,9 +225,9 @@ private:
     ColorDelegate *m_colorDelegate;
     /** Item type delegate created/parented to MainWindow; owned by MainWindow unless reparented. */
     ItemTypeDelegate *m_itemTypeDelegate;
-    /** Proxy models to split worms vs ROI/points in separate views. */
+    /** Proxy models to split worms vs reference items (ROI rectangles and Start/End/Center points) in separate views. */
     ItemTypeFilterProxyModel *m_wormProxyModel = nullptr;
-    ItemTypeFilterProxyModel *m_roiProxyModel = nullptr;
+    ItemTypeFilterProxyModel *m_referenceItemsProxy = nullptr;
 
     // Controller and storage
     /**

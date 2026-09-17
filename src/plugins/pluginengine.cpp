@@ -619,7 +619,7 @@ static std::shared_ptr<CompiledPluginPlan> cachedPluginPlan(const PlotPluginSpec
 // ── Build and initialize the var map (once per worm) ─────────────────────
 
 static void initVarMap(VarMap& v,
-                       const PluginRoiPoints& roi,
+                       const ReferencePoints& refPts,
                        const QHash<QString, QString>& bindingKeys)
 {
     v.reserve(80);
@@ -639,10 +639,10 @@ static void initVarMap(VarMap& v,
     };
     for (const QString& k : keys) v[k] = 0.0;
 
-    // ROI reference points
-    if (roi.hasStart)  { v["has_start"] = 1.0;  v["start_x"]  = roi.startX;  v["start_y"]  = roi.startY; }
-    if (roi.hasEnd)    { v["has_end"] = 1.0;    v["end_x"]    = roi.endX;    v["end_y"]    = roi.endY; }
-    if (roi.hasCenter) { v["has_center"] = 1.0; v["center_x"] = roi.centerX; v["center_y"] = roi.centerY; }
+    // reference points
+    if (refPts.hasStart)  { v["has_start"] = 1.0;  v["start_x"]  = refPts.startX;  v["start_y"]  = refPts.startY; }
+    if (refPts.hasEnd)    { v["has_end"] = 1.0;    v["end_x"]    = refPts.endX;    v["end_y"]    = refPts.endY; }
+    if (refPts.hasCenter) { v["has_center"] = 1.0; v["center_x"] = refPts.centerX; v["center_y"] = refPts.centerY; }
 
     // Named quality constants
     v["Single"] = Q_SINGLE; v["Merged"] = Q_MERGED;
@@ -659,7 +659,7 @@ static void initVarMap(VarMap& v,
 static void updateVarMap(VarMap& v,
                          const AnalysisSessionModel::AnalysisWormEntry& worm,
                          int idx,
-                         const PluginRoiPoints& roi,
+                         const ReferencePoints& refPts,
                          double umPerPixel,
                          double fps)
 {
@@ -688,24 +688,24 @@ static void updateVarMap(VarMap& v,
         v["xtail_um"] = p.tailTip.x*um; v["ytail_um"] = p.tailTip.y*um;
     }
 
-    if (roi.hasStart) {
-        double dx = x-roi.startX, dy = y-roi.startY;
+    if (refPts.hasStart) {
+        double dx = x-refPts.startX, dy = y-refPts.startY;
         const double distPx = std::sqrt(dx*dx + dy*dy);
         const double distUm = (um > 0.0) ? distPx * um : distPx;
         v["dist_to_start_px"] = distPx;
         v["dist_to_start_um"] = distUm;
         v["dist_to_start"] = (um > 0.0) ? distUm : distPx;
     }
-    if (roi.hasEnd) {
-        double dx = x-roi.endX, dy = y-roi.endY;
+    if (refPts.hasEnd) {
+        double dx = x-refPts.endX, dy = y-refPts.endY;
         const double distPx = std::sqrt(dx*dx + dy*dy);
         const double distUm = (um > 0.0) ? distPx * um : distPx;
         v["dist_to_end_px"] = distPx;
         v["dist_to_end_um"] = distUm;
         v["dist_to_end"] = (um > 0.0) ? distUm : distPx;
     }
-    if (roi.hasCenter) {
-        double dx = x-roi.centerX, dy = y-roi.centerY;
+    if (refPts.hasCenter) {
+        double dx = x-refPts.centerX, dy = y-refPts.centerY;
         const double distPx = std::sqrt(dx*dx + dy*dy);
         const double distUm = (um > 0.0) ? distPx * um : distPx;
         v["dist_to_center_px"] = distPx;
@@ -719,13 +719,13 @@ static void updateVarMap(VarMap& v,
 QHash<QString, double> PluginEngine::buildVars(
     const AnalysisSessionModel::AnalysisWormEntry& worm,
     int pointIdx,
-    const PluginRoiPoints& roi,
+    const ReferencePoints& refPts,
     double umPerPixel,
     double fps)
 {
     VarMap v;
-    initVarMap(v, roi, {});
-    updateVarMap(v, worm, pointIdx, roi, umPerPixel, fps);
+    initVarMap(v, refPts, {});
+    updateVarMap(v, worm, pointIdx, refPts, umPerPixel, fps);
     return v;
 }
 
@@ -855,32 +855,32 @@ static double updateSmoothSlot(SmoothSlotState& state,
         : state.sum / static_cast<double>(state.win.size());
 }
 
-static PluginRoiPoints effectiveRoiForWorm(
+static ReferencePoints effectiveReferencePointsForWorm(
     const AnalysisSessionModel::AnalysisWormEntry& worm,
-    const PluginRoiPoints& fallback)
+    const ReferencePoints& fallback)
 {
-    PluginRoiPoints roi = fallback;
+    ReferencePoints refPts = fallback;
     if (worm.hasStartPoint) {
-        roi.hasStart = true;
-        roi.startX = worm.startPoint.x();
-        roi.startY = worm.startPoint.y();
+        refPts.hasStart = true;
+        refPts.startX = worm.startPoint.x();
+        refPts.startY = worm.startPoint.y();
     }
     if (worm.hasEndPoint) {
-        roi.hasEnd = true;
-        roi.endX = worm.endPoint.x();
-        roi.endY = worm.endPoint.y();
+        refPts.hasEnd = true;
+        refPts.endX = worm.endPoint.x();
+        refPts.endY = worm.endPoint.y();
     }
     if (worm.hasCenterPoint) {
-        roi.hasCenter = true;
-        roi.centerX = worm.centerPoint.x();
-        roi.centerY = worm.centerPoint.y();
+        refPts.hasCenter = true;
+        refPts.centerX = worm.centerPoint.x();
+        refPts.centerY = worm.centerPoint.y();
     }
-    return roi;
+    return refPts;
 }
 
 static void initSlotValues(QVector<double>& slotValues,
                            const CompiledPluginPlan& plan,
-                           const PluginRoiPoints& roi,
+                           const ReferencePoints& refPts,
                            double fps)
 {
     slotValues.fill(0.0);
@@ -890,20 +890,20 @@ static void initSlotValues(QVector<double>& slotValues,
     slotValues[S_LOST] = Q_LOST;
     slotValues[S_FPS] = fps;
 
-    if (roi.hasStart) {
+    if (refPts.hasStart) {
         slotValues[S_HAS_START] = 1.0;
-        slotValues[S_START_X] = roi.startX;
-        slotValues[S_START_Y] = roi.startY;
+        slotValues[S_START_X] = refPts.startX;
+        slotValues[S_START_Y] = refPts.startY;
     }
-    if (roi.hasEnd) {
+    if (refPts.hasEnd) {
         slotValues[S_HAS_END] = 1.0;
-        slotValues[S_END_X] = roi.endX;
-        slotValues[S_END_Y] = roi.endY;
+        slotValues[S_END_X] = refPts.endX;
+        slotValues[S_END_Y] = refPts.endY;
     }
-    if (roi.hasCenter) {
+    if (refPts.hasCenter) {
         slotValues[S_HAS_CENTER] = 1.0;
-        slotValues[S_CENTER_X] = roi.centerX;
-        slotValues[S_CENTER_Y] = roi.centerY;
+        slotValues[S_CENTER_X] = refPts.centerX;
+        slotValues[S_CENTER_Y] = refPts.centerY;
     }
 
     for (const PlanBinding& binding : plan.bindings) {
@@ -916,7 +916,7 @@ static void updateSlotValues(QVector<double>& slotValues,
                              const CompiledPluginPlan& plan,
                              const AnalysisSessionModel::AnalysisWormEntry& worm,
                              const Tracking::WormTrackPoint& p,
-                             const PluginRoiPoints& roi,
+                             const ReferencePoints& refPts,
                              SpeedSlotState& speedState)
 {
     const QSet<int>& req = plan.requiredSlots;
@@ -961,9 +961,9 @@ static void updateSlotValues(QVector<double>& slotValues,
     const bool needsStartDist = req.contains(S_DIST_TO_START) ||
                                 req.contains(S_DIST_TO_START_PX) ||
                                 req.contains(S_DIST_TO_START_UM);
-    if (needsStartDist && roi.hasStart) {
-        const double dx = x - roi.startX;
-        const double dy = y - roi.startY;
+    if (needsStartDist && refPts.hasStart) {
+        const double dx = x - refPts.startX;
+        const double dy = y - refPts.startY;
         const double distPx = std::sqrt(dx * dx + dy * dy);
         const double distUm = (um > 0.0) ? distPx * um : distPx;
         slotValues[S_DIST_TO_START_PX] = distPx;
@@ -974,9 +974,9 @@ static void updateSlotValues(QVector<double>& slotValues,
     const bool needsEndDist = req.contains(S_DIST_TO_END) ||
                               req.contains(S_DIST_TO_END_PX) ||
                               req.contains(S_DIST_TO_END_UM);
-    if (needsEndDist && roi.hasEnd) {
-        const double dx = x - roi.endX;
-        const double dy = y - roi.endY;
+    if (needsEndDist && refPts.hasEnd) {
+        const double dx = x - refPts.endX;
+        const double dy = y - refPts.endY;
         const double distPx = std::sqrt(dx * dx + dy * dy);
         const double distUm = (um > 0.0) ? distPx * um : distPx;
         slotValues[S_DIST_TO_END_PX] = distPx;
@@ -987,9 +987,9 @@ static void updateSlotValues(QVector<double>& slotValues,
     const bool needsCenterDist = req.contains(S_DIST_TO_CENTER) ||
                                  req.contains(S_DIST_TO_CENTER_PX) ||
                                  req.contains(S_DIST_TO_CENTER_UM);
-    if (needsCenterDist && roi.hasCenter) {
-        const double dx = x - roi.centerX;
-        const double dy = y - roi.centerY;
+    if (needsCenterDist && refPts.hasCenter) {
+        const double dx = x - refPts.centerX;
+        const double dy = y - refPts.centerY;
         const double distPx = std::sqrt(dx * dx + dy * dy);
         const double distUm = (um > 0.0) ? distPx * um : distPx;
         slotValues[S_DIST_TO_CENTER_PX] = distPx;
@@ -1067,7 +1067,7 @@ static void updateSlotValues(QVector<double>& slotValues,
 PluginEngine::PluginResult PluginEngine::evaluate(
     const PlotPluginSpec& spec,
     const QList<AnalysisSessionModel::AnalysisGroupData>& data,
-    const PluginRoiPoints& roiPoints)
+    const ReferencePoints& referencePoints)
 {
     PluginResult result;
     if (!spec.isValid) {
@@ -1092,19 +1092,19 @@ PluginEngine::PluginResult PluginEngine::evaluate(
     auto runWormLoop = [&](const AnalysisSessionModel::AnalysisWormEntry& worm,
                            std::function<bool(const QVector<double>&, const Tracking::WormTrackPoint&)> frameCallback) -> bool
     {
-        const PluginRoiPoints roi = effectiveRoiForWorm(worm, roiPoints);
+        const ReferencePoints refPts = effectiveReferencePointsForWorm(worm, referencePoints);
         QVector<double> slotValues(plan->slotCount, 0.0);
         QVector<double> prevSlots(plan->slotCount, 0.0);
         QVector<double> prevBindingVals(plan->bindings.size(), kNaN);
-        initSlotValues(slotValues, *plan, roi, worm.fps);
-        initSlotValues(prevSlots, *plan, roi, worm.fps);
+        initSlotValues(slotValues, *plan, refPts, worm.fps);
+        initSlotValues(prevSlots, *plan, refPts, worm.fps);
 
         bool hasPrevFrame = false;
         SpeedSlotState speedState;
         QVector<SmoothSlotState> smoothStates(plan->bindings.size());
 
         for (const Tracking::WormTrackPoint& point : worm.points) {
-            updateSlotValues(slotValues, *plan, worm, point, roi, speedState);
+            updateSlotValues(slotValues, *plan, worm, point, refPts, speedState);
 
             for (int bi = 0; bi < plan->bindings.size(); ++bi) {
                 const PlanBinding& binding = plan->bindings[bi];

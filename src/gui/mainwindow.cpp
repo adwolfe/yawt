@@ -173,16 +173,16 @@ MainWindow::MainWindow(QWidget *parent)
     });
     ui->wormTableView->setModel(m_wormProxyModel);
 
-    m_roiProxyModel = new ItemTypeFilterProxyModel(this);
-    m_roiProxyModel->setSourceModel(m_blobTableModel);
-    m_roiProxyModel->setAllowedTypes(QSet<TableItems::ItemType>{
+    m_referenceItemsProxy = new ItemTypeFilterProxyModel(this);
+    m_referenceItemsProxy->setSourceModel(m_blobTableModel);
+    m_referenceItemsProxy->setAllowedTypes(QSet<TableItems::ItemType>{
         TableItems::ItemType::ROI,
         TableItems::ItemType::StartPoint,
         TableItems::ItemType::EndPoint,
         TableItems::ItemType::ControlPoint,
         TableItems::ItemType::CenterPoint
     });
-    ui->roiTableView->setModel(m_roiProxyModel);
+    ui->roiTableView->setModel(m_referenceItemsProxy);
 
     m_annotationTableModel = m_appController->annotationTableModel();
     // ui->annoTableView->setModel(m_annotationTableModel);
@@ -1324,9 +1324,9 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
     if (added) {
         ui->deleteButton->setEnabled(true);
         int lastRow = m_blobTableModel->rowCount() - 1;
-        if (m_roiProxyModel) {
+        if (m_referenceItemsProxy) {
             QModelIndex srcIndex = m_blobTableModel->index(lastRow, 0);
-            QModelIndex proxyIndex = m_roiProxyModel->mapFromSource(srcIndex);
+            QModelIndex proxyIndex = m_referenceItemsProxy->mapFromSource(srcIndex);
             if (proxyIndex.isValid()) {
                 ui->roiTableView->setCurrentIndex(proxyIndex);
                 ui->roiTableView->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
@@ -1359,7 +1359,7 @@ void MainWindow::handlePointDefined(const QPointF& point) {
     };
 
     const auto selectPointRow = [this](int itemId) {
-        if (!m_roiProxyModel) {
+        if (!m_referenceItemsProxy) {
             return;
         }
 
@@ -1369,7 +1369,7 @@ void MainWindow::handlePointDefined(const QPointF& point) {
         }
 
         const QModelIndex sourceIndex = m_blobTableModel->index(sourceRow, 0);
-        const QModelIndex proxyIndex = m_roiProxyModel->mapFromSource(sourceIndex);
+        const QModelIndex proxyIndex = m_referenceItemsProxy->mapFromSource(sourceIndex);
         if (!proxyIndex.isValid()) {
             return;
         }
@@ -1428,7 +1428,7 @@ void MainWindow::handleDeleteSelectedBlobClicked() {
         activeProxy = m_wormProxyModel;
     } else if (ui->roiTableView->selectionModel() && ui->roiTableView->selectionModel()->hasSelection()) {
         activeView = ui->roiTableView;
-        activeProxy = m_roiProxyModel;
+        activeProxy = m_referenceItemsProxy;
     }
 
     if (!activeView || !activeProxy) return;

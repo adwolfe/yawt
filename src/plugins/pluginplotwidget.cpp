@@ -45,7 +45,7 @@ void addHashNumber(QCryptographicHash& hash, double value)
 QString resultCacheKey(const PlotPluginSpec& spec,
                        quint64 dataRevision,
                        quint64 checkRevision,
-                       const PluginRoiPoints& roi)
+                       const ReferencePoints& refPts)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     addHashText(hash, QString::number(dataRevision));
@@ -69,15 +69,15 @@ QString resultCacheKey(const PlotPluginSpec& spec,
         addHashText(hash, spec.bindings.value(key));
     }
 
-    addHashText(hash, roi.hasStart ? "start" : "no-start");
-    addHashNumber(hash, roi.startX);
-    addHashNumber(hash, roi.startY);
-    addHashText(hash, roi.hasEnd ? "end" : "no-end");
-    addHashNumber(hash, roi.endX);
-    addHashNumber(hash, roi.endY);
-    addHashText(hash, roi.hasCenter ? "center" : "no-center");
-    addHashNumber(hash, roi.centerX);
-    addHashNumber(hash, roi.centerY);
+    addHashText(hash, refPts.hasStart ? "start" : "no-start");
+    addHashNumber(hash, refPts.startX);
+    addHashNumber(hash, refPts.startY);
+    addHashText(hash, refPts.hasEnd ? "end" : "no-end");
+    addHashNumber(hash, refPts.endX);
+    addHashNumber(hash, refPts.endY);
+    addHashText(hash, refPts.hasCenter ? "center" : "no-center");
+    addHashNumber(hash, refPts.centerX);
+    addHashNumber(hash, refPts.centerY);
 
     return QString::fromLatin1(hash.result().toHex());
 }
@@ -149,9 +149,9 @@ PluginPlotWidget::~PluginPlotWidget()
     m_watcher.waitForFinished();
 }
 
-void PluginPlotWidget::setRoiPoints(const PluginRoiPoints& roi)
+void PluginPlotWidget::setReferencePoints(const ReferencePoints& refPts)
 {
-    m_roi = roi;
+    m_referencePoints = refPts;
     refreshData();
 }
 
@@ -163,11 +163,11 @@ void PluginPlotWidget::refreshData()
     if (m_computing) { m_pendingRefresh = true; return; }
 
     PlotPluginSpec spec = m_spec;
-    const PluginRoiPoints roi = m_roi;
+    const ReferencePoints refPts = m_referencePoints;
     const QString cacheKey = resultCacheKey(spec,
                                            m_model->dataRevision(),
                                            m_model->checkRevision(),
-                                           roi);
+                                           refPts);
 
     {
         QMutexLocker locker(&resultCacheMutex());
@@ -191,8 +191,8 @@ void PluginPlotWidget::refreshData()
 
     auto future = QtConcurrent::run([spec = std::move(spec),
                                      data = std::move(data),
-                                     roi]() {
-        return PluginEngine::evaluate(spec, data, roi);
+                                     refPts]() {
+        return PluginEngine::evaluate(spec, data, refPts);
     });
     m_watcher.setFuture(future);
 }

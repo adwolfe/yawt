@@ -33,10 +33,10 @@
  *   speed, speed_px, speed_um            — 2-second smoothed speed
  *   quality                              — 0=Single 1=Merged 2=Split 3=Lost
  *   start_x, start_y, end_x, end_y,
- *   center_x, center_y                   — ROI reference points (if set)
- *   has_start, has_end, has_center        — 1 when the ROI point is available
+ *   center_x, center_y                   — reference points (if set)
+ *   has_start, has_end, has_center        — 1 when the reference point is available
  *   dist_to_start, dist_to_end,
- *   dist_to_center                       — distances to ROI reference points
+ *   dist_to_center                       — distances to reference points
  *   dist_to_start_px, dist_to_start_um,
  *   dist_to_end_px, dist_to_end_um,
  *   dist_to_center_px, dist_to_center_um — explicit distance units

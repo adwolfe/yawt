@@ -57,9 +57,9 @@ These variables are always available in any formula, filter, or binding expressi
 
 ---
 
-## ROI Reference Variables
+## Reference Point Variables
 
-These variables are available only when the corresponding reference points are configured in the project.
+These variables are available only when the corresponding Start, End or Center reference point is configured in the project (stored in `roi_points.json`).
 
 | Variable | Description |
 |---|---|

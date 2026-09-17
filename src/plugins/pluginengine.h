@@ -8,8 +8,8 @@
 #include <QHash>
 #include <QPointF>
 
-/** Optional ROI reference points for use in plugin expressions (start_x, dist_to_end, etc.). */
-struct PluginRoiPoints {
+/** Optional Start/End/Center reference points (from roi_points.json) for use in plugin expressions (start_x, dist_to_end, etc.). */
+struct ReferencePoints {
     bool    hasStart  = false;
     double  startX    = 0, startY = 0;
     bool    hasEnd    = false;
@@ -28,8 +28,8 @@ struct PluginRoiPoints {
  * bindings, applies the formula and filter, reduces per-worm, and organises
  * everything by group for plotting.
  *
- * ROI reference points (start_x etc.) are optional — pass a default-constructed
- * PluginRoiPoints{} when they are not available.
+ * reference points (start_x etc.) are optional — pass a default-constructed
+ * ReferencePoints{} when they are not available.
  */
 class PluginEngine
 {
@@ -80,18 +80,18 @@ public:
      * Evaluate the plugin against the provided group data.
      * @param spec       Validated plugin specification.
      * @param data       Grouped worm data (from AnalysisSessionModel::getGroupedData()).
-     * @param roiPoints  Optional ROI reference points for the current project.
+     * @param referencePoints  Optional reference points for the current project.
      */
     static PluginResult evaluate(const PlotPluginSpec& spec,
                                  const QList<AnalysisSessionModel::AnalysisGroupData>& data,
-                                 const PluginRoiPoints& roiPoints = PluginRoiPoints{});
+                                 const ReferencePoints& referencePoints = ReferencePoints{});
 
 private:
     // Build the variable map for a single track point
     static QHash<QString, double> buildVars(
         const AnalysisSessionModel::AnalysisWormEntry& worm,
         int pointIdx,
-        const PluginRoiPoints& roi,
+        const ReferencePoints& refPts,
         double umPerPixel,
         double fps);
 

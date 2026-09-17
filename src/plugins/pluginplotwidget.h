@@ -25,7 +25,7 @@ public:
                               QWidget* parent = nullptr);
     ~PluginPlotWidget() override;
 
-    void setRoiPoints(const PluginRoiPoints& roi);
+    void setReferencePoints(const ReferencePoints& refPts);
 
 public slots:
     void refreshData();
@@ -44,7 +44,7 @@ private:
 
     PlotPluginSpec            m_spec;
     AnalysisSessionModel*     m_model   = nullptr;
-    PluginRoiPoints           m_roi;
+    ReferencePoints           m_referencePoints;
     PluginEngine::PluginResult m_result;
 
     bool m_computing = false;
