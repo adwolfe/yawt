@@ -256,11 +256,31 @@ struct DetectedBlob {
 QJsonObject detectedBlobToJson(const DetectedBlob& blob);
 DetectedBlob detectedBlobFromJson(const QJsonObject& obj);
 
+/**
+ * @brief Persisted per-track-point label describing how confidently the point was tracked.
+ *
+ * THE INTEGER VALUES ARE A PUBLIC CONTRACT. They are written to worms.json as
+ * "quality" and exposed to analysis plugins as the `quality` variable and the
+ * constants Single = 0, Merged = 1, Split = 2, Lost = 3 (see
+ * docs/plugin_reference.md and PluginEngine). Never reorder or renumber these
+ * members; append new ones at the end.
+ *
+ * How a point gets its label (TrackingManager::handleFrameUpdate and
+ * processFrameSpecificSplit):
+ *   - Single: a valid blob was found while the tracker state was TrackingSingle.
+ *   - Merged: a valid blob was found in any other tracker state (TrackingMerged,
+ *             PausedForSplit). The position is the shared blob's centroid, so it
+ *             is ambiguous.
+ *   - Split:  the frame on which a split was resolved and this worm was assigned
+ *             one of the resulting blobs. Functionally like Single for display.
+ *   - Lost:   no valid blob. `position` is a (0,0) placeholder and must not be
+ *             used; consumers should filter on quality != Lost.
+ */
 enum class TrackPointQuality {
-    Single,     // Single (confident) tracking
-    Merged,     // Part of a merged blob (ambiguous)
-    Split,      // Frame where a split was detected/resolved (functionally like Single for display)
-    Lost        // Tracking was lost - position data is invalid
+    Single = 0,
+    Merged = 1,
+    Split  = 2,
+    Lost   = 3
 };
 Q_ENUM_NS(TrackPointQuality)
 
