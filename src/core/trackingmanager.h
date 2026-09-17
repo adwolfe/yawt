@@ -156,7 +156,7 @@ public:
     void setSmoothCenterline(bool smooth);
     void setMaxReversalFraction(float fraction);
     void setLoadedRunContext(const QString& videoPath,
-                             const QString& processingOutputDirectory,
+                             const QString& runDirectory,
                              int keyFrameNum);
 
 public slots:
@@ -293,8 +293,8 @@ private:
     // (startCenterlineComputation is declared as a public slot above)
     
     // JSON storage methods
-    QString createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath);
-    QString createProcessingOutputDirectory(const QString& videoSpecificDirectory);
+    QString createVideoDirectory(const QString& dataDirectory, const QString& videoPath);
+    QString createRunDirectory(const QString& videoDirectory);
     void saveThresholdingJson(const QString& directoryPath, const Thresholding::ThresholdSettings& settings);
     void saveInputBlobs(const QString& directoryPath, const std::vector<Tracking::InitialWormInfo>& worms);
     bool saveWormsJson(const QString& directoryPath);
@@ -308,8 +308,8 @@ private:
     // Basic tracking parameters
     QString m_videoPath;
     QString m_dataDirectory;
-    QString m_videoSpecificDirectory;
-    QString m_processingOutputDirectory;
+    QString m_videoDirectory;
+    QString m_runDirectory;
     int m_keyFrameNum;
     std::vector<Tracking::InitialWormInfo> m_initialWormInfos;
     Thresholding::ThresholdSettings m_thresholdSettings;

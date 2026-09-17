@@ -162,7 +162,7 @@ public:
      * the current tracking session, so the rerun can persist back to that folder.
      */
     void setLoadedRunContext(const QString& videoPath,
-                             const QString& processingOutputDirectory,
+                             const QString& runDirectory,
                              int keyFrameNum);
 
     /**

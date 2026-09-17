@@ -51,10 +51,10 @@ public:
         QString label;   // "Worm 1", "Worm 2", …
     };
 
-    struct VideoItem {
+    struct RunItem {
         QString       baseName;    // video filename without extension
-        QString       procDir;     // absolute path to PROC_* folder
-        QString       procStamp;   // the "yyyy-MM-dd-HHmmss" part of the folder name
+        QString       runDir;     // absolute path to PROC_* run folder
+        QString       runStamp;   // the "yyyy-MM-dd-HHmmss" part of the folder name
         QList<WormItem> worms;
 
         // Track data is loaded lazily from worms.json when analysis plots request it.
@@ -89,20 +89,20 @@ public:
 
     struct GroupItem {
         QString          name;
-        QList<VideoItem> videos;
+        QList<RunItem> videos;
     };
 
     // ── Construction / population ─────────────────────────────────────────────
     explicit AnalysisSessionModel(QObject* parent = nullptr);
 
-    /** Scan a data directory (the yawt/ folder beside the videos), populate "Unassigned" with all found proc runs. */
+    /** Scan a data directory (the yawt/ folder beside the videos), populate "Unassigned" with all found runs. */
     void scanDataDirectory(const QString& dataDir);
 
     /** Add a user-named group at the end of the group list. */
     void addGroup(const QString& name);
 
-    /** Set checked state for all worms in the given proc directory. */
-    void setCheckedForProcDir(const QString& procDir, bool checked);
+    /** Set checked state for all worms in the given run directory. */
+    void setCheckedForRunDir(const QString& runDir, bool checked);
 
     /** Set checked state for specific worm IDs across all groups/videos. */
     void setCheckedWormIds(const QSet<int>& ids);
@@ -186,12 +186,12 @@ private:
     void recalcGroupColors(int groupRow);
     static QList<int>                parseWormIds(const QString& wormsJsonPath);
     static Tracking::AllWormTracks   loadTracksFromJson(const QString& wormsJsonPath);
-    static QString                   findMostRecentProc(const QString& videoSubDir);
-    static QStringList               buildWarnings(const QString& procDir,
+    static QString                   findMostRecentRun(const QString& videoSubDir);
+    static QStringList               buildWarnings(const QString& runDir,
                                                    const QString& dataDir,
                                                    const QString& baseName,
                                                    double umPerPixel);
-    static void                      loadRoiReferencePoints(VideoItem& vid);
+    static void                      loadRoiReferencePoints(RunItem& vid);
     static QColor     colormapColor(int index, int total);
     static QIcon      makeColorIcon(const QColor& c);
 

@@ -1491,18 +1491,18 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
         return false;
     }
 
-    QDir procDir(selectedDir);
-    QString wormsPath = procDir.absoluteFilePath("worms.json");
-    QString thresholdPath = procDir.absoluteFilePath("thresholding.json");
-    QString roiPath = procDir.absoluteFilePath("roi_points.json");
-    QStringList trackFiles = procDir.entryList(QStringList() << "*_tracks.csv" << "*_tracks.xlsx", QDir::Files);
+    QDir runDir(selectedDir);
+    QString wormsPath = runDir.absoluteFilePath("worms.json");
+    QString thresholdPath = runDir.absoluteFilePath("thresholding.json");
+    QString roiPath = runDir.absoluteFilePath("roi_points.json");
+    QStringList trackFiles = runDir.entryList(QStringList() << "*_tracks.csv" << "*_tracks.xlsx", QDir::Files);
 
     if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath) || trackFiles.isEmpty()) {
         QMessageBox::warning(this, "Load Run", "Selected folder is missing required files (worms.json, thresholding.json, and a *_tracks.csv or *_tracks.xlsx export).");
         return false;
     }
 
-    QDir cursor(procDir);
+    QDir cursor(runDir);
     QString yawtPath;
     while (true) {
         if (cursor.dirName() == "yawt") {
@@ -1523,7 +1523,7 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
     }
     QString videoDirPath = dataDir.absolutePath();
 
-    QString videoBaseName = QFileInfo(procDir.absolutePath()).dir().dirName();
+    QString videoBaseName = QFileInfo(runDir.absolutePath()).dir().dirName();
     QDir videoDir(videoDirPath);
     QString videoPath;
     QStringList videoFiles = videoDir.entryList(QDir::Files | QDir::Readable);
@@ -1579,7 +1579,7 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
         }
     }
     if (m_appController) {
-        m_appController->setLoadedRunContext(videoPath, procDir.absolutePath(), loadedKeyFrame);
+        m_appController->setLoadedRunContext(videoPath, runDir.absolutePath(), loadedKeyFrame);
     }
 
     if (QFileInfo::exists(roiPath)) {
@@ -1628,7 +1628,7 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     if (m_analysisPanel) {
         m_analysisPanel->setVideoFps(m_videoFps);
         // Trigger a (re-)scan of the data directory so the Analysis tree reflects
-        // all available proc runs for this video's sibling videos.
+        // all available runs for this video's sibling videos.
         if (!m_currentVideoDataDir.isEmpty())
             m_analysisPanel->setDataDirectory(m_currentVideoDataDir);
     }
@@ -2078,7 +2078,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     // Mark that we have completed tracking
     m_hasCompletedTracking = true;
 
-    // Re-scan the data directory so the Analysis tree picks up the new proc folder.
+    // Re-scan the data directory so the Analysis tree picks up the new run folder.
     if (m_analysisPanel && !m_currentVideoDataDir.isEmpty())
         m_analysisPanel->setDataDirectory(m_currentVideoDataDir, true);
 
@@ -2399,17 +2399,17 @@ void MainWindow::runDebugExport(bool silent)
         return;
     }
 
-    const QString videoSpecificDir = QDir(dataDir).absoluteFilePath(videoBaseName);
-    const QStringList procDirs = QDir(videoSpecificDir).entryList(
+    const QString videoDir = QDir(dataDir).absoluteFilePath(videoBaseName);
+    const QStringList runDirs = QDir(videoDir).entryList(
         QStringList() << "PROC_*", QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    if (procDirs.isEmpty()) {
+    if (runDirs.isEmpty()) {
         if (!silent) QMessageBox::warning(this, "Export Process",
-            QString("No processing output directory found under:\n%1\n\nRun tracking first.")
-                .arg(videoSpecificDir));
+            QString("No run directory found under:\n%1\n\nRun tracking first.")
+                .arg(videoDir));
         return;
     }
 
-    const QString outDir = QDir(QDir(videoSpecificDir).absoluteFilePath(procDirs.constLast()))
+    const QString outDir = QDir(QDir(videoDir).absoluteFilePath(runDirs.constLast()))
         .absoluteFilePath(QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
     if (!QDir().mkpath(outDir)) {
         if (!silent) QMessageBox::warning(this, "Export Process",

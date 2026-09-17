@@ -61,7 +61,7 @@ public:
     void setUmPerPixel(double umPerPixel);
     void setVideoFps(double fps);
 
-    /** Scan (or re-scan) all proc runs found under the given data directory (the yawt/ folder). */
+    /** Scan (or re-scan) all runs found under the given data directory (the yawt/ folder). */
     void setDataDirectory(const QString& dataDir, bool forceRescan = false);
 
 public slots:

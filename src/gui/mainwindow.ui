@@ -2038,7 +2038,7 @@ QToolButton#lastFrameButton {
                  </size>
                 </property>
                 <property name="toolTip">
-                 <string>Rescan for new or updated proc runs</string>
+                 <string>Rescan for new or updated runs</string>
                 </property>
                 <property name="text">
                  <string>↻</string>

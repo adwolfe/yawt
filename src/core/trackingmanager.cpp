@@ -106,16 +106,16 @@ static Tracking::DetectedBlob storageDetectedBlobFromJson(const QJsonObject& obj
 
 // ---------------------------------------------------------------------------
 // Load merge/split state from the mergeState section of worms.json.
-// Replaces loadFrameAtomicStateFromJson — reads from worms.json in procDir.
+// Replaces loadFrameAtomicStateFromJson — reads from worms.json in runDir.
 // ---------------------------------------------------------------------------
 static bool loadMergeStateFromWormsJson(
-    const QString& procDir,
+    const QString& runDir,
     int& outNextPhysicalBlobId,
     QMap<int, QList<FrameSpecificPhysicalBlob>>& outFrameMergeRecords,
     QMap<int, QMap<int, Tracking::DetectedBlob>>& outSplitResolutionMap,
     QMap<int, int>& outWormToPhysicalBlobIdMap)
 {
-    const QString path = QDir(procDir).absoluteFilePath("worms.json");
+    const QString path = QDir(runDir).absoluteFilePath("worms.json");
     if (!QFile::exists(path)) return false;
 
     const QJsonObject ms = WormsJson::readMergeState(path);
@@ -681,17 +681,17 @@ bool writeStoredZip(const QString& outputFilePath, QList<ZipEntry> entries)
 
 } // namespace
 
-static QString findLatestProcessingDirectory(const QString& videoSpecificDirectory) {
-    if (videoSpecificDirectory.isEmpty()) return QString();
-    QDir baseDir(videoSpecificDirectory);
+static QString findLatestRunDirectory(const QString& videoDirectory) {
+    if (videoDirectory.isEmpty()) return QString();
+    QDir baseDir(videoDirectory);
     if (!baseDir.exists()) return QString();
 
-    QStringList procDirs = baseDir.entryList(QStringList() << "PROC_*",
+    QStringList runDirs = baseDir.entryList(QStringList() << "PROC_*",
                                              QDir::Dirs | QDir::NoDotAndDotDot,
                                              QDir::Name);
-    if (procDirs.isEmpty()) return QString();
+    if (runDirs.isEmpty()) return QString();
 
-    return baseDir.absoluteFilePath(procDirs.constLast());
+    return baseDir.absoluteFilePath(runDirs.constLast());
 }
 
 // No-storage constructor implementation
@@ -795,11 +795,11 @@ void TrackingManager::startFullTrackingProcess(
     m_thresholdSettings = settings;
     m_totalFramesInVideoHint = totalFramesInVideoHint;
 
-    // Create video-specific directory, try loading latest run state, then create new processing output directory
-    m_videoSpecificDirectory = createVideoSpecificDirectory(dataDirectory, videoPath);
-    m_processingOutputDirectory.clear();
-    if (!m_videoSpecificDirectory.isEmpty()) {
-        const QString latestProcDir = findLatestProcessingDirectory(m_videoSpecificDirectory);
+    // Create video directory, try loading latest run state, then create new run directory
+    m_videoDirectory = createVideoDirectory(dataDirectory, videoPath);
+    m_runDirectory.clear();
+    if (!m_videoDirectory.isEmpty()) {
+        const QString latestProcDir = findLatestRunDirectory(m_videoDirectory);
         if (!latestProcDir.isEmpty()) {
             QString thresholdFilePath = QDir(latestProcDir).absoluteFilePath("thresholding.json");
             if (QFile::exists(thresholdFilePath)) {
@@ -824,10 +824,10 @@ void TrackingManager::startFullTrackingProcess(
             }
         }
 
-        m_processingOutputDirectory = createProcessingOutputDirectory(m_videoSpecificDirectory);
-        if (!m_processingOutputDirectory.isEmpty()) {
-            saveThresholdingJson(m_processingOutputDirectory, settings);
-            saveInputBlobs(m_processingOutputDirectory, initialWorms);
+        m_runDirectory = createRunDirectory(m_videoDirectory);
+        if (!m_runDirectory.isEmpty()) {
+            saveThresholdingJson(m_runDirectory, settings);
+            saveInputBlobs(m_runDirectory, initialWorms);
         }
     }
     m_isTrackingRunning = true;
@@ -1729,12 +1729,12 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
                 // Populate merge history storage in one batch before saving JSON state
                 populateMergeHistoryInStorage();
 
-                if (!m_processingOutputDirectory.isEmpty()) {
+                if (!m_runDirectory.isEmpty()) {
                     // worms.json now contains everything (tracks, centerlines, merge state)
-                    if (!saveWormsJson(m_processingOutputDirectory)) {
+                    if (!saveWormsJson(m_runDirectory)) {
                         emit trackingStatusUpdate("Warning: Failed to save worms.json");
                     }
-                    if (!saveRoiPointsJson(m_processingOutputDirectory)) {
+                    if (!saveRoiPointsJson(m_runDirectory)) {
                         emit trackingStatusUpdate("Warning: Failed to save roi_points.json");
                     }
                 }
@@ -1788,20 +1788,20 @@ QString TrackingManager::trackWorkbookOutputPath() const
         ? QStringLiteral("tracks.xlsx")
         : baseName + QStringLiteral("_tracks.xlsx");
 
-    if (!m_processingOutputDirectory.isEmpty() && QDir(m_processingOutputDirectory).exists()) {
-        return QDir(m_processingOutputDirectory).filePath(workbookName);
+    if (!m_runDirectory.isEmpty() && QDir(m_runDirectory).exists()) {
+        return QDir(m_runDirectory).filePath(workbookName);
     }
     if (m_videoPath.isEmpty()) {
         return QStringLiteral("tracks.xlsx");
     }
-    if (!m_videoSpecificDirectory.isEmpty() && QDir(m_videoSpecificDirectory).exists()) {
-        return QDir(m_videoSpecificDirectory).filePath(workbookName);
+    if (!m_videoDirectory.isEmpty() && QDir(m_videoDirectory).exists()) {
+        return QDir(m_videoDirectory).filePath(workbookName);
     }
-    // Fallback to video directory if video-specific directory is not available.
+    // Fallback to video directory if video directory is not available.
     return QDir(QFileInfo(m_videoPath).absolutePath()).filePath(workbookName);
 }
 
-// OUTPUT: {processingOutputDir}/{basename}_tracks.xlsx
+// OUTPUT: {runDir}/{basename}_tracks.xlsx
 // FORMAT: XLSX (Office Open XML, written as a ZIP with hand-built XML)
 // DATA:   Four sheets:
 //   "Tracks"          — one row per (worm, frame): WormID, SourceItemID, Frame,
@@ -1994,7 +1994,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
 
     return writeStoredZip(outputFilePath, workbookEntries);
 }
-QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirectory, const QString& videoPath) {
+QString TrackingManager::createVideoDirectory(const QString& dataDirectory, const QString& videoPath) {
     if (dataDirectory.isEmpty() || videoPath.isEmpty()) {
         qWarning() << "TrackingManager: Invalid data directory or video path";
         return QString();
@@ -2002,21 +2002,21 @@ QString TrackingManager::createVideoSpecificDirectory(const QString& dataDirecto
 
     QFileInfo videoInfo(videoPath);
     QString videoBaseName = videoInfo.completeBaseName(); // Gets filename without extension
-    QString videoSpecificPath = QDir(dataDirectory).absoluteFilePath(videoBaseName);
+    QString videoDirPath = QDir(dataDirectory).absoluteFilePath(videoBaseName);
 
-    QDir videoSpecificDir(videoSpecificPath);
-    if (!videoSpecificDir.exists()) {
-        if (QDir().mkpath(videoSpecificPath)) {
-            TRACKING_DEBUG() << "TrackingManager: Created video-specific directory:" << videoSpecificPath;
+    QDir videoDir(videoDirPath);
+    if (!videoDir.exists()) {
+        if (QDir().mkpath(videoDirPath)) {
+            TRACKING_DEBUG() << "TrackingManager: Created video directory:" << videoDirPath;
         } else {
-            qWarning() << "TrackingManager: Failed to create video-specific directory:" << videoSpecificPath;
+            qWarning() << "TrackingManager: Failed to create video directory:" << videoDirPath;
             return QString();
         }
     } else {
-        TRACKING_DEBUG() << "TrackingManager: Using existing video-specific directory:" << videoSpecificPath;
+        TRACKING_DEBUG() << "TrackingManager: Using existing video directory:" << videoDirPath;
     }
 
-    return videoSpecificPath;
+    return videoDirPath;
 }
 
 // ── Head/tail swap xlsx export ─────────────────────────────────────────────
@@ -2221,7 +2221,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
     qDebug() << "TrackingManager: worm_summary.json saved to" << path;
 }
 
-// OUTPUT: caller-specified path (typically {processingOutputDir}/{basename}_summary.txt)
+// OUTPUT: caller-specified path (typically {runDir}/{basename}_summary.txt)
 // FORMAT: UTF-8 plain text (human-readable report)
 // DATA:   High-level tracking run report: video metadata (fps, frame range, worm count),
 //           per-worm statistics (track frame range, quality breakdown by category,
@@ -2423,7 +2423,7 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
     out << rule << "\n";
 }
 
-// OUTPUT: {processingOutputDir}/{basename}_headtail_swaps.xlsx
+// OUTPUT: {runDir}/{basename}_headtail_swaps.xlsx
 // FORMAT: XLSX (Office Open XML, written as a ZIP with hand-built XML)
 // DATA:   One sheet with a row per frame and one column per worm;
 //           cells contain "SWAP" on frames where the head/tail assignment was reversed,
@@ -2484,33 +2484,33 @@ void TrackingManager::exportHeadTailSwapXlsx(
     writeStoredZip(outputPath, entries);
 }
 
-QString TrackingManager::createProcessingOutputDirectory(const QString& videoSpecificDirectory) {
-    if (videoSpecificDirectory.isEmpty()) {
-        qWarning() << "TrackingManager: Invalid video-specific directory";
+QString TrackingManager::createRunDirectory(const QString& videoDirectory) {
+    if (videoDirectory.isEmpty()) {
+        qWarning() << "TrackingManager: Invalid video directory";
         return QString();
     }
 
-    QDir baseDir(videoSpecificDirectory);
+    QDir baseDir(videoDirectory);
     if (!baseDir.exists()) {
-        qWarning() << "TrackingManager: Video-specific directory does not exist:" << videoSpecificDirectory;
+        qWarning() << "TrackingManager: Video-specific directory does not exist:" << videoDirectory;
         return QString();
     }
 
     QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss");
-    QString procDirName = QString("PROC_%1").arg(timestamp);
-    QString procPath = baseDir.absoluteFilePath(procDirName);
+    QString runDirName = QString("PROC_%1").arg(timestamp);
+    QString runPath = baseDir.absoluteFilePath(runDirName);
 
-    if (QDir(procPath).exists()) {
-        TRACKING_DEBUG() << "TrackingManager: Processing directory already exists:" << procPath;
-        return procPath;
+    if (QDir(runPath).exists()) {
+        TRACKING_DEBUG() << "TrackingManager: Processing directory already exists:" << runPath;
+        return runPath;
     }
 
-    if (QDir().mkpath(procPath)) {
-        TRACKING_DEBUG() << "TrackingManager: Created processing directory:" << procPath;
-        return procPath;
+    if (QDir().mkpath(runPath)) {
+        TRACKING_DEBUG() << "TrackingManager: Created processing directory:" << runPath;
+        return runPath;
     }
 
-    qWarning() << "TrackingManager: Failed to create processing directory:" << procPath;
+    qWarning() << "TrackingManager: Failed to create processing directory:" << runPath;
     return QString();
 }
 
@@ -2542,7 +2542,7 @@ void TrackingManager::populateMergeHistoryInStorage() {
 }
 
 
-// OUTPUT: {processingOutputDir}/thresholding.json
+// OUTPUT: {runDir}/thresholding.json
 // FORMAT: JSON
 // DATA:   Thresholding parameters used for this tracking run:
 //           algorithm, globalThresholdValue, adaptiveBlockSize, adaptiveCValue,
@@ -2568,7 +2568,7 @@ void TrackingManager::saveThresholdingJson(const QString& directoryPath, const T
     }
 }
 
-// OUTPUT: {processingOutputDir}/worms.json
+// OUTPUT: {runDir}/worms.json
 // FORMAT: JSON (indented)
 // DATA:   Single authoritative file for all tracking results:
 //           version, videoPath, keyFrame, metrics, items (color, centroid, bounding box),
@@ -2698,7 +2698,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
     return false;
 }
 
-// OUTPUT: {processingOutputDir}/roi_points.json
+// OUTPUT: {runDir}/roi_points.json
 // FORMAT: JSON (indented)
 // DATA:   All user-placed reference items (ROI, StartPoint, EndPoint, CenterPoint):
 //           version, videoPath, keyFrame, items array mirroring the worms.json item structure.
@@ -2733,7 +2733,7 @@ bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
     return false;
 }
 
-// OUTPUT: {processingOutputDir}/input_blobs.json
+// OUTPUT: {runDir}/input_blobs.json
 // FORMAT: JSON
 // DATA:   Initial blob detections that seeded tracking (one entry per worm):
 //           centroid, bounding box, area, convexity, and other blob shape descriptors
@@ -2937,12 +2937,12 @@ void TrackingManager::setMaxReversalFraction(float fraction)
 }
 
 void TrackingManager::setLoadedRunContext(const QString& videoPath,
-                                          const QString& processingOutputDirectory,
+                                          const QString& runDirectory,
                                           int keyFrameNum)
 {
     m_videoPath = videoPath;
-    m_processingOutputDirectory = processingOutputDirectory;
-    m_videoSpecificDirectory = QFileInfo(processingOutputDirectory).absoluteDir().absolutePath();
+    m_runDirectory = runDirectory;
+    m_videoDirectory = QFileInfo(runDirectory).absoluteDir().absolutePath();
     m_keyFrameNum = keyFrameNum;
 }
 
@@ -3072,9 +3072,9 @@ void TrackingManager::handleCenterlineFinished() {
     // push that back onto the in-memory tracks before anything reads them.
     if (m_storage) m_storage->refreshDerivedTrackData();
 
-    const QString dir = !m_processingOutputDirectory.isEmpty()
-        ? m_processingOutputDirectory
-        : m_videoSpecificDirectory;
+    const QString dir = !m_runDirectory.isEmpty()
+        ? m_runDirectory
+        : m_videoDirectory;
     const QString baseName = QFileInfo(m_videoPath).completeBaseName();
 
     // Rewrite worms.json now that centerlines and head/tail assignments have
