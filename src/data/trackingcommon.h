@@ -288,7 +288,7 @@ Q_ENUM_NS(TrackPointQuality)
  * @brief Represents a single point in a worm's track.
  */
 struct WormTrackPoint {
-    int frameNumberOriginal;        // Frame number in the original video
+    int frameNumber;              // Absolute frame index in the source video
     cv::Point2f position;           // Position (centroid) in video coordinates
     QRectF searchWindow;   // Fixed-size search window the tracker used on this frame (video coordinates)
     TrackPointQuality quality;      // Single is confident, merged is ambiguous. For visualization later.

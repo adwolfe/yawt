@@ -38,7 +38,7 @@ WormTracker::WormTracker(int wormId,
     m_currentSearchWindow(initialSearchWindow),
     m_lastKnownPosition(initialSearchWindow.center().x(), initialSearchWindow.center().y()),
     m_videoKeyFrameNum(videoKeyFrameNum),
-    m_currFrameNum(0), // Initialize m_currFrameNum
+    m_sequenceIndex(0), // Initialize m_sequenceIndex
     m_trackingActive(false),
     m_skipMergeDetectionNextFrame(false),
     m_currentState(Tracking::TrackerState::Idle)
@@ -73,7 +73,7 @@ void WormTracker::startTracking() {
     m_currentState = Tracking::TrackerState::TrackingSingle; // Initial state when tracking starts
     m_lastPrimaryBlob.isValid = false; // Reset for a new tracking session
     m_lastFullBlob.isValid = false;    // Reset for a new tracking session
-    m_currFrameNum = 0; // Reset frame counter for new tracking session
+    m_sequenceIndex = 0; // Reset frame counter for new tracking session
 
     // Start tracking debug removed
 
@@ -86,16 +86,16 @@ void WormTracker::startTracking() {
  * Advances frame-by-frame, emitting progress and positionUpdated/stateChanged as appropriate.
  */
 void WormTracker::continueTracking() {
-    TRACKING_DEBUG().noquote() << getDebugLabel("continueTracking") << "continueTracking - CALLED for frame:" << m_currFrameNum;
+    TRACKING_DEBUG().noquote() << getDebugLabel("continueTracking") << "continueTracking - CALLED for frame:" << m_sequenceIndex;
 
     if (QThread::currentThread()->isInterruptionRequested())
     {
         m_trackingActive = false; // Stop active tracking without debug message
     }
 
-    if (m_trackingActive && m_currFrameNum < static_cast<int>(m_framesToProcess->size()))
+    if (m_trackingActive && m_sequenceIndex < static_cast<int>(m_framesToProcess->size()))
     {
-        const cv::Mat& currentFrame = (*m_framesToProcess)[m_currFrameNum];
+        const cv::Mat& currentFrame = (*m_framesToProcess)[m_sequenceIndex];
         QRectF searchRoiForThisFrame = m_currentSearchWindow; // Capture the ROI used for *this* frame's search
 
         if (currentFrame.empty())
@@ -113,22 +113,22 @@ void WormTracker::continueTracking() {
 
             // Use the unified processFrame function with appropriate mode
             bool asMerged = (m_currentState == Tracking::TrackerState::TrackingMerged);
-            foundTargetThisFrame = processFrame(asMerged, currentFrame, m_currFrameNum, m_currentSearchWindow);
+            foundTargetThisFrame = processFrame(asMerged, currentFrame, m_sequenceIndex, m_currentSearchWindow);
 
             if (!foundTargetThisFrame && m_currentState != Tracking::TrackerState::PausedForSplit) {
-                // qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Target search at sequence index" << m_currFrameNum << "was skipped or unsuccessful; ROI for next frame remains" << m_currentSearchWindow;
+                // qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Target search at sequence index" << m_sequenceIndex << "was skipped or unsuccessful; ROI for next frame remains" << m_currentSearchWindow;
             }
         }
 
         if (m_currentState != Tracking::TrackerState::PausedForSplit)
         {
-            if (m_currFrameNum % 10 == 0 || m_currFrameNum == static_cast<int>(m_framesToProcess->size()) - 1) {
-                emit progress(m_wormId, static_cast<int>((static_cast<double>(m_currFrameNum + 1) / m_framesToProcess->size()) * 100.0));
+            if (m_sequenceIndex % 10 == 0 || m_sequenceIndex == static_cast<int>(m_framesToProcess->size()) - 1) {
+                emit progress(m_wormId, static_cast<int>((static_cast<double>(m_sequenceIndex + 1) / m_framesToProcess->size()) * 100.0));
             }
-            m_currFrameNum++;
+            m_sequenceIndex++;
         }
 
-        if (m_trackingActive && (m_currentState != Tracking::TrackerState::PausedForSplit || m_currFrameNum >= static_cast<int>(m_framesToProcess->size())) ) {
+        if (m_trackingActive && (m_currentState != Tracking::TrackerState::PausedForSplit || m_sequenceIndex >= static_cast<int>(m_framesToProcess->size())) ) {
             QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
         } else if (!m_trackingActive) {
             emit progress(m_wormId, 100);
@@ -158,15 +158,15 @@ Tracking::DetectedBlob WormTracker::findPersistingComponent(
     const Tracking::DetectedBlob& previousFrameAnchorBlob, // Renamed for clarity
     const Tracking::DetectedBlob& currentFrameFullBlob,    // Renamed for clarity
     const cv::Size& frameSize,
-    int originalFrameNumberForDebug)
+    int frameNumberForDebug)
 {
     Tracking::DetectedBlob persistingComponent;
     persistingComponent.isValid = false;
 
     if (!previousFrameAnchorBlob.isValid || previousFrameAnchorBlob.contourPoints.empty() ||
         !currentFrameFullBlob.isValid || currentFrameFullBlob.contourPoints.empty()) {
-        // if (originalFrameNumberForDebug != -1) {
-        //     qDebug().noquote()<< "WormTracker ID" << m_wormId << "Frame" << originalFrameNumberForDebug
+        // if (frameNumberForDebug != -1) {
+        //     qDebug().noquote()<< "WormTracker ID" << m_wormId << "Frame" << frameNumberForDebug
         //              << ": findPersistingComponent called with invalid input blobs.";
         // }
         return persistingComponent;
@@ -225,14 +225,14 @@ Tracking::DetectedBlob WormTracker::findPersistingComponent(
 }
 
 
-WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const cv::Mat& frame, int sequenceFrameIndex, const QRectF& searchRoi)
+WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const cv::Mat& frame, int sequenceIndex, const QRectF& searchRoi)
 {
     FrameProcessingContext context;
 
     if (m_direction == TrackingDirection::Forward) {
-        context.originalFrameNumber = m_videoKeyFrameNum + sequenceFrameIndex;
+        context.frameNumber = m_videoKeyFrameNum + sequenceIndex;
     } else {
-        context.originalFrameNumber = m_videoKeyFrameNum - 1 - sequenceFrameIndex;
+        context.frameNumber = m_videoKeyFrameNum - 1 - sequenceIndex;
     }
 
     // debugMessage field has been removed - using getDebugLabel directly in debug statements
@@ -246,12 +246,12 @@ WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const
 }
 
 // Unified frame processing - handles both single and merged tracking modes
-bool WormTracker::processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindow)
+bool WormTracker::processFrame(bool asMerged, const cv::Mat& frame, int sequenceIndex, QRectF& currentSearchWindow)
 {
     TRACKING_DEBUG().noquote() << getDebugLabel("processFrame") << "processFrame - CALLED asMerged:" << asMerged;
 
     // 1. Initialize processing context
-    FrameProcessingContext context = initializeFrameProcessing(frame, sequenceFrameIndex, currentSearchWindow);
+    FrameProcessingContext context = initializeFrameProcessing(frame, sequenceIndex, currentSearchWindow);
 
     // 2. Process based on blob count
     if (context.plausibleBlobsInFixedRoi == 0) {
@@ -286,7 +286,7 @@ bool WormTracker::handleLostTracking(const FrameProcessingContext& context, QRec
     Tracking::DetectedBlob invalidBlobForSignal; // Default invalid
     QList<Tracking::DetectedBlob> emptySplitCandidates;
 
-    emit positionUpdated(m_wormId, context.originalFrameNumber, invalidBlobForSignal,
+    emit positionUpdated(m_wormId, context.frameNumber, invalidBlobForSignal,
                          invalidBlobForSignal, context.searchWindowUsedForThisFrame,
                          m_currentState, emptySplitCandidates);
 
@@ -518,7 +518,7 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
     // Determine anchor: if previously tracked, find persisting part. Otherwise, anchor is the full blob.
     if (m_lastPrimaryBlob.isValid) {
         // Debug message removed - persisting component search message
-        Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, blobToReport, frame.size(), context.originalFrameNumber);
+        Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, blobToReport, frame.size(), context.frameNumber);
         blobForAnchor = persisted.isValid ? persisted : blobToReport;
         // Debug removed - component persistence validation
 
@@ -629,7 +629,7 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
             // Find persisting component for anchor
             Tracking::DetectedBlob anchor;
             if (m_lastPrimaryBlob.isValid) {
-                Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, bestCandidate, frame.size(), context.originalFrameNumber);
+                Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, bestCandidate, frame.size(), context.frameNumber);
                 anchor = persisted.isValid ? persisted : bestCandidate;
             } else {
                 anchor = bestCandidate;
@@ -679,7 +679,7 @@ Tracking::DetectedBlob WormTracker::findPersistingAnchor(const Tracking::Detecte
         return currentBlob;
     }
 
-    Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, currentBlob, frameSize, context.originalFrameNumber);
+    Tracking::DetectedBlob persisted = findPersistingComponent(m_lastPrimaryBlob, currentBlob, frameSize, context.frameNumber);
     return persisted.isValid ? persisted : currentBlob;
 }
 
@@ -837,7 +837,7 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
     m_lastFullBlob = blobToReport;
 
     // Emit position update
-    emit positionUpdated(m_wormId, context.originalFrameNumber,
+    emit positionUpdated(m_wormId, context.frameNumber,
                         m_lastPrimaryBlob, m_lastFullBlob,
                         context.searchWindowUsedForThisFrame,
                         m_currentState, splitCandidates);
@@ -864,14 +864,14 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
 }
 
 // Legacy method implementations for backward compatibility
-bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut)
+bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceIndex, QRectF& currentSearchWindowInOut)
 {
-    return processFrame(false, frame, sequenceFrameIndex, currentSearchWindowInOut);
+    return processFrame(false, frame, sequenceIndex, currentSearchWindowInOut);
 }
 
-bool WormTracker::processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut)
+bool WormTracker::processFrameAsMerged(const cv::Mat& frame, int sequenceIndex, QRectF& currentSearchWindowInOut)
 {
-    return processFrame(true, frame, sequenceFrameIndex, currentSearchWindowInOut);
+    return processFrame(true, frame, sequenceIndex, currentSearchWindowInOut);
 }
 
 
@@ -882,9 +882,9 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         return;
     }
 
-    int originalFrameNumber = (m_direction == TrackingDirection::Forward) ?
-                                  m_videoKeyFrameNum + m_currFrameNum :
-                                  m_videoKeyFrameNum - 1 - m_currFrameNum;
+    int frameNumber = (m_direction == TrackingDirection::Forward) ?
+                                  m_videoKeyFrameNum + m_sequenceIndex :
+                                  m_videoKeyFrameNum - 1 - m_sequenceIndex;
 
     TRACKING_DEBUG().noquote() << getDebugLabel("resumeTrackingWithAssignedTarget")
                       << "resumeTrackingWithAssignedTarget - Resuming with target - Valid:" << targetBlob.isValid
@@ -898,12 +898,12 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         // m_trackingActive = false; // Don't stop the loop, let it try to recover or finish
         emit stateChanged(m_wormId, m_currentState);
         // Emit a lost position update for this frame
-        if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0) {
+        if (m_framesToProcess && m_sequenceIndex < static_cast<int>(m_framesToProcess->size()) && m_sequenceIndex >=0) {
             Tracking::DetectedBlob invalidBlob;
             QList<Tracking::DetectedBlob> emptySplitCandidates;
-            emit positionUpdated(m_wormId, originalFrameNumber, invalidBlob, invalidBlob, m_currentSearchWindow, m_currentState, emptySplitCandidates);
+            emit positionUpdated(m_wormId, frameNumber, invalidBlob, invalidBlob, m_currentSearchWindow, m_currentState, emptySplitCandidates);
         }
-        m_currFrameNum++; // Advance frame, even if lost, to continue processing sequence
+        m_sequenceIndex++; // Advance frame, even if lost, to continue processing sequence
         if (m_trackingActive) {
             QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
         } else {
@@ -915,9 +915,9 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
     m_lastKnownPosition = cv::Point2f(static_cast<float>(targetBlob.centroid.x()), static_cast<float>(targetBlob.centroid.y()));
 
     cv::Size currentFrameCvSize = cv::Size(640,480); // Fallback
-    if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >= 0) {
-        if (!m_framesToProcess->at(m_currFrameNum).empty()) {
-            currentFrameCvSize = m_framesToProcess->at(m_currFrameNum).size();
+    if (m_framesToProcess && m_sequenceIndex < static_cast<int>(m_framesToProcess->size()) && m_sequenceIndex >= 0) {
+        if (!m_framesToProcess->at(m_sequenceIndex).empty()) {
+            currentFrameCvSize = m_framesToProcess->at(m_sequenceIndex).size();
         }
     } else if (m_framesToProcess && !m_framesToProcess->empty()) {
         if (!m_framesToProcess->at(0).empty()) {
@@ -935,21 +935,21 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
     TRACKING_DEBUG().noquote() << getDebugLabel("resumeTrackingWithAssignedTarget") << "resumeTrackingWithAssignedTarget - Resumed tracking as single worm";
 
     // Emit position update for the *current* frame where it was paused, now with the assigned target
-    if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0) {
-        int originalFrameNumber = (m_direction == TrackingDirection::Forward) ?
-                                      m_videoKeyFrameNum + m_currFrameNum :
-                                      m_videoKeyFrameNum - 1 - m_currFrameNum;
+    if (m_framesToProcess && m_sequenceIndex < static_cast<int>(m_framesToProcess->size()) && m_sequenceIndex >=0) {
+        int frameNumber = (m_direction == TrackingDirection::Forward) ?
+                                      m_videoKeyFrameNum + m_sequenceIndex :
+                                      m_videoKeyFrameNum - 1 - m_sequenceIndex;
         // searchWindowUsedForThisFrame would be the ROI when it paused. We might not have it easily here.
         // Using m_currentSearchWindow (which is now for the *next* frame) is not ideal for this specific emit.
         // For simplicity, we can pass the new m_currentSearchWindow or the old one if stored.
         // Let's assume the ROI that *led* to pause is what TM cares about, but we don't have it.
         // So, we pass the ROI that will be used *next*.
         QList<Tracking::DetectedBlob> emptySplitCandidates;
-        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, m_currentSearchWindow, m_currentState, emptySplitCandidates);
+        emit positionUpdated(m_wormId, frameNumber, m_lastPrimaryBlob, m_lastFullBlob, m_currentSearchWindow, m_currentState, emptySplitCandidates);
     }
 
 
-    m_currFrameNum++; // Advance to process the *next* frame
+    m_sequenceIndex++; // Advance to process the *next* frame
 
     if (m_trackingActive) {
         QMetaObject::invokeMethod(this, &WormTracker::continueTracking, Qt::QueuedConnection);
@@ -1015,9 +1015,9 @@ QString WormTracker::getDebugLabel(const QString& functionName) const {
 
     int frameNumber = -1;
     if (m_direction == TrackingDirection::Forward) {
-        frameNumber = (m_videoKeyFrameNum + m_currFrameNum);
+        frameNumber = (m_videoKeyFrameNum + m_sequenceIndex);
     } else {
-        frameNumber = (m_videoKeyFrameNum - 1 - m_currFrameNum);
+        frameNumber = (m_videoKeyFrameNum - 1 - m_sequenceIndex);
     }
 
     return QString("WT: %1|FN%2|").arg(displayId).arg(frameNumber);

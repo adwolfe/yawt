@@ -3225,7 +3225,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
     }
 
     QMap<int, Tracking::DetectedBlob> frameBlobs =
-        io.getDetectedBlobsForFrame(tp.frameNumberOriginal);
+        io.getDetectedBlobsForFrame(tp.frameNumber);
     if (!frameBlobs.contains(ctx.wormId)) return result;
     Tracking::DetectedBlob blob = frameBlobs[ctx.wormId];
     if (!blob.isValid || blob.contourPoints.empty()) return result;
@@ -3238,7 +3238,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
         prevState = CenterlineState{};
         blob.centerlinePoints.clear();
         blob.hasCenterlineCutPoint = false;
-        io.setDetectedBlobForFrame(tp.frameNumberOriginal, ctx.wormId, blob);
+        io.setDetectedBlobForFrame(tp.frameNumber, ctx.wormId, blob);
         result.wroteBlob = true;
         result.blob = blob;
         return result; // result.processed = false; doWork bootstraps the next non-merged frame.
@@ -3249,7 +3249,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
     float frameRefLength = ctx.refLength;
     if (!req.isKeyframeBootstrap) {
         float localRefLength = frameRefLength;
-        if (loadPreviousFrameContext(tp.frameNumberOriginal, req.step,
+        if (loadPreviousFrameContext(tp.frameNumber, req.step,
                                      framePredictor,
                                      framePrevState,
                                      localRefLength)) {
@@ -3266,7 +3266,7 @@ const bool captureDebug =
     ctx.captureDebug;
 Debug::CenterlineFrameDebug debugRecord;
 debugRecord.wormId = ctx.wormId;
-debugRecord.frameNumber = tp.frameNumberOriginal;
+debugRecord.frameNumber = tp.frameNumber;
 debugRecord.sweepStep = req.step;
 debugRecord.keyframeBootstrap = req.isKeyframeBootstrap;
 debugRecord.inMergeGroup = inMerge;
@@ -3554,7 +3554,7 @@ auto runSkeletonArcDispatch =
         framePrevState.blob.topologyState == Tracking::TopologyState::SelfCrossed &&
         dispEr.topology == Tracking::TopologyState::SelfCrossed) {
         const QMap<int, Tracking::DetectedBlob> prevPrevBlobs =
-            io.getDetectedBlobsForFrame(tp.frameNumberOriginal - (2 * req.step));
+            io.getDetectedBlobsForFrame(tp.frameNumber - (2 * req.step));
         const bool prevPrevSelfCrossed =
             prevPrevBlobs.contains(ctx.wormId) &&
             prevPrevBlobs[ctx.wormId].topologyState == Tracking::TopologyState::SelfCrossed;
@@ -3966,7 +3966,7 @@ debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
 if (centerline.size() < 2) {
     // No centerline producible. Persist what we DID compute
     // (tip data) so the renderer still shows green dots.
-    io.setDetectedBlobForFrame(tp.frameNumberOriginal, ctx.wormId, blob);
+    io.setDetectedBlobForFrame(tp.frameNumber, ctx.wormId, blob);
     result.wroteBlob = true;
     result.blob = blob;
     debugRecord.decisions << QStringLiteral("no centerline producible; persisted endpoint/debug blob state only");
@@ -4056,7 +4056,7 @@ if (hasOverlap) {
     blob.hasCenterlineCutPoint = true;
 }
 
-io.setDetectedBlobForFrame(tp.frameNumberOriginal, ctx.wormId, blob);
+io.setDetectedBlobForFrame(tp.frameNumber, ctx.wormId, blob);
 result.wroteBlob = true;
 result.blob = blob;
 

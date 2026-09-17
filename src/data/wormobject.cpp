@@ -38,11 +38,11 @@ void WormObject::updateTrackPoint(Tracking::WormTrackPoint point) {
     //m_currentState = TrackingState::Tracking; // Assume tracking if position is updated
 
     //Tracking::WormTrackPoint point;
-    //point.frameNumberOriginal = originalFrameNum;
+    //point.frameNumber = originalFrameNum;
     //point.position = position;
     //point.searchWindow = roi;
 
-    m_trackHistoryMap[point.frameNumberOriginal] = point;
+    m_trackHistoryMap[point.frameNumber] = point;
     rebuildTrackHistoryVector(); // Rebuild the sorted vector
 }
 
@@ -72,6 +72,6 @@ void WormObject::rebuildTrackHistoryVector() {
     // Sort by frame number
     std::sort(m_trackHistoryVector.begin(), m_trackHistoryVector.end(),
               [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
-                  return a.frameNumberOriginal < b.frameNumberOriginal;
+                  return a.frameNumber < b.frameNumber;
               });
 }

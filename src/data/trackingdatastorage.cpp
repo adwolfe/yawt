@@ -449,7 +449,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                 if (!pv.isObject()) continue;
                 QJsonObject pObj = pv.toObject();
                 Tracking::WormTrackPoint p;
-                p.frameNumberOriginal = pObj.value("frame").toInt();
+                p.frameNumber = pObj.value("frame").toInt();
                 if (pObj.contains("position") && pObj["position"].isObject()) {
                     QJsonObject pos = pObj["position"].toObject();
                     p.position = cv::Point2f(static_cast<float>(pos.value("x").toDouble()),
@@ -502,7 +502,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                         }
                         p.bodyLength = static_cast<float>(arcLen);
                     }
-                    setDetectedBlobForFrame(p.frameNumberOriginal, wormId, blob);
+                    setDetectedBlobForFrame(p.frameNumber, wormId, blob);
                 } else if (pObj.contains("centerlinePoints") && pObj["centerlinePoints"].isArray()) {
                     // Legacy format: restore the minimal centerline-only blob.
                     Tracking::DetectedBlob blob;
@@ -524,7 +524,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                             arcLen += std::sqrt(d.x * d.x + d.y * d.y);
                         }
                         p.bodyLength = static_cast<float>(arcLen);
-                        setDetectedBlobForFrame(p.frameNumberOriginal, wormId, blob);
+                        setDetectedBlobForFrame(p.frameNumber, wormId, blob);
                     }
                 }
 
@@ -731,7 +731,7 @@ void TrackingDataStorage::refreshDerivedTrackData(int onlyWormId) {
 
         for (Tracking::WormTrackPoint& point : entry.second) {
             if (const Tracking::DetectedBlob* blob =
-                    findDetectedBlob(point.frameNumberOriginal, wormId)) {
+                    findDetectedBlob(point.frameNumber, wormId)) {
                 applyBlobDerivedFields(point, *blob);
             }
         }
@@ -898,7 +898,7 @@ QSet<int> TrackingDataStorage::getLostTrackingFrames(int wormId) const {
     const std::vector<Tracking::WormTrackPoint>& trackPoints = trackIt->second;
     for (const auto& point : trackPoints) {
         if (point.quality == Tracking::TrackPointQuality::Lost) {
-            lostFrames.insert(point.frameNumberOriginal);
+            lostFrames.insert(point.frameNumber);
         }
     }
     
@@ -1094,7 +1094,7 @@ void TrackingDataStorage::buildFrameIndex() {
     
         QMap<int, const Tracking::WormTrackPoint*> frameMap;
         for (const auto& trackPoint : trackPoints) {
-            frameMap[trackPoint.frameNumberOriginal] = &trackPoint;
+            frameMap[trackPoint.frameNumber] = &trackPoint;
         }
     
         m_frameIndex[wormId] = frameMap;

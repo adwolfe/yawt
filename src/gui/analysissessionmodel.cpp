@@ -74,7 +74,7 @@ Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& 
             if (!pv.isObject()) continue;
             const QJsonObject pObj = pv.toObject();
             Tracking::WormTrackPoint p;
-            p.frameNumberOriginal = pObj.value("frame").toInt();
+            p.frameNumber = pObj.value("frame").toInt();
             if (pObj.contains("position") && pObj["position"].isObject()) {
                 const QJsonObject pos = pObj["position"].toObject();
                 p.position = cv::Point2f(static_cast<float>(pos.value("x").toDouble()),
@@ -127,7 +127,7 @@ Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& 
         if (!points.empty()) {
             std::sort(points.begin(), points.end(),
                 [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
-                    return a.frameNumberOriginal < b.frameNumberOriginal;
+                    return a.frameNumber < b.frameNumber;
                 });
             tracks[wormId] = std::move(points);
         }

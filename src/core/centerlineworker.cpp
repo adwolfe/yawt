@@ -50,13 +50,13 @@ static QList<int> refineHeadTailByMotion(
         QMap<int, Tracking::DetectedBlob> blobs;
         {
             QMutexLocker locker(storageMutex);
-            blobs = storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            blobs = storage->getDetectedBlobsForFrame(tp.frameNumber);
         }
         if (!blobs.contains(wormId)) return std::nullopt;
         const Tracking::DetectedBlob& blob = blobs[wormId];
         if (!blob.isValid || blob.centerlinePoints.size() < 2) return std::nullopt;
         if (blob.topologyState != Tracking::TopologyState::Clean) return std::nullopt;
-        return SegFrame{tp.frameNumberOriginal, tp.position,
+        return SegFrame{tp.frameNumber, tp.position,
                         blob.centerlinePoints.front(), blob.centerlinePoints.back()};
     };
 
@@ -304,7 +304,7 @@ static QList<int> refineHeadTailByGeometry(
         QMap<int, Tracking::DetectedBlob> blobs;
         {
             QMutexLocker locker(storageMutex);
-            blobs = storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            blobs = storage->getDetectedBlobsForFrame(tp.frameNumber);
         }
         if (!blobs.contains(wormId)) return std::nullopt;
         const Tracking::DetectedBlob& blob = blobs[wormId];
@@ -314,7 +314,7 @@ static QList<int> refineHeadTailByGeometry(
         if (blob.centerlinePoints.size() < 4) return std::nullopt;
 
         FrameGeom fg;
-        fg.frameNumber = tp.frameNumberOriginal;
+        fg.frameNumber = tp.frameNumber;
         fg.head = computeTipGeomFeatures(blob, blob.assignedHeadTipIdx, true);
         fg.tail = computeTipGeomFeatures(blob, blob.assignedTailTipIdx, false);
         if (!fg.head.valid || !fg.tail.valid) return std::nullopt;
@@ -642,7 +642,7 @@ static void smoothTipsAndRelaxCenterlines(
         QMap<int, Tracking::DetectedBlob> frameBlobs;
         {
             QMutexLocker lk(storageMutex);
-            frameBlobs = storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+            frameBlobs = storage->getDetectedBlobsForFrame(tp.frameNumber);
         }
         if (!frameBlobs.contains(wormId)) {
             if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
@@ -661,7 +661,7 @@ static void smoothTipsAndRelaxCenterlines(
             if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
             continue;
         }
-        current.push_back({tp.frameNumberOriginal,
+        current.push_back({tp.frameNumber,
                            blob.tipCandidates[hIdx].point,
                            blob.tipCandidates[tIdx].point});
     }
@@ -757,7 +757,7 @@ void CenterlineWorker::doWork()
         std::sort(sortedPoints.begin(), sortedPoints.end(),
                   [](const Tracking::WormTrackPoint& a,
                      const Tracking::WormTrackPoint& b) {
-                      return a.frameNumberOriginal < b.frameNumberOriginal;
+                      return a.frameNumber < b.frameNumber;
                   });
 
         // Per-worm keyframe (the user-clicked frame).
@@ -774,7 +774,7 @@ void CenterlineWorker::doWork()
             if (tp.quality == Tracking::TrackPointQuality::Merged ||
                 tp.quality == Tracking::TrackPointQuality::Lost) continue;
             QMap<int, Tracking::DetectedBlob> frameBlobs =
-                getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                getDetectedBlobsForFrame(tp.frameNumber);
             if (!frameBlobs.contains(wormId)) continue;
             Tracking::DetectedBlob temp = frameBlobs[wormId];
             if (!temp.isValid || temp.contourPoints.empty()) continue;
@@ -800,7 +800,7 @@ void CenterlineWorker::doWork()
         int keyframeIdx = -1;
         if (keyframe >= 0) {
             for (size_t i = 0; i < sortedPoints.size(); ++i) {
-                if (sortedPoints[i].frameNumberOriginal == keyframe) {
+                if (sortedPoints[i].frameNumber == keyframe) {
                     keyframeIdx = static_cast<int>(i);
                     break;
                 }

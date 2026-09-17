@@ -102,7 +102,7 @@ public:
     /**
      * Build a snapshot of all checked worms organised by group.
      * Groups with no checked worms are omitted.
-     * Track points are sorted by frameNumberOriginal.
+     * Track points are sorted by frameNumber.
      * Call this from paintEvent; the data is a deep copy (safe after model resets).
      */
     QList<AnalysisGroupData> getGroupedData() const;

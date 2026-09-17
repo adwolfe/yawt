@@ -667,11 +667,11 @@ static void updateVarMap(VarMap& v,
     const double x  = static_cast<double>(p.position.x);
     const double y  = static_cast<double>(p.position.y);
     const double um = umPerPixel;
-    const double t  = (fps > 0) ? p.frameNumberOriginal / fps : 0.0;
+    const double t  = (fps > 0) ? p.frameNumber / fps : 0.0;
 
     v["x"] = x;     v["y"] = y;
     v["x_um"] = x*um; v["y_um"] = y*um;
-    v["frame"] = p.frameNumberOriginal;
+    v["frame"] = p.frameNumber;
     v["t"]     = t;
     v["quality"] = static_cast<double>(static_cast<int>(p.quality));
     v["area"]          = p.area;
@@ -929,8 +929,8 @@ static void updateSlotValues(QVector<double>& slotValues,
     if (req.contains(S_Y)) slotValues[S_Y] = y;
     if (req.contains(S_X_UM)) slotValues[S_X_UM] = x * um;
     if (req.contains(S_Y_UM)) slotValues[S_Y_UM] = y * um;
-    if (req.contains(S_FRAME)) slotValues[S_FRAME] = p.frameNumberOriginal;
-    if (req.contains(S_T)) slotValues[S_T] = (fps > 0.0) ? p.frameNumberOriginal / fps : 0.0;
+    if (req.contains(S_FRAME)) slotValues[S_FRAME] = p.frameNumber;
+    if (req.contains(S_T)) slotValues[S_T] = (fps > 0.0) ? p.frameNumber / fps : 0.0;
     if (req.contains(S_QUALITY)) slotValues[S_QUALITY] = static_cast<double>(static_cast<int>(p.quality));
     if (req.contains(S_AREA)) slotValues[S_AREA] = p.area;
     if (req.contains(S_AREA_UM2)) slotValues[S_AREA_UM2] = p.area * um * um;
@@ -1013,14 +1013,14 @@ static void updateSlotValues(QVector<double>& slotValues,
     if (!speedState.hasPrev || fps <= 0.0) {
         speedState.hasPrev = true;
         speedState.prevPos = p.position;
-        speedState.prevFrame = p.frameNumberOriginal;
+        speedState.prevFrame = p.frameNumber;
         slotValues[S_SPEED] = 0.0;
         slotValues[S_SPEED_PX] = 0.0;
         slotValues[S_SPEED_UM] = 0.0;
         return;
     }
 
-    const int df = p.frameNumberOriginal - speedState.prevFrame;
+    const int df = p.frameNumber - speedState.prevFrame;
     if (df > 0) {
         const double dx = static_cast<double>(p.position.x - speedState.prevPos.x);
         const double dy = static_cast<double>(p.position.y - speedState.prevPos.y);
@@ -1030,17 +1030,17 @@ static void updateSlotValues(QVector<double>& slotValues,
         const double speedUm = (um > 0.0) ? speedPx * um : speedPx;
         const int speedWindow = std::max(1, static_cast<int>(std::round(2.0 * fps)));
 
-        speedState.winPx.emplace_back(p.frameNumberOriginal, speedPx);
+        speedState.winPx.emplace_back(p.frameNumber, speedPx);
         speedState.sumPx += speedPx;
-        speedState.winUm.emplace_back(p.frameNumberOriginal, speedUm);
+        speedState.winUm.emplace_back(p.frameNumber, speedUm);
         speedState.sumUm += speedUm;
         while (!speedState.winPx.empty()
-               && (p.frameNumberOriginal - speedState.winPx.front().first) > speedWindow) {
+               && (p.frameNumber - speedState.winPx.front().first) > speedWindow) {
             speedState.sumPx -= speedState.winPx.front().second;
             speedState.winPx.pop_front();
         }
         while (!speedState.winUm.empty()
-               && (p.frameNumberOriginal - speedState.winUm.front().first) > speedWindow) {
+               && (p.frameNumber - speedState.winUm.front().first) > speedWindow) {
             speedState.sumUm -= speedState.winUm.front().second;
             speedState.winUm.pop_front();
         }
@@ -1059,7 +1059,7 @@ static void updateSlotValues(QVector<double>& slotValues,
     }
 
     speedState.prevPos = p.position;
-    speedState.prevFrame = p.frameNumberOriginal;
+    speedState.prevFrame = p.frameNumber;
 }
 
 // ── Main evaluation ───────────────────────────────────────────────────────
@@ -1216,8 +1216,8 @@ PluginEngine::PluginResult PluginEngine::evaluate(
                     const double val = plan->formulaFn(slotValues);
                     if (!std::isnan(val) && std::isfinite(val))
                         ws.points.append(QPointF(worm.fps > 0.0
-                                                 ? static_cast<double>(point.frameNumberOriginal) / worm.fps
-                                                 : static_cast<double>(point.frameNumberOriginal),
+                                                 ? static_cast<double>(point.frameNumber) / worm.fps
+                                                 : static_cast<double>(point.frameNumber),
                                                  val));
                     return true;
                 });

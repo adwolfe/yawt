@@ -224,7 +224,7 @@ private slots:
 
     // WormTracker slots
     void handleFrameUpdate(int reportingConceptualWormId,
-                           int originalFrameNumber,
+                           int frameNumber,
                            const Tracking::DetectedBlob& primaryBlob, // Anchor blob for track history
                            const Tracking::DetectedBlob& fullBlob,    // Full blob for merge/state processing
                            QRectF searchWindowUsed,

@@ -47,22 +47,22 @@ static std::vector<std::pair<int,double>> speedTimeline(
         }
         const QPointF pos(p.position.x, p.position.y);
         if (!hasPrev) {
-            result.push_back({p.frameNumberOriginal, 0.0});
-            hasPrev = true; prevPos = pos; prevFrame = p.frameNumberOriginal; continue;
+            result.push_back({p.frameNumber, 0.0});
+            hasPrev = true; prevPos = pos; prevFrame = p.frameNumber; continue;
         }
-        const int   df  = p.frameNumberOriginal - prevFrame;
-        if (df <= 0) { result.push_back({p.frameNumberOriginal, 0.0}); prevPos = pos; prevFrame = p.frameNumberOriginal; continue; }
+        const int   df  = p.frameNumber - prevFrame;
+        if (df <= 0) { result.push_back({p.frameNumber, 0.0}); prevPos = pos; prevFrame = p.frameNumber; continue; }
         const double d  = QLineF(prevPos, pos).length() * scale;
         const double dt = haveFps ? (static_cast<double>(df) / fps) : 1.0;
         const double spd = d / dt;
 
-        win.emplace_back(p.frameNumberOriginal, spd);
+        win.emplace_back(p.frameNumber, spd);
         winSum += spd;
-        while (!win.empty() && (p.frameNumberOriginal - win.front().first) > window) {
+        while (!win.empty() && (p.frameNumber - win.front().first) > window) {
             winSum -= win.front().second; win.pop_front();
         }
-        result.push_back({p.frameNumberOriginal, win.empty() ? spd : winSum / win.size()});
-        prevPos = pos; prevFrame = p.frameNumberOriginal;
+        result.push_back({p.frameNumber, win.empty() ? spd : winSum / win.size()});
+        prevPos = pos; prevFrame = p.frameNumber;
     }
     return result;
 }

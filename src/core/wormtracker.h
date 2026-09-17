@@ -21,10 +21,10 @@
  *    detectMergeByAreaIncrease(), and boundary/area plausibility checks.
  *
  * Signals (semantics):
- *  - positionUpdated(wormId, originalFrameNumber, primaryBlob, fullBlob, searchWindowUsed, state, splitCandidates):
+ *  - positionUpdated(wormId, frameNumber, primaryBlob, fullBlob, searchWindowUsed, state, splitCandidates):
  *      Per-frame update. primaryBlob is the anchor used to extend the track; fullBlob may be larger (merged) for state logic.
  *      splitCandidates is populated only when entering PausedForSplit.
- *  - splitDetectedAndPaused(wormId, originalFrameNumber, detectedBlobs):
+ *  - splitDetectedAndPaused(wormId, frameNumber, detectedBlobs):
  *      Emitted when a merged entity appears to split. The tracker pauses. TrackingManager should resolve by calling
  *      resumeTrackingWithAssignedTarget(...).
  *  - stateChanged(wormId, newState, associatedEntityId):
@@ -97,7 +97,7 @@ public:
 
     // Helper structure for frame processing
     struct FrameProcessingContext {
-        int originalFrameNumber;
+        int frameNumber;
         QRectF searchWindowUsedForThisFrame;
         QList<Tracking::DetectedBlob> blobsInFixedRoi;
         int plausibleBlobsInFixedRoi;
@@ -134,7 +134,7 @@ signals:
     /**
      * @brief Emitted each frame a worm's position is updated.
      * @param wormId The conceptual ID of the worm being tracked.
-     * @param originalFrameNumber The frame number in the original video sequence.
+     * @param frameNumber The absolute frame index in the source video.
      * @param primaryBlob The characteristics of the blob chosen as the primary target for this frame.
      * @param fullBlob The full blob being tracked (could be merged entity).
      * @param searchWindowUsed The fixed-size search window that was used to find blobs in this frame.
@@ -142,7 +142,7 @@ signals:
      * @param splitCandidates List of all candidate blobs when in PausedForSplit state (empty otherwise).
      */
     void positionUpdated(int wormId,
-                         int originalFrameNumber,
+                         int frameNumber,
                          const Tracking::DetectedBlob& primaryBlob,
                          const Tracking::DetectedBlob& fullBlob,
                          QRectF searchWindowUsed,
@@ -153,11 +153,11 @@ signals:
      * @brief Emitted when the tracker was in a merged state and detects that the merged entity has split.
      * The tracker will pause after emitting this, awaiting instruction from TrackingManager.
      * @param wormId The ID of the worm this tracker is responsible for.
-     * @param originalFrameNumber The frame number where the split was detected.
+     * @param frameNumber The frame number where the split was detected.
      * @param detectedBlobs A list of all distinct blobs found after the split.
      */
     void splitDetectedAndPaused(int wormId,
-                                int originalFrameNumber,
+                                int frameNumber,
                                 const QList<Tracking::DetectedBlob>& detectedBlobs);
 
     /**
@@ -174,10 +174,10 @@ signals:
 
 private:
     // Main processing logic for a frame
-    bool processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindow);
-    bool processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut);
-    bool processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut);
-    //bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
+    bool processFrame(bool asMerged, const cv::Mat& frame, int sequenceIndex, QRectF& currentSearchWindow);
+    bool processFrameAsSingle(const cv::Mat& frame, int sequenceIndex, QRectF& currentSearchWindowInOut);
+    bool processFrameAsMerged(const cv::Mat& frame, int sequenceIndex, QRectF& currentSearchWindowInOut);
+    //bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceIndex, QRectF& currentFixedSearchRoiInOut);
     
     // Helper methods for unified frame processing
     bool handleLostTracking(const FrameProcessingContext& context, QRectF& currentSearchWindow);
@@ -204,7 +204,7 @@ private:
     bool isBlobTouchingBoundary(const Tracking::DetectedBlob& blob, const QRectF& roi);
 
     // Helper functions
-    FrameProcessingContext initializeFrameProcessing(const cv::Mat& frame, int sequenceFrameIndex, const QRectF& searchRoi);
+    FrameProcessingContext initializeFrameProcessing(const cv::Mat& frame, int sequenceIndex, const QRectF& searchRoi);
     QRectF adjustSearchWindowPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
     QList<Tracking::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
     Tracking::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
@@ -218,7 +218,7 @@ private:
      * @param previousFrameBlob The DetectedBlob of the worm from the previous frame.
      * @param currentFrameBlob The DetectedBlob from the current frame (could be a merged entity).
      * @param frameSize The size of the current video frame (for creating masks).
-     * @param originalFrameNumberForDebug Optional: Frame number for debug logging.
+     * @param frameNumberForDebug Optional: Frame number for debug logging.
      * @return A DetectedBlob representing the most likely continuation of previousFrameBlob
      * within currentFrameBlob. Returns an invalid DetectedBlob if analysis is inconclusive.
      */
@@ -226,7 +226,7 @@ private:
         const Tracking::DetectedBlob& previousFrameBlob,
         const Tracking::DetectedBlob& currentFrameBlob,
         const cv::Size& frameSize,
-        int originalFrameNumberForDebug = -1);
+        int frameNumberForDebug = -1);
 
 
     // --- Configuration & State (Permanent or set at init) ---
@@ -241,7 +241,7 @@ private:
     // --- Transient State (Changes during tracking) ---
     QRectF m_currentSearchWindow;              // Current fixed-size ROI used for searching in the current frame
     cv::Point2f m_lastKnownPosition;        // Last known centroid of the tracked blob (used as fallback)
-    int m_currFrameNum;                     // Index in m_framesToProcess (0 to N-1)
+    int m_sequenceIndex;                    // Index into m_framesToProcess (0..N-1); NOT a video frame number
     bool m_trackingActive;                  // Flag to control the tracking loop
     bool m_skipMergeDetectionNextFrame;     // Flag to skip merge detection for one frame after resuming from split
     Tracking::TrackerState m_currentState;            // Current operational state of this tracker

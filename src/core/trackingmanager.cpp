@@ -1140,7 +1140,7 @@ WormTracker::TrackingDirection TrackingManager::getDirectionFromSignedId(int sig
 
 // --- Core Frame Update Logic ---
 void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
-                                           int originalFrameNumber,
+                                           int frameNumber,
                                            const Tracking::DetectedBlob& primaryBlob, // Anchor blob for track history
                                            const Tracking::DetectedBlob& fullBlob,    // Full blob for merge/state processing
                                            QRectF searchWindowUsed,
@@ -1156,13 +1156,13 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
     WormTracker::TrackingDirection direction = reportingTrackerInstance ? reportingTrackerInstance->getDirection() : WormTracker::TrackingDirection::Forward;
     int signedWormId = getSignedWormId(reportingConceptualWormId, direction);
 
-    QString dmsg = QString("TM: WT %1 FN%2 | ").arg(signedWormId).arg(originalFrameNumber);
-    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** PROCESSING FRAME UPDATE *** State:").arg(signedWormId).arg(originalFrameNumber) << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid << "SplitCandidates:" << splitCandidates.size();
+    QString dmsg = QString("TM: WT %1 FN%2 | ").arg(signedWormId).arg(frameNumber);
+    TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** PROCESSING FRAME UPDATE *** State:").arg(signedWormId).arg(frameNumber) << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid << "SplitCandidates:" << splitCandidates.size();
     // Note: WormObject update uses primaryBlob
     WormObject* wormObject = m_wormObjectsMap.value(reportingConceptualWormId, nullptr);
     if (wormObject) {
         Tracking::WormTrackPoint point;
-        point.frameNumberOriginal = originalFrameNumber;
+        point.frameNumber = frameNumber;
         point.searchWindow = searchWindowUsed;
 
         if (primaryBlob.isValid) {
@@ -1176,28 +1176,28 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
         wormObject->updateTrackPoint(point);
     }
 
-    //QString dmsg = QString("TM: WT %1 FN%2 | ").arg(reportingConceptualWormId).arg(originalFrameNumber);
+    //QString dmsg = QString("TM: WT %1 FN%2 | ").arg(reportingConceptualWormId).arg(frameNumber);
     // qDebug().noquote() << dmsg << "State" << static_cast<int>(currentState) << "FullBlobValid:" << fullBlob.isValid;
 
     if (currentState == Tracking::TrackerState::TrackingSingle || currentState == Tracking::TrackerState::TrackingLost) {
         m_wormToPhysicalBlobIdMap[signedWormId] = -1; // No longer part of a specific physical blob
     } else if (currentState == Tracking::TrackerState::TrackingMerged) {
         if (fullBlob.isValid) {
-            processFrameSpecificMerge(signedWormId, originalFrameNumber, fullBlob, reportingTrackerInstance);
+            processFrameSpecificMerge(signedWormId, frameNumber, fullBlob, reportingTrackerInstance);
         } else {
             // qDebug().noquote() << dmsg << "State Merged but fullBlob invalid. Treating as lost for merge logic.";
             m_wormToPhysicalBlobIdMap[signedWormId] = -1;
         }
     } else if (currentState == Tracking::TrackerState::PausedForSplit) {
-        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** ENTERING SPLIT PROCESSING ***").arg(signedWormId).arg(originalFrameNumber);
+        TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|*** ENTERING SPLIT PROCESSING ***").arg(signedWormId).arg(frameNumber);
         if (!splitCandidates.isEmpty() && reportingTrackerInstance) {
             // Find the chosen candidate (should be the primaryBlob if valid, otherwise first candidate)
             Tracking::DetectedBlob chosenCandidate = primaryBlob.isValid ? primaryBlob :
                                                     (!splitCandidates.isEmpty() ? splitCandidates.first() : Tracking::DetectedBlob());
-            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Chosen candidate Area:").arg(signedWormId).arg(originalFrameNumber) << chosenCandidate.area << "Pos:" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y();
-            processFrameSpecificSplit(signedWormId, originalFrameNumber, splitCandidates, chosenCandidate, reportingTrackerInstance);
+            TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|Chosen candidate Area:").arg(signedWormId).arg(frameNumber) << chosenCandidate.area << "Pos:" << chosenCandidate.centroid.x() << "," << chosenCandidate.centroid.y();
+            processFrameSpecificSplit(signedWormId, frameNumber, splitCandidates, chosenCandidate, reportingTrackerInstance);
         } else {
-             TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|State PausedForSplit but no candidates/instance. Forcing lost.").arg(signedWormId).arg(originalFrameNumber);
+             TRACKING_DEBUG().noquote() << QString("TM: %1|FN%2|State PausedForSplit but no candidates/instance. Forcing lost.").arg(signedWormId).arg(frameNumber);
             m_wormToPhysicalBlobIdMap[signedWormId] = -1;
             if(reportingTrackerInstance) QMetaObject::invokeMethod(reportingTrackerInstance, "resumeTrackingWithAssignedTarget", Qt::QueuedConnection, Q_ARG(Tracking::DetectedBlob, Tracking::DetectedBlob()));
         }
@@ -1207,7 +1207,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
     if (m_storage && fullBlob.isValid) {
         // Store using the unsigned conceptual worm id (frame differentiates entries)
         int unsignedWormId = getUnsignedWormId(signedWormId);
-        m_storage->setDetectedBlobForFrame(originalFrameNumber, unsignedWormId, fullBlob);
+        m_storage->setDetectedBlobForFrame(frameNumber, unsignedWormId, fullBlob);
     }
 
     // All split resolution is now immediate without any paused state
@@ -1597,7 +1597,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
         WormObject* wobj = m_wormObjectsMap.value(unsignedWormId, nullptr);
         if (wobj) {
             Tracking::WormTrackPoint splitPoint;
-            splitPoint.frameNumberOriginal = frameNumber;
+            splitPoint.frameNumber = frameNumber;
             splitPoint.position = cv::Point2f(static_cast<float>(blobToAssign.centroid.x()), static_cast<float>(blobToAssign.centroid.y()));
             splitPoint.searchWindow = blobToAssign.boundingBox;
             splitPoint.quality = Tracking::TrackPointQuality::Split;
@@ -1843,14 +1843,14 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         std::vector<Tracking::WormTrackPoint> sortedTrackPoints = it->second;
         std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
                   [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
-                      return lhs.frameNumberOriginal < rhs.frameNumberOriginal;
+                      return lhs.frameNumber < rhs.frameNumber;
                   });
 
         for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
             trackRows.append(WorkbookRow{
                 numberCell(QString::number(exportWormId)),
                 numberCell(QString::number(sourceItemId)),
-                numberCell(QString::number(point.frameNumberOriginal)),
+                numberCell(QString::number(point.frameNumber)),
                 numberCell(QString::number(static_cast<double>(point.position.x), 'f', 4)),
                 numberCell(QString::number(static_cast<double>(point.position.y), 'f', 4)),
                 numberCell(QString::number(point.searchWindow.x(), 'f', 2)),
@@ -1938,14 +1938,14 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
             std::vector<Tracking::WormTrackPoint> sortedTrackPoints = it->second;
             std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
                       [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
-                          return lhs.frameNumberOriginal < rhs.frameNumberOriginal;
+                          return lhs.frameNumber < rhs.frameNumber;
                       });
 
             for (const Tracking::WormTrackPoint& point : sortedTrackPoints) {
                 QList<QPointF> centerlinePoints;
                 if (point.quality != Tracking::TrackPointQuality::Lost) {
                     const QMap<int, Tracking::DetectedBlob> blobsForFrame =
-                        m_storage->getDetectedBlobsForFrame(point.frameNumberOriginal);
+                        m_storage->getDetectedBlobsForFrame(point.frameNumber);
                     const auto blobIt = blobsForFrame.constFind(sourceItemId);
                     if (blobIt != blobsForFrame.constEnd()) {
                         centerlinePoints =
@@ -1957,7 +1957,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                 WorkbookRow centerlineRow{
                     numberCell(QString::number(exportWormId)),
                     numberCell(QString::number(sourceItemId)),
-                    numberCell(QString::number(point.frameNumberOriginal))
+                    numberCell(QString::number(point.frameNumber))
                 };
                 const double distance = tipToTipDistance(centerlinePoints);
                 if (distance >= 0.0) {
@@ -2101,7 +2101,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
         std::vector<Tracking::WormTrackPoint> pts = rawPoints;
         std::sort(pts.begin(), pts.end(),
                   [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
-                      return a.frameNumberOriginal < b.frameNumberOriginal;
+                      return a.frameNumber < b.frameNumber;
                   });
 
         int nSingle = 0, nSplit = 0, nMerged = 0, nLost = 0;
@@ -2123,7 +2123,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
             // Morphology from detected blobs (skip merged/lost for cleaner stats)
             if (tp.quality == Q::Single || tp.quality == Q::Split) {
                 QMap<int, Tracking::DetectedBlob> blobs =
-                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                    m_storage->getDetectedBlobsForFrame(tp.frameNumber);
                 if (blobs.contains(wormId)) {
                     const Tracking::DetectedBlob& blob = blobs[wormId];
                     if (blob.isValid) {
@@ -2245,8 +2245,8 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
     int minFrame = INT_MAX, maxFrame = INT_MIN;
     for (const auto& entry : tracks) {
         for (const auto& tp : entry.second) {
-            minFrame = std::min(minFrame, tp.frameNumberOriginal);
-            maxFrame = std::max(maxFrame, tp.frameNumberOriginal);
+            minFrame = std::min(minFrame, tp.frameNumber);
+            maxFrame = std::max(maxFrame, tp.frameNumber);
         }
     }
 
@@ -2299,12 +2299,12 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
         std::sort(pts.begin(), pts.end(),
                   [](const Tracking::WormTrackPoint& a,
                      const Tracking::WormTrackPoint& b) {
-                      return a.frameNumberOriginal < b.frameNumberOriginal;
+                      return a.frameNumber < b.frameNumber;
                   });
 
         const int total = static_cast<int>(pts.size());
-        const int wFirst = pts.front().frameNumberOriginal;
-        const int wLast  = pts.back().frameNumberOriginal;
+        const int wFirst = pts.front().frameNumber;
+        const int wLast  = pts.back().frameNumber;
 
         // Per-point stats
         int nSingle = 0, nSplit = 0, nMerged = 0, nLost = 0;
@@ -2343,7 +2343,7 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
                 ++nCLskipped;
             } else {
                 QMap<int, Tracking::DetectedBlob> blobs =
-                    m_storage->getDetectedBlobsForFrame(tp.frameNumberOriginal);
+                    m_storage->getDetectedBlobsForFrame(tp.frameNumber);
                 if (blobs.contains(wormId)) {
                     const Tracking::DetectedBlob& blob = blobs[wormId];
                     if (blob.isValid && blob.centerlinePoints.size() >= 2) {
@@ -2439,8 +2439,8 @@ void TrackingManager::exportHeadTailSwapXlsx(
     const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
     for (const auto& entry : tracks) {
         for (const auto& tp : entry.second) {
-            minFrame = std::min(minFrame, tp.frameNumberOriginal);
-            maxFrame = std::max(maxFrame, tp.frameNumberOriginal);
+            minFrame = std::min(minFrame, tp.frameNumber);
+            maxFrame = std::max(maxFrame, tp.frameNumber);
         }
     }
     if (minFrame > maxFrame) return;
@@ -2657,7 +2657,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
         QJsonArray pointsArr;
         for (const Tracking::WormTrackPoint& p : it->second) {
             QJsonObject pObj;
-            pObj["frame"]   = p.frameNumberOriginal;
+            pObj["frame"]   = p.frameNumber;
             pObj["quality"] = static_cast<int>(p.quality);
 
             QJsonObject posObj;
@@ -2691,7 +2691,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
             }
 
             if (const Tracking::DetectedBlob* blob =
-                    m_storage->findDetectedBlob(p.frameNumberOriginal, wormId)) {
+                    m_storage->findDetectedBlob(p.frameNumber, wormId)) {
                 pObj["detectedBlob"] = storageDetectedBlobToJson(*blob);
 
                 QJsonArray clArr;

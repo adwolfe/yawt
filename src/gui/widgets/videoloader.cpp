@@ -758,12 +758,12 @@ void VideoLoader::rebuildCenterlineMidpointCache() {
         for (const auto& pt : trackPoints) {
             if (pt.quality == Tracking::TrackPointQuality::Lost) continue;
             const QMap<int, Tracking::DetectedBlob> blobs =
-                m_storage->getDetectedBlobsForFrame(pt.frameNumberOriginal);
+                m_storage->getDetectedBlobsForFrame(pt.frameNumber);
             auto it = blobs.constFind(wormId);
             if (it != blobs.constEnd() && it->isValid && !it->centerlinePoints.empty()) {
                 const auto& clPts = it->centerlinePoints;
                 const cv::Point2f& mid = clPts[clPts.size() / 2];
-                wormCache[pt.frameNumberOriginal] = QPointF(mid.x, mid.y);
+                wormCache[pt.frameNumber] = QPointF(mid.x, mid.y);
             }
         }
     }
@@ -1300,7 +1300,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
                 QPointF currentPointVideo;
                 if (clCache) {
-                    auto fit = clCache->constFind(pt.frameNumberOriginal);
+                    auto fit = clCache->constFind(pt.frameNumber);
                     currentPointVideo = (fit != clCache->constEnd())
                         ? *fit
                         : QPointF(pt.position.x, pt.position.y);
@@ -1521,7 +1521,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                         double distSq = dx * dx + dy * dy;
                         if (distSq < minDistanceSq) {
                             minDistanceSq = distSq; bestTrackId = wormId;
-                            bestFrameNum = pt.frameNumberOriginal; bestVideoPoint = videoPt;
+                            bestFrameNum = pt.frameNumber; bestVideoPoint = videoPt;
                         }
                     }
                 }
