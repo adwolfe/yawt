@@ -112,10 +112,10 @@ signals:
     /**
      * @brief Emitted when an item's visibility is changed.
      * Useful for components that need to update visibility without refreshing all items.
-     * @param id The ID of the item.
+     * @param itemId The ID of the item.
      * @param visible The new visibility state of the item.
      */
-    void itemVisibilityChanged(int id, bool visible);
+    void itemVisibilityChanged(int itemId, bool visible);
 
     /**
      * @brief Emitted when the calculated global metrics (min/max area, aspect ratio, fixed ROI size) change.

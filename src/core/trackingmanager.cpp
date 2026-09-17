@@ -3076,13 +3076,13 @@ void TrackingManager::clearProcessedVideoMemory() {
 
 
 bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath,
-                                           int fixBlobId,
+                                           int wormId,
                                            const QRectF& initialROI,
                                            int startFrame,
                                            int endFrame,
                                            bool replaceExisting,
                                            bool extendTrack) {
-    TRACKING_DEBUG() << "TrackingManager: Starting retracking process for Fix blob" << fixBlobId
+    TRACKING_DEBUG() << "TrackingManager: Starting retracking process for Fix blob" << wormId
                      << "from frame" << startFrame << "to" << endFrame
                      << "using video:" << thresholdedVideoPath;
 
@@ -3120,7 +3120,7 @@ bool TrackingManager::startRetrackingProcess(const QString& thresholdedVideoPath
     qDebug() << "TrackingManager: Parameters - ROI:" << initialROI
              << "Replace:" << replaceExisting << "Extend:" << extendTrack;
 
-    emit trackingStatusUpdate(QString("Retracking for Fix Blob ID %1 completed (placeholder)").arg(fixBlobId));
+    emit trackingStatusUpdate(QString("Retracking for Fix Blob ID %1 completed (placeholder)").arg(wormId));
 
     return true;
 }

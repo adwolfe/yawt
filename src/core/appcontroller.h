@@ -115,7 +115,7 @@ public:
     // - Returns the number of items currently marked as worms in the blob model
     Q_INVOKABLE int countWormItems() const;
     // - Returns the number of distinct items that already have tracks stored
-    Q_INVOKABLE int countItemsWithTracks() const;
+    Q_INVOKABLE int countWormsWithTracks() const;
     // - Convenience: whether there are any worm items available to track
     Q_INVOKABLE bool hasWormItems() const;
     // UI helper: create and show the tracking progress dialog parented to 'parent' (optional).

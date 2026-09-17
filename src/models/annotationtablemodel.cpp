@@ -76,7 +76,7 @@ void AnnotationTableModel::populateLostAnnotations() {
     if (!m_storage) return;
     
     // Get all worm IDs that have tracks
-    QSet<int> wormIds = m_storage->getItemsWithTracks();
+    QSet<int> wormIds = m_storage->getWormsWithTracks();
     
     for (int wormId : wormIds) {
         // Get lost tracking segments for this worm

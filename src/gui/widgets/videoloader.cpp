@@ -989,20 +989,20 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs)) {
         if (!m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
             // Tracking has run, display current frame's blob positions from tracks
-            for (int trackId : std::as_const(m_visibleTrackIDs)) {
-                if (m_allTracksToDisplay.count(trackId)) {
+            for (int wormId : std::as_const(m_visibleTrackIDs)) {
+                if (m_allTracksToDisplay.count(wormId)) {
                     // Check if this track's item is set to visible
                     bool isVisible = false;
                     if (m_storage) {
                         // Get item from storage if available
-                        const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+                        const TableItems::ClickedItem* item = m_storage->getItem(wormId);
                         if (item) {
                             isVisible = item->visible;
                         }
                     } else {
                         // Fallback to legacy method
                         for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                            if (item.id == trackId) {
+                            if (item.id == wormId) {
                                 isVisible = item.visible;
                                 break;
                             }
@@ -1013,8 +1013,8 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     // Use optimized lookup instead of linear search
                     QPointF wormPosition;
                     QRectF wormRoi;
-                    if (m_storage && m_storage->getWormDataForFrame(trackId, currentFrameIdx, wormPosition, wormRoi)) {
-                        QColor itemColor = getTrackColor(trackId);
+                    if (m_storage && m_storage->getWormDataForFrame(wormId, currentFrameIdx, wormPosition, wormRoi)) {
+                        QColor itemColor = getTrackColor(wormId);
 
                         // Draw Bounding Box for current frame from track data
                         QRectF bboxVideo = wormRoi;
@@ -1253,31 +1253,31 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         // Paint tracks for all worms
         // For each track, paint its path
         for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
-            int trackId = it_map->first;
+            int wormId = it_map->first;
             const std::vector<Tracking::WormTrackPoint>& trackPoints = it_map->second;
 
             // Only show tracks for items with visible checkbox checked
             bool isVisible = false;
             if (m_storage) {
                 // Get item from storage if available
-                const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+                const TableItems::ClickedItem* item = m_storage->getItem(wormId);
                 if (item) {
                     isVisible = item->visible;
                 }
             } else {
                 // Fallback to legacy method
                 for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                    if (item.id == trackId) {
+                    if (item.id == wormId) {
                         isVisible = item.visible;
                         break;
                     }
                 }
             }
 
-            if (!isVisible || !m_visibleTrackIDs.contains(trackId) || trackPoints.empty()) continue;
+            if (!isVisible || !m_visibleTrackIDs.contains(wormId) || trackPoints.empty()) continue;
 
             QPainterPath path;
-            QColor trackColorWithAlpha = getTrackColor(trackId); // Assuming getTrackColor provides color with desired alpha
+            QColor trackColorWithAlpha = getTrackColor(wormId); // Assuming getTrackColor provides color with desired alpha
             // If getTrackColor returns opaque, set alpha here:
             // trackColorWithAlpha.setAlphaF(0.5); // Example: 50% opacity for lines
 
@@ -1286,7 +1286,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
             const QMap<int, QPointF>* clCache = nullptr;
             if (m_trackDisplayMode == TrackDisplayMode::CenterlineMidpoint) {
-                auto cit = m_centerlineMidpointCache.constFind(trackId);
+                auto cit = m_centerlineMidpointCache.constFind(wormId);
                 if (cit != m_centerlineMidpointCache.constEnd())
                     clCache = &(*cit);
             }
@@ -1485,19 +1485,19 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
             QPointF clickWidgetPoint = event->position();
             int bestTrackId = -1; int bestFrameNum = -1; QPointF bestVideoPoint;
             double minDistanceSq = TRACK_POINT_CLICK_TOLERANCE * TRACK_POINT_CLICK_TOLERANCE;
-            for (int trackId : std::as_const(m_visibleTrackIDs)) {
+            for (int wormId : std::as_const(m_visibleTrackIDs)) {
                 // Only interact with tracks for items with visible checkbox checked
                 bool isVisible = false;
                 if (m_storage) {
                     // Get item from storage if available
-                    const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+                    const TableItems::ClickedItem* item = m_storage->getItem(wormId);
                     if (item) {
                         isVisible = item->visible;
                     }
                 } else {
                     // Fallback to legacy method
                     for (const TableItems::ClickedItem& item : std::as_const(m_itemsToDisplay)) {
-                        if (item.id == trackId) {
+                        if (item.id == wormId) {
                             isVisible = item.visible;
                             break;
                         }
@@ -1505,8 +1505,8 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                 }
                 if (!isVisible) continue;
 
-                if (m_allTracksToDisplay.count(trackId)) {
-                    const auto& trackPoints = m_allTracksToDisplay.at(trackId);
+                if (m_allTracksToDisplay.count(wormId)) {
+                    const auto& trackPoints = m_allTracksToDisplay.at(wormId);
                     for (const auto& pt : trackPoints) {
                         // Skip lost tracking points for mouse interaction
                         if (pt.quality == Tracking::TrackPointQuality::Lost) {
@@ -1520,7 +1520,7 @@ void VideoLoader::mousePressEvent(QMouseEvent* event) {
                         double dy = widgetPt.y() - clickWidgetPoint.y();
                         double distSq = dx * dx + dy * dy;
                         if (distSq < minDistanceSq) {
-                            minDistanceSq = distSq; bestTrackId = trackId;
+                            minDistanceSq = distSq; bestTrackId = wormId;
                             bestFrameNum = pt.frameNumberOriginal; bestVideoPoint = videoPt;
                         }
                     }
@@ -2333,28 +2333,28 @@ void VideoLoader::emitThresholdParametersChanged() {
     emit thresholdParametersChanged(getCurrentThresholdSettings());
 }
 
-QColor VideoLoader::getTrackColor(int trackId) const {
+QColor VideoLoader::getTrackColor(int wormId) const {
     // First check if the item exists in storage
     if (m_storage) {
-        const TableItems::ClickedItem* item = m_storage->getItem(trackId);
+        const TableItems::ClickedItem* item = m_storage->getItem(wormId);
         if (item && item->color.isValid()) {
             return item->color;
         }
     }
 
     // Fall back to cached colors
-    if (m_trackColors.contains(trackId)) {
-        return m_trackColors.value(trackId);
+    if (m_trackColors.contains(wormId)) {
+        return m_trackColors.value(wormId);
     }
 
     // Generate a random color if not found
-    quint32 seed = static_cast<quint32>(trackId + 0xABCDEF);
+    quint32 seed = static_cast<quint32>(wormId + 0xABCDEF);
     QRandomGenerator generator(seed);
     int hue = generator.bounded(360);
     int saturation = 180 + generator.bounded(76);
     int value = 180 + generator.bounded(76);
     QColor color = QColor::fromHsv(hue, saturation, value);
-    m_trackColors.insert(trackId, color);
+    m_trackColors.insert(wormId, color);
     return color;
 }
 

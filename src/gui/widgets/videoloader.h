@@ -326,7 +326,7 @@ private:
     void applyThresholding(); // Applies thresholding to currentCvFrame, stores in m_thresholdedFrame_mono
     void updateTimerInterval();
     void emitThresholdParametersChanged();
-    QColor getTrackColor(int trackId) const; // Used for drawing tracks
+    QColor getTrackColor(int wormId) const; // Used for drawing tracks
     QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
     void rebuildCenterlineMidpointCache();
 

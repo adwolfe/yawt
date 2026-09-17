@@ -2044,7 +2044,7 @@ void MainWindow::acceptTracksFromManager(const Tracking::AllWormTracks& tracks) 
     // Store tracks in the central data storage
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
         YAWT_DEBUG(lcGuiMainWindow) << "Storing track for worm" << it->first << "with" << it->second.size() << "points";
-        m_trackingDataStorage->setTrackForItem(it->first, it->second);
+        m_trackingDataStorage->setTrackForWorm(it->first, it->second);
     }
 
     // Debug: Verify tracks were stored

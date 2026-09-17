@@ -210,39 +210,39 @@ void TrackingDataStorage::setRoiSizeMultiplier(double multiplier) {
  * @brief Replace or set the full track for an item and rebuild frame index.
  * Emits trackRemoved/trackAdded appropriately and signals allDataChanged/itemsChanged for UI/model refresh.
  */
-void TrackingDataStorage::setTrackForItem(int itemId, const std::vector<Tracking::WormTrackPoint>& trackPoints) {
+void TrackingDataStorage::setTrackForWorm(int wormId, const std::vector<Tracking::WormTrackPoint>& trackPoints) {
     // Check if item exists
-    if (getIndexFromId(itemId) < 0) {
-        YAWT_WARN(lcDataStorage) << "Tried to set track for non-existent item ID" << itemId;
+    if (getIndexFromId(wormId) < 0) {
+        YAWT_WARN(lcDataStorage) << "Tried to set track for non-existent item ID" << wormId;
         return;
     }
     
-    bool isNewTrack = !m_tracks.count(itemId);
-    m_tracks[itemId] = trackPoints;
+    bool isNewTrack = !m_tracks.count(wormId);
+    m_tracks[wormId] = trackPoints;
 
     // Trackers supply position/ROI/quality only; join in the blob-derived
     // geometry so the track is complete in memory, not just once serialized.
-    refreshDerivedTrackData(itemId);
+    refreshDerivedTrackData(wormId);
 
     // Rebuild frame index for fast lookups
     buildFrameIndex();
     
     if (isNewTrack) {
-        emit trackAdded(itemId);
+        emit trackAdded(wormId);
     } else {
-        emit trackRemoved(itemId); // Remove old track
-        emit trackAdded(itemId);   // Add new track
+        emit trackRemoved(wormId); // Remove old track
+        emit trackAdded(wormId);   // Add new track
     }
     
     emit allDataChanged();
     emit itemsChanged(m_items);
 }
 
-void TrackingDataStorage::clearTrackForItem(int itemId) {
-    if (m_tracks.erase(itemId)) {
+void TrackingDataStorage::clearTrackForWorm(int wormId) {
+    if (m_tracks.erase(wormId)) {
         // Rebuild frame index after removing track
         buildFrameIndex();
-        emit trackRemoved(itemId);
+        emit trackRemoved(wormId);
         emit allDataChanged();
         emit itemsChanged(m_items);
     }
@@ -722,12 +722,12 @@ void TrackingDataStorage::applyBlobDerivedFields(Tracking::WormTrackPoint& point
     }
 }
 
-void TrackingDataStorage::refreshDerivedTrackData(int itemId) {
+void TrackingDataStorage::refreshDerivedTrackData(int onlyWormId) {
     if (m_detectedBlobsByFrame.isEmpty()) return;
 
     for (auto& entry : m_tracks) {
         const int wormId = entry.first;
-        if (itemId >= 0 && wormId != itemId) continue;
+        if (onlyWormId >= 0 && wormId != onlyWormId) continue;
 
         for (Tracking::WormTrackPoint& point : entry.second) {
             if (const Tracking::DetectedBlob* blob =
@@ -807,7 +807,7 @@ QSet<int> TrackingDataStorage::getAllItemIds() const {
     return ids;
 }
 
-QSet<int> TrackingDataStorage::getItemsWithTracks() const {
+QSet<int> TrackingDataStorage::getWormsWithTracks() const {
     QSet<int> ids;
     for (const auto& track : m_tracks) {
         ids.insert(track.first);

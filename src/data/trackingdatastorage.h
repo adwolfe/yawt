@@ -36,7 +36,7 @@
  *
  * Key APIs:
  * - addItem/removeItem/removeAllItems: manage item lifecycle and emit itemAdded/itemRemoved/itemsChanged.
- * - setTrackForItem/clearTrackForItem/clearAllTracks: manage per-item tracks and rebuild frame index.
+ * - setTrackForWorm/clearTrackForWorm/clearAllTracks: manage per-worm tracks and rebuild frame index.
  * - getWormDataForFrame/getLastKnownPositionBefore: query per-frame position/ROI derived from tracks.
  * - setMergeGroupsForFrame/getMergeGroupsForFrame: persist/retrieve per-frame conceptual merge groups.
  * - setDetectedBlobForFrame/getDetectedBlobsForFrame: record per-frame detected blobs per worm.
@@ -139,16 +139,16 @@ public:
     
     /**
      * @brief Set tracking data for a specific item
-     * @param itemId The ID of the item
+     * @param wormId The worm ID (the ID of a Worm-type item)
      * @param trackPoints Vector of track points
      */
-    void setTrackForItem(int itemId, const std::vector<Tracking::WormTrackPoint>& trackPoints);
+    void setTrackForWorm(int wormId, const std::vector<Tracking::WormTrackPoint>& trackPoints);
     
     /**
      * @brief Clear track data for a specific item
-     * @param itemId The ID of the item
+     * @param wormId The worm ID
      */
-    void clearTrackForItem(int itemId);
+    void clearTrackForWorm(int wormId);
     
     /**
      * @brief Clear all track data for all items
@@ -216,10 +216,10 @@ public:
     QSet<int> getAllItemIds() const;
     
     /**
-     * @brief Get IDs of items that have track data
-     * @return Set of item IDs with tracks
+     * @brief Get IDs of worms that have track data
+     * @return Set of worm IDs with tracks
      */
-    QSet<int> getItemsWithTracks() const;
+    QSet<int> getWormsWithTracks() const;
     
     /**
      * @brief Get worm position and ROI for a specific frame
@@ -346,7 +346,7 @@ public:
      * This joins the two in memory so consumers never have to save and reload
      * a session to see head/tail assignments.
      *
-     * Called automatically by setTrackForItem() and after loading a session.
+     * Called automatically by setTrackForWorm() and after loading a session.
      * Call it explicitly when the blob store changes underneath unchanged
      * tracks — most importantly after the post-tracking centerline pass, which
      * reassigns head/tail.
@@ -354,9 +354,9 @@ public:
      * Frames with no stored blob keep whatever the track point already held, so
      * this never discards data restored from a legacy session file.
      *
-     * @param itemId Restrict the refresh to one item, or -1 for all items.
+     * @param onlyWormId Restrict the refresh to one worm, or -1 for all items.
      */
-    void refreshDerivedTrackData(int itemId = -1);
+    void refreshDerivedTrackData(int onlyWormId = -1);
 
     // --- Merge history API (per-frame groups)
     /**
@@ -457,15 +457,15 @@ signals:
     
     /**
      * @brief Emitted when track data is added for an item
-     * @param itemId ID of the item
+     * @param wormId ID of the worm
      */
-    void trackAdded(int itemId);
+    void trackAdded(int wormId);
     
     /**
      * @brief Emitted when track data is removed for an item
-     * @param itemId ID of the item
+     * @param wormId ID of the worm
      */
-    void trackRemoved(int itemId);
+    void trackRemoved(int wormId);
     
     /**
      * @brief Emitted when all data has significantly changed

@@ -285,7 +285,7 @@ void AppController::onTrackingManagerAllTracksUpdated(const Tracking::AllWormTra
         for (auto it = tracks.begin(); it != tracks.end(); ++it) {
             int wormId = it->first;
             const std::vector<Tracking::WormTrackPoint>& track = it->second;
-            m_storage->setTrackForItem(wormId, track);
+            m_storage->setTrackForWorm(wormId, track);
             YAWT_DEBUG(lcCoreAppController) << "stored track for worm" << wormId << "with" << (int)track.size() << "points";
         }
     }
@@ -337,7 +337,7 @@ std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel
     // If requested, collect the set of item ids that already have tracks.
     QSet<int> itemsWithTracks;
     if (onlyTrackMissing && m_storage) {
-        itemsWithTracks = m_storage->getItemsWithTracks();
+        itemsWithTracks = m_storage->getWormsWithTracks();
     }
 
     const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
@@ -367,7 +367,7 @@ bool AppController::validateAndGetSharedKeyframe(bool onlyTrackMissing, int& out
 
     QSet<int> itemsWithTracks;
     if (onlyTrackMissing && m_storage)
-        itemsWithTracks = m_storage->getItemsWithTracks();
+        itemsWithTracks = m_storage->getWormsWithTracks();
 
     const QList<TableItems::ClickedItem>& items = m_blobModel->getAllItems();
     int sharedKeyframe = -2; // sentinel: no worm seen yet
@@ -449,10 +449,10 @@ int AppController::countWormItems() const
     return cnt;
 }
 
-int AppController::countItemsWithTracks() const
+int AppController::countWormsWithTracks() const
 {
     if (!m_storage) return 0;
-    return m_storage->getItemsWithTracks().size();
+    return m_storage->getWormsWithTracks().size();
 }
 
 bool AppController::hasWormItems() const
@@ -509,7 +509,7 @@ void AppController::showTrackingDialog(const QString& videoPath,
 
     // Provide the dialog with accurate context using the parameters passed in and model/storage counts.
     int wormCount = countWormItems();
-    int wormsWithTracks = countItemsWithTracks();
+    int wormsWithTracks = countWormsWithTracks();
 
     m_trackingDialog->setTrackingParameters(m_dialogVideoPath, m_dialogKeyFrame, m_dialogSettings,
                                             wormCount, m_dialogTotalFrames, wormsWithTracks);

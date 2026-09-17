@@ -145,7 +145,7 @@ public:
     /**
      * @brief Start a focused retracking on a pre-thresholded video segment for a specific blob.
      * @param thresholdedVideoPath Path to the pre-processed (thresholded) video.
-     * @param fixBlobId Identifier of the blob/track to fix.
+     * @param wormId Identifier of the blob/track to fix.
      * @param initialROI Initial ROI for retracking.
      * @param startFrame Start frame index (inclusive).
      * @param endFrame End frame index (exclusive).
@@ -154,7 +154,7 @@ public:
      * @return true if the retracking process was launched; false otherwise.
      */
     bool startRetrackingProcess(const QString& thresholdedVideoPath,
-                               int fixBlobId,
+                               int wormId,
                                const QRectF& initialROI,
                                int startFrame,
                                int endFrame,
