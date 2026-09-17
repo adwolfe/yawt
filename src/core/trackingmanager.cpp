@@ -1168,11 +1168,10 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
 
         if (primaryBlob.isValid) {
             point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
-            point.quality = (currentState == Tracking::TrackerState::TrackingSingle) ? Tracking::TrackPointQuality::Single : Tracking::TrackPointQuality::Merged;
         } else {
             point.position = cv::Point2f(0.0f, 0.0f);  // Placeholder (won't be used for display)
-            point.quality = Tracking::TrackPointQuality::Lost;
         }
+        point.quality = Tracking::qualityForFrame(currentState, primaryBlob.isValid);
 
         wormObject->updateTrackPoint(point);
     }
@@ -1601,7 +1600,9 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
             splitPoint.frameNumber = frameNumber;
             splitPoint.position = cv::Point2f(static_cast<float>(blobToAssign.centroid.x()), static_cast<float>(blobToAssign.centroid.y()));
             splitPoint.searchWindow = blobToAssign.boundingBox;
-            splitPoint.quality = Tracking::TrackPointQuality::Split;
+            splitPoint.quality = Tracking::qualityForFrame(Tracking::TrackerState::PausedForSplit,
+                                                           /*hasValidBlob=*/true,
+                                                           /*splitResolvedThisFrame=*/true);
             wobj->updateTrackPoint(splitPoint);
         }
     } else {

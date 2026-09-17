@@ -279,8 +279,8 @@ DetectedBlob detectedBlobFromJson(const QJsonObject& obj);
  * docs/plugin_reference.md and PluginEngine). Never reorder or renumber these
  * members; append new ones at the end.
  *
- * How a point gets its label (TrackingManager::handleFrameUpdate and
- * processFrameSpecificSplit):
+ * A point gets its label from qualityForFrame() below, which is the only
+ * place the tracker's live state is mapped to a persisted label:
  *   - Single: a valid blob was found while the tracker state was TrackingSingle.
  *   - Merged: a valid blob was found in any other tracker state (TrackingMerged,
  *             PausedForSplit). The position is the shared blob's centroid, so it
@@ -296,6 +296,29 @@ enum class TrackPointQuality {
     Split  = 2,
     Lost   = 3
 };
+
+/**
+ * @brief Map a tracker's per-frame report to the persisted TrackPointQuality.
+ *
+ * This is the single definition of the relationship between the three state
+ * vocabularies: TrackerState (live tracker belief), TrackPointQuality (persisted
+ * per-point label) and, indirectly, the blob's TopologyState, which the
+ * centerline pass derives later and which does not feed back into quality.
+ *
+ * @param state                  Tracker state when the frame was reported.
+ * @param hasValidBlob           Whether the tracker found a blob to anchor the point.
+ * @param splitResolvedThisFrame True on the frame where TrackingManager resolved a
+ *                               split and assigned this worm one of the pieces.
+ */
+inline TrackPointQuality qualityForFrame(TrackerState state,
+                                         bool hasValidBlob,
+                                         bool splitResolvedThisFrame = false)
+{
+    if (!hasValidBlob) return TrackPointQuality::Lost;
+    if (splitResolvedThisFrame) return TrackPointQuality::Split;
+    return (state == TrackerState::TrackingSingle) ? TrackPointQuality::Single
+                                                   : TrackPointQuality::Merged;
+}
 Q_ENUM_NS(TrackPointQuality)
 
 /**
