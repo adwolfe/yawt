@@ -177,6 +177,7 @@ set(HEADERS
     # Data
     src/data/trackingdatastorage.h
     src/data/trackingcommon.h
+    src/data/analysistypes.h
     src/data/wormobject.h
     src/data/videometadatastore.h
 

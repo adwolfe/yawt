@@ -1,7 +1,7 @@
 #pragma once
 
 #include "plotpluginspec.h"
-#include "../gui/analysissessionmodel.h"
+#include "../data/analysistypes.h"
 
 #include <QString>
 #include <QList>
@@ -83,13 +83,13 @@ public:
      * @param referencePoints  Optional reference points for the current project.
      */
     static PluginResult evaluate(const PlotPluginSpec& spec,
-                                 const QList<AnalysisSessionModel::AnalysisGroupData>& data,
+                                 const QList<AnalysisGroupData>& data,
                                  const ReferencePoints& referencePoints = ReferencePoints{});
 
 private:
     // Build the variable map for a single track point
     static QHash<QString, double> buildVars(
-        const AnalysisSessionModel::AnalysisWormEntry& worm,
+        const AnalysisWormEntry& worm,
         int pointIdx,
         const ReferencePoints& refPts,
         double umPerPixel,

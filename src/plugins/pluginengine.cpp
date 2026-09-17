@@ -657,7 +657,7 @@ static void initVarMap(VarMap& v,
 
 // Update only the raw vocabulary values — no new hash nodes, just overwrites.
 static void updateVarMap(VarMap& v,
-                         const AnalysisSessionModel::AnalysisWormEntry& worm,
+                         const AnalysisWormEntry& worm,
                          int idx,
                          const ReferencePoints& refPts,
                          double umPerPixel,
@@ -717,7 +717,7 @@ static void updateVarMap(VarMap& v,
 // ── Unused overload (kept for API compatibility) ───────────────────────────
 
 QHash<QString, double> PluginEngine::buildVars(
-    const AnalysisSessionModel::AnalysisWormEntry& worm,
+    const AnalysisWormEntry& worm,
     int pointIdx,
     const ReferencePoints& refPts,
     double umPerPixel,
@@ -856,7 +856,7 @@ static double updateSmoothSlot(SmoothSlotState& state,
 }
 
 static ReferencePoints effectiveReferencePointsForWorm(
-    const AnalysisSessionModel::AnalysisWormEntry& worm,
+    const AnalysisWormEntry& worm,
     const ReferencePoints& fallback)
 {
     ReferencePoints refPts = fallback;
@@ -914,7 +914,7 @@ static void initSlotValues(QVector<double>& slotValues,
 
 static void updateSlotValues(QVector<double>& slotValues,
                              const CompiledPluginPlan& plan,
-                             const AnalysisSessionModel::AnalysisWormEntry& worm,
+                             const AnalysisWormEntry& worm,
                              const Tracking::WormTrackPoint& p,
                              const ReferencePoints& refPts,
                              SpeedSlotState& speedState)
@@ -1066,7 +1066,7 @@ static void updateSlotValues(QVector<double>& slotValues,
 
 PluginEngine::PluginResult PluginEngine::evaluate(
     const PlotPluginSpec& spec,
-    const QList<AnalysisSessionModel::AnalysisGroupData>& data,
+    const QList<AnalysisGroupData>& data,
     const ReferencePoints& referencePoints)
 {
     PluginResult result;
@@ -1089,7 +1089,7 @@ PluginEngine::PluginResult PluginEngine::evaluate(
             if (worm.umPerPixel <= 0) { allHaveUm = false; break; }
     result.usedUm = allHaveUm;
 
-    auto runWormLoop = [&](const AnalysisSessionModel::AnalysisWormEntry& worm,
+    auto runWormLoop = [&](const AnalysisWormEntry& worm,
                            std::function<bool(const QVector<double>&, const Tracking::WormTrackPoint&)> frameCallback) -> bool
     {
         const ReferencePoints refPts = effectiveReferencePointsForWorm(worm, referencePoints);

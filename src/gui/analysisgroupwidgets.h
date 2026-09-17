@@ -49,7 +49,7 @@ private:
     AnalysisSessionModel* m_model = nullptr;
     Mode   m_mode;
     double m_fps   = 0.0;
-    QList<AnalysisSessionModel::AnalysisGroupData> m_data;
+    QList<AnalysisGroupData> m_data;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ protected:
 private:
     AnalysisSessionModel* m_model = nullptr;
     double m_fps = 0.0;
-    QList<AnalysisSessionModel::AnalysisGroupData> m_data;
+    QList<AnalysisGroupData> m_data;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ protected:
 private:
     AnalysisSessionModel* m_model = nullptr;
     double m_fps = 0.0;
-    QList<AnalysisSessionModel::AnalysisGroupData> m_data;
+    QList<AnalysisGroupData> m_data;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ protected:
 private:
     AnalysisSessionModel* m_model = nullptr;
     double m_fps = 0.0;  // unused currently
-    QList<AnalysisSessionModel::AnalysisGroupData> m_data;
+    QList<AnalysisGroupData> m_data;
 };
 
 #endif // ANALYSISGROUPWIDGETS_H

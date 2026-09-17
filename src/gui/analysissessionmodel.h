@@ -2,6 +2,7 @@
 #define ANALYSISSESSIONMODEL_H
 
 #include "trackingcommon.h"   // Tracking::AllWormTracks, WormTrackPoint
+#include "../data/analysistypes.h"   // AnalysisWormEntry, AnalysisGroupData
 
 #include <QAbstractItemModel>
 #include <QColor>
@@ -74,30 +75,9 @@ public:
         QPointF centerPoint;
     };
 
-    // ── Grouped data structs (returned by getGroupedData) ─────────────────────
-    /** One worm's complete data as seen by the analysis plots. */
-    struct AnalysisWormEntry {
-        int     wormId;
-        QString label;         // "Worm 1" …
-        QColor  color;         // group colormap color
-        double  umPerPixel;    // from the video this worm belongs to
-        double  fps;           // from the video this worm belongs to (0 if unknown)
-        QString videoBaseName;
-        std::vector<Tracking::WormTrackPoint> points;  // sorted by frame
-
-        bool hasStartPoint = false;
-        QPointF startPoint;
-        bool hasEndPoint = false;
-        QPointF endPoint;
-        bool hasCenterPoint = false;
-        QPointF centerPoint;
-    };
-
-    /** All checked worms that belong to one group. */
-    struct AnalysisGroupData {
-        QString name;
-        QList<AnalysisWormEntry> worms;
-    };
+    // ── Grouped data (returned by getGroupedData) ────────────────────────────
+    // AnalysisWormEntry and AnalysisGroupData are defined in src/data/analysistypes.h
+    // so that the plugin engine can consume them without depending on this model.
 
     /**
      * Build a snapshot of all checked worms organised by group.

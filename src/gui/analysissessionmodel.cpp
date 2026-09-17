@@ -530,7 +530,7 @@ void AnalysisSessionModel::setCheckedWormIds(const QSet<int>& ids)
     emit checkedWormIdsChanged();
 }
 
-QList<AnalysisSessionModel::AnalysisGroupData>
+QList<AnalysisGroupData>
 AnalysisSessionModel::getGroupedData() const
 {
     QList<AnalysisGroupData> result;
