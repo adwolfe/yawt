@@ -467,7 +467,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
 
 
 QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
-                                               const QRectF& roiToSearch, // This is in full image coordinates
+                                               const QRectF& roiToSearch, // This is in full-frame video coordinates
                                                double minArea,
                                                double maxArea,
                                                double minAspectRatio,
@@ -479,7 +479,7 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
         return plausibleBlobs;
     }
 
-    // Define the OpenCV ROI from QRectF (roiToSearch is in full image coordinates)
+    // Define the OpenCV ROI from QRectF (roiToSearch is in full-frame video coordinates)
     cv::Rect roiCv(static_cast<int>(qRound(roiToSearch.x())),
                    static_cast<int>(qRound(roiToSearch.y())),
                    static_cast<int>(qRound(roiToSearch.width())),
@@ -551,14 +551,14 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
             blob.area = area;
             blob.convexHullArea = hullArea;
 
-            // Convert centroid and bounding box to full image coordinates
+            // Convert centroid and bounding box to full-frame video coordinates
             // Centroid in sub-image: (mu.m10 / mu.m00), (mu.m01 / mu.m00)
-            // Add actualRoiCv.x and actualRoiCv.y to convert to full image coordinates
+            // Add actualRoiCv.x and actualRoiCv.y to convert to full-frame video coordinates
             blob.centroid = QPointF(actualRoiCv.x + (mu.m10 / mu.m00),
                                     actualRoiCv.y + (mu.m01 / mu.m00));
 
             // Bounding box in sub-image: brInSub
-            // Add actualRoiCv.x and actualRoiCv.y to convert to full image coordinates
+            // Add actualRoiCv.x and actualRoiCv.y to convert to full-frame video coordinates
             blob.boundingBox = QRectF(actualRoiCv.x + brInSub.x,
                                       actualRoiCv.y + brInSub.y,
                                       brInSub.width,

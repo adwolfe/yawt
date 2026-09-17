@@ -10,7 +10,7 @@
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
 #include <cmath>  // For std::sqrt (TipFeatureBaseline accessors)
-#include <QColor> // Added for TrackedItem color
+#include <QColor> // For ClickedItem color
 #include <QString> // For typeToString and stringToType
 #include <QJsonObject>
 #include <map>     // For AllWormTracks
@@ -18,6 +18,20 @@
 
 // This header defines types and structures common to video loading,
 // processing, and tracking to avoid circular dependencies.
+//
+// Coordinate frames used throughout YAWT
+// --------------------------------------
+//  video coordinates   Pixels of the source video frame: origin top-left, x right, y down.
+//                      Every position stored on a DetectedBlob, WormTrackPoint, ClickedItem
+//                      or reference point is in this frame. This is the only frame that is
+//                      persisted.
+//  local coordinates   Pixels relative to a blob's padded bounding box
+//                      (Centerline::EndpointResult::localBounds). Used only inside the
+//                      skeleton and distance-transform buffers; add the box origin to
+//                      convert back to video coordinates.
+//  widget coordinates  Pixels of a Qt widget (VideoLoader, MiniLoader). Transient.
+//  crop coordinates    Pixels of MiniLoader's cropped image, offset from video coordinates
+//                      by the crop origin. Transient.
 
 // Forward declaration
 //class WormObject; // If WormObject needs to be referenced here, though likely not for these structs

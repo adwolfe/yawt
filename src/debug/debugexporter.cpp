@@ -57,10 +57,10 @@ static cv::Rect unionBounds(const cv::Rect& a, const cv::Rect& b)
     return cv::Rect(x1, y1, std::max(1, x2 - x1), std::max(1, y2 - y1));
 }
 
-static cv::Point worldToCanvas(const cv::Point2f& world, const cv::Rect& bounds)
+static cv::Point videoToCanvas(const cv::Point2f& video, const cv::Rect& bounds)
 {
-    return cv::Point(static_cast<int>(std::lround((world.x - bounds.x) * kExportScale)),
-                     static_cast<int>(std::lround((world.y - bounds.y) * kExportScale)));
+    return cv::Point(static_cast<int>(std::lround((video.x - bounds.x) * kExportScale)),
+                     static_cast<int>(std::lround((video.y - bounds.y) * kExportScale)));
 }
 
 static std::vector<cv::Point> contourToLocal(const std::vector<cv::Point>& contour,
@@ -194,7 +194,7 @@ static void drawPolyline(cv::Mat& canvas,
     std::vector<cv::Point> points;
     points.reserve(centerline.size());
     for (const cv::Point2f& p : centerline) {
-        points.push_back(worldToCanvas(p, bounds));
+        points.push_back(videoToCanvas(p, bounds));
     }
     cv::polylines(canvas, std::vector<std::vector<cv::Point>>{points},
                   false, color, 2, cv::LINE_AA);
@@ -273,7 +273,7 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
         }
     }
     for (const auto& [xy, color] : pixelColor) {
-        const cv::Point cp = worldToCanvas(cv::Point2f(static_cast<float>(xy.first),
+        const cv::Point cp = videoToCanvas(cv::Point2f(static_cast<float>(xy.first),
                                                        static_cast<float>(xy.second)),
                                            bounds);
         cv::circle(canvas, cp, 2, color, cv::FILLED);
@@ -287,7 +287,7 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
         const QString& role = (ti < static_cast<int>(record.tipCapRoles.size()))
                               ? record.tipCapRoles[ti] : QString();
 
-        const cv::Point epCv   = worldToCanvas(cd.skelEndpoint, bounds);
+        const cv::Point epCv   = videoToCanvas(cd.skelEndpoint, bounds);
         const cv::Point2f fwdEnd(cd.skelEndpoint.x + cd.outwardDir.x * cd.maxForward,
                                  cd.skelEndpoint.y + cd.outwardDir.y * cd.maxForward);
         const cv::Point2f perpDir(-cd.outwardDir.y, cd.outwardDir.x);
@@ -297,10 +297,10 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
                                 cd.skelEndpoint.y - perpDir.y * cd.maxSide);
 
         // Outward direction arrow
-        cv::arrowedLine(canvas, epCv, worldToCanvas(fwdEnd, bounds),
+        cv::arrowedLine(canvas, epCv, videoToCanvas(fwdEnd, bounds),
                         cv::Scalar(200, 200, 200), 1, cv::LINE_AA, 0, 0.15);
         // Lateral extent ticks
-        cv::line(canvas, worldToCanvas(sideL, bounds), worldToCanvas(sideR, bounds),
+        cv::line(canvas, videoToCanvas(sideL, bounds), videoToCanvas(sideR, bounds),
                  cv::Scalar(80, 80, 80), 1, cv::LINE_AA);
 
         // Skeleton endpoint (white circle)
@@ -308,30 +308,30 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
 
         // Old snap point (grey X)
         if (validPoint(cd.snapPoint)) {
-            const cv::Point sp = worldToCanvas(cd.snapPoint, bounds);
+            const cv::Point sp = videoToCanvas(cd.snapPoint, bounds);
             cv::drawMarker(canvas, sp, cv::Scalar(180, 180, 180),
                            cv::MARKER_CROSS, 9, 1, cv::LINE_AA);
         }
         // Old curvature peak (magenta X) if different from snap
         if (cd.hadPeak && validPoint(cd.peakOrSnapPoint)) {
-            const cv::Point pp = worldToCanvas(cd.peakOrSnapPoint, bounds);
+            const cv::Point pp = videoToCanvas(cd.peakOrSnapPoint, bounds);
             cv::drawMarker(canvas, pp, cv::Scalar(255, 80, 255),
                            cv::MARKER_TILTED_CROSS, 9, 1, cv::LINE_AA);
         }
 
         // Left apex (cyan filled circle)
         if (cd.hasLeft && cd.hasBilateral) {
-            cv::circle(canvas, worldToCanvas(cd.leftApex, bounds),
+            cv::circle(canvas, videoToCanvas(cd.leftApex, bounds),
                        4, cv::Scalar(255, 220, 50), cv::FILLED);
         }
         // Right apex (orange filled circle)
         if (cd.hasRight && cd.hasBilateral) {
-            cv::circle(canvas, worldToCanvas(cd.rightApex, bounds),
+            cv::circle(canvas, videoToCanvas(cd.rightApex, bounds),
                        4, cv::Scalar(50, 130, 255), cv::FILLED);
         }
         // Bilateral midpoint (yellow diamond)
         if (cd.hasBilateral) {
-            const cv::Point bp = worldToCanvas(cd.bilateralTip, bounds);
+            const cv::Point bp = videoToCanvas(cd.bilateralTip, bounds);
             const std::vector<cv::Point> diamond = {
                 bp + cv::Point(0, -7), bp + cv::Point(5, 0),
                 bp + cv::Point(0,  7), bp + cv::Point(-5, 0)
@@ -349,7 +349,7 @@ static void writeTipCapOverviewStage(const Tracking::DetectedBlob& blob,
                 ? QStringLiteral("tip%1 snap (no bilateral)").arg(ti)
                 : QStringLiteral("%1 snap (no bilateral)").arg(role);
             drawSmallText(canvas, roleLabel,
-                          worldToCanvas(cd.snapPoint, bounds) + cv::Point(8, -4));
+                          videoToCanvas(cd.snapPoint, bounds) + cv::Point(8, -4));
         }
     }
 
@@ -377,11 +377,11 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
 
     // Build a local crop centred on the skeleton endpoint.
     constexpr int kZoomScale   = 3;
-    constexpr int kZoomPad     = 6; // extra world-pixel padding around cap window
+    constexpr int kZoomPad     = 6; // extra video-pixel padding around cap window
     const float halfW = cd.maxSide  + static_cast<float>(kZoomPad);
     const float halfH = cd.maxForward * 1.1f + static_cast<float>(kZoomPad);
 
-    // Bounding box in world coords (axis-aligned, generous).
+    // Bounding box in video coords (axis-aligned, generous).
     const cv::Point2f ep = cd.skelEndpoint;
     const int wxMin = static_cast<int>(std::floor(ep.x - halfW - halfH));
     const int wyMin = static_cast<int>(std::floor(ep.y - halfW - halfH));
@@ -396,7 +396,7 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
     const int cW = zBounds.width  * totalScale;
     const int cH = zBounds.height * totalScale;
 
-    auto worldToCrop = [&](const cv::Point2f& w) -> cv::Point {
+    auto videoToCrop = [&](const cv::Point2f& w) -> cv::Point {
         return cv::Point(
             static_cast<int>(std::lround((w.x - zBounds.x) * totalScale)),
             static_cast<int>(std::lround((w.y - zBounds.y) * totalScale)));
@@ -422,17 +422,17 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
     // Colour contour points by cap zone.
     for (const cv::Point& cp : blob.contourPoints) {
         const cv::Point2f wp(static_cast<float>(cp.x), static_cast<float>(cp.y));
-        const cv::Point cc = worldToCrop(wp);
+        const cv::Point cc = videoToCrop(wp);
         if (cc.x < 0 || cc.y < 0 || cc.x >= cW || cc.y >= cH) continue;
         cv::circle(canvas, cc, 2, cv::Scalar(0, 180, 0), cv::FILLED); // default green
     }
     for (const cv::Point2f& wp : cd.leftCapPoints) {
-        const cv::Point cc = worldToCrop(wp);
+        const cv::Point cc = videoToCrop(wp);
         if (cc.x >= 0 && cc.y >= 0 && cc.x < cW && cc.y < cH)
             cv::circle(canvas, cc, 3, cv::Scalar(255, 220, 50), cv::FILLED);
     }
     for (const cv::Point2f& wp : cd.rightCapPoints) {
-        const cv::Point cc = worldToCrop(wp);
+        const cv::Point cc = videoToCrop(wp);
         if (cc.x >= 0 && cc.y >= 0 && cc.x < cW && cc.y < cH)
             cv::circle(canvas, cc, 3, cv::Scalar(50, 130, 255), cv::FILLED);
     }
@@ -449,7 +449,7 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
             ep + P * -cd.maxSide + D * (-1.f),
         };
         std::vector<cv::Point> cpts;
-        for (const cv::Point2f& c : corners) cpts.push_back(worldToCrop(c));
+        for (const cv::Point2f& c : corners) cpts.push_back(videoToCrop(c));
         cv::polylines(canvas, std::vector<std::vector<cv::Point>>{cpts},
                       true, cv::Scalar(60, 60, 60), 1, cv::LINE_AA);
     }
@@ -458,8 +458,8 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
     {
         const cv::Point2f P(-cd.outwardDir.y, cd.outwardDir.x);
         cv::line(canvas,
-                 worldToCrop(ep + P * cd.maxSide),
-                 worldToCrop(ep - P * cd.maxSide),
+                 videoToCrop(ep + P * cd.maxSide),
+                 videoToCrop(ep - P * cd.maxSide),
                  cv::Scalar(70, 70, 70), 1, cv::LINE_AA);
     }
 
@@ -467,51 +467,51 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
     {
         const cv::Point2f tip2(ep.x + cd.outwardDir.x * cd.maxForward,
                                ep.y + cd.outwardDir.y * cd.maxForward);
-        cv::arrowedLine(canvas, worldToCrop(ep), worldToCrop(tip2),
+        cv::arrowedLine(canvas, videoToCrop(ep), videoToCrop(tip2),
                         cv::Scalar(200, 200, 200), 1, cv::LINE_AA, 0, 0.12);
     }
 
     // Skeleton endpoint (white circle).
-    cv::circle(canvas, worldToCrop(ep), 6, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    cv::circle(canvas, videoToCrop(ep), 6, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
 
     // Old snap point (grey X).
     if (validPoint(cd.snapPoint)) {
-        cv::drawMarker(canvas, worldToCrop(cd.snapPoint),
+        cv::drawMarker(canvas, videoToCrop(cd.snapPoint),
                        cv::Scalar(180, 180, 180), cv::MARKER_CROSS, 14, 1, cv::LINE_AA);
         drawSmallText(canvas, QStringLiteral("snap"),
-                      worldToCrop(cd.snapPoint) + cv::Point(7, -4),
+                      videoToCrop(cd.snapPoint) + cv::Point(7, -4),
                       cv::Scalar(180, 180, 180));
     }
     // Old curvature peak (magenta tilted X) if different.
     if (cd.hadPeak && validPoint(cd.peakOrSnapPoint)) {
-        cv::drawMarker(canvas, worldToCrop(cd.peakOrSnapPoint),
+        cv::drawMarker(canvas, videoToCrop(cd.peakOrSnapPoint),
                        cv::Scalar(255, 80, 255), cv::MARKER_TILTED_CROSS, 14, 1, cv::LINE_AA);
         drawSmallText(canvas, QStringLiteral("peak"),
-                      worldToCrop(cd.peakOrSnapPoint) + cv::Point(7, 4),
+                      videoToCrop(cd.peakOrSnapPoint) + cv::Point(7, 4),
                       cv::Scalar(255, 80, 255));
     }
 
     // Left apex centroid (cyan filled) + right apex (orange filled).
     if (cd.hasLeft && cd.hasBilateral) {
-        cv::circle(canvas, worldToCrop(cd.leftApex),
+        cv::circle(canvas, videoToCrop(cd.leftApex),
                    6, cv::Scalar(255, 220, 50), cv::FILLED);
         drawSmallText(canvas, QStringLiteral("L apex fwd=%1")
                       .arg(cd.leftPeakFwd, 0, 'f', 1),
-                      worldToCrop(cd.leftApex) + cv::Point(8, 0),
+                      videoToCrop(cd.leftApex) + cv::Point(8, 0),
                       cv::Scalar(255, 220, 50));
     }
     if (cd.hasRight && cd.hasBilateral) {
-        cv::circle(canvas, worldToCrop(cd.rightApex),
+        cv::circle(canvas, videoToCrop(cd.rightApex),
                    6, cv::Scalar(50, 130, 255), cv::FILLED);
         drawSmallText(canvas, QStringLiteral("R apex fwd=%1")
                       .arg(cd.rightPeakFwd, 0, 'f', 1),
-                      worldToCrop(cd.rightApex) + cv::Point(8, 0),
+                      videoToCrop(cd.rightApex) + cv::Point(8, 0),
                       cv::Scalar(50, 130, 255));
     }
 
     // Bilateral midpoint (yellow diamond, large + label).
     if (cd.hasBilateral) {
-        const cv::Point bp = worldToCrop(cd.bilateralTip);
+        const cv::Point bp = videoToCrop(cd.bilateralTip);
         const std::vector<cv::Point> diamond = {
             bp + cv::Point(0, -10), bp + cv::Point(8, 0),
             bp + cv::Point(0,  10), bp + cv::Point(-8, 0)
@@ -523,7 +523,7 @@ static void writeTipCapZoomStage(const Tracking::DetectedBlob& blob,
                       bp + cv::Point(11, -3), cv::Scalar(0, 240, 255));
         // Line connecting the two apexes through the midpoint.
         if (cd.hasLeft && cd.hasRight) {
-            cv::line(canvas, worldToCrop(cd.leftApex), worldToCrop(cd.rightApex),
+            cv::line(canvas, videoToCrop(cd.leftApex), videoToCrop(cd.rightApex),
                      cv::Scalar(0, 180, 180), 1, cv::LINE_AA);
         }
     }
@@ -573,13 +573,13 @@ static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
     cv::Mat canvas = makeBaseCanvas(blob, bounds);
     drawContoursOverlay(canvas, blob, bounds);
 
-    for (const cv::Point2f& world : record.skeletonPixels) {
-        cv::circle(canvas, worldToCanvas(world, bounds), 1,
+    for (const cv::Point2f& video : record.skeletonPixels) {
+        cv::circle(canvas, videoToCanvas(video, bounds), 1,
                    cv::Scalar(255, 255, 0), cv::FILLED);
     }
 
     for (int i = 0; i < static_cast<int>(record.rawSkeletonEndpointPoints.size()); ++i) {
-        const cv::Point p = worldToCanvas(record.rawSkeletonEndpointPoints[i], bounds);
+        const cv::Point p = videoToCanvas(record.rawSkeletonEndpointPoints[i], bounds);
         cv::line(canvas, p + cv::Point(-4, -4), p + cv::Point(4, 4),
                  cv::Scalar(255, 80, 255), 1, cv::LINE_AA);
         cv::line(canvas, p + cv::Point(-4, 4), p + cv::Point(4, -4),
@@ -587,7 +587,7 @@ static void writeSkeletonStage(const Tracking::DetectedBlob& blob,
     }
 
     for (int i = 0; i < static_cast<int>(record.skeletonEndpointPoints.size()); ++i) {
-        const cv::Point p = worldToCanvas(record.skeletonEndpointPoints[i], bounds);
+        const cv::Point p = videoToCanvas(record.skeletonEndpointPoints[i], bounds);
         cv::circle(canvas, p, 6,
                    cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
         QString label = QStringLiteral("ep%1").arg(i);
@@ -617,8 +617,8 @@ static void writeJunctionClustersStage(const Tracking::DetectedBlob& blob,
     drawContoursOverlay(canvas, blob, bounds);
 
     // Draw skeleton pixels as dim yellow dots.
-    for (const cv::Point2f& world : record.skeletonPixels) {
-        cv::circle(canvas, worldToCanvas(world, bounds), 1,
+    for (const cv::Point2f& video : record.skeletonPixels) {
+        cv::circle(canvas, videoToCanvas(video, bounds), 1,
                    cv::Scalar(160, 160, 0), cv::FILLED);
     }
 
@@ -630,21 +630,21 @@ static void writeJunctionClustersStage(const Tracking::DetectedBlob& blob,
         const bool sel = (ci == record.d3SelectedJunctionCluster);
         const cv::Scalar& nodeColor = sel ? kSelected : kUnselected;
         const std::vector<cv::Point2f>& nodes = record.d3JunctionClusterNodes[ci];
-        for (const cv::Point2f& world : nodes) {
-            const cv::Point cp = worldToCanvas(world, bounds);
+        for (const cv::Point2f& video : nodes) {
+            const cv::Point cp = videoToCanvas(video, bounds);
             cv::circle(canvas, cp, sel ? 4 : 3, nodeColor, cv::FILLED);
             cv::circle(canvas, cp, sel ? 4 : 3, nodeColor, 1, cv::LINE_AA);
         }
         // Label the cluster at its first node.
         if (!nodes.empty()) {
-            const cv::Point lp = worldToCanvas(nodes.front(), bounds) + cv::Point(5, -4);
+            const cv::Point lp = videoToCanvas(nodes.front(), bounds) + cv::Point(5, -4);
             drawSmallText(canvas, QStringLiteral("c%1").arg(ci), lp, nodeColor);
         }
     }
 
     // Highlight the selected centroid node.
     if (validPoint(record.d3RouteJunction)) {
-        const cv::Point cp = worldToCanvas(record.d3RouteJunction, bounds);
+        const cv::Point cp = videoToCanvas(record.d3RouteJunction, bounds);
         cv::drawMarker(canvas, cp, kCentroid, cv::MARKER_CROSS, 10, 2, cv::LINE_AA);
         cv::circle(canvas, cp, 6, kCentroid, 1, cv::LINE_AA);
         drawText(canvas, QStringLiteral("centroid"), cp + cv::Point(8, -6), kCentroid);
@@ -664,8 +664,8 @@ static void drawSkeletonPixels(cv::Mat& canvas,
                                const cv::Rect& bounds,
                                cv::Scalar color = cv::Scalar(255, 255, 0))
 {
-    for (const cv::Point2f& world : record.skeletonPixels) {
-        cv::circle(canvas, worldToCanvas(world, bounds), 1, color, cv::FILLED);
+    for (const cv::Point2f& video : record.skeletonPixels) {
+        cv::circle(canvas, videoToCanvas(video, bounds), 1, color, cv::FILLED);
     }
 }
 
@@ -689,7 +689,7 @@ static void writeD3RouteKeypointsStage(const Tracking::DetectedBlob& blob,
         if (!validPoint(point)) {
             return;
         }
-        const cv::Point cp = worldToCanvas(point, bounds);
+        const cv::Point cp = videoToCanvas(point, bounds);
         cv::circle(canvas, cp, radius, color, 2, cv::LINE_AA);
         cv::circle(canvas, cp, 2, color, cv::FILLED, cv::LINE_AA);
         drawText(canvas, label, cp + cv::Point(7, -5), color);
@@ -744,7 +744,7 @@ static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
         std::vector<cv::Point> points;
         points.reserve(path.size());
         for (const cv::Point2f& p : path) {
-            points.push_back(worldToCanvas(p, bounds));
+            points.push_back(videoToCanvas(p, bounds));
         }
         cv::polylines(canvas, std::vector<std::vector<cv::Point>>{points},
                       false, color, selected ? 3 : 2, cv::LINE_AA);
@@ -758,15 +758,15 @@ static void writeD3CandidatePathsStage(const Tracking::DetectedBlob& blob,
     }
 
     if (validPoint(record.d3RouteStart)) {
-        cv::circle(canvas, worldToCanvas(record.d3RouteStart, bounds),
+        cv::circle(canvas, videoToCanvas(record.d3RouteStart, bounds),
                    8, cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
     }
     if (validPoint(record.d3RouteEnd)) {
-        cv::circle(canvas, worldToCanvas(record.d3RouteEnd, bounds),
+        cv::circle(canvas, videoToCanvas(record.d3RouteEnd, bounds),
                    8, cv::Scalar(0, 180, 255), 2, cv::LINE_AA);
     }
     if (validPoint(record.d3RouteJunction)) {
-        cv::circle(canvas, worldToCanvas(record.d3RouteJunction, bounds),
+        cv::circle(canvas, videoToCanvas(record.d3RouteJunction, bounds),
                    8, cv::Scalar(255, 0, 255), 2, cv::LINE_AA);
     }
 
@@ -865,7 +865,7 @@ static void writeContourCurvatureStage(const Tracking::DetectedBlob& blob,
     };
 
     for (size_t i = 0; i < record.contourCurvaturePoints.size(); ++i) {
-        const cv::Point p = worldToCanvas(record.contourCurvaturePoints[i], bounds);
+        const cv::Point p = videoToCanvas(record.contourCurvaturePoints[i], bounds);
         cv::circle(canvas, p, 2, curvatureColor(record.contourCurvatures[i]), cv::FILLED);
     }
 
@@ -873,14 +873,14 @@ static void writeContourCurvatureStage(const Tracking::DetectedBlob& blob,
         if (idx < 0 || idx >= static_cast<int>(record.contourCurvaturePoints.size())) {
             continue;
         }
-        const cv::Point p = worldToCanvas(record.contourCurvaturePoints[idx], bounds);
+        const cv::Point p = videoToCanvas(record.contourCurvaturePoints[idx], bounds);
         cv::rectangle(canvas, p - cv::Point(4, 4), p + cv::Point(4, 4),
                       cv::Scalar(255, 80, 255), 1, cv::LINE_AA);
     }
 
     for (int i = 0; i < static_cast<int>(record.tipCandidates.size()); ++i) {
         const Tracking::TipCandidate& tip = record.tipCandidates[i];
-        const cv::Point p = worldToCanvas(tip.point, bounds);
+        const cv::Point p = videoToCanvas(tip.point, bounds);
         cv::circle(canvas, p, 6, cv::Scalar(80, 255, 80), 2, cv::LINE_AA);
         drawText(canvas, QStringLiteral("tip%1").arg(i), p + cv::Point(7, -5),
                  cv::Scalar(80, 255, 80));
@@ -903,7 +903,7 @@ static void writeTipStage(const Tracking::DetectedBlob& blob,
 
     for (int i = 0; i < static_cast<int>(record.tipCandidates.size()); ++i) {
         const Tracking::TipCandidate& tip = record.tipCandidates[i];
-        const cv::Point point = worldToCanvas(tip.point, bounds);
+        const cv::Point point = videoToCanvas(tip.point, bounds);
         cv::Scalar color(80, 255, 80);
         if (tip.source == Tracking::TipCandidate::Source::CurvaturePeak) {
             color = cv::Scalar(255, 80, 255);
@@ -943,7 +943,7 @@ static void writeHeadTailStage(const Tracking::DetectedBlob& blob,
         if (!validPoint(point)) {
             return;
         }
-        const cv::Point canvasPoint = worldToCanvas(point, bounds);
+        const cv::Point canvasPoint = videoToCanvas(point, bounds);
         cv::drawMarker(canvas, canvasPoint, color, cv::MARKER_CROSS, 13, 1, cv::LINE_AA);
         drawText(canvas, label, canvasPoint + cv::Point(7, -4), color);
     };
@@ -962,7 +962,7 @@ static void writeHeadTailStage(const Tracking::DetectedBlob& blob,
         if (idx < 0 || idx >= static_cast<int>(record.tipCandidates.size())) {
             return;
         }
-        const cv::Point point = worldToCanvas(record.tipCandidates[idx].point, bounds);
+        const cv::Point point = videoToCanvas(record.tipCandidates[idx].point, bounds);
         cv::circle(canvas, point, 10, color, 2, cv::LINE_AA);
         drawText(canvas, label, point + cv::Point(-5, 5), color);
     };
@@ -1024,7 +1024,7 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
         if (!validPoint(point)) {
             return;
         }
-        const cv::Point cp = worldToCanvas(point, bounds);
+        const cv::Point cp = videoToCanvas(point, bounds);
         cv::drawMarker(canvas, cp, color, marker, radius * 2, 1, cv::LINE_AA);
         cv::circle(canvas, cp, radius, color, 1, cv::LINE_AA);
         drawText(canvas, label, cp + cv::Point(7, -5), color);
@@ -1245,7 +1245,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         if (i < static_cast<int>(record.rawSkeletonEndpointGraphIndices.size())) {
             log << " graphIdx=" << record.rawSkeletonEndpointGraphIndices[i];
         }
-        log << " world=" << pointString(record.rawSkeletonEndpointPoints[i]) << "\n";
+        log << " video=" << pointString(record.rawSkeletonEndpointPoints[i]) << "\n";
     }
     log << "pruned endpoint graph indices:";
     for (int idx : record.prunedSkeletonEndpointGraphIndices) {
@@ -1257,7 +1257,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         if (i < static_cast<int>(record.prunedSkeletonEndpointGraphIndices.size())) {
             log << " graphIdx=" << record.prunedSkeletonEndpointGraphIndices[i];
         }
-        log << " world=" << pointString(record.skeletonEndpointPoints[i]) << "\n";
+        log << " video=" << pointString(record.skeletonEndpointPoints[i]) << "\n";
     }
     if (!record.distanceTransform.empty()) {
         float dtMin = std::numeric_limits<float>::max();
@@ -1291,7 +1291,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         }
         log << "  peak" << pi
             << " contourIdx=" << idx
-            << " world=" << pointString(record.contourCurvaturePoints[idx])
+            << " video=" << pointString(record.contourCurvaturePoints[idx])
             << " curvature=" << record.contourCurvatures[idx] << "\n";
     }
     log << "endpointCandidateDebug entries=" << record.endpointCandidateDebug.size() << "\n";
@@ -1301,13 +1301,13 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
             << " graphIdx=" << ep.graphIndex
             << " graphDegree=" << ep.graphDegree << "\n";
         log << "    skeletonLocal=" << pointString(ep.skeletonLocal)
-            << " skeletonWorld=" << pointString(ep.skeletonWorld)
+            << " skeletonVideo=" << pointString(ep.skeletonVideo)
             << " outwardDir=(" << ep.outwardDir.x << "," << ep.outwardDir.y << ")"
             << " dtAtEndpoint=" << ep.dtAtEndpoint
             << " searchForward=" << ep.maxForward
             << " searchSide=" << ep.maxSide << "\n";
         log << "    contourSnap idx=" << ep.snapContourIdx
-            << " world=" << pointString(ep.snapWorld)
+            << " video=" << pointString(ep.snapVideo)
             << " curvature=" << ep.snapCurvature << "\n";
         log << "    curvatureSearch reachablePeaks=" << ep.reachablePeakCount
             << " bestPeakIdx=" << ep.bestPeakContourIdx
@@ -1315,13 +1315,13 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
             << " accepted=" << (ep.peakAccepted ? "Y" : "N")
             << " reason=" << ep.peakRejectReason << "\n";
         if (ep.bestPeakContourIdx >= 0) {
-            log << "    bestPeak world=" << pointString(ep.bestPeakWorld)
+            log << "    bestPeak video=" << pointString(ep.bestPeakVideo)
                 << " curvature=" << ep.bestPeakCurvature
                 << " distFromSnap=" << ep.bestPeakDistanceFromSnap
                 << " maxPeakShift=" << ep.maxPeakShift << "\n";
         }
         log << "    finalTip idx=" << ep.finalTipIdx
-            << " world=" << pointString(ep.finalTipWorld)
+            << " video=" << pointString(ep.finalTipVideo)
             << " source=" << (ep.finalExtended ? "curvaturePeak" : "skeletonSnap")
             << " curvature=" << ep.finalCurvature
             << " width=" << ep.finalWidth

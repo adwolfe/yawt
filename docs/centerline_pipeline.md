@@ -13,7 +13,7 @@ Code: `src/core/centerlineworker.cpp` (orchestration), `src/core/centerlineproce
 ## What the pass does
 
 Tracking produces, per worm per frame, a `DetectedBlob` (contour, holes, area) and a
-`WormTrackPoint` (centroid, search ROI, quality). The centerline pass runs afterwards on
+`WormTrackPoint` (centroid, search window, quality). The centerline pass runs afterwards on
 a background thread (`CenterlineWorker::doWork`) and, for every non-lost frame, fills in:
 
 - `DetectedBlob::centerlinePoints` — an ordered polyline from head to tail
@@ -127,7 +127,7 @@ stored in `HeadTailPredictor` for the next frame.
 
 ## Coordinate frames
 
-"Video" (also written "world") coordinates are pixels in the source frame; every point
+"Video" coordinates are pixels in the source frame; every point
 stored on a `DetectedBlob` or `WormTrackPoint` is in this frame. Inside `detectEndpoints`
 the skeleton, distance transform, and `SkeletonGraph::points` are **local** to
 `EndpointResult::localBounds`; add the bounds origin to convert back.

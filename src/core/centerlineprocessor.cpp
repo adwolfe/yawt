@@ -302,7 +302,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             (epIdx >= 0 && epIdx < static_cast<int>(r.skeleton.adjacency.size()))
                 ? static_cast<int>(r.skeleton.adjacency[epIdx].size()) : 0;
         endpointDbg.skeletonLocal = epLocalF;
-        endpointDbg.skeletonWorld = epWorld;
+        endpointDbg.skeletonVideo = epWorld;
         endpointDbg.outwardDir = outwardDir;
         endpointDbg.dtAtEndpoint = dtAtEp;
         endpointDbg.maxForward = maxForward;
@@ -313,14 +313,14 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         // the end-cap apex.
         const int snapIdx = projectedEndpointContourIdx(epLocalF, outwardDir, dtAtEp);
         cv::Point2f snapLocal(0.f, 0.f);
-        cv::Point2f snapWorld = epWorld;
+        cv::Point2f snapVideo = epWorld;
         if (snapIdx >= 0) {
             snapLocal = contourLocal[snapIdx];
-            snapWorld = cv::Point2f(snapLocal.x + originOffset.x,
+            snapVideo = cv::Point2f(snapLocal.x + originOffset.x,
                                     snapLocal.y + originOffset.y);
         }
         endpointDbg.snapContourIdx = snapIdx;
-        endpointDbg.snapWorld = snapWorld;
+        endpointDbg.snapVideo = snapVideo;
         endpointDbg.snapCurvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
 
         // Find a strong curvature peak in the local end-cap region defined by
@@ -364,7 +364,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             const cv::Point2f peakDelta = contourLocal[bestPeak] - snapLocal;
             const float peakDist = std::hypot(peakDelta.x, peakDelta.y);
             const float maxPeakShift = std::clamp(1.0f + 0.75f * dtAtEp, 2.0f, 4.0f);
-            endpointDbg.bestPeakWorld =
+            endpointDbg.bestPeakVideo =
                 cv::Point2f(contourLocal[bestPeak].x + originOffset.x,
                             contourLocal[bestPeak].y + originOffset.y);
             endpointDbg.bestPeakCurvature = curvature[bestPeak];
@@ -424,13 +424,13 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             // search window even when the bilateral computation falls through.
             TipCapDebug capDbg;
             capDbg.valid       = true;
-            capDbg.skelEndpoint = snapWorld;
+            capDbg.skelEndpoint = snapVideo;
             capDbg.outwardDir  = outwardDir;
             capDbg.dtAtEp      = dtAtEp;
             capDbg.maxForward  = maxForward;
             capDbg.maxSide     = maxSide;
-            capDbg.snapPoint       = snapWorld;
-            capDbg.peakOrSnapPoint = snapWorld; // updated below if a peak is found
+            capDbg.snapPoint       = snapVideo;
+            capDbg.peakOrSnapPoint = snapVideo; // updated below if a peak is found
             capDbg.hadPeak         = false;
 
             float leftPeakFwd  = -std::numeric_limits<float>::max();
@@ -445,14 +445,14 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                 const float lat = rel.x * perp.x + rel.y * perp.y;
                 if (std::abs(lat) > maxSide) continue;
 
-                const cv::Point2f worldPt(contourLocal[i].x + originOffset.x,
+                const cv::Point2f videoPt(contourLocal[i].x + originOffset.x,
                                           contourLocal[i].y + originOffset.y);
                 if (lat >= 0.f) {
-                    capDbg.leftCapPoints.push_back(worldPt);
+                    capDbg.leftCapPoints.push_back(videoPt);
                     if (fwd > leftPeakFwd) leftPeakFwd = fwd;
                 }
                 if (lat <= 0.f) {
-                    capDbg.rightCapPoints.push_back(worldPt);
+                    capDbg.rightCapPoints.push_back(videoPt);
                     if (fwd > rightPeakFwd) rightPeakFwd = fwd;
                 }
             }
@@ -516,7 +516,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                         capDbg.hasBilateral  = true;
 
                         TrueTip t;
-                        t.skelPoint     = snapWorld;
+                        t.skelPoint     = snapVideo;
                         t.bilateralTip  = bilateralWorld;
                         t.hasBilateral  = true;
                         if (bestPeak >= 0) {
@@ -530,14 +530,14 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                             capDbg.peakOrSnapPoint = peakWorld;
                             capDbg.hadPeak         = true;
                         } else {
-                            t.point     = snapWorld;
+                            t.point     = snapVideo;
                             t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
                             t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
                             t.extended  = false;
                         }
                         r.tips.push_back(t);
                         endpointDbg.finalTipIdx = static_cast<int>(r.tips.size()) - 1;
-                        endpointDbg.finalTipWorld = t.point;
+                        endpointDbg.finalTipVideo = t.point;
                         endpointDbg.finalExtended = t.extended;
                         endpointDbg.finalCurvature = t.curvature;
                         endpointDbg.finalWidth = t.width;
@@ -565,7 +565,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
 
         // Fallback (no valid bilateral): construct TrueTip with snap/peak only.
         TrueTip t;
-        t.skelPoint = snapWorld;
+        t.skelPoint = snapVideo;
         if (bestPeak >= 0) {
             const cv::Point2f peakLocal = contourLocal[bestPeak];
             t.point     = cv::Point2f(peakLocal.x + originOffset.x,
@@ -574,14 +574,14 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             t.width     = widthAt(peakLocal, bestPeak);
             t.extended  = true;
         } else {
-            t.point     = snapWorld;
+            t.point     = snapVideo;
             t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
             t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
             t.extended  = false;
         }
         r.tips.push_back(t);
         endpointDbg.finalTipIdx = static_cast<int>(r.tips.size()) - 1;
-        endpointDbg.finalTipWorld = t.point;
+        endpointDbg.finalTipVideo = t.point;
         endpointDbg.finalExtended = t.extended;
         endpointDbg.finalCurvature = t.curvature;
         endpointDbg.finalWidth = t.width;
@@ -1327,7 +1327,7 @@ static HiddenTipTarget predictHiddenTipTarget(const Tracking::DetectedBlob& curr
 
 // ── Skeleton-graph shortest path (used by the new Clean centerline branch) ─
 //
-// Run Dijkstra on a prepared skeleton graph and return a world-coordinate
+// Run Dijkstra on a prepared skeleton graph and return a video-coordinate
 // start-to-goal path for the clean centerline branch.
 static bool skeletonGraphPath(const Centerline::SkeletonGraph& graph,
                               int startIdx, int goalIdx,
@@ -1359,18 +1359,18 @@ static bool skeletonGraphPath(const Centerline::SkeletonGraph& graph,
 // right-hand-rule state, falling back to arc-length proximity to refLength
 // when no previous state is available.
 
-// Nearest skeleton graph node (by squared Euclidean distance) to a world point.
-// Find the skeleton graph node nearest to a world-coordinate point.
+// Nearest skeleton graph node (by squared Euclidean distance) to a video point.
+// Find the skeleton graph node nearest to a video-coordinate point.
 static int nearestSkeletonNode(const Centerline::SkeletonGraph& graph,
-                                const cv::Point2f& worldPt,
+                                const cv::Point2f& videoPt,
                                 const cv::Point2f& originOffset)
 {
     int best = -1;
     float bestD2 = std::numeric_limits<float>::max();
     for (int i = 0; i < static_cast<int>(graph.points.size()); ++i) {
         const cv::Point& p = graph.points[i];
-        const float dx = (p.x + originOffset.x) - worldPt.x;
-        const float dy = (p.y + originOffset.y) - worldPt.y;
+        const float dx = (p.x + originOffset.x) - videoPt.x;
+        const float dy = (p.y + originOffset.y) - videoPt.y;
         const float d2 = dx * dx + dy * dy;
         if (d2 < bestD2) { bestD2 = d2; best = i; }
     }
@@ -1432,7 +1432,7 @@ static bool skeletonBothArcs(const Centerline::SkeletonGraph& graph,
     using Entry = std::pair<double, int>;
 
     // ── Arc A: standard Dijkstra, keeping parent indices so we can
-    //    reconstruct the node-index sequence (not just world coords).
+    //    reconstruct the node-index sequence (not just video coords).
     std::vector<double> distA(N, std::numeric_limits<double>::infinity());
     std::vector<int>    parentA(N, -1);
     distA[srcIdx] = 0.0;
@@ -1577,8 +1577,8 @@ static std::vector<cv::Point2f> pickArcByRHR(
     return arcA;
 }
 
-// Convert a skeleton node-index path into world-coordinate points.
-static std::vector<cv::Point2f> nodesToWorldPath(const Centerline::SkeletonGraph& graph,
+// Convert a skeleton node-index path into video-coordinate points.
+static std::vector<cv::Point2f> nodesToVideoPath(const Centerline::SkeletonGraph& graph,
                                                  const std::vector<int>& nodePath,
                                                  const cv::Point2f& originOffset)
 {
@@ -2014,9 +2014,9 @@ static float minPathDistanceToPoint(const Centerline::SkeletonGraph& graph,
     float best = std::numeric_limits<float>::max();
     for (int idx : nodes) {
         const cv::Point& p = graph.points[idx];
-        const cv::Point2f world(static_cast<float>(p.x) + originOffset.x,
+        const cv::Point2f video(static_cast<float>(p.x) + originOffset.x,
                                 static_cast<float>(p.y) + originOffset.y);
-        best = std::min(best, ptDist(world, target));
+        best = std::min(best, ptDist(video, target));
     }
     return best;
 }
@@ -2080,7 +2080,7 @@ static bool selectZeroTipRingGraphCenterline(
         std::reverse(tTrunk.begin(), tTrunk.end());
         full.insert(full.end(), tTrunk.begin() + 1, tTrunk.end());
         if (full.size() >= 2 && nodePathLength(graph, full) >= minUsableLen) {
-            paths.push_back(nodesToWorldPath(graph, full, originOffset));
+            paths.push_back(nodesToVideoPath(graph, full, originOffset));
         }
 
         const std::vector<JunctionPort> ports = clusterPorts(graph, cluster);
@@ -2106,7 +2106,7 @@ static bool selectZeroTipRingGraphCenterline(
             std::reverse(tailToCluster.begin(), tailToCluster.end());
             loopFull.insert(loopFull.end(), tailToCluster.begin() + 1, tailToCluster.end());
             if (loopFull.size() >= 2 && nodePathLength(graph, loopFull) >= minUsableLen) {
-                paths.push_back(nodesToWorldPath(graph, loopFull, originOffset));
+                paths.push_back(nodesToVideoPath(graph, loopFull, originOffset));
             }
         }
     }
@@ -2538,7 +2538,7 @@ struct D3RouteDebug {
     cv::Point2f center = {-1.f, -1.f};
     cv::Point2f end = {-1.f, -1.f};
     std::vector<std::vector<cv::Point2f>> candidatePaths;
-    // World-coordinate positions for every node in every junction cluster.
+    // Video-coordinate positions for every node in every junction cluster.
     // Parallel to selectedJunctionCluster (same id).
     std::vector<std::vector<cv::Point2f>> allJunctionClusterNodes;
     QStringList junctionDiagnostics;
@@ -2608,14 +2608,14 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
         routeDebug->junctionDiagnostics = junction.diagnostics;
         routeDebug->allJunctionClusterNodes.clear();
         for (const JunctionCluster& cl : junction.allClusters) {
-            std::vector<cv::Point2f> worldNodes;
-            worldNodes.reserve(cl.nodes.size());
+            std::vector<cv::Point2f> videoNodes;
+            videoNodes.reserve(cl.nodes.size());
             for (int node : cl.nodes) {
-                worldNodes.emplace_back(
+                videoNodes.emplace_back(
                     static_cast<float>(graph.points[node].x) + originOffset.x,
                     static_cast<float>(graph.points[node].y) + originOffset.y);
             }
-            routeDebug->allJunctionClusterNodes.push_back(std::move(worldNodes));
+            routeDebug->allJunctionClusterNodes.push_back(std::move(videoNodes));
         }
     }
 
@@ -2753,7 +2753,7 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
             c.centerDist = ptDist(midpoint, predictedCenter);
         }
         const std::vector<cv::Point2f> candidatePath =
-            nodesToWorldPath(graph, c.fullNodes, originOffset);
+            nodesToVideoPath(graph, c.fullNodes, originOffset);
         if (routeDebug) {
             routeDebug->candidatePaths.push_back(candidatePath);
         }
@@ -2833,7 +2833,7 @@ static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& g
     if (routeDebug) {
         routeDebug->selectedCandidate = bestCandidate;
     }
-    outPath = nodesToWorldPath(graph, picked.fullNodes, originOffset);
+    outPath = nodesToVideoPath(graph, picked.fullNodes, originOffset);
     return outPath.size() >= 2;
 }
 
@@ -2929,16 +2929,16 @@ static bool refineSnakeCore(const Tracking::DetectedBlob& blob,
     gx /= static_cast<float>(gradScale);
     gy /= static_cast<float>(gradScale);
 
-    auto sampleGradient = [&](const cv::Point2f& world) -> cv::Point2f {
-        const int lx = std::clamp(static_cast<int>(std::lround(world.x - bounds.x)),
+    auto sampleGradient = [&](const cv::Point2f& video) -> cv::Point2f {
+        const int lx = std::clamp(static_cast<int>(std::lround(video.x - bounds.x)),
                                   0, gx.cols - 1);
-        const int ly = std::clamp(static_cast<int>(std::lround(world.y - bounds.y)),
+        const int ly = std::clamp(static_cast<int>(std::lround(video.y - bounds.y)),
                                   0, gx.rows - 1);
         return cv::Point2f(gx.at<float>(ly, lx), gy.at<float>(ly, lx));
     };
-    auto isInsideMask = [&](const cv::Point2f& world) -> bool {
-        const int lx = static_cast<int>(std::lround(world.x - bounds.x));
-        const int ly = static_cast<int>(std::lround(world.y - bounds.y));
+    auto isInsideMask = [&](const cv::Point2f& video) -> bool {
+        const int lx = static_cast<int>(std::lround(video.x - bounds.x));
+        const int ly = static_cast<int>(std::lround(video.y - bounds.y));
         if (lx < 0 || ly < 0 || lx >= mask.cols || ly >= mask.rows) return false;
         return mask.at<uchar>(ly, lx) != 0;
     };

@@ -20,7 +20,7 @@ GraphSearchResult dijkstraSkeleton(const std::vector<cv::Point>& points,
                                    const std::vector<std::vector<int>>& adjacency,
                                    int startIndex);
 
-// Reconstruct a world-coordinate centerline from Dijkstra parent links.
+// Reconstruct a video-coordinate centerline from Dijkstra parent links.
 std::vector<cv::Point2f> reconstructCenterlinePath(const std::vector<cv::Point>& points,
                                                    const std::vector<int>& parents,
                                                    int startIndex,

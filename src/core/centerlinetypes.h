@@ -35,18 +35,18 @@ struct SkeletonGraph {
  * @brief A high-confidence body tip — skeleton endpoint optionally extended
  *        to the matching outer-contour curvature peak.
  *
- * `point` is the best-estimate world position used for downstream geodesic
+ * `point` is the best-estimate position (video coordinates) used for downstream geodesic
  * paths, snake pinning, and head/tail assignment. `skelPoint` is the raw
  * skeleton degree-1 node mapped to the nearest outer contour point, in
- * world coordinates (handy when the extension is disputed).
+ * video coordinates (handy when the extension is disputed).
  *
  * `extended == true` iff `point` came from a curvature peak rather than the
  * skeleton-endpoint contour snap.
  */
 struct TrueTip {
-    cv::Point2f point;          // world coords; either curvature peak or skel pt
-    cv::Point2f skelPoint;      // world coords; raw skeleton degree-1 node
-    cv::Point2f bilateralTip;   // world coords; midpoint of left/right cap-wall apexes
+    cv::Point2f point;          // video coords; either curvature peak or skel pt
+    cv::Point2f skelPoint;      // video coords; raw skeleton degree-1 node
+    cv::Point2f bilateralTip;   // video coords; midpoint of left/right cap-wall apexes
     float       curvature    = 0.f;
     float       width        = 0.f;
     bool        extended     = false;
@@ -60,7 +60,7 @@ struct TrueTip {
  * on EndpointResult::tipCapDebug (parallel to EndpointResult::tips).
  * Consumed only by the debug exporter — zero cost in release when unused.
  *
- * All point coordinates are in WORLD (video) space.
+ * All point coordinates are in video space.
  */
 struct TipCapDebug {
     bool valid = false;
@@ -110,20 +110,20 @@ struct EndpointCandidateDebug {
     int graphDegree = 0;
 
     cv::Point2f skeletonLocal = {0.f, 0.f};
-    cv::Point2f skeletonWorld = {0.f, 0.f};
+    cv::Point2f skeletonVideo = {0.f, 0.f};
     cv::Point2f outwardDir = {0.f, 0.f};
     float dtAtEndpoint = 0.f;
     float maxForward = 0.f;
     float maxSide = 0.f;
 
     int snapContourIdx = -1;
-    cv::Point2f snapWorld = {0.f, 0.f};
+    cv::Point2f snapVideo = {0.f, 0.f};
     float snapCurvature = 0.f;
 
     int reachablePeakCount = 0;
     int bestPeakContourIdx = -1;
     float bestPeakScore = 0.f;
-    cv::Point2f bestPeakWorld = {-1.f, -1.f};
+    cv::Point2f bestPeakVideo = {-1.f, -1.f};
     float bestPeakCurvature = 0.f;
     float bestPeakDistanceFromSnap = 0.f;
     float maxPeakShift = 0.f;
@@ -131,7 +131,7 @@ struct EndpointCandidateDebug {
     QString peakRejectReason;
 
     int finalTipIdx = -1;
-    cv::Point2f finalTipWorld = {-1.f, -1.f};
+    cv::Point2f finalTipVideo = {-1.f, -1.f};
     bool finalExtended = false;
     float finalCurvature = 0.f;
     float finalWidth = 0.f;
@@ -147,18 +147,18 @@ struct EndpointCandidateDebug {
  * downstream step (centerline build, snake refinement, predictor update).
  *
  * Coordinates: `tips`, `headIdx`, `tailIdx` index into `tips`; the `point`
- * and `skelPoint` fields inside each TrueTip are in WORLD (video) coords.
+ * and `skelPoint` fields inside each TrueTip are in video coords.
  * `skeleton` and `distTransform` are LOCAL to `localBounds`.
  */
 struct EndpointResult {
     SkeletonGraph        skeleton;
     cv::Mat              distTransform;        // CV_32F, local coords
-    cv::Rect             localBounds;          // origin offset (LOCAL->WORLD)
+    cv::Rect             localBounds;          // origin offset (local -> video)
     std::vector<int> rawSkeletonEndpointIndices;
     std::vector<TrueTip>     tips;             // 0-2 entries (post-prune)
     std::vector<TipCapDebug> tipCapDebug;      // parallel to tips[], bilateral debug
     std::vector<EndpointCandidateDebug> endpointCandidateDebug;
-    std::vector<cv::Point2f> contourPoints;    // WORLD coords, for curvature debug
+    std::vector<cv::Point2f> contourPoints;    // video coords, for curvature debug
     std::vector<float> contourCurvatures;      // Signed curvature, aligned with contourPoints
     std::vector<int> contourCurvaturePeaks;    // Indices into contourPoints
     Tracking::TopologyState topology = Tracking::TopologyState::Unknown;
