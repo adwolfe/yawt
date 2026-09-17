@@ -1,6 +1,7 @@
 #pragma once
 
 #include "trackingcommon.h"
+#include "../core/centerlinetypes.h"   // Centerline::TipFeatureBaseline
 
 #include <QJsonObject>
 #include <QList>
@@ -25,6 +26,9 @@
  *   items[]             worm items only                       -> itemToJson()
  *   tracks              { "<wormId>": [ point, ... ] }        -> trackPointToJson()
  *   mergeGroupsByFrame  { "<frame>": [ [wormId, ...], ... ] }
+ *   tipBaselines        { "<wormId>": { meanAbsCurvature, m2AbsCurvature, curvatureSamples,
+ *                         meanWidth, m2Width, widthSamples, meanBodyLength, m2BodyLength,
+ *                         lengthSamples } }   present once the centerline pass has run
  *   mergeState          opaque TrackingManager section (physical blobs, split
  *                       resolutions); passed through untouched
  *
@@ -63,6 +67,7 @@ struct Document {
     Tracking::AllWormTracks tracks;                              // sorted by frame after read
     QMap<int, QMap<int, Tracking::DetectedBlob>> blobsByFrame;   // frame -> wormId -> blob (filled on read)
     QMap<int, QList<QList<int>>> mergeGroupsByFrame;
+    QMap<int, Centerline::TipFeatureBaseline> tipBaselines;    // per-worm Welford stats (Phase A)
     QJsonObject mergeState;                                      // TrackingManager's section, passed through
 
     /**

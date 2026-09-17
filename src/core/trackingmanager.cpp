@@ -2682,6 +2682,7 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
     }
     doc.tracks = m_storage->getAllTracks();
     doc.mergeGroupsByFrame = m_storage->getAllMergeGroups();
+    doc.tipBaselines = m_storage->getAllTipBaselines();   // empty until the centerline pass has run
     doc.blobLookup = [this](int frameNumber, int wormId) {
         return m_storage->findDetectedBlob(frameNumber, wormId);
     };

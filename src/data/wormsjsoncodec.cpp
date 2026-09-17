@@ -305,6 +305,25 @@ QJsonObject toJson(const Document& doc)
     }
     root["mergeGroupsByFrame"] = merge;
 
+    if (!doc.tipBaselines.isEmpty()) {
+        QJsonObject baselines;
+        for (auto it = doc.tipBaselines.constBegin(); it != doc.tipBaselines.constEnd(); ++it) {
+            const Centerline::TipFeatureBaseline& b = it.value();
+            QJsonObject o;
+            o["meanAbsCurvature"] = static_cast<double>(b.meanAbsCurvature);
+            o["m2AbsCurvature"]   = static_cast<double>(b.m2AbsCurvature);
+            o["curvatureSamples"] = b.curvatureSamples;
+            o["meanWidth"]        = static_cast<double>(b.meanWidth);
+            o["m2Width"]          = static_cast<double>(b.m2Width);
+            o["widthSamples"]     = b.widthSamples;
+            o["meanBodyLength"]   = static_cast<double>(b.meanBodyLength);
+            o["m2BodyLength"]     = static_cast<double>(b.m2BodyLength);
+            o["lengthSamples"]    = b.lengthSamples;
+            baselines[QString::number(it.key())] = o;
+        }
+        root["tipBaselines"] = baselines;
+    }
+
     if (!doc.mergeState.isEmpty()) root["mergeState"] = doc.mergeState;
     return root;
 }
@@ -371,6 +390,25 @@ Document fromJson(const QJsonObject& root)
             groups.append(group);
         }
         doc.mergeGroupsByFrame.insert(frame, groups);
+    }
+
+    const QJsonObject baselines = root.value("tipBaselines").toObject();
+    for (auto it = baselines.constBegin(); it != baselines.constEnd(); ++it) {
+        bool ok = false;
+        const int wormId = it.key().toInt(&ok);
+        if (!ok || !it.value().isObject()) continue;
+        const QJsonObject o = it.value().toObject();
+        Centerline::TipFeatureBaseline b;
+        b.meanAbsCurvature = static_cast<float>(o.value("meanAbsCurvature").toDouble());
+        b.m2AbsCurvature   = static_cast<float>(o.value("m2AbsCurvature").toDouble());
+        b.curvatureSamples = o.value("curvatureSamples").toInt();
+        b.meanWidth        = static_cast<float>(o.value("meanWidth").toDouble());
+        b.m2Width          = static_cast<float>(o.value("m2Width").toDouble());
+        b.widthSamples     = o.value("widthSamples").toInt();
+        b.meanBodyLength   = static_cast<float>(o.value("meanBodyLength").toDouble());
+        b.m2BodyLength     = static_cast<float>(o.value("m2BodyLength").toDouble());
+        b.lengthSamples    = o.value("lengthSamples").toInt();
+        doc.tipBaselines.insert(wormId, b);
     }
 
     doc.mergeState = root.value("mergeState").toObject();

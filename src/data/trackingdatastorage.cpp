@@ -380,6 +380,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
     m_tracks = std::move(doc.tracks);
     m_detectedBlobsByFrame = std::move(doc.blobsByFrame);
     m_mergeHistory = std::move(doc.mergeGroupsByFrame);
+    m_tipBaselines = std::move(doc.tipBaselines);
 
     refreshDerivedTrackData();
     updateIdToIndexMap();
