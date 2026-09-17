@@ -13,7 +13,7 @@ MiniLoader::MiniLoader(QWidget* parent)
     , m_cropSize(100, 100)
     , m_trackingDataStorage(nullptr)
     , m_showOverlays(true)
-    , m_showSkeleton(false)
+    , m_showCenterline(false)
     , m_selectedWormId(-1)
 {
     setMinimumSize(100, 100);
@@ -124,16 +124,16 @@ bool MiniLoader::showOverlays() const
     return m_showOverlays;
 }
 
-void MiniLoader::setShowSkeleton(bool show)
+void MiniLoader::setShowCenterline(bool show)
 {
-    if (m_showSkeleton == show) return;
-    m_showSkeleton = show;
+    if (m_showCenterline == show) return;
+    m_showCenterline = show;
     update();
 }
 
-bool MiniLoader::showSkeleton() const
+bool MiniLoader::showCenterline() const
 {
-    return m_showSkeleton;
+    return m_showCenterline;
 }
 
 int MiniLoader::getSelectedWorm() const
@@ -571,8 +571,8 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
         }
     }
 
-    // Draw centerline skeletons for all visible blobs if enabled
-    if (m_showSkeleton) {
+    // Draw centerlines for all visible blobs if enabled
+    if (m_showCenterline) {
         for (int wormId : m_visibleWormIds) {
             if (!blobMap.contains(wormId)) continue;
             const Tracking::DetectedBlob& blob = blobMap.value(wormId);

@@ -692,7 +692,7 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::ClickedItem>& ite
         }
     }
     if (m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
-        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
+        m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Items to display updated. Count:" << m_itemsToDisplay.size();
@@ -704,7 +704,7 @@ void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
     rebuildCenterlineMidpointCache();
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
-        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
+        m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Tracks set for display. Count:" << m_allTracksToDisplay.size();
@@ -715,7 +715,7 @@ void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
     m_visibleTrackIDs = visibleTrackIDs;
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
-        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
+        m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: Visible track IDs updated. Count:" << m_visibleTrackIDs.size();
@@ -728,7 +728,7 @@ void VideoLoader::clearDisplayedTracks() {
     // m_trackColors is cleared on new video load.
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
-        m_activeViewModes.testFlag(ViewModeOption::Skeletons)) {
+        m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
         update();
     }
     YAWT_DEBUG(lcGuiVideoLoader) << "VideoLoader: All displayed tracks (data) cleared.";
@@ -1087,16 +1087,16 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
     drawPersistentPointItems();
 
-    if (m_activeViewModes.testFlag(ViewModeOption::Skeletons) && m_storage && currentFrameIdx >= 0) {
+    if (m_activeViewModes.testFlag(ViewModeOption::Centerlines) && m_storage && currentFrameIdx >= 0) {
         const QMap<int, Tracking::DetectedBlob> blobs = m_storage->getDetectedBlobsForFrame(currentFrameIdx);
-        QSet<int> skeletonIds = m_visibleTrackIDs;
-        if (skeletonIds.isEmpty()) {
+        QSet<int> centerlineIds = m_visibleTrackIDs;
+        if (centerlineIds.isEmpty()) {
             for (auto it = blobs.constBegin(); it != blobs.constEnd(); ++it) {
-                skeletonIds.insert(it.key());
+                centerlineIds.insert(it.key());
             }
         }
 
-        for (int wormId : std::as_const(skeletonIds)) {
+        for (int wormId : std::as_const(centerlineIds)) {
             const TableItems::ClickedItem* item = m_storage->getItem(wormId);
             if (!item || !item->visible) {
                 continue;

@@ -131,7 +131,7 @@ public slots:
     void onViewThresholdToggled(bool checked); // Connected to ui->showThreshButton's toggled()
     void onViewBlobsToggled(bool checked);     // Connected to a new ui->viewBlobsButton's toggled()
     void onViewTracksToggled(bool checked);    // Connected to a new ui->viewTracksButton's toggled()
-    void onViewSkeletonsToggled(bool checked); // Connected to ui->skeletonButton's toggled()
+    void onViewCenterlinesToggled(bool checked); // Connected to ui->centerlineButton's toggled()
 
     // Thresholding Parameter Updates
     void updateThresholdAlgorithmSettings();

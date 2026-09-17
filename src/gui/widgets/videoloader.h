@@ -117,7 +117,7 @@ public:
         Threshold     = 0x01,   // Show thresholded image as base
         Blobs         = 0x02,   // Overlay blob information
         Tracks        = 0x04,   // Overlay track information
-        Skeletons     = 0x08,   // Overlay skeletonized centerlines
+        Centerlines     = 0x08,   // Overlay computed centerlines
         TipCandidates = 0x10    // Overlay candidate nose/tail (tip) points
         // You could add combined flags like:
         // AllOverlays = Blobs | Tracks,

@@ -733,12 +733,12 @@
               </widget>
              </item>
              <item>
-              <widget class="QToolButton" name="skeletonButton">
+              <widget class="QToolButton" name="centerlineButton">
                <property name="toolTip">
                 <string>Show the calculated centerline information, if available. </string>
                </property>
                <property name="statusTip">
-                <string>Show/hide skeletonized centerline</string>
+                <string>Show/hide the computed centerline</string>
                </property>
                <property name="text">
                 <string/>

@@ -692,7 +692,7 @@ void MainWindow::setupConnections() {
             ui->videoLoader->setTrackDisplayMode(VideoLoader::TrackDisplayMode::CenterlineMidpoint);
         });
     }
-    connect(ui->skeletonButton, &QToolButton::toggled, this, &MainWindow::onViewSkeletonsToggled);
+    connect(ui->centerlineButton, &QToolButton::toggled, this, &MainWindow::onViewCenterlinesToggled);
 
 
     // Thresholding UI -> VideoLoader & MainWindow
@@ -1154,9 +1154,9 @@ void MainWindow::onViewTracksToggled(bool checked) {
     // Assuming you have a ui->viewTracksButton that is checkable
     ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Tracks, checked);
 }
-void MainWindow::onViewSkeletonsToggled(bool checked) {
-    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Skeletons, checked);
-    if (ui->miniLoader) ui->miniLoader->setShowSkeleton(checked);
+void MainWindow::onViewCenterlinesToggled(bool checked) {
+    ui->videoLoader->setViewModeOption(VideoLoader::ViewModeOption::Centerlines, checked);
+    if (ui->miniLoader) ui->miniLoader->setShowCenterline(checked);
 }
 // Optional:
 // void MainWindow::onViewNoneClicked() {
@@ -1190,12 +1190,12 @@ void MainWindow::syncViewModeOptionButtons(VideoLoader::ViewModeOptions newModes
     // Assuming you have ui->viewBlobsButton and ui->viewTracksButton:
     ui->viewBlobsButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Blobs));
     ui->viewTracksButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Tracks));
-    ui->skeletonButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Skeletons));
+    ui->centerlineButton->setChecked(newModes.testFlag(VideoLoader::ViewModeOption::Centerlines));
     YAWT_DEBUG(lcGuiMainWindow) << "View mode UI synced. Flags:" << QString::number(static_cast<int>(newModes), 16);
 
     const bool showOverlays = newModes.testFlag(VideoLoader::ViewModeOption::Blobs);
     if (ui->miniLoader) ui->miniLoader->setShowOverlays(showOverlays);
-    if (ui->miniLoader) ui->miniLoader->setShowSkeleton(newModes.testFlag(VideoLoader::ViewModeOption::Skeletons));
+    if (ui->miniLoader) ui->miniLoader->setShowCenterline(newModes.testFlag(VideoLoader::ViewModeOption::Centerlines));
 
     if (ui->videoLoader && ui->videoLoader->isVideoLoaded()) {
         int currentFrame = ui->videoLoader->getCurrentFrameNumber();
