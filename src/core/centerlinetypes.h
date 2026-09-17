@@ -173,7 +173,7 @@ struct TipFeatureBaseline {
  *                        distance transform of the current blob mask).
  *
  * Endpoints are pinned to the nearest outer-contour point of the predicted
- * nose/tail. Because the curve is a parametric polyline (not a skeleton), it
+ * head/tail. Because the curve is a parametric polyline (not a skeleton), it
  * is allowed to self-intersect — which is exactly what's needed when a worm
  * physically crosses over itself in 2D.
  */
@@ -193,7 +193,7 @@ struct CenterlineSnakeParams {
     // signed inter-segment angles) is negated when traversal direction is
     // reversed. We track this quantity from frame to frame and veto any
     // candidate whose sign disagrees with the previous frame's sign — i.e.
-    // we enforce that the centerline is always traversed nose→tail in the
+    // we enforce that the centerline is always traversed head→tail in the
     // same rotational sense (CCW or CW).
     //
     // When the worm is nearly straight the turning angle is close to zero

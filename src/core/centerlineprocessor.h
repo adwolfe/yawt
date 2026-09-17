@@ -20,7 +20,7 @@ struct CenterlineState {
     float turningAngle = 0.f;
 
     // Return the current head-side endpoint of the carried centerline.
-    cv::Point2f nose() const { return points.front(); }
+    cv::Point2f head() const { return points.front(); }
     // Return the current tail-side endpoint of the carried centerline.
     cv::Point2f tail() const { return points.back(); }
     // Return the midpoint sample of the carried centerline.

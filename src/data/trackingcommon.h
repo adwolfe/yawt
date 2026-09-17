@@ -175,7 +175,7 @@ Q_ENUM_NS(TrackerState)
 
 
 /**
- * @brief A candidate "tip" point (probable nose or tail) on a blob's geometry.
+ * @brief A candidate "tip" point (probable head or tail) on a blob's geometry.
  *
  * Produced as a pure preprocessing pass over each blob (no temporal state, no
  * scoring against previous frames). The downstream head/tail assignment step
@@ -246,7 +246,7 @@ struct BlobCenterline {
     std::vector<cv::Point2f> points;          // Ordered head -> tail, video coordinates
     cv::Point2f cutPoint{0.f, 0.f};           // Debug/overlay: where a ring mask was cut open
     bool hasCutPoint = false;                 // True when cutPoint is meaningful
-    std::vector<TipCandidate> tipCandidates;  // Per-frame nose/tail candidates (Phase B)
+    std::vector<TipCandidate> tipCandidates;  // Per-frame head/tail candidates (Phase B)
     int headTipIdx = -1;                      // Index into tipCandidates of the assigned head, or -1
     int tailTipIdx = -1;                      // Index into tipCandidates of the assigned tail, or -1
     TopologyState topology = TopologyState::Unknown;  // Per-frame geometric classification (Phase C.2)

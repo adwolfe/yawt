@@ -1136,7 +1136,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             painter.setBrush(Qt::NoBrush);
             painter.drawPolyline(centerlinePolyline);
 
-            // Mark nose (front), tail (back) and centerline-centroid (middle).
+            // Mark head (front), tail (back) and centerline-centroid (middle).
             // Different fills make head/tail orientation legible at a glance and
             // the centroid distinguishes the centerline-derived center from the
             // blob centroid (which can be inside the hole of a coiled worm).
@@ -1174,7 +1174,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     }
 
     // ── Tip-candidate overlay ────────────────────────────────────────────────
-    // Phase-B preprocessing dots: nose/tail candidates produced per-frame from
+    // Phase-B preprocessing dots: head/tail candidates produced per-frame from
     // the blob's geometry alone (no temporal state). Skeleton-derived
     // candidates render as filled circles; curvature-peak candidates as
     // hollow squares — so it's visually obvious which detector surfaced each
