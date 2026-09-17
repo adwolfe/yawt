@@ -9,21 +9,27 @@
  * File location: <dataDir>/<videoBaseName>_metadata.json
  * The dataDir is the "yawt" folder created by VideoLoader alongside a video file.
  *
- * File format (v1):
+ * File format (v1). Every key is optional. Each save* call merges into the
+ * existing file and preserves the keys it does not own.
  * {
  *   "version": 1,
- *   "scale": {
- *     "pixelsPerUnit": 45.3,
- *     "unit": "mm",
+ *   "umPerPixel": 0.0221,          // Spatial scale in MICROMETERS PER PIXEL. This is the
+ *                                  // canonical value read by tracking and analysis.
+ *                                  // Written by saveUmPerPixel(); also derived and written
+ *                                  // by saveScale() from the calibration below.
+ *   "fps": 25.0,                   // Source video frame rate. saveFps() / loadFps().
+ *   "scaleCalibration": {          // Raw measurement behind umPerPixel. saveScale() / loadScale().
+ *     "pixelsPerUnit": 45.3,       //   pixelLength / physicalValue
+ *     "unit": "mm",                //   mm | cm | inch | µm
  *     "physicalValue": 1.0,
  *     "pixelLength": 45.3,
  *     "timestamp": "2025-05-31T10:30:00"
  *   }
  * }
  *
- * Only the scale section is written/read today; the file is structured so
- * future metadata (capture settings, notes, etc.) can be added without
- * breaking existing readers.
+ * Legacy key: "pixelSizeUm" held PIXELS PER MICROMETER in files written before
+ * the unit flip. loadUmPerPixel() still accepts it (and inverts it) when
+ * "umPerPixel" is absent. Nothing writes it any more; do not reintroduce it.
  */
 class VideoMetadataStore
 {
@@ -44,15 +50,15 @@ public:
     static QString metadataPath(const QString& dataDir,
                                 const QString& videoBaseName);
 
-    /** Save (or update) the scale section of the metadata file. Other sections
-     *  in an existing file are preserved. Also writes the top-level pixelSizeUm
-     *  field derived from the calibration. Returns true on success. */
+    /** Save (or update) the "scaleCalibration" section of the metadata file.
+     *  Other keys in an existing file are preserved. Also writes the top-level
+     *  "umPerPixel" key derived from the calibration. Returns true on success. */
     static bool saveScale(const QString& dataDir,
                           const QString& videoBaseName,
                           const ScaleCalibration& cal);
 
-    /** Load the scale section. Returns false if the file doesn't exist or has
-     *  no valid scale data — @p cal is left untouched in that case. */
+    /** Load the "scaleCalibration" section. Returns false if the file doesn't
+     *  exist or has no valid calibration — @p cal is left untouched in that case. */
     static bool loadScale(const QString& dataDir,
                           const QString& videoBaseName,
                           ScaleCalibration& cal);
