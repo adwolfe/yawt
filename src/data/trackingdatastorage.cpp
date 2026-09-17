@@ -504,10 +504,10 @@ void TrackingDataStorage::applyBlobDerivedFields(Tracking::WormTrackPoint& point
         point.aspectRatio = static_cast<float>(ratio < 1.0 ? 1.0 / ratio : ratio);
     }
 
-    if (blob.centerlinePoints.size() >= 2) {
+    if (blob.centerline.points.size() >= 2) {
         double arcLength = 0.0;
-        for (size_t i = 1; i < blob.centerlinePoints.size(); ++i) {
-            const cv::Point2f d = blob.centerlinePoints[i] - blob.centerlinePoints[i - 1];
+        for (size_t i = 1; i < blob.centerline.points.size(); ++i) {
+            const cv::Point2f d = blob.centerline.points[i] - blob.centerline.points[i - 1];
             arcLength += std::sqrt(d.x * d.x + d.y * d.y);
         }
         point.bodyLength = static_cast<float>(arcLength);
@@ -515,12 +515,12 @@ void TrackingDataStorage::applyBlobDerivedFields(Tracking::WormTrackPoint& point
 
     // Head/tail is authoritative when a blob exists: the centerline pass may
     // have swapped or withdrawn an assignment, and that has to show through.
-    const int tipCount = static_cast<int>(blob.tipCandidates.size());
-    const bool hasHead = blob.assignedHeadTipIdx >= 0 && blob.assignedHeadTipIdx < tipCount;
-    const bool hasTail = blob.assignedTailTipIdx >= 0 && blob.assignedTailTipIdx < tipCount;
+    const int tipCount = static_cast<int>(blob.centerline.tipCandidates.size());
+    const bool hasHead = blob.centerline.headTipIdx >= 0 && blob.centerline.headTipIdx < tipCount;
+    const bool hasTail = blob.centerline.tailTipIdx >= 0 && blob.centerline.tailTipIdx < tipCount;
     if (hasHead && hasTail) {
-        point.headTip = blob.tipCandidates[blob.assignedHeadTipIdx].point;
-        point.tailTip = blob.tipCandidates[blob.assignedTailTipIdx].point;
+        point.headTip = blob.centerline.tipCandidates[blob.centerline.headTipIdx].point;
+        point.tailTip = blob.centerline.tipCandidates[blob.centerline.tailTipIdx].point;
         point.hasTips = true;
     } else {
         point.hasTips = false;

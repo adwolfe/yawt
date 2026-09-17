@@ -1417,20 +1417,20 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         log << "decision: " << decision << "\n";
     }
     log << "\n--- Stored result comparison ---\n";
-    log << "stored centerline points = " << blob.centerlinePoints.size() << "\n";
-    log << "stored topologyState     = " << Tracking::topologyStateToString(blob.topologyState) << "\n";
-    log << "stored head/tail tipIdx  = " << blob.assignedHeadTipIdx
-        << " / " << blob.assignedTailTipIdx << "\n";
-    const bool haveHead = blob.assignedHeadTipIdx >= 0 &&
-                          blob.assignedHeadTipIdx < static_cast<int>(blob.tipCandidates.size());
-    const bool haveTail = blob.assignedTailTipIdx >= 0 &&
-                          blob.assignedTailTipIdx < static_cast<int>(blob.tipCandidates.size());
+    log << "stored centerline points = " << blob.centerline.points.size() << "\n";
+    log << "stored topologyState     = " << Tracking::topologyStateToString(blob.centerline.topology) << "\n";
+    log << "stored head/tail tipIdx  = " << blob.centerline.headTipIdx
+        << " / " << blob.centerline.tailTipIdx << "\n";
+    const bool haveHead = blob.centerline.headTipIdx >= 0 &&
+                          blob.centerline.headTipIdx < static_cast<int>(blob.centerline.tipCandidates.size());
+    const bool haveTail = blob.centerline.tailTipIdx >= 0 &&
+                          blob.centerline.tailTipIdx < static_cast<int>(blob.centerline.tipCandidates.size());
     if (haveHead)
-        log << "stored head tip = " << pointString(blob.tipCandidates[blob.assignedHeadTipIdx].point) << "\n";
+        log << "stored head tip = " << pointString(blob.centerline.tipCandidates[blob.centerline.headTipIdx].point) << "\n";
     if (haveTail)
-        log << "stored tail tip = " << pointString(blob.tipCandidates[blob.assignedTailTipIdx].point) << "\n";
-    if (blob.centerlinePoints.size() >= 2) {
-        std::vector<cv::Point2f> stored(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
+        log << "stored tail tip = " << pointString(blob.centerline.tipCandidates[blob.centerline.tailTipIdx].point) << "\n";
+    if (blob.centerline.points.size() >= 2) {
+        std::vector<cv::Point2f> stored(blob.centerline.points.begin(), blob.centerline.points.end());
         log << "stored arcLength = " << polylineLength(stored) << "\n";
     }
     return true;

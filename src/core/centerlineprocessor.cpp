@@ -883,8 +883,8 @@ static bool enforceSelfCrossedTwoTipPredictorRoles(
     const Centerline::HeadTailPredictor& predictor,
     QStringList* diagnostics)
 {
-    if (blob.topologyState != Tracking::TopologyState::SelfCrossed ||
-        blob.tipCandidates.size() != 2 ||
+    if (blob.centerline.topology != Tracking::TopologyState::SelfCrossed ||
+        blob.centerline.tipCandidates.size() != 2 ||
         !predictor.hasPrev) {
         return false;
     }
@@ -902,8 +902,8 @@ static bool enforceSelfCrossedTwoTipPredictorRoles(
         : predictor.lastTailPos;
 
     auto assignmentCost = [&](int headIdx, int tailIdx) -> float {
-        const cv::Point2f& h = blob.tipCandidates[headIdx].point;
-        const cv::Point2f& t = blob.tipCandidates[tailIdx].point;
+        const cv::Point2f& h = blob.centerline.tipCandidates[headIdx].point;
+        const cv::Point2f& t = blob.centerline.tipCandidates[tailIdx].point;
 
         float cost = distSq(h, predHead) + distSq(t, predTail);
         cost += 0.5f * (distSq(h, predictor.lastHeadPos) +
@@ -917,27 +917,27 @@ static bool enforceSelfCrossedTwoTipPredictorRoles(
 
     const float cost01 = assignmentCost(0, 1);
     const float cost10 = assignmentCost(1, 0);
-    const int oldHead = blob.assignedHeadTipIdx;
-    const int oldTail = blob.assignedTailTipIdx;
+    const int oldHead = blob.centerline.headTipIdx;
+    const int oldTail = blob.centerline.tailTipIdx;
 
     if (cost01 <= cost10) {
-        blob.assignedHeadTipIdx = 0;
-        blob.assignedTailTipIdx = 1;
+        blob.centerline.headTipIdx = 0;
+        blob.centerline.tailTipIdx = 1;
     } else {
-        blob.assignedHeadTipIdx = 1;
-        blob.assignedTailTipIdx = 0;
+        blob.centerline.headTipIdx = 1;
+        blob.centerline.tailTipIdx = 0;
     }
 
     const bool changed =
-        oldHead != blob.assignedHeadTipIdx ||
-        oldTail != blob.assignedTailTipIdx;
+        oldHead != blob.centerline.headTipIdx ||
+        oldTail != blob.centerline.tailTipIdx;
     if (diagnostics) {
         diagnostics->append(
             QStringLiteral("SelfCrossed two-tip predictor role check cost01=%1 cost10=%2 selected headIdx=%3 tailIdx=%4%5")
                 .arg(cost01, 0, 'f', 2)
                 .arg(cost10, 0, 'f', 2)
-                .arg(blob.assignedHeadTipIdx)
-                .arg(blob.assignedTailTipIdx)
+                .arg(blob.centerline.headTipIdx)
+                .arg(blob.centerline.tailTipIdx)
                 .arg(changed ? QStringLiteral(" reassigned") : QString()));
     }
     return changed;
@@ -950,7 +950,7 @@ static bool enforceTwoTipCenterlineOrderRoles(
     const cv::Point2f& previousCentroid,
     QStringList* diagnostics)
 {
-    if (blob.tipCandidates.size() != 2 || previousCenterline.size() < 2) {
+    if (blob.centerline.tipCandidates.size() != 2 || previousCenterline.size() < 2) {
         return false;
     }
 
@@ -1000,26 +1000,26 @@ static bool enforceTwoTipCenterlineOrderRoles(
         return best;
     };
 
-    const Projection p0 = projectOntoPreviousOrder(blob.tipCandidates[0].point);
-    const Projection p1 = projectOntoPreviousOrder(blob.tipCandidates[1].point);
+    const Projection p0 = projectOntoPreviousOrder(blob.centerline.tipCandidates[0].point);
+    const Projection p1 = projectOntoPreviousOrder(blob.centerline.tipCandidates[1].point);
     const float cost01 = p0.fraction * p0.fraction +
                          (1.f - p1.fraction) * (1.f - p1.fraction);
     const float cost10 = p1.fraction * p1.fraction +
                          (1.f - p0.fraction) * (1.f - p0.fraction);
-    const int oldHead = blob.assignedHeadTipIdx;
-    const int oldTail = blob.assignedTailTipIdx;
+    const int oldHead = blob.centerline.headTipIdx;
+    const int oldTail = blob.centerline.tailTipIdx;
 
     if (cost01 <= cost10) {
-        blob.assignedHeadTipIdx = 0;
-        blob.assignedTailTipIdx = 1;
+        blob.centerline.headTipIdx = 0;
+        blob.centerline.tailTipIdx = 1;
     } else {
-        blob.assignedHeadTipIdx = 1;
-        blob.assignedTailTipIdx = 0;
+        blob.centerline.headTipIdx = 1;
+        blob.centerline.tailTipIdx = 0;
     }
 
     const bool changed =
-        oldHead != blob.assignedHeadTipIdx ||
-        oldTail != blob.assignedTailTipIdx;
+        oldHead != blob.centerline.headTipIdx ||
+        oldTail != blob.centerline.tailTipIdx;
     if (diagnostics) {
         diagnostics->append(
             QStringLiteral("two-tip centerline-order role check s0=%1 d0=%2 s1=%3 d1=%4 cost01=%5 cost10=%6 selected headIdx=%7 tailIdx=%8%9")
@@ -1029,8 +1029,8 @@ static bool enforceTwoTipCenterlineOrderRoles(
                 .arg(std::sqrt(p1.distSq), 0, 'f', 2)
                 .arg(cost01, 0, 'f', 4)
                 .arg(cost10, 0, 'f', 4)
-                .arg(blob.assignedHeadTipIdx)
-                .arg(blob.assignedTailTipIdx)
+                .arg(blob.centerline.headTipIdx)
+                .arg(blob.centerline.tailTipIdx)
                 .arg(changed ? QStringLiteral(" reassigned") : QString()));
     }
     return changed;
@@ -1094,7 +1094,7 @@ static bool selectZeroTipRingCutCenterline(
     for (const CutCandidate& cut : cuts) {
         Tracking::DetectedBlob cutBlob = blob;
         if (!Centerline::populateCenterlineFromContourWithCut(cutBlob, cut.a, cut.b, 3) ||
-            cutBlob.centerlinePoints.size() < 2) {
+            cutBlob.centerline.points.size() < 2) {
             if (diagnostics) {
                 diagnostics->append(QStringLiteral("0-tip ring cut candidate %1 failed")
                                         .arg(cut.label));
@@ -1105,7 +1105,7 @@ static bool selectZeroTipRingCutCenterline(
         ScoredCandidate c;
         c.label = cut.label;
         c.cutPoint = (cut.a + cut.b) * 0.5f;
-        c.points.assign(cutBlob.centerlinePoints.begin(), cutBlob.centerlinePoints.end());
+        c.points.assign(cutBlob.centerline.points.begin(), cutBlob.centerline.points.end());
         if (hasPredictedTips) {
             const float forward = ptDist(c.points.front(), predictedHead) +
                                   ptDist(c.points.back(), predictedTail);
@@ -3124,8 +3124,8 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
                                   const cv::Point2f& target) -> int {
         int bestIdx = -1;
         float bestDistSq = std::numeric_limits<float>::max();
-        for (size_t idx = 0; idx < b.tipCandidates.size(); ++idx) {
-            const cv::Point2f d = b.tipCandidates[idx].point - target;
+        for (size_t idx = 0; idx < b.centerline.tipCandidates.size(); ++idx) {
+            const cv::Point2f d = b.centerline.tipCandidates[idx].point - target;
             const float dsq = d.x * d.x + d.y * d.y;
             if (dsq < bestDistSq) { bestDistSq = dsq; bestIdx = static_cast<int>(idx); }
         }
@@ -3151,14 +3151,14 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
 
         outPredictor = Centerline::HeadTailPredictor{};
         const auto prevHead =
-            (prevBlob.assignedHeadTipIdx >= 0 &&
-             prevBlob.assignedHeadTipIdx < static_cast<int>(prevBlob.tipCandidates.size()))
-                ? prevBlob.tipCandidates[prevBlob.assignedHeadTipIdx].point
+            (prevBlob.centerline.headTipIdx >= 0 &&
+             prevBlob.centerline.headTipIdx < static_cast<int>(prevBlob.centerline.tipCandidates.size()))
+                ? prevBlob.centerline.tipCandidates[prevBlob.centerline.headTipIdx].point
                 : cv::Point2f(-1.f, -1.f);
         const auto prevTail =
-            (prevBlob.assignedTailTipIdx >= 0 &&
-             prevBlob.assignedTailTipIdx < static_cast<int>(prevBlob.tipCandidates.size()))
-                ? prevBlob.tipCandidates[prevBlob.assignedTailTipIdx].point
+            (prevBlob.centerline.tailTipIdx >= 0 &&
+             prevBlob.centerline.tailTipIdx < static_cast<int>(prevBlob.centerline.tipCandidates.size()))
+                ? prevBlob.centerline.tipCandidates[prevBlob.centerline.tailTipIdx].point
                 : cv::Point2f(-1.f, -1.f);
         outPredictor.lastHeadPos = prevHead;
         outPredictor.lastTailPos = prevTail;
@@ -3167,27 +3167,27 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
         Tracking::DetectedBlob prevPrevBlob;
         if (blobAt(frameNumber - (2 * frameStep), prevPrevBlob)) {
             const auto prevPrevHead =
-                (prevPrevBlob.assignedHeadTipIdx >= 0 &&
-                 prevPrevBlob.assignedHeadTipIdx < static_cast<int>(prevPrevBlob.tipCandidates.size()))
-                    ? prevPrevBlob.tipCandidates[prevPrevBlob.assignedHeadTipIdx].point
+                (prevPrevBlob.centerline.headTipIdx >= 0 &&
+                 prevPrevBlob.centerline.headTipIdx < static_cast<int>(prevPrevBlob.centerline.tipCandidates.size()))
+                    ? prevPrevBlob.centerline.tipCandidates[prevPrevBlob.centerline.headTipIdx].point
                     : cv::Point2f(-1.f, -1.f);
             const auto prevPrevTail =
-                (prevPrevBlob.assignedTailTipIdx >= 0 &&
-                 prevPrevBlob.assignedTailTipIdx < static_cast<int>(prevPrevBlob.tipCandidates.size()))
-                    ? prevPrevBlob.tipCandidates[prevPrevBlob.assignedTailTipIdx].point
+                (prevPrevBlob.centerline.tailTipIdx >= 0 &&
+                 prevPrevBlob.centerline.tailTipIdx < static_cast<int>(prevPrevBlob.centerline.tipCandidates.size()))
+                    ? prevPrevBlob.centerline.tipCandidates[prevPrevBlob.centerline.tailTipIdx].point
                     : cv::Point2f(-1.f, -1.f);
             if (prevPrevHead.x >= 0.f && prevHead.x >= 0.f)
                 outPredictor.velHead = prevHead - prevPrevHead;
             if (prevPrevTail.x >= 0.f && prevTail.x >= 0.f)
                 outPredictor.velTail = prevTail - prevPrevTail;
             const bool havePrevPrevCenter =
-                prevPrevBlob.centerlinePoints.size() >= 2 &&
-                prevBlob.centerlinePoints.size() >= 2;
+                prevPrevBlob.centerline.points.size() >= 2 &&
+                prevBlob.centerline.points.size() >= 2;
             if (havePrevPrevCenter) {
                 const cv::Point2f prevPrevCenter =
-                    prevPrevBlob.centerlinePoints[prevPrevBlob.centerlinePoints.size() / 2];
+                    prevPrevBlob.centerline.points[prevPrevBlob.centerline.points.size() / 2];
                 const cv::Point2f prevCenter =
-                    prevBlob.centerlinePoints[prevBlob.centerlinePoints.size() / 2];
+                    prevBlob.centerline.points[prevBlob.centerline.points.size() / 2];
                 outPredictor.velCenter = prevCenter - prevPrevCenter;
             }
             outPredictor.hasVelocity =
@@ -3197,9 +3197,9 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
         }
 
         outPrevState = CenterlineState{};
-        if (prevBlob.centerlinePoints.size() >= 2) {
-            outPrevState.points.assign(prevBlob.centerlinePoints.begin(),
-                                       prevBlob.centerlinePoints.end());
+        if (prevBlob.centerline.points.size() >= 2) {
+            outPrevState.points.assign(prevBlob.centerline.points.begin(),
+                                       prevBlob.centerline.points.end());
             outPrevState.blobCentroid = blobCentroid(prevBlob);
             outPrevState.blob = prevBlob;
             outPrevState.valid = true;
@@ -3229,15 +3229,15 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
     if (!frameBlobs.contains(ctx.wormId)) return result;
     Tracking::DetectedBlob blob = frameBlobs[ctx.wormId];
     if (!blob.isValid || blob.contourPoints.empty()) return result;
-    blob.hasCenterlineCutPoint = false;
+    blob.centerline.hasCutPoint = false;
 
     const bool inMerge = tp.quality == Tracking::TrackPointQuality::Merged;
 
     if (inMerge && req.skipIfMerged) {
         predictor = Centerline::HeadTailPredictor{};
         prevState = CenterlineState{};
-        blob.centerlinePoints.clear();
-        blob.hasCenterlineCutPoint = false;
+        blob.centerline.points.clear();
+        blob.centerline.hasCutPoint = false;
         io.setDetectedBlobForFrame(tp.frameNumber, ctx.wormId, blob);
         result.wroteBlob = true;
         result.blob = blob;
@@ -3340,7 +3340,7 @@ if (captureDebug) {
 // for ALL tips so the renderer's filled-green-dot styling
 // applies regardless of whether the position came from the
 // skeleton-snap or the curvature-peak extension.
-blob.tipCandidates.clear();
+blob.centerline.tipCandidates.clear();
 for (const Centerline::TrueTip& t : er.tips) {
     Tracking::TipCandidate tc;
     tc.point     = t.point;
@@ -3348,16 +3348,16 @@ for (const Centerline::TrueTip& t : er.tips) {
     tc.width     = t.width;
     tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
                               : Tracking::TipCandidate::Source::SkeletonEndpoint;
-    blob.tipCandidates.push_back(tc);
+    blob.centerline.tipCandidates.push_back(tc);
 }
-blob.assignedHeadTipIdx = er.headIdx;
-blob.assignedTailTipIdx = er.tailIdx;
-blob.topologyState      = er.topology;
+blob.centerline.headTipIdx = er.headIdx;
+blob.centerline.tailTipIdx = er.tailIdx;
+blob.centerline.topology      = er.topology;
 debugRecord.decisions << QStringLiteral("detectEndpoints topology=%1 tips=%2 headIdx=%3 tailIdx=%4")
                              .arg(Tracking::topologyStateToString(er.topology))
-                             .arg(static_cast<int>(blob.tipCandidates.size()))
-                             .arg(blob.assignedHeadTipIdx)
-                             .arg(blob.assignedTailTipIdx);
+                             .arg(static_cast<int>(blob.centerline.tipCandidates.size()))
+                             .arg(blob.centerline.headTipIdx)
+                             .arg(blob.centerline.tailTipIdx);
 enforceSelfCrossedTwoTipPredictorRoles(blob,
                                        framePredictor,
                                        &debugRecord.decisions);
@@ -3368,16 +3368,16 @@ if (framePrevState.valid) {
                                       &debugRecord.decisions);
 }
 debugRecord.topology = er.topology;
-debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
-debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
-debugRecord.tipCandidates = blob.tipCandidates;
+debugRecord.assignedHeadTipIdx = blob.centerline.headTipIdx;
+debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
+debugRecord.tipCandidates = blob.centerline.tipCandidates;
 
 // Copy bilateral cap debug — parallel to tipCandidates, with role labels.
 debugRecord.tipCapDebug = er.tipCapDebug;
 debugRecord.tipCapRoles.resize(er.tipCapDebug.size());
 for (int ci = 0; ci < static_cast<int>(er.tipCapDebug.size()); ++ci) {
-    if (ci == blob.assignedHeadTipIdx)      debugRecord.tipCapRoles[ci] = QStringLiteral("head");
-    else if (ci == blob.assignedTailTipIdx) debugRecord.tipCapRoles[ci] = QStringLiteral("tail");
+    if (ci == blob.centerline.headTipIdx)      debugRecord.tipCapRoles[ci] = QStringLiteral("head");
+    else if (ci == blob.centerline.tailTipIdx) debugRecord.tipCapRoles[ci] = QStringLiteral("tail");
     else                                    debugRecord.tipCapRoles[ci] = QString();
 }
 
@@ -3400,17 +3400,17 @@ if (cleanWithTwoTips) {
 // can build a centerline; head/tail will be re-derived from
 // the centerline orientation after Step 3.
 if (req.isKeyframeBootstrap && !er.tips.empty()) {
-    if (er.tips.size() >= 2 && blob.assignedHeadTipIdx < 0) {
-        blob.assignedHeadTipIdx = 0;
-        blob.assignedTailTipIdx = 1;
+    if (er.tips.size() >= 2 && blob.centerline.headTipIdx < 0) {
+        blob.centerline.headTipIdx = 0;
+        blob.centerline.tailTipIdx = 1;
         debugRecord.decisions << QStringLiteral("keyframe bootstrap assigned head/tail candidate indices 0/1");
-    } else if (blob.assignedHeadTipIdx < 0 &&
-               blob.assignedTailTipIdx < 0) {
-        blob.assignedHeadTipIdx = 0;
+    } else if (blob.centerline.headTipIdx < 0 &&
+               blob.centerline.tailTipIdx < 0) {
+        blob.centerline.headTipIdx = 0;
         debugRecord.decisions << QStringLiteral("keyframe bootstrap assigned single head candidate index 0");
     }
-    debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
-    debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
+    debugRecord.assignedHeadTipIdx = blob.centerline.headTipIdx;
+    debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
 }
 
 // ── STEP 2: build centerline based on topology ──────────────
@@ -3433,16 +3433,16 @@ auto runSkeletonArcDispatch =
     [&](const Tracking::DetectedBlob& dispBlob,
         const Centerline::EndpointResult& dispEr,
         const cv::Point2f& dispOrigin) -> bool {
-    const int hIdx = dispBlob.assignedHeadTipIdx;
-    const int tIdx = dispBlob.assignedTailTipIdx;
+    const int hIdx = dispBlob.centerline.headTipIdx;
+    const int tIdx = dispBlob.centerline.tailTipIdx;
     const bool hasHead = (hIdx >= 0 &&
-        hIdx < static_cast<int>(dispBlob.tipCandidates.size()));
+        hIdx < static_cast<int>(dispBlob.centerline.tipCandidates.size()));
     const bool hasTail = (tIdx >= 0 &&
-        tIdx < static_cast<int>(dispBlob.tipCandidates.size()));
+        tIdx < static_cast<int>(dispBlob.centerline.tipCandidates.size()));
     if (!hasHead && !hasTail) return false;
 
     const int knownIdx   = hasHead ? hIdx : tIdx;
-    const cv::Point2f knownPos = dispBlob.tipCandidates[knownIdx].point;
+    const cv::Point2f knownPos = dispBlob.centerline.tipCandidates[knownIdx].point;
     const int srcNode = nearestSkeletonNode(dispEr.skeleton, knownPos, dispOrigin);
     if (srcNode < 0) return false;
 
@@ -3462,7 +3462,7 @@ auto runSkeletonArcDispatch =
         }
     }
     if (hasActualTarget) {
-        targetPos = dispBlob.tipCandidates[hasHead ? tIdx : hIdx].point;
+        targetPos = dispBlob.centerline.tipCandidates[hasHead ? tIdx : hIdx].point;
     } else if (framePredictor.hasPrev) {
         const bool hiddenIsHead = !hasHead;
         const cv::Point2f& last = hiddenIsHead
@@ -3551,13 +3551,13 @@ auto runSkeletonArcDispatch =
 
     if (!hasActualTarget && (targetPos.x != -1.f || targetPos.y != -1.f) &&
         framePrevState.valid &&
-        framePrevState.blob.topologyState == Tracking::TopologyState::SelfCrossed &&
+        framePrevState.blob.centerline.topology == Tracking::TopologyState::SelfCrossed &&
         dispEr.topology == Tracking::TopologyState::SelfCrossed) {
         const QMap<int, Tracking::DetectedBlob> prevPrevBlobs =
             io.getDetectedBlobsForFrame(tp.frameNumber - (2 * req.step));
         const bool prevPrevSelfCrossed =
             prevPrevBlobs.contains(ctx.wormId) &&
-            prevPrevBlobs[ctx.wormId].topologyState == Tracking::TopologyState::SelfCrossed;
+            prevPrevBlobs[ctx.wormId].centerline.topology == Tracking::TopologyState::SelfCrossed;
         const bool secondSelfCrossedFrame = !prevPrevSelfCrossed;
         if (secondSelfCrossedFrame) {
             const JunctionSelection junction = selectLoopAwareJunction(
@@ -3737,11 +3737,11 @@ auto runSkeletonArcDispatch =
         Tracking::TipCandidate hyp;
         hyp.point  = hiddenPoint;
         hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
-        blob.tipCandidates.push_back(hyp);
-        const int newIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
-        if (hasHead) blob.assignedTailTipIdx = newIdx;
+        blob.centerline.tipCandidates.push_back(hyp);
+        const int newIdx = static_cast<int>(blob.centerline.tipCandidates.size()) - 1;
+        if (hasHead) blob.centerline.tailTipIdx = newIdx;
         else {
-            blob.assignedHeadTipIdx = newIdx;
+            blob.centerline.headTipIdx = newIdx;
             std::reverse(centerline.begin(), centerline.end());
         }
         debugRecord.decisions << QStringLiteral("D-3 registered hypothesized hidden tip at (%1,%2)")
@@ -3752,15 +3752,15 @@ auto runSkeletonArcDispatch =
 };
 
 if (er.topology == Tracking::TopologyState::Clean &&
-    blob.assignedHeadTipIdx >= 0 &&
-    blob.assignedTailTipIdx >= 0 &&
+    blob.centerline.headTipIdx >= 0 &&
+    blob.centerline.tailTipIdx >= 0 &&
     static_cast<int>(er.skeleton.endpointIndices.size()) >
-        std::max(blob.assignedHeadTipIdx, blob.assignedTailTipIdx)) {
+        std::max(blob.centerline.headTipIdx, blob.centerline.tailTipIdx)) {
 
     const int hGraphIdx =
-        er.skeleton.endpointIndices[blob.assignedHeadTipIdx];
+        er.skeleton.endpointIndices[blob.centerline.headTipIdx];
     const int tGraphIdx =
-        er.skeleton.endpointIndices[blob.assignedTailTipIdx];
+        er.skeleton.endpointIndices[blob.centerline.tailTipIdx];
 
     std::vector<cv::Point2f> graphPath;
     if (skeletonGraphPath(er.skeleton, hGraphIdx, tGraphIdx,
@@ -3769,9 +3769,9 @@ if (er.topology == Tracking::TopologyState::Clean &&
         debugRecord.branch = Debug::CenterlineBranch::D1CleanGraphPath;
         debugRecord.decisions << QStringLiteral("D-1 clean skeleton graph path selected");
         if (!centerline.empty())
-            centerline.front() = trustedTipPointForCleanD1(er.tips[blob.assignedHeadTipIdx]);
+            centerline.front() = trustedTipPointForCleanD1(er.tips[blob.centerline.headTipIdx]);
         if (!centerline.empty())
-            centerline.back() = trustedTipPointForCleanD1(er.tips[blob.assignedTailTipIdx]);
+            centerline.back() = trustedTipPointForCleanD1(er.tips[blob.centerline.tailTipIdx]);
 
         // If D-1 result is suspiciously short the worm is
         // tightly self-coiled but had no visible hole in the
@@ -3795,7 +3795,7 @@ if (er.topology == Tracking::TopologyState::Clean &&
                 std::vector<cv::Point2f> prevCl = centerline;
                 Tracking::DetectedBlob savedBlob = blob;
                 blob = holeBlob;
-                blob.tipCandidates.clear();
+                blob.centerline.tipCandidates.clear();
                 for (const Centerline::TrueTip& t : er2.tips) {
                     Tracking::TipCandidate tc;
                     tc.point     = t.point;
@@ -3803,11 +3803,11 @@ if (er.topology == Tracking::TopologyState::Clean &&
                     tc.width     = t.width;
                     tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
                                               : Tracking::TipCandidate::Source::SkeletonEndpoint;
-                    blob.tipCandidates.push_back(tc);
+                    blob.centerline.tipCandidates.push_back(tc);
                 }
-                blob.assignedHeadTipIdx = er2.headIdx;
-                blob.assignedTailTipIdx = er2.tailIdx;
-                blob.topologyState      = er2.topology;
+                blob.centerline.headTipIdx = er2.headIdx;
+                blob.centerline.tailTipIdx = er2.tailIdx;
+                blob.centerline.topology      = er2.topology;
                 centerline.clear();
                 if (!runSkeletonArcDispatch(blob, er2, origin2)) {
                     // Restore if synthetic-hole dispatch also failed.
@@ -3837,7 +3837,7 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
             const Centerline::EndpointResult er2 =
                 Centerline::detectEndpoints(
                     holeBlob, framePredictor, baseline, inMerge);
-            holeBlob.tipCandidates.clear();
+            holeBlob.centerline.tipCandidates.clear();
             for (const Centerline::TrueTip& t : er2.tips) {
                 Tracking::TipCandidate tc;
                 tc.point     = t.point;
@@ -3846,11 +3846,11 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
                 tc.source    = t.extended
                     ? Tracking::TipCandidate::Source::CurvaturePeak
                     : Tracking::TipCandidate::Source::SkeletonEndpoint;
-                holeBlob.tipCandidates.push_back(tc);
+                holeBlob.centerline.tipCandidates.push_back(tc);
             }
-            holeBlob.assignedHeadTipIdx = er2.headIdx;
-            holeBlob.assignedTailTipIdx = er2.tailIdx;
-            holeBlob.topologyState      = er2.topology;
+            holeBlob.centerline.headTipIdx = er2.headIdx;
+            holeBlob.centerline.tailTipIdx = er2.tailIdx;
+            holeBlob.centerline.topology      = er2.topology;
             blob = holeBlob;
             er   = er2;
             debugRecord.syntheticHoleUsed = true;
@@ -3866,10 +3866,10 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
         static_cast<float>(er.localBounds.y));
 
     // ── Tip-count dispatch ────────────────────────────────────────
-    const int hIdx = blob.assignedHeadTipIdx;
-    const int tIdx = blob.assignedTailTipIdx;
-    const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.tipCandidates.size()));
-    const bool hasTail = (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size()));
+    const int hIdx = blob.centerline.headTipIdx;
+    const int tIdx = blob.centerline.tailTipIdx;
+    const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.centerline.tipCandidates.size()));
+    const bool hasTail = (tIdx >= 0 && tIdx < static_cast<int>(blob.centerline.tipCandidates.size()));
 
     if (hasHead || hasTail) {
         // D-2 (two tips) / D-3 (one tip): trace the skeleton
@@ -3920,8 +3920,8 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
                                                        centerline,
                                                        cutPoint);
             if (zeroTipOk) {
-                blob.centerlineCutPoint = cutPoint;
-                blob.hasCenterlineCutPoint = true;
+                blob.centerline.cutPoint = cutPoint;
+                blob.centerline.hasCutPoint = true;
             }
         }
 
@@ -3932,10 +3932,10 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
             Tracking::TipCandidate hypTail;
             hypTail.point = centerline.back();
             hypTail.source = Tracking::TipCandidate::Source::HypothesizedHidden;
-            blob.tipCandidates.push_back(hypHead);
-            blob.tipCandidates.push_back(hypTail);
-            blob.assignedHeadTipIdx = static_cast<int>(blob.tipCandidates.size()) - 2;
-            blob.assignedTailTipIdx = static_cast<int>(blob.tipCandidates.size()) - 1;
+            blob.centerline.tipCandidates.push_back(hypHead);
+            blob.centerline.tipCandidates.push_back(hypTail);
+            blob.centerline.headTipIdx = static_cast<int>(blob.centerline.tipCandidates.size()) - 2;
+            blob.centerline.tailTipIdx = static_cast<int>(blob.centerline.tipCandidates.size()) - 1;
             debugRecord.decisions << QStringLiteral("0-tip ring supplied predictor-scored centerline");
         }
     }
@@ -3950,18 +3950,18 @@ if (centerline.empty()) {
     debugRecord.branch = Debug::CenterlineBranch::D4FallbackContourSkeleton;
     Tracking::DetectedBlob fallback = blob;
     if (Centerline::populateCenterlineFromContour(fallback) &&
-        fallback.centerlinePoints.size() >= 2) {
-        centerline.assign(fallback.centerlinePoints.begin(),
-                          fallback.centerlinePoints.end());
+        fallback.centerline.points.size() >= 2) {
+        centerline.assign(fallback.centerline.points.begin(),
+                          fallback.centerline.points.end());
         debugRecord.decisions << QStringLiteral("D-4 fallback contour skeleton supplied centerline");
     }
 }
 
 debugRecord.initialCenterline = centerline;
 debugRecord.initialArcLength = centerline.size() >= 2 ? arcLen(centerline) : 0.f;
-debugRecord.tipCandidates = blob.tipCandidates;
-debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
-debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
+debugRecord.tipCandidates = blob.centerline.tipCandidates;
+debugRecord.assignedHeadTipIdx = blob.centerline.headTipIdx;
+debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
 
 if (centerline.size() < 2) {
     // No centerline producible. Persist what we DID compute
@@ -3995,15 +3995,15 @@ if (er.topology == Tracking::TopologyState::Clean) {
     cv::Mat mask;
     cv::Rect bounds;
     if (buildSnakeMask(blob, mask, bounds)) {
-        const cv::Point2f pinH = (blob.assignedHeadTipIdx >= 0 &&
-                                  blob.assignedHeadTipIdx <
-                                    static_cast<int>(blob.tipCandidates.size()))
-            ? blob.tipCandidates[blob.assignedHeadTipIdx].point
+        const cv::Point2f pinH = (blob.centerline.headTipIdx >= 0 &&
+                                  blob.centerline.headTipIdx <
+                                    static_cast<int>(blob.centerline.tipCandidates.size()))
+            ? blob.centerline.tipCandidates[blob.centerline.headTipIdx].point
             : centerline.front();
-        const cv::Point2f pinT = (blob.assignedTailTipIdx >= 0 &&
-                                  blob.assignedTailTipIdx <
-                                    static_cast<int>(blob.tipCandidates.size()))
-            ? blob.tipCandidates[blob.assignedTailTipIdx].point
+        const cv::Point2f pinT = (blob.centerline.tailTipIdx >= 0 &&
+                                  blob.centerline.tailTipIdx <
+                                    static_cast<int>(blob.centerline.tipCandidates.size()))
+            ? blob.centerline.tipCandidates[blob.centerline.tailTipIdx].point
             : centerline.back();
         cv::Point2f tmpOverlap(0.f, 0.f);
         bool tmpHasOverlap = false;
@@ -4031,7 +4031,7 @@ if (allowRhrFlip &&
     curTurning * framePrevState.turningAngle < 0.f) {
     std::reverse(centerline.begin(), centerline.end());
     flipped = true;
-    std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+    std::swap(blob.centerline.headTipIdx, blob.centerline.tailTipIdx);
     debugRecord.decisions << QStringLiteral("RHR orientation veto flipped centerline");
 }
 
@@ -4040,20 +4040,20 @@ if (allowRhrFlip &&
 // (front = head). This stabilises the convention regardless
 // of which tip arbitrarily got tips[0] in detectEndpoints.
 if (req.isKeyframeBootstrap && centerline.size() >= 2 &&
-    !blob.tipCandidates.empty()) {
+    !blob.centerline.tipCandidates.empty()) {
     const int headIdx = nearestCandidateIdx(blob, centerline.front());
     int       tailIdx = nearestCandidateIdx(blob, centerline.back());
     if (tailIdx == headIdx) tailIdx = -1;
-    blob.assignedHeadTipIdx = headIdx;
-    blob.assignedTailTipIdx = tailIdx;
+    blob.centerline.headTipIdx = headIdx;
+    blob.centerline.tailTipIdx = tailIdx;
     debugRecord.decisions << QStringLiteral("keyframe bootstrap re-derived head/tail from centerline orientation");
 }
 
 // Persist centerline + cut/overlap marker on the blob.
-blob.centerlinePoints.assign(centerline.begin(), centerline.end());
+blob.centerline.points.assign(centerline.begin(), centerline.end());
 if (hasOverlap) {
-    blob.centerlineCutPoint = overlapCenter;
-    blob.hasCenterlineCutPoint = true;
+    blob.centerline.cutPoint = overlapCenter;
+    blob.centerline.hasCutPoint = true;
 }
 
 io.setDetectedBlobForFrame(tp.frameNumber, ctx.wormId, blob);
@@ -4065,25 +4065,25 @@ debugRecord.rhrFlipped = flipped;
 debugRecord.finalCenterline = centerline;
 debugRecord.finalArcLength = arcLen(centerline);
 debugRecord.finalTurningAngle = flipped ? -curTurning : curTurning;
-debugRecord.tipCandidates = blob.tipCandidates;
-debugRecord.assignedHeadTipIdx = blob.assignedHeadTipIdx;
-debugRecord.assignedTailTipIdx = blob.assignedTailTipIdx;
-debugRecord.topology = blob.topologyState;
+debugRecord.tipCandidates = blob.centerline.tipCandidates;
+debugRecord.assignedHeadTipIdx = blob.centerline.headTipIdx;
+debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
+debugRecord.topology = blob.centerline.topology;
 if (captureDebug) {
     io.setCenterlineDebugFrame(debugRecord);
 }
 
 // ── STEP 5: predictor update ────────────────────────────────
-const int hIdx = blob.assignedHeadTipIdx;
-const int tIdx = blob.assignedTailTipIdx;
-if (hIdx >= 0 && hIdx < static_cast<int>(blob.tipCandidates.size())) {
-    const cv::Point2f newH = blob.tipCandidates[hIdx].point;
+const int hIdx = blob.centerline.headTipIdx;
+const int tIdx = blob.centerline.tailTipIdx;
+if (hIdx >= 0 && hIdx < static_cast<int>(blob.centerline.tipCandidates.size())) {
+    const cv::Point2f newH = blob.centerline.tipCandidates[hIdx].point;
     if (predictor.hasPrev)
         predictor.velHead = newH - predictor.lastHeadPos;
     predictor.lastHeadPos = newH;
 }
-if (tIdx >= 0 && tIdx < static_cast<int>(blob.tipCandidates.size())) {
-    const cv::Point2f newT = blob.tipCandidates[tIdx].point;
+if (tIdx >= 0 && tIdx < static_cast<int>(blob.centerline.tipCandidates.size())) {
+    const cv::Point2f newT = blob.centerline.tipCandidates[tIdx].point;
     if (predictor.hasPrev)
         predictor.velTail = newT - predictor.lastTailPos;
     predictor.lastTailPos = newT;
@@ -4118,31 +4118,31 @@ bool relaxCenterlineToSmoothedTips(Tracking::DetectedBlob& blob,
                                    const CenterlineSnakeParams& params)
 {
     if (blob.contourPoints.empty()) return false;
-    if (blob.centerlinePoints.empty()) return false;
-    if (blob.topologyState != Tracking::TopologyState::Clean) return false;
+    if (blob.centerline.points.empty()) return false;
+    if (blob.centerline.topology != Tracking::TopologyState::Clean) return false;
 
-    const int hIdx = blob.assignedHeadTipIdx;
-    const int tIdx = blob.assignedTailTipIdx;
+    const int hIdx = blob.centerline.headTipIdx;
+    const int tIdx = blob.centerline.tailTipIdx;
     if (hIdx < 0 || tIdx < 0) return false;
-    if (hIdx >= static_cast<int>(blob.tipCandidates.size())) return false;
-    if (tIdx >= static_cast<int>(blob.tipCandidates.size())) return false;
+    if (hIdx >= static_cast<int>(blob.centerline.tipCandidates.size())) return false;
+    if (tIdx >= static_cast<int>(blob.centerline.tipCandidates.size())) return false;
 
     cv::Mat mask;
     cv::Rect bounds;
     if (!buildSnakeMask(blob, mask, bounds)) return false;
 
-    const cv::Point2f pinH = blob.tipCandidates[hIdx].point;
-    const cv::Point2f pinT = blob.tipCandidates[tIdx].point;
+    const cv::Point2f pinH = blob.centerline.tipCandidates[hIdx].point;
+    const cv::Point2f pinT = blob.centerline.tipCandidates[tIdx].point;
 
-    std::vector<cv::Point2f> centerline(blob.centerlinePoints.begin(),
-                                        blob.centerlinePoints.end());
+    std::vector<cv::Point2f> centerline(blob.centerline.points.begin(),
+                                        blob.centerline.points.end());
     cv::Point2f overlapCenter(0.f, 0.f);
     bool hasOverlap = false;
     if (!refineSnakeCore(blob, mask, bounds, centerline, pinH, pinT,
                          nPoints, params, overlapCenter, hasOverlap))
         return false;
 
-    blob.centerlinePoints.assign(centerline.begin(), centerline.end());
+    blob.centerline.points.assign(centerline.begin(), centerline.end());
     return true;
 }
 

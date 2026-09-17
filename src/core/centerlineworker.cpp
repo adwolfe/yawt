@@ -54,10 +54,10 @@ static QList<int> refineHeadTailByMotion(
         }
         if (!blobs.contains(wormId)) return std::nullopt;
         const Tracking::DetectedBlob& blob = blobs[wormId];
-        if (!blob.isValid || blob.centerlinePoints.size() < 2) return std::nullopt;
-        if (blob.topologyState != Tracking::TopologyState::Clean) return std::nullopt;
+        if (!blob.isValid || blob.centerline.points.size() < 2) return std::nullopt;
+        if (blob.centerline.topology != Tracking::TopologyState::Clean) return std::nullopt;
         return SegFrame{tp.frameNumber, tp.position,
-                        blob.centerlinePoints.front(), blob.centerlinePoints.back()};
+                        blob.centerline.points.front(), blob.centerline.points.back()};
     };
 
     // Returns {netScore, minorityFraction} for a segment.
@@ -93,9 +93,9 @@ static QList<int> refineHeadTailByMotion(
             }
             if (!blobs.contains(wormId)) continue;
             Tracking::DetectedBlob blob = blobs[wormId];
-            if (blob.centerlinePoints.size() >= 2)
-                std::reverse(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
-            std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+            if (blob.centerline.points.size() >= 2)
+                std::reverse(blob.centerline.points.begin(), blob.centerline.points.end());
+            std::swap(blob.centerline.headTipIdx, blob.centerline.tailTipIdx);
             {
                 QMutexLocker locker(storageMutex);
                 storage->setDetectedBlobForFrame(sf.frameNumber, wormId, blob);
@@ -184,17 +184,17 @@ static TipGeomFeatures computeTipGeomFeatures(
     bool isFront)
 {
     TipGeomFeatures result;
-    if (tipIdx < 0 || tipIdx >= static_cast<int>(blob.tipCandidates.size())) return result;
-    if (blob.centerlinePoints.size() < 4) return result;
+    if (tipIdx < 0 || tipIdx >= static_cast<int>(blob.centerline.tipCandidates.size())) return result;
+    if (blob.centerline.points.size() < 4) return result;
     if (blob.contourPoints.size() < 6)    return result;
 
-    const cv::Point2f tipPoint = blob.tipCandidates[tipIdx].point;
-    const auto& cl     = blob.centerlinePoints;
+    const cv::Point2f tipPoint = blob.centerline.tipCandidates[tipIdx].point;
+    const auto& cl     = blob.centerline.points;
     const auto& contour = blob.contourPoints;
     const int   N      = static_cast<int>(contour.size());
 
     // Feature C
-    result.curvature = std::abs(blob.tipCandidates[tipIdx].curvature);
+    result.curvature = std::abs(blob.centerline.tipCandidates[tipIdx].curvature);
 
     // Inward body axis from tip (averaged over a few points to smooth noise)
     cv::Point2f bodyAxis;
@@ -309,14 +309,14 @@ static QList<int> refineHeadTailByGeometry(
         if (!blobs.contains(wormId)) return std::nullopt;
         const Tracking::DetectedBlob& blob = blobs[wormId];
         if (!blob.isValid) return std::nullopt;
-        if (blob.topologyState != Tracking::TopologyState::Clean) return std::nullopt;
-        if (blob.assignedHeadTipIdx < 0 || blob.assignedTailTipIdx < 0) return std::nullopt;
-        if (blob.centerlinePoints.size() < 4) return std::nullopt;
+        if (blob.centerline.topology != Tracking::TopologyState::Clean) return std::nullopt;
+        if (blob.centerline.headTipIdx < 0 || blob.centerline.tailTipIdx < 0) return std::nullopt;
+        if (blob.centerline.points.size() < 4) return std::nullopt;
 
         FrameGeom fg;
         fg.frameNumber = tp.frameNumber;
-        fg.head = computeTipGeomFeatures(blob, blob.assignedHeadTipIdx, true);
-        fg.tail = computeTipGeomFeatures(blob, blob.assignedTailTipIdx, false);
+        fg.head = computeTipGeomFeatures(blob, blob.centerline.headTipIdx, true);
+        fg.tail = computeTipGeomFeatures(blob, blob.centerline.tailTipIdx, false);
         if (!fg.head.valid || !fg.tail.valid) return std::nullopt;
         return fg;
     };
@@ -394,9 +394,9 @@ static QList<int> refineHeadTailByGeometry(
             }
             if (!blobs.contains(wormId)) continue;
             Tracking::DetectedBlob blob = blobs[wormId];
-            if (blob.centerlinePoints.size() >= 2)
-                std::reverse(blob.centerlinePoints.begin(), blob.centerlinePoints.end());
-            std::swap(blob.assignedHeadTipIdx, blob.assignedTailTipIdx);
+            if (blob.centerline.points.size() >= 2)
+                std::reverse(blob.centerline.points.begin(), blob.centerline.points.end());
+            std::swap(blob.centerline.headTipIdx, blob.centerline.tailTipIdx);
             {
                 QMutexLocker locker(storageMutex);
                 storage->setDetectedBlobForFrame(fg.frameNumber, wormId, blob);
@@ -581,9 +581,9 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
 //
 //   Sweep 1 — keyframe-outward bidirectional per-frame loop. Each frame:
 //             Step 1: detectEndpoints() → tip data + topology + assignment.
-//                     Write back to blob.tipCandidates (source = SkeletonEndpoint),
-//                     blob.assignedHeadTipIdx, blob.assignedTailTipIdx,
-//                     blob.topologyState. On Clean frames, sample baseline.
+//                     Write back to blob.centerline.tipCandidates (source = SkeletonEndpoint),
+//                     blob.centerline.headTipIdx, blob.centerline.tailTipIdx,
+//                     blob.centerline.topology. On Clean frames, sample baseline.
 //             Step 2: build centerline.
 //                       Clean    → skeleton-graph Dijkstra head→tail.
 //                       Ring     → synthetic-hole punch + re-skeletonize.
@@ -649,21 +649,21 @@ static void smoothTipsAndRelaxCenterlines(
             continue;
         }
         const Tracking::DetectedBlob& blob = frameBlobs[wormId];
-        if (blob.topologyState != Tracking::TopologyState::Clean) {
+        if (blob.centerline.topology != Tracking::TopologyState::Clean) {
             if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
             continue;
         }
-        const int hIdx = blob.assignedHeadTipIdx;
-        const int tIdx = blob.assignedTailTipIdx;
+        const int hIdx = blob.centerline.headTipIdx;
+        const int tIdx = blob.centerline.tailTipIdx;
         if (hIdx < 0 || tIdx < 0 ||
-            hIdx >= static_cast<int>(blob.tipCandidates.size()) ||
-            tIdx >= static_cast<int>(blob.tipCandidates.size())) {
+            hIdx >= static_cast<int>(blob.centerline.tipCandidates.size()) ||
+            tIdx >= static_cast<int>(blob.centerline.tipCandidates.size())) {
             if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
             continue;
         }
         current.push_back({tp.frameNumber,
-                           blob.tipCandidates[hIdx].point,
-                           blob.tipCandidates[tIdx].point});
+                           blob.centerline.tipCandidates[hIdx].point,
+                           blob.centerline.tipCandidates[tIdx].point});
     }
     if (!current.empty()) runs.push_back(std::move(current));
 
@@ -695,8 +695,8 @@ static void smoothTipsAndRelaxCenterlines(
             if (!frameBlobs.contains(wormId)) continue;
             Tracking::DetectedBlob blob = frameBlobs[wormId];
 
-            blob.tipCandidates[blob.assignedHeadTipIdx].point = newHead;
-            blob.tipCandidates[blob.assignedTailTipIdx].point = newTail;
+            blob.centerline.tipCandidates[blob.centerline.headTipIdx].point = newHead;
+            blob.centerline.tipCandidates[blob.centerline.tailTipIdx].point = newTail;
             Centerline::relaxCenterlineToSmoothedTips(blob, nPts, snakeParams);
 
             QMutexLocker lk(storageMutex);
@@ -780,9 +780,9 @@ void CenterlineWorker::doWork()
             if (!temp.isValid || temp.contourPoints.empty()) continue;
             if (!temp.holeContourPoints.empty()) continue;
             if (Centerline::populateCenterlineFromContour(temp) &&
-                temp.centerlinePoints.size() >= 2) {
-                std::vector<cv::Point2f> p(temp.centerlinePoints.begin(),
-                                           temp.centerlinePoints.end());
+                temp.centerline.points.size() >= 2) {
+                std::vector<cv::Point2f> p(temp.centerline.points.begin(),
+                                           temp.centerline.points.end());
                 validLengths.push_back(Centerline::arcLength(p));
             }
         }

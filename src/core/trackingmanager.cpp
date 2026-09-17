@@ -1949,7 +1949,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                     const auto blobIt = blobsForFrame.constFind(sourceItemId);
                     if (blobIt != blobsForFrame.constEnd()) {
                         centerlinePoints =
-                            Centerline::resampleCenterlinePoints(blobIt.value().centerlinePoints, 10);
+                            Centerline::resampleCenterlinePoints(blobIt.value().centerline.points, 10);
                     }
 
                 }
@@ -2129,10 +2129,10 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
                     if (blob.isValid) {
                         if (blob.area > 0) { sumAreaPx += blob.area; ++nAreaSamples; }
                         // Body length: arc length of centerline
-                        if (blob.centerlinePoints.size() >= 2) {
+                        if (blob.centerline.points.size() >= 2) {
                             double arcLen = 0.0;
-                            for (size_t k = 1; k < blob.centerlinePoints.size(); ++k) {
-                                cv::Point2f d = blob.centerlinePoints[k] - blob.centerlinePoints[k-1];
+                            for (size_t k = 1; k < blob.centerline.points.size(); ++k) {
+                                cv::Point2f d = blob.centerline.points[k] - blob.centerline.points[k-1];
                                 arcLen += std::sqrt(d.x*d.x + d.y*d.y);
                             }
                             sumBodyLenPx += arcLen;
@@ -2346,14 +2346,14 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
                     m_storage->getDetectedBlobsForFrame(tp.frameNumber);
                 if (blobs.contains(wormId)) {
                     const Tracking::DetectedBlob& blob = blobs[wormId];
-                    if (blob.isValid && blob.centerlinePoints.size() >= 2) {
+                    if (blob.isValid && blob.centerline.points.size() >= 2) {
                         ++nCLcomputed;
                     } else {
                         ++nCLskipped;
                     }
                     using T = Tracking::TopologyState;
-                    if (blob.topologyState == T::Clean)       ++nCleanTopo;
-                    if (blob.topologyState == T::SelfCrossed) ++nSCTopo;
+                    if (blob.centerline.topology == T::Clean)       ++nCleanTopo;
+                    if (blob.centerline.topology == T::SelfCrossed) ++nSCTopo;
                 } else {
                     ++nCLskipped;
                 }

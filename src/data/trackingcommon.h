@@ -229,9 +229,34 @@ inline QString topologyStateToString(TopologyState s) {
 }
 
 /**
-     * @brief Structure to hold information about a detected blob during tracking.
-     */
+ * @brief Results of the post-tracking centerline pass for one blob.
+ *
+ * Empty until CenterlineWorker has run (see docs/centerline_pipeline.md). A
+ * rerun of the pass replaces this wholesale without touching the detection-time
+ * geometry on DetectedBlob, and it is persisted as its own "centerline" object
+ * per track point.
+ */
+struct BlobCenterline {
+    std::vector<cv::Point2f> points;          // Ordered head -> tail, video coordinates
+    cv::Point2f cutPoint{0.f, 0.f};           // Debug/overlay: where a ring mask was cut open
+    bool hasCutPoint = false;                 // True when cutPoint is meaningful
+    std::vector<TipCandidate> tipCandidates;  // Per-frame nose/tail candidates (Phase B)
+    int headTipIdx = -1;                      // Index into tipCandidates of the assigned head, or -1
+    int tailTipIdx = -1;                      // Index into tipCandidates of the assigned tail, or -1
+    TopologyState topology = TopologyState::Unknown;  // Per-frame geometric classification (Phase C.2)
 
+    bool isEmpty() const {
+        return points.empty() && tipCandidates.empty() && topology == TopologyState::Unknown;
+    }
+};
+
+/**
+ * @brief One connected component on one thresholded frame.
+ *
+ * Everything except `centerline` is detection-time geometry, known as soon as
+ * the tracker finds the blob. `centerline` is filled later by the centerline
+ * pass and is serialised separately.
+ */
 struct DetectedBlob {
     QPointF centroid;                     // Centroid of the blob in video coordinates
     QRectF boundingBox;                   // Bounding box of the blob in video coordinates
@@ -239,29 +264,20 @@ struct DetectedBlob {
     double convexHullArea = 0.0;          // Area of the convex hull (blob area without holes)
     std::vector<cv::Point> contourPoints;                   // Outer contour points (in video coordinates)
     std::vector<std::vector<cv::Point>> holeContourPoints;  // Inner hole contours (ring topology from coiled worm)
-    std::vector<cv::Point2f> centerlinePoints;              // Ordered centerline points from one body end to the other
-    cv::Point2f centerlineCutPoint;                         // Debug/overlay point where a ring mask was cut open
-    bool hasCenterlineCutPoint = false;                     // True when centerlineCutPoint is meaningful
-    std::vector<TipCandidate> tipCandidates;                // Per-frame nose/tail candidates (Phase B preprocessing)
-    int assignedHeadTipIdx = -1;                            // Index into tipCandidates of the assigned head, or -1
-    int assignedTailTipIdx = -1;                            // Index into tipCandidates of the assigned tail, or -1
-    TopologyState topologyState = TopologyState::Unknown;   // Per-frame geometric classification (Phase C.2)
     bool isValid = false;                 // Flag indicating if this blob data is valid
-    bool touchesSearchWindow = false;      // Blob touches the edge of the search window (suggests it continues outside, i.e. merged or partially visible).
+    bool touchesSearchWindow = false;     // Blob touches the edge of the search window (suggests it continues outside, i.e. merged or partially visible).
 
-    // Default constructor
-    DetectedBlob()
-        : area(0.0),
-          convexHullArea(0.0),
-          centerlineCutPoint(0.f, 0.f),
-          hasCenterlineCutPoint(false),
-          assignedHeadTipIdx(-1),
-          assignedTailTipIdx(-1),
-          topologyState(TopologyState::Unknown),
-          isValid(false),
-          touchesSearchWindow(false) {}
+    BlobCenterline centerline;            // Centerline-pass results; empty until the pass has run
 };
 
+// Detection-time geometry only (everything but `centerline`).
+QJsonObject blobGeometryToJson(const DetectedBlob& blob);
+void        blobGeometryFromJson(const QJsonObject& obj, DetectedBlob& blob);
+// Centerline-pass results only.
+QJsonObject    blobCenterlineToJson(const BlobCenterline& cl);
+BlobCenterline blobCenterlineFromJson(const QJsonObject& obj);
+// Combined single-object layout (geometry + centerline keys). Still written for
+// TrackingManager's mergeState section and read for pre-split worms.json files.
 QJsonObject detectedBlobToJson(const DetectedBlob& blob);
 DetectedBlob detectedBlobFromJson(const QJsonObject& obj);
 

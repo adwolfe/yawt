@@ -331,7 +331,7 @@ struct HeadTailPredictor {
  *       extrapolation as tiebreak when the cost spread is < 10%.
  *
  * The renderer at videoloader.cpp keys on `tc.source`. The caller is
- * expected to write each TrueTip back into `blob.tipCandidates` with
+ * expected to write each TrueTip back into `blob.centerline.tipCandidates` with
  * `tc.source = SkeletonEndpoint`, regardless of `extended`, so the dots
  * keep their familiar green-filled appearance.
  */

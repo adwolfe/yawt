@@ -35,8 +35,11 @@
  *   frame, quality, position{x,y}, roi{x,y,width,height}   (roi = search window)
  *   area, aspectRatio, bodyLength   optional, present when derived
  *   tips{head{x,y},tail{x,y}}       optional
- *   detectedBlob{...}               optional, Tracking::detectedBlobToJson()
- *   centerlinePoints[[x,y],...]     legacy (read only; superseded by detectedBlob)
+ *   blob{...}                       optional, Tracking::blobGeometryToJson()
+ *   centerline{...}                 optional, Tracking::blobCenterlineToJson(); only
+ *                                   written once the centerline pass has run
+ *   detectedBlob{...}               legacy combined object (read only)
+ *   centerlinePoints[[x,y],...]     oldest layout (read only)
  */
 namespace WormsJson {
 
@@ -78,7 +81,7 @@ QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
                              const Tracking::DetectedBlob* blob);
 /**
  * Parse one track point. When @p outBlob is non-null and the point carries a
- * blob (new "detectedBlob" or legacy "centerlinePoints"), it is written there
+ * blob ("blob"/"centerline", legacy "detectedBlob" or "centerlinePoints"), it is written there
  * and @p outHasBlob is set. bodyLength is taken from the file when present and
  * otherwise computed from the centerline so legacy files still yield it.
  */

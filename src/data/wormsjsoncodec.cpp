@@ -172,7 +172,10 @@ QJsonObject trackPointToJson(const Tracking::WormTrackPoint& p,
     }
 
     if (blob) {
-        o["detectedBlob"] = Tracking::detectedBlobToJson(*blob);
+        o["blob"] = Tracking::blobGeometryToJson(*blob);
+        if (!blob->centerline.isEmpty()) {
+            o["centerline"] = Tracking::blobCenterlineToJson(blob->centerline);
+        }
     }
     return o;
 }
@@ -207,15 +210,22 @@ Tracking::WormTrackPoint trackPointFromJson(const QJsonObject& obj,
         }
     }
 
-    // Blob: current combined object, or the legacy centerline-only array.
+    // Blob: current split layout, the pre-split combined object, or the oldest
+    // centerline-only array.
     Tracking::DetectedBlob blob;
     bool hasBlob = false;
-    if (obj.value("detectedBlob").isObject()) {
+    if (obj.value("blob").isObject()) {
+        Tracking::blobGeometryFromJson(obj["blob"].toObject(), blob);
+        if (obj.value("centerline").isObject()) {
+            blob.centerline = Tracking::blobCenterlineFromJson(obj["centerline"].toObject());
+        }
+        hasBlob = true;
+    } else if (obj.value("detectedBlob").isObject()) {
         blob = Tracking::detectedBlobFromJson(obj["detectedBlob"].toObject());
         hasBlob = true;
     } else if (obj.value("centerlinePoints").isArray()) {
-        blob.centerlinePoints = pointArrayFrom(obj["centerlinePoints"].toArray());
-        hasBlob = blob.centerlinePoints.size() >= 2;
+        blob.centerline.points = pointArrayFrom(obj["centerlinePoints"].toArray());
+        hasBlob = blob.centerline.points.size() >= 2;
     }
 
     if (hasBlob) {
@@ -229,8 +239,8 @@ Tracking::WormTrackPoint trackPointFromJson(const QJsonObject& obj,
         if (blob.boundingBox.isNull()) {
             blob.boundingBox = p.searchWindow;
         }
-        if (p.bodyLength <= 0.f && blob.centerlinePoints.size() >= 2) {
-            p.bodyLength = arcLength(blob.centerlinePoints);
+        if (p.bodyLength <= 0.f && blob.centerline.points.size() >= 2) {
+            p.bodyLength = arcLength(blob.centerline.points);
         }
         if (outBlob) *outBlob = std::move(blob);
         if (outHasBlob) *outHasBlob = true;

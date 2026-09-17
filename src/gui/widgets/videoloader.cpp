@@ -761,8 +761,8 @@ void VideoLoader::rebuildCenterlineMidpointCache() {
             const QMap<int, Tracking::DetectedBlob> blobs =
                 m_storage->getDetectedBlobsForFrame(pt.frameNumber);
             auto it = blobs.constFind(wormId);
-            if (it != blobs.constEnd() && it->isValid && !it->centerlinePoints.empty()) {
-                const auto& clPts = it->centerlinePoints;
+            if (it != blobs.constEnd() && it->isValid && !it->centerline.points.empty()) {
+                const auto& clPts = it->centerline.points;
                 const cv::Point2f& mid = clPts[clPts.size() / 2];
                 wormCache[pt.frameNumber] = QPointF(mid.x, mid.y);
             }
@@ -1157,9 +1157,9 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             painter.setBrush(QColor(255, 255, 0));   // yellow = centerline-centroid
             painter.drawEllipse(midPoint, centroidRadius, centroidRadius);
 
-            if (blob.hasCenterlineCutPoint) {
+            if (blob.centerline.hasCutPoint) {
                 const QPointF cutPoint = mapPointFromVideo(
-                    QPointF(blob.centerlineCutPoint.x, blob.centerlineCutPoint.y));
+                    QPointF(blob.centerline.cutPoint.x, blob.centerline.cutPoint.y));
                 if (cutPoint.x() >= 0) {
                     const qreal cutRadius = CENTERLINE_LINE_WIDTH * 1.25;
                     painter.setPen(QPen(Qt::black, 1.0));
@@ -1193,7 +1193,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             if (!item || !item->visible) continue;
 
             const Tracking::DetectedBlob blob = tipBlobs.value(wormId);
-            if (!blob.isValid || blob.tipCandidates.empty()) continue;
+            if (!blob.isValid || blob.centerline.tipCandidates.empty()) continue;
 
             const qreal dotRadius  = CENTERLINE_LINE_WIDTH * 1.05;
             const qreal ringRadius = CENTERLINE_LINE_WIDTH * 1.95;
@@ -1201,7 +1201,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             edgePen.setCosmetic(true);
 
             // Phase B: candidate dots (one per tipCandidate).
-            for (const Tracking::TipCandidate& tc : blob.tipCandidates) {
+            for (const Tracking::TipCandidate& tc : blob.centerline.tipCandidates) {
                 const QPointF pt = mapPointFromVideo(QPointF(tc.point.x, tc.point.y));
                 if (pt.x() < 0) continue;
 
@@ -1233,8 +1233,8 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             // candidate dots so the assignment is visually obvious without
             // hiding which detector surfaced each tip.
             auto drawRoleRing = [&](int idx, const QColor& color) {
-                if (idx < 0 || idx >= static_cast<int>(blob.tipCandidates.size())) return;
-                const cv::Point2f& cv = blob.tipCandidates[idx].point;
+                if (idx < 0 || idx >= static_cast<int>(blob.centerline.tipCandidates.size())) return;
+                const cv::Point2f& cv = blob.centerline.tipCandidates[idx].point;
                 const QPointF pt = mapPointFromVideo(QPointF(cv.x, cv.y));
                 if (pt.x() < 0) return;
                 QPen ringPen(color, 2.0);
@@ -1243,8 +1243,8 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                 painter.setBrush(Qt::NoBrush);
                 painter.drawEllipse(pt, ringRadius, ringRadius);
             };
-            drawRoleRing(blob.assignedHeadTipIdx, QColor(0x70, 0xE6, 0x9D));  // head
-            drawRoleRing(blob.assignedTailTipIdx, QColor(0xD0, 0xB8, 0xE0));  // tail
+            drawRoleRing(blob.centerline.headTipIdx, QColor(0x70, 0xE6, 0x9D));  // head
+            drawRoleRing(blob.centerline.tailTipIdx, QColor(0xD0, 0xB8, 0xE0));  // tail
         }
     }
 

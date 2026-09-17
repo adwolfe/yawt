@@ -16,9 +16,9 @@ Tracking produces, per worm per frame, a `DetectedBlob` (contour, holes, area) a
 `WormTrackPoint` (centroid, search window, quality). The centerline pass runs afterwards on
 a background thread (`CenterlineWorker::doWork`) and, for every non-lost frame, fills in:
 
-- `DetectedBlob::centerlinePoints` — an ordered polyline from head to tail
-- `DetectedBlob::tipCandidates` with `assignedHeadTipIdx` / `assignedTailTipIdx`
-- `DetectedBlob::topologyState` — `Clean`, `SelfCrossed`, `Merged`, or `Lost`
+- `DetectedBlob::centerline.points` — an ordered polyline from head to tail
+- `DetectedBlob::centerline.tipCandidates` with `headTipIdx` / `tailTipIdx`
+- `DetectedBlob::centerline.topology` — `Clean`, `SelfCrossed`, `Merged`, or `Lost`
 - per-worm `TipFeatureBaseline` statistics in `TrackingDataStorage`
 
 When it finishes, `TrackingManager::handleCenterlineFinished` calls
@@ -33,9 +33,9 @@ They are not execution stages; all three are computed inside Step 1 of every fra
 | Name | Meaning | Type | Where computed |
 |---|---|---|---|
 | **Phase A** | Per-worm **tip-feature baseline**: running mean and variance of tip curvature magnitude, tip width, and body length, sampled only on `Clean` frames. Used as a length prior and as a curvature threshold. | `Centerline::TipFeatureBaseline` (Welford online stats) | `TrackingDataStorage::recordTipFeatureSample` / `recordBodyLengthSample`, fed from Step 1 |
-| **Phase B** | Per-frame **tip candidates**: points on the outer contour that could be a nose or tail. Sources: skeleton degree-1 endpoints, contour curvature peaks, or a hypothesised hidden tip (D-3). | `Tracking::TipCandidate` on `DetectedBlob::tipCandidates` | `Centerline::detectEndpoints`, steps (b)–(e) |
+| **Phase B** | Per-frame **tip candidates**: points on the outer contour that could be a nose or tail. Sources: skeleton degree-1 endpoints, contour curvature peaks, or a hypothesised hidden tip (D-3). | `Tracking::TipCandidate` on `DetectedBlob::centerline.tipCandidates` | `Centerline::detectEndpoints`, steps (b)–(e) |
 | **Phase C** | **Head/tail assignment** and its prerequisites. | | |
-| Phase C.1 | Assigning the head and tail roles to two candidates using the previous frame's positions and velocities. | `EndpointResult::headIdx` / `tailIdx` → `DetectedBlob::assignedHeadTipIdx` / `assignedTailTipIdx`; predictor state in `Centerline::HeadTailPredictor` | `detectEndpoints`, step (g) |
+| Phase C.1 | Assigning the head and tail roles to two candidates using the previous frame's positions and velocities. | `EndpointResult::headIdx` / `tailIdx` → `DetectedBlob::centerline.headTipIdx` / `tailTipIdx`; predictor state in `Centerline::HeadTailPredictor` | `detectEndpoints`, step (g) |
 | Phase C.2 | **Topology classification** of the blob so that later steps know whether both tips are trustworthy. | `Tracking::TopologyState` | `detectEndpoints`, step (f) |
 
 Topology values:

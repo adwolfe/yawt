@@ -339,7 +339,7 @@ cv::Rect buildCenterlineMask(const Tracking::DetectedBlob& blob, cv::Mat& mask)
 
 bool populateCenterlineFromContour(Tracking::DetectedBlob& blob)
 {
-    blob.centerlinePoints.clear();
+    blob.centerline.points.clear();
 
     if (!blob.isValid || blob.contourPoints.size() < 3) {
         return false;
@@ -349,11 +349,11 @@ bool populateCenterlineFromContour(Tracking::DetectedBlob& blob)
     cv::Rect localBounds = buildCenterlineMask(blob, mask);
     if (mask.empty()) return false;
 
-    blob.centerlinePoints = extractCenterlineFromMask(
+    blob.centerline.points = extractCenterlineFromMask(
         mask,
         cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
 
-    return blob.centerlinePoints.size() >= 2;
+    return blob.centerline.points.size() >= 2;
 }
 
 bool populateCenterlineFromContourWithCut(Tracking::DetectedBlob& blob,
@@ -361,7 +361,7 @@ bool populateCenterlineFromContourWithCut(Tracking::DetectedBlob& blob,
                                           const cv::Point2f& cutEnd,
                                           int cutThickness)
 {
-    blob.centerlinePoints.clear();
+    blob.centerline.points.clear();
 
     if (!blob.isValid || blob.contourPoints.size() < 3 || blob.holeContourPoints.empty()) {
         return false;
@@ -378,11 +378,11 @@ bool populateCenterlineFromContourWithCut(Tracking::DetectedBlob& blob,
     const int thickness = std::max(1, cutThickness);
     cv::line(mask, localStart, localEnd, cv::Scalar(0), thickness, cv::LINE_8);
 
-    blob.centerlinePoints = extractCenterlineFromMask(
+    blob.centerline.points = extractCenterlineFromMask(
         mask,
         cv::Point2f(static_cast<float>(localBounds.x), static_cast<float>(localBounds.y)));
 
-    return blob.centerlinePoints.size() >= 2;
+    return blob.centerline.points.size() >= 2;
 }
 
 QList<QPointF> extractOrderedCenterlinePoints(const Tracking::DetectedBlob& blob)
@@ -392,12 +392,12 @@ QList<QPointF> extractOrderedCenterlinePoints(const Tracking::DetectedBlob& blob
         return centerlinePoints;
     }
 
-    if (blob.centerlinePoints.empty()) {
+    if (blob.centerline.points.empty()) {
         return centerlinePoints;
     }
 
-    centerlinePoints.reserve(static_cast<qsizetype>(blob.centerlinePoints.size()));
-    for (const cv::Point2f& point : blob.centerlinePoints) {
+    centerlinePoints.reserve(static_cast<qsizetype>(blob.centerline.points.size()));
+    for (const cv::Point2f& point : blob.centerline.points) {
         centerlinePoints.append(QPointF(point.x, point.y));
     }
 

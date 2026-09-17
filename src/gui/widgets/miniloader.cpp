@@ -543,9 +543,9 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
             painter.drawText(QRectF(centroidWidget.x() - 12 + dx, centroidWidget.y() - 12 + dy, 24, 24),
                              Qt::AlignCenter, label);
 
-            if (blob.hasCenterlineCutPoint) {
-                const QPointF cutCrop(blob.centerlineCutPoint.x - m_cropOffset.x(),
-                                      blob.centerlineCutPoint.y - m_cropOffset.y());
+            if (blob.centerline.hasCutPoint) {
+                const QPointF cutCrop(blob.centerline.cutPoint.x - m_cropOffset.x(),
+                                      blob.centerline.cutPoint.y - m_cropOffset.y());
                 const QPointF cutWidget(
                     targetRect.left() + cutCrop.x() * static_cast<double>(targetRect.width()) / m_croppedFrame.width(),
                     targetRect.top() + cutCrop.y() * static_cast<double>(targetRect.height()) / m_croppedFrame.height());
@@ -576,10 +576,10 @@ void MiniLoader::drawOverlays(QPainter& painter, const QRect& targetRect)
         for (int wormId : m_visibleWormIds) {
             if (!blobMap.contains(wormId)) continue;
             const Tracking::DetectedBlob& blob = blobMap.value(wormId);
-            if (!blob.isValid || blob.centerlinePoints.empty()) continue;
+            if (!blob.isValid || blob.centerline.points.empty()) continue;
 
             QPolygonF linePoly;
-            for (const cv::Point2f& pt : blob.centerlinePoints) {
+            for (const cv::Point2f& pt : blob.centerline.points) {
                 QPointF cropLocal(pt.x - m_cropOffset.x(), pt.y - m_cropOffset.y());
                 QPointF widget(
                     targetRect.left() + cropLocal.x() * targetRect.width()  / m_croppedFrame.width(),
