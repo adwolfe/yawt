@@ -24,7 +24,7 @@ const double MERGE_CONFIRM_ABSOLUTE_AREA_FACTOR = 1.3; // For confirming merge a
 
 
 WormTracker::WormTracker(int wormId,
-                         QRectF initialRoi, // This is the fixed-size ROI
+                         QRectF initialSearchWindow, // This is the fixed-size search window
                          TrackingDirection direction,
                          int videoKeyFrameNum,
                          QObject *parent)
@@ -32,11 +32,11 @@ WormTracker::WormTracker(int wormId,
     m_wormId(wormId),
     m_direction(direction),
     m_framesToProcess(nullptr),
-    m_initialRoiEdge(initialRoi.isValid() ? initialRoi.width() : 20.0), // Default if invalid
+    m_searchWindowEdge(initialSearchWindow.isValid() ? initialSearchWindow.width() : 20.0), // Default if invalid
     m_minBlobArea(TrackingConstants::DEFAULT_MIN_WORM_AREA),
     m_maxBlobArea(TrackingConstants::DEFAULT_MAX_WORM_AREA),
-    m_currentSearchRoi(initialRoi),
-    m_lastKnownPosition(initialRoi.center().x(), initialRoi.center().y()),
+    m_currentSearchWindow(initialSearchWindow),
+    m_lastKnownPosition(initialSearchWindow.center().x(), initialSearchWindow.center().y()),
     m_videoKeyFrameNum(videoKeyFrameNum),
     m_currFrameNum(0), // Initialize m_currFrameNum
     m_trackingActive(false),
@@ -96,7 +96,7 @@ void WormTracker::continueTracking() {
     if (m_trackingActive && m_currFrameNum < static_cast<int>(m_framesToProcess->size()))
     {
         const cv::Mat& currentFrame = (*m_framesToProcess)[m_currFrameNum];
-        QRectF searchRoiForThisFrame = m_currentSearchRoi; // Capture the ROI used for *this* frame's search
+        QRectF searchRoiForThisFrame = m_currentSearchWindow; // Capture the ROI used for *this* frame's search
 
         if (currentFrame.empty())
         {
@@ -105,18 +105,18 @@ void WormTracker::continueTracking() {
         else
         {
             bool foundTargetThisFrame = false;
-            if (!m_currentSearchRoi.isValid() || m_currentSearchRoi.isEmpty()) {
+            if (!m_currentSearchWindow.isValid() || m_currentSearchWindow.isEmpty()) {
                 qWarning().noquote() << getDebugLabel("continueTracking") << "Invalid ROI, resetting";
-                m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrame.size());
-                searchRoiForThisFrame = m_currentSearchRoi; // Update captured ROI if it was reset
+                m_currentSearchWindow = adjustSearchWindowPos(m_lastKnownPosition, currentFrame.size());
+                searchRoiForThisFrame = m_currentSearchWindow; // Update captured ROI if it was reset
             }
 
             // Use the unified processFrame function with appropriate mode
             bool asMerged = (m_currentState == Tracking::TrackerState::TrackingMerged);
-            foundTargetThisFrame = processFrame(asMerged, currentFrame, m_currFrameNum, m_currentSearchRoi);
+            foundTargetThisFrame = processFrame(asMerged, currentFrame, m_currFrameNum, m_currentSearchWindow);
 
             if (!foundTargetThisFrame && m_currentState != Tracking::TrackerState::PausedForSplit) {
-                // qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Target search at sequence index" << m_currFrameNum << "was skipped or unsuccessful; ROI for next frame remains" << m_currentSearchRoi;
+                // qDebug().noquote()<< "WormTracker ID" << m_wormId << ": Target search at sequence index" << m_currFrameNum << "was skipped or unsuccessful; ROI for next frame remains" << m_currentSearchWindow;
             }
         }
 
@@ -236,7 +236,7 @@ WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const
     }
 
     // debugMessage field has been removed - using getDebugLabel directly in debug statements
-    context.searchRoiUsedForThisFrame = searchRoi;
+    context.searchWindowUsedForThisFrame = searchRoi;
     context.blobsInFixedRoi = findPlausibleBlobsInRoi(frame, searchRoi);
     context.plausibleBlobsInFixedRoi = context.blobsInFixedRoi.count();
 
@@ -246,25 +246,25 @@ WormTracker::FrameProcessingContext WormTracker::initializeFrameProcessing(const
 }
 
 // Unified frame processing - handles both single and merged tracking modes
-bool WormTracker::processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoi)
+bool WormTracker::processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindow)
 {
     TRACKING_DEBUG().noquote() << getDebugLabel("processFrame") << "processFrame - CALLED asMerged:" << asMerged;
 
     // 1. Initialize processing context
-    FrameProcessingContext context = initializeFrameProcessing(frame, sequenceFrameIndex, currentRoi);
+    FrameProcessingContext context = initializeFrameProcessing(frame, sequenceFrameIndex, currentSearchWindow);
 
     // 2. Process based on blob count
     if (context.plausibleBlobsInFixedRoi == 0) {
-        return handleLostTracking(context, currentRoi);
+        return handleLostTracking(context, currentSearchWindow);
     } else if (context.plausibleBlobsInFixedRoi == 1) {
-        return handleSingleBlobCase(asMerged, context.blobsInFixedRoi.first(), frame, context, currentRoi);
+        return handleSingleBlobCase(asMerged, context.blobsInFixedRoi.first(), frame, context, currentSearchWindow);
     } else {
-        return handleMultipleBlobsCase(asMerged, context.blobsInFixedRoi, frame, context, currentRoi);
+        return handleMultipleBlobsCase(asMerged, context.blobsInFixedRoi, frame, context, currentSearchWindow);
     }
 }
 
 // Handle case when no blobs are found
-bool WormTracker::handleLostTracking(const FrameProcessingContext& context, QRectF& currentRoi)
+bool WormTracker::handleLostTracking(const FrameProcessingContext& context, QRectF& currentSearchWindow)
 {
     // No debug needed for common case of no blobs found
 
@@ -287,7 +287,7 @@ bool WormTracker::handleLostTracking(const FrameProcessingContext& context, QRec
     QList<Tracking::DetectedBlob> emptySplitCandidates;
 
     emit positionUpdated(m_wormId, context.originalFrameNumber, invalidBlobForSignal,
-                         invalidBlobForSignal, context.searchRoiUsedForThisFrame,
+                         invalidBlobForSignal, context.searchWindowUsedForThisFrame,
                          m_currentState, emptySplitCandidates);
 
     // Reset merge detection skip flag
@@ -302,30 +302,30 @@ bool WormTracker::handleLostTracking(const FrameProcessingContext& context, QRec
 // Check if blob is touching boundary
 bool WormTracker::isBlobTouchingBoundary(const Tracking::DetectedBlob& blob, const QRectF& roi)
 {
-    return blob.touchesROIboundary || !roi.contains(blob.boundingBox);
+    return blob.touchesSearchWindow || !roi.contains(blob.boundingBox);
 }
 
 // Handle a single blob case
 bool WormTracker::handleSingleBlobCase(bool asMerged, const Tracking::DetectedBlob& blob,
                                       const cv::Mat& frame, const FrameProcessingContext& context,
-                                      QRectF& currentRoi)
+                                      QRectF& currentSearchWindow)
 {
     TRACKING_DEBUG().noquote() << getDebugLabel("handleSingleBlobCase") << "handleSingleBlobCase - CALLED asMerged:" << asMerged << "area:" << blob.area;
 
     // Debug removed - found single blob
 
-    bool touchesBoundary = isBlobTouchingBoundary(blob, context.searchRoiUsedForThisFrame);
+    bool touchesBoundary = isBlobTouchingBoundary(blob, context.searchWindowUsedForThisFrame);
 
     if (!touchesBoundary) {
-        return handleNonBoundaryBlob(asMerged, blob, context, frame, currentRoi);
+        return handleNonBoundaryBlob(asMerged, blob, context, frame, currentSearchWindow);
     } else {
-        return handleBoundaryTouchingBlob(asMerged, blob, frame, context, currentRoi);
+        return handleBoundaryTouchingBlob(asMerged, blob, frame, context, currentSearchWindow);
     }
 }
 
 // Handle a blob that's fully contained in the ROI
 bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedBlob& blob,
-                                       const FrameProcessingContext& context, const cv::Mat& frame, QRectF& currentRoi)
+                                       const FrameProcessingContext& context, const cv::Mat& frame, QRectF& currentSearchWindow)
 {
     TRACKING_DEBUG().noquote() << getDebugLabel("handleNonBoundaryBlob") << "handleNonBoundaryBlob - CALLED asMerged:" << asMerged << "area:" << blob.area;
 
@@ -336,7 +336,7 @@ bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedB
         // qDebug().noquote() << getDebugLabel("handleNonBoundaryBlob") << "Potential split detected. Expanding to look for other fragments...";
 
         // Proactively expand ROI to look for other fragments, even though this blob doesn't touch the boundary
-        QRectF expandedRoi = context.searchRoiUsedForThisFrame;
+        QRectF expandedRoi = context.searchWindowUsedForThisFrame;
 
         // Apply expansion similar to expandBlobTouchingBoundary
         for (int i = 0; i < MAX_EXPANSION_ITERATIONS_BOUNDARY; ++i) {
@@ -381,7 +381,7 @@ bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedB
 
         return updateTrackingState(blob, blob, splitCandidates,
                                   Tracking::TrackerState::PausedForSplit,
-                                  context, frame.size(), currentRoi);
+                                  context, frame.size(), currentSearchWindow);
     } else if (!asMerged) {
         // In single mode, check for merge
         bool confirmedMerge = detectMergeByAreaIncrease(blob);
@@ -390,18 +390,18 @@ bool WormTracker::handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedB
             TRACKING_DEBUG().noquote() << getDebugLabel("handleNonBoundaryBlob") << "handleNonBoundaryBlob - MERGE confirmed - Area:" << blob.area;
             return updateTrackingState(blob, blob, QList<Tracking::DetectedBlob>(),
                                       Tracking::TrackerState::TrackingMerged,
-                                      context, frame.size(), currentRoi);
+                                      context, frame.size(), currentSearchWindow);
         } else {
             // Continue normal single tracking
             return updateTrackingState(blob, blob, QList<Tracking::DetectedBlob>(),
                                       Tracking::TrackerState::TrackingSingle,
-                                      context, frame.size(), currentRoi);
+                                      context, frame.size(), currentSearchWindow);
         }
     } else {
         // In merged mode, continue as merged
         return updateTrackingState(blob, blob, QList<Tracking::DetectedBlob>(),
                                   Tracking::TrackerState::TrackingMerged,
-                                  context, frame.size(), currentRoi);
+                                  context, frame.size(), currentSearchWindow);
     }
 }
 
@@ -465,7 +465,7 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
         // Check if ANY blob in the expanded ROI touches the boundary
         bool anyBlobTouchesBoundary = false;
         for (const auto& b : blobsInExpanded) {
-            if (b.isValid && (b.touchesROIboundary || !expandedRoi.contains(b.boundingBox))) {
+            if (b.isValid && (b.touchesSearchWindow || !expandedRoi.contains(b.boundingBox))) {
                 anyBlobTouchesBoundary = true;
                 // Debug message removed - boundary touching blob details
             }
@@ -491,13 +491,13 @@ Tracking::DetectedBlob WormTracker::expandBlobTouchingBoundary(const Tracking::D
 // Handle a blob that touches the boundary
 bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::DetectedBlob& blob,
                                             const cv::Mat& frame, const FrameProcessingContext& context,
-                                            QRectF& currentRoi)
+                                            QRectF& currentSearchWindow)
 {
     TRACKING_DEBUG().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "handleBoundaryTouchingBlob - CALLED asMerged:" << asMerged << "area:" << blob.area;
 
     // Try to expand the blob by growing the ROI and re-thresholding
     // Expand ROI to get full blob
-    QRectF expandedRoi = context.searchRoiUsedForThisFrame;
+    QRectF expandedRoi = context.searchWindowUsedForThisFrame;
     Tracking::DetectedBlob expandedBlob = expandBlobTouchingBoundary(blob, expandedRoi, frame);
 
     // After expansion, expandedBlob is our best guess for the full entity
@@ -562,7 +562,7 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
         //                       << "Centroid:" << candidate.centroid.x() << "," << candidate.centroid.y();
         // }
         return updateTrackingState(blobForAnchor, blobToReport, splitCandidates,
-                                 Tracking::TrackerState::PausedForSplit, context, frame.size(), currentRoi);
+                                 Tracking::TrackerState::PausedForSplit, context, frame.size(), currentSearchWindow);
     }
 
     // Check for merge if in single mode
@@ -572,25 +572,25 @@ bool WormTracker::handleBoundaryTouchingBlob(bool asMerged, const Tracking::Dete
         if (confirmedMerge) {
             TRACKING_DEBUG().noquote() << getDebugLabel("handleBoundaryTouchingBlob") << "handleBoundaryTouchingBlob - MERGE confirmed - Area:" << blobToReport.area;
             return updateTrackingState(blobForAnchor, blobToReport, QList<Tracking::DetectedBlob>(),
-                                     Tracking::TrackerState::TrackingMerged, context, frame.size(), currentRoi);
+                                     Tracking::TrackerState::TrackingMerged, context, frame.size(), currentSearchWindow);
         } else {
             // Debug message removed - no merge case details
             // If it wasn't a merge, it's a single worm. Anchor and report should ideally be the same.
             blobForAnchor = blobToReport;
             return updateTrackingState(blobForAnchor, blobToReport, QList<Tracking::DetectedBlob>(),
-                                     Tracking::TrackerState::TrackingSingle, context, frame.size(), currentRoi);
+                                     Tracking::TrackerState::TrackingSingle, context, frame.size(), currentSearchWindow);
         }
     } else {
         // In merged mode, continue as merged
         return updateTrackingState(blobForAnchor, blobToReport, QList<Tracking::DetectedBlob>(),
-                                 Tracking::TrackerState::TrackingMerged, context, frame.size(), currentRoi);
+                                 Tracking::TrackerState::TrackingMerged, context, frame.size(), currentSearchWindow);
     }
 }
 
 // Handle multiple blobs case
 bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::DetectedBlob>& blobs,
                                          const cv::Mat& frame, const FrameProcessingContext& context,
-                                         QRectF& currentRoi)
+                                         QRectF& currentSearchWindow)
 {
     TRACKING_DEBUG().noquote() << getDebugLabel("handleMultipleBlobsCase") << "handleMultipleBlobsCase - CALLED asMerged:" << asMerged << "blobCount:" << blobs.size();
     if (asMerged) {
@@ -600,7 +600,7 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
         // If any blob touches the ROI boundary, expand to capture the full merged entity.
         bool anyBlobTouchesBoundary = false;
         for (const auto& blob : blobs) {
-            if (isBlobTouchingBoundary(blob, context.searchRoiUsedForThisFrame)) {
+            if (isBlobTouchingBoundary(blob, context.searchWindowUsedForThisFrame)) {
                 anyBlobTouchesBoundary = true;
                 break;
             }
@@ -608,14 +608,14 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
         if (anyBlobTouchesBoundary) {
             // Use the blob closest to the last primary blob as the expansion anchor.
             Tracking::DetectedBlob boundaryAnchor = selectBestBlobCandidate(blobs);
-            return handleBoundaryTouchingBlob(asMerged, boundaryAnchor, frame, context, currentRoi);
+            return handleBoundaryTouchingBlob(asMerged, boundaryAnchor, frame, context, currentSearchWindow);
         }
 
         // Select best candidate
         Tracking::DetectedBlob bestCandidate = selectBestBlobCandidate(blobs);
 
         if (!bestCandidate.isValid) {
-            return handleLostTracking(context, currentRoi);
+            return handleLostTracking(context, currentSearchWindow);
         }
 
         // Check if this is a split
@@ -624,7 +624,7 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
         if (isSplit) {
             // Report all blobs as split candidates
             return updateTrackingState(bestCandidate, bestCandidate, blobs,
-                                     Tracking::TrackerState::PausedForSplit, context, frame.size(), currentRoi);
+                                     Tracking::TrackerState::PausedForSplit, context, frame.size(), currentSearchWindow);
         } else {
             // Find persisting component for anchor
             Tracking::DetectedBlob anchor;
@@ -636,7 +636,7 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
             }
             
             return updateTrackingState(anchor, bestCandidate, QList<Tracking::DetectedBlob>(), 
-                                     Tracking::TrackerState::TrackingMerged, context, frame.size(), currentRoi);
+                                     Tracking::TrackerState::TrackingMerged, context, frame.size(), currentSearchWindow);
         }
     } else {
         // For single mode, multiple blobs might still indicate a merge if 3+ worms are in view
@@ -646,10 +646,10 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
         Tracking::DetectedBlob searchCandidate = selectBestBlobCandidate(blobs);
 
         if (!searchCandidate.isValid) {
-            return handleLostTracking(context, currentRoi);
+            return handleLostTracking(context, currentSearchWindow);
         }
 
-        bool touchesBoundary = isBlobTouchingBoundary(searchCandidate, context.searchRoiUsedForThisFrame);
+        bool touchesBoundary = isBlobTouchingBoundary(searchCandidate, context.searchWindowUsedForThisFrame);
 
         if (!touchesBoundary) {
             // Non-boundary case: still allow merge detection based on area jump
@@ -659,13 +659,13 @@ bool WormTracker::handleMultipleBlobsCase(bool asMerged, const QList<Tracking::D
                                            << "handleMultipleBlobsCase - MERGE confirmed (multi-blob, non-boundary) - Area:"
                                            << searchCandidate.area;
                 return updateTrackingState(searchCandidate, searchCandidate, QList<Tracking::DetectedBlob>(),
-                                         Tracking::TrackerState::TrackingMerged, context, frame.size(), currentRoi);
+                                         Tracking::TrackerState::TrackingMerged, context, frame.size(), currentSearchWindow);
             }
             return updateTrackingState(searchCandidate, searchCandidate, QList<Tracking::DetectedBlob>(),
-                                     Tracking::TrackerState::TrackingSingle, context, frame.size(), currentRoi);
+                                     Tracking::TrackerState::TrackingSingle, context, frame.size(), currentSearchWindow);
         } else {
             // Boundary case, need to expand
-            return handleBoundaryTouchingBlob(asMerged, searchCandidate, frame, context, currentRoi);
+            return handleBoundaryTouchingBlob(asMerged, searchCandidate, frame, context, currentSearchWindow);
         }
     }
 }
@@ -787,11 +787,11 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
                                     Tracking::TrackerState nextState,
                                     const FrameProcessingContext& context,
                                     const cv::Size& frameSize,
-                                    QRectF& currentRoi)
+                                    QRectF& currentSearchWindow)
 {
     if (!blobToReport.isValid || !blobForAnchor.isValid) {
         // Debug removed - invalid blobs case
-        return handleLostTracking(context, currentRoi);
+        return handleLostTracking(context, currentSearchWindow);
     }
 
     // Update state if changed
@@ -823,13 +823,13 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
         qWarning().noquote() << getDebugLabel("updateTrackingState") << "Invalid frame size";
         // Use a fallback size to prevent ROI calculation errors
         cv::Size fallbackSize(1280, 720);
-        QRectF nextFrameSearchRoi = adjustRoiPos(m_lastKnownPosition, fallbackSize);
+        QRectF nextFrameSearchRoi = adjustSearchWindowPos(m_lastKnownPosition, fallbackSize);
         // Debug removed - fallback frame size message
-        currentRoi = nextFrameSearchRoi;
+        currentSearchWindow = nextFrameSearchRoi;
     } else {
-        QRectF nextFrameSearchRoi = adjustRoiPos(m_lastKnownPosition, frameSize);
+        QRectF nextFrameSearchRoi = adjustSearchWindowPos(m_lastKnownPosition, frameSize);
         // Debug messages removed - ROI adjustment details
-        currentRoi = nextFrameSearchRoi;
+        currentSearchWindow = nextFrameSearchRoi;
     }
 
     // Store blob information
@@ -839,20 +839,20 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
     // Emit position update
     emit positionUpdated(m_wormId, context.originalFrameNumber,
                         m_lastPrimaryBlob, m_lastFullBlob,
-                        context.searchRoiUsedForThisFrame,
+                        context.searchWindowUsedForThisFrame,
                         m_currentState, splitCandidates);
 
     // ROI has already been updated above, verify it's valid
     // Debug message removed - final ROI details
 
-    if (!currentRoi.isValid() || currentRoi.isEmpty()) {
+    if (!currentSearchWindow.isValid() || currentSearchWindow.isEmpty()) {
         qWarning().noquote() << getDebugLabel("updateTrackingState") << "Invalid ROI";
         // Create emergency fallback ROI centered on the worm with the initial ROI size
-        currentRoi = QRectF(
-            m_lastKnownPosition.x - m_initialRoiEdge/2,
-            m_lastKnownPosition.y - m_initialRoiEdge/2,
-            m_initialRoiEdge,
-            m_initialRoiEdge
+        currentSearchWindow = QRectF(
+            m_lastKnownPosition.x - m_searchWindowEdge/2,
+            m_lastKnownPosition.y - m_searchWindowEdge/2,
+            m_searchWindowEdge,
+            m_searchWindowEdge
         );
         // Debug removed - emergency fallback ROI message
     }
@@ -864,14 +864,14 @@ bool WormTracker::updateTrackingState(const Tracking::DetectedBlob& blobForAncho
 }
 
 // Legacy method implementations for backward compatibility
-bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut)
+bool WormTracker::processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut)
 {
-    return processFrame(false, frame, sequenceFrameIndex, currentFixedSearchRoiRef_InOut);
+    return processFrame(false, frame, sequenceFrameIndex, currentSearchWindowInOut);
 }
 
-bool WormTracker::processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut)
+bool WormTracker::processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut)
 {
-    return processFrame(true, frame, sequenceFrameIndex, currentFixedSearchRoiRef_InOut);
+    return processFrame(true, frame, sequenceFrameIndex, currentSearchWindowInOut);
 }
 
 
@@ -901,7 +901,7 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         if (m_framesToProcess && m_currFrameNum < static_cast<int>(m_framesToProcess->size()) && m_currFrameNum >=0) {
             Tracking::DetectedBlob invalidBlob;
             QList<Tracking::DetectedBlob> emptySplitCandidates;
-            emit positionUpdated(m_wormId, originalFrameNumber, invalidBlob, invalidBlob, m_currentSearchRoi, m_currentState, emptySplitCandidates);
+            emit positionUpdated(m_wormId, originalFrameNumber, invalidBlob, invalidBlob, m_currentSearchWindow, m_currentState, emptySplitCandidates);
         }
         m_currFrameNum++; // Advance frame, even if lost, to continue processing sequence
         if (m_trackingActive) {
@@ -925,7 +925,7 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         }
     }
 
-    m_currentSearchRoi = adjustRoiPos(m_lastKnownPosition, currentFrameCvSize);
+    m_currentSearchWindow = adjustSearchWindowPos(m_lastKnownPosition, currentFrameCvSize);
     m_lastPrimaryBlob = targetBlob; // This is the anchor
     m_lastFullBlob = targetBlob;    // And also what's reported
     m_currentState = Tracking::TrackerState::TrackingSingle; // Resumed as single
@@ -939,13 +939,13 @@ void WormTracker::resumeTrackingWithAssignedTarget(const Tracking::DetectedBlob&
         int originalFrameNumber = (m_direction == TrackingDirection::Forward) ?
                                       m_videoKeyFrameNum + m_currFrameNum :
                                       m_videoKeyFrameNum - 1 - m_currFrameNum;
-        // searchRoiUsedForThisFrame would be the ROI when it paused. We might not have it easily here.
-        // Using m_currentSearchRoi (which is now for the *next* frame) is not ideal for this specific emit.
-        // For simplicity, we can pass the new m_currentSearchRoi or the old one if stored.
+        // searchWindowUsedForThisFrame would be the ROI when it paused. We might not have it easily here.
+        // Using m_currentSearchWindow (which is now for the *next* frame) is not ideal for this specific emit.
+        // For simplicity, we can pass the new m_currentSearchWindow or the old one if stored.
         // Let's assume the ROI that *led* to pause is what TM cares about, but we don't have it.
         // So, we pass the ROI that will be used *next*.
         QList<Tracking::DetectedBlob> emptySplitCandidates;
-        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, m_currentSearchRoi, m_currentState, emptySplitCandidates);
+        emit positionUpdated(m_wormId, originalFrameNumber, m_lastPrimaryBlob, m_lastFullBlob, m_currentSearchWindow, m_currentState, emptySplitCandidates);
     }
 
 
@@ -1023,9 +1023,9 @@ QString WormTracker::getDebugLabel(const QString& functionName) const {
     return QString("WT: %1|FN%2|").arg(displayId).arg(frameNumber);
 }
 
-QRectF WormTracker::adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize) {
-    qreal roiWidth = m_initialRoiEdge;
-    qreal roiHeight = m_initialRoiEdge;
+QRectF WormTracker::adjustSearchWindowPos(const cv::Point2f& wormCenter, const cv::Size& frameSize) {
+    qreal roiWidth = m_searchWindowEdge;
+    qreal roiHeight = m_searchWindowEdge;
     qreal roiX = static_cast<qreal>(wormCenter.x) - roiWidth / 2.0;
     qreal roiY = static_cast<qreal>(wormCenter.y) - roiHeight / 2.0;
 

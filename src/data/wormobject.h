@@ -10,7 +10,7 @@
 
 class WormObject {
 public:
-    WormObject(int id, const QRectF& initialRoi);
+    WormObject(int id, const QRectF& initialSearchWindow);
 
     int getId() const;
     const std::vector<Tracking::WormTrackPoint>& getTrackHistory() const;

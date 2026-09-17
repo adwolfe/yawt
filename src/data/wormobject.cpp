@@ -1,10 +1,10 @@
 #include "wormobject.h"
 #include <algorithm> // For std::sort
 
-WormObject::WormObject(int id, const QRectF& initialRoi)
+WormObject::WormObject(int id, const QRectF& initialSearchWindow)
     : m_id(id)
-    //m_currentPosition(initialRoi.center().x(), initialRoi.center().y()), // Initial position is center of ROI
-    //m_currentRoi(initialRoi),
+    //m_currentPosition(initialSearchWindow.center().x(), initialSearchWindow.center().y()), // Initial position is center of ROI
+    //m_currentRoi(initialSearchWindow),
     //m_currentState(Tracking::Inactive),
     //m_mergedWithId(-1)
 {}
@@ -40,7 +40,7 @@ void WormObject::updateTrackPoint(Tracking::WormTrackPoint point) {
     //Tracking::WormTrackPoint point;
     //point.frameNumberOriginal = originalFrameNum;
     //point.position = position;
-    //point.roi = roi;
+    //point.searchWindow = roi;
 
     m_trackHistoryMap[point.frameNumberOriginal] = point;
     rebuildTrackHistoryVector(); // Rebuild the sorted vector

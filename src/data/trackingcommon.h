@@ -238,7 +238,7 @@ struct DetectedBlob {
     int assignedTailTipIdx = -1;                            // Index into tipCandidates of the assigned tail, or -1
     TopologyState topologyState = TopologyState::Unknown;   // Per-frame geometric classification (Phase C.2)
     bool isValid = false;                 // Flag indicating if this blob data is valid
-    bool touchesROIboundary = false;      // Flag indicating if the ROI extends beyond the cropped region (suggests it is merged).
+    bool touchesSearchWindow = false;      // Blob touches the edge of the search window (suggests it continues outside, i.e. merged or partially visible).
 
     // Default constructor
     DetectedBlob()
@@ -250,7 +250,7 @@ struct DetectedBlob {
           assignedTailTipIdx(-1),
           topologyState(TopologyState::Unknown),
           isValid(false),
-          touchesROIboundary(false) {}
+          touchesSearchWindow(false) {}
 };
 
 QJsonObject detectedBlobToJson(const DetectedBlob& blob);
@@ -290,7 +290,7 @@ Q_ENUM_NS(TrackPointQuality)
 struct WormTrackPoint {
     int frameNumberOriginal;        // Frame number in the original video
     cv::Point2f position;           // Position (centroid) in video coordinates
-    QRectF roi;                     // ROI used for this worm at this frame (in video coordinates)
+    QRectF searchWindow;   // Fixed-size search window the tracker used on this frame (video coordinates)
     TrackPointQuality quality;      // Single is confident, merged is ambiguous. For visualization later.
 
     // Blob-derived morphology — populated post-centerline; 0/invalid if unavailable.
@@ -314,7 +314,7 @@ typedef std::map<int, std::vector<WormTrackPoint>> AllWormTracks;
  */
 struct InitialWormInfo {
     int id;
-    QRectF initialRoi; // ROI on the keyframe in video coordinates
+    QRectF initialSearchWindow; // Fixed-size search window centred on the worm at the keyframe (video coordinates)
     QColor color;      // Color associated with this worm
 };
 

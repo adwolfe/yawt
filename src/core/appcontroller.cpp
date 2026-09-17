@@ -348,7 +348,7 @@ std::vector<Tracking::InitialWormInfo> AppController::buildInitialWormsFromModel
 
         Tracking::InitialWormInfo info;
         info.id = it.id;
-        info.initialRoi = it.initialBoundingBox;
+        info.initialSearchWindow = it.initialBoundingBox;
         info.color = it.color;
         result.push_back(info);
     }

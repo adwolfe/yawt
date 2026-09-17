@@ -457,7 +457,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                 }
                 if (pObj.contains("roi") && pObj["roi"].isObject()) {
                     QJsonObject r = pObj["roi"].toObject();
-                    p.roi = QRectF(r.value("x").toDouble(), r.value("y").toDouble(),
+                    p.searchWindow = QRectF(r.value("x").toDouble(), r.value("y").toDouble(),
                                    r.value("width").toDouble(), r.value("height").toDouble());
                 }
                 p.quality = static_cast<Tracking::TrackPointQuality>(
@@ -492,7 +492,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                                                 static_cast<double>(p.position.y));
                     }
                     if (blob.boundingBox.isNull()) {
-                        blob.boundingBox = p.roi;
+                        blob.boundingBox = p.searchWindow;
                     }
                     if (blob.centerlinePoints.size() >= 2) {
                         double arcLen = 0.0;
@@ -509,7 +509,7 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
                     blob.isValid   = true;
                     blob.centroid  = QPointF(static_cast<double>(p.position.x),
                                              static_cast<double>(p.position.y));
-                    blob.boundingBox = p.roi;
+                    blob.boundingBox = p.searchWindow;
                     for (const QJsonValue& cv : pObj["centerlinePoints"].toArray()) {
                         const QJsonArray a = cv.toArray();
                         if (a.size() >= 2)
@@ -815,12 +815,12 @@ QSet<int> TrackingDataStorage::getWormsWithTracks() const {
     return ids;
 }
 
-bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outRoi) const {
+bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outSearchWindow) const {
     // First, check if we can get the initial position from the ClickedItem (for keyframe)
     const TableItems::ClickedItem* item = getItem(wormId);
     if (item && item->frameOfSelection == frameNumber) {
         outPosition = item->initialCentroid;
-        outRoi = item->initialBoundingBox;
+        outSearchWindow = item->initialBoundingBox;
         return true;
     }
     
@@ -836,7 +836,7 @@ bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPoin
             }
             // Convert cv::Point2f to QPointF
             outPosition = QPointF(trackPoint->position.x, trackPoint->position.y);
-            outRoi = trackPoint->roi;
+            outSearchWindow = trackPoint->searchWindow;
             return true;
         }
     }
@@ -845,14 +845,14 @@ bool TrackingDataStorage::getWormDataForFrame(int wormId, int frameNumber, QPoin
     // use the initial position as fallback
     if (item && qAbs(frameNumber - item->frameOfSelection) <= 1) {
         outPosition = item->initialCentroid;
-        outRoi = item->initialBoundingBox;
+        outSearchWindow = item->initialBoundingBox;
         return true;
     }
     
     return false;  // Worm not found for this frame
 }
 
-bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame, QPointF& outPosition, QRectF& outRoi) const {
+bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame, QPointF& outPosition, QRectF& outSearchWindow) const {
     // Check if we have tracking data for this worm
     auto wormIndexIt = m_frameIndex.find(wormId);
     if (wormIndexIt == m_frameIndex.end()) {
@@ -869,7 +869,7 @@ bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame
             // Only return positions with good tracking quality (not Lost)
             if (trackPoint->quality != Tracking::TrackPointQuality::Lost) {
                 outPosition = QPointF(trackPoint->position.x, trackPoint->position.y);
-                outRoi = trackPoint->roi;
+                outSearchWindow = trackPoint->searchWindow;
                 return true;
             }
         }
@@ -879,7 +879,7 @@ bool TrackingDataStorage::getLastKnownPositionBefore(int wormId, int beforeFrame
     const TableItems::ClickedItem* item = getItem(wormId);
     if (item) {
         outPosition = item->initialCentroid;
-        outRoi = item->initialBoundingBox;
+        outSearchWindow = item->initialBoundingBox;
         return true;
     }
     

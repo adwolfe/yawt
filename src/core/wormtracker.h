@@ -3,7 +3,7 @@
  * @brief Per-worm tracker processing frames forward/backward from a keyframe.
  *
  * Responsibilities:
- *  - Maintain per-worm tracking state and a fixed-size search ROI.
+ *  - Maintain per-worm tracking state and a fixed-size search window.
  *  - For each frame, choose an anchor (primary) blob, report the full blob, and emit updates.
  *  - Detect and react to merges/splits/lost-tracking scenarios; pause on split for external resolution.
  *  - Emit lifecycle and progress signals suitable for cross-thread consumption.
@@ -21,7 +21,7 @@
  *    detectMergeByAreaIncrease(), and boundary/area plausibility checks.
  *
  * Signals (semantics):
- *  - positionUpdated(wormId, originalFrameNumber, primaryBlob, fullBlob, searchRoiUsed, state, splitCandidates):
+ *  - positionUpdated(wormId, originalFrameNumber, primaryBlob, fullBlob, searchWindowUsed, state, splitCandidates):
  *      Per-frame update. primaryBlob is the anchor used to extend the track; fullBlob may be larger (merged) for state logic.
  *      splitCandidates is populated only when entering PausedForSplit.
  *  - splitDetectedAndPaused(wormId, originalFrameNumber, detectedBlobs):
@@ -37,8 +37,8 @@
  *    to TrackingManager/UI. The underlying frames pointer is non-owning and must remain valid for the tracker lifetime.
  *
  * Public API (semantics):
- *  - WormTracker(int wormId, QRectF initialRoi, TrackingDirection direction, int videoKeyFrameNum, QObject* parent):
- *      Construct a tracker for a conceptual worm. initialRoi is the fixed-size search ROI (centered on the worm at keyframe);
+ *  - WormTracker(int wormId, QRectF initialSearchWindow, TrackingDirection direction, int videoKeyFrameNum, QObject* parent):
+ *      Construct a tracker for a conceptual worm. initialSearchWindow is the fixed-size search window (centered on the worm at keyframe);
  *      direction selects forward/backward traversal; videoKeyFrameNum is the absolute keyframe index in the original video.
  *  - setFrames(const std::vector<cv::Mat>* frames):
  *      Non-owning pointer to pre-processed frames (forward or reverse order depending on direction). Must remain valid during tracking.
@@ -60,7 +60,7 @@
  *      Heuristics guiding transitions between single vs merged states.
  *  - findPersistingAnchor/findPersistingComponent/selectBestBlobCandidate:
  *      Blob selection utilities emphasizing temporal consistency across frames.
- *  - initializeFrameProcessing/adjustRoiPos/findPlausibleBlobsInRoi:
+ *  - initializeFrameProcessing/adjustSearchWindowPos/findPlausibleBlobsInRoi:
  *      ROI management and candidate enumeration within the fixed-size search window.
  */
 
@@ -98,13 +98,13 @@ public:
     // Helper structure for frame processing
     struct FrameProcessingContext {
         int originalFrameNumber;
-        QRectF searchRoiUsedForThisFrame;
+        QRectF searchWindowUsedForThisFrame;
         QList<Tracking::DetectedBlob> blobsInFixedRoi;
         int plausibleBlobsInFixedRoi;
     };
 
     explicit WormTracker(int wormId,
-                         QRectF initialRoi, // This is the fixed-size ROI
+                         QRectF initialSearchWindow, // This is the fixed-size search window
                          TrackingDirection direction,
                          int videoKeyFrameNum, // Original video keyframe number
                          QObject *parent = nullptr);
@@ -137,7 +137,7 @@ signals:
      * @param originalFrameNumber The frame number in the original video sequence.
      * @param primaryBlob The characteristics of the blob chosen as the primary target for this frame.
      * @param fullBlob The full blob being tracked (could be merged entity).
-     * @param searchRoiUsed The fixed-size search ROI that was used to find blobs in this frame.
+     * @param searchWindowUsed The fixed-size search window that was used to find blobs in this frame.
      * @param currentState The current tracking state.
      * @param splitCandidates List of all candidate blobs when in PausedForSplit state (empty otherwise).
      */
@@ -145,7 +145,7 @@ signals:
                          int originalFrameNumber,
                          const Tracking::DetectedBlob& primaryBlob,
                          const Tracking::DetectedBlob& fullBlob,
-                         QRectF searchRoiUsed,
+                         QRectF searchWindowUsed,
                          Tracking::TrackerState currentState,
                          const QList<Tracking::DetectedBlob>& splitCandidates = QList<Tracking::DetectedBlob>());
 
@@ -174,21 +174,21 @@ signals:
 
 private:
     // Main processing logic for a frame
-    bool processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentRoi);
-    bool processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut);
-    bool processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiRef_InOut);
+    bool processFrame(bool asMerged, const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindow);
+    bool processFrameAsSingle(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut);
+    bool processFrameAsMerged(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentSearchWindowInOut);
     //bool processFrameAsMergedWorms(const cv::Mat& frame, int sequenceFrameIndex, QRectF& currentFixedSearchRoiInOut);
     
     // Helper methods for unified frame processing
-    bool handleLostTracking(const FrameProcessingContext& context, QRectF& currentRoi);
+    bool handleLostTracking(const FrameProcessingContext& context, QRectF& currentSearchWindow);
     bool handleSingleBlobCase(bool asMerged, const Tracking::DetectedBlob& blob, const cv::Mat& frame, 
-                             const FrameProcessingContext& context, QRectF& currentRoi);
+                             const FrameProcessingContext& context, QRectF& currentSearchWindow);
     bool handleMultipleBlobsCase(bool asMerged, const QList<Tracking::DetectedBlob>& blobs, 
-                                const cv::Mat& frame, const FrameProcessingContext& context, QRectF& currentRoi);
+                                const cv::Mat& frame, const FrameProcessingContext& context, QRectF& currentSearchWindow);
     bool handleNonBoundaryBlob(bool asMerged, const Tracking::DetectedBlob& blob, 
-                              const FrameProcessingContext& context, const cv::Mat& frame, QRectF& currentRoi);
+                              const FrameProcessingContext& context, const cv::Mat& frame, QRectF& currentSearchWindow);
     bool handleBoundaryTouchingBlob(bool asMerged, const Tracking::DetectedBlob& blob, 
-                                   const cv::Mat& frame, const FrameProcessingContext& context, QRectF& currentRoi);
+                                   const cv::Mat& frame, const FrameProcessingContext& context, QRectF& currentSearchWindow);
     
     // Blob analysis helpers
     Tracking::DetectedBlob expandBlobTouchingBoundary(const Tracking::DetectedBlob& initialBlob, 
@@ -200,12 +200,12 @@ private:
     Tracking::DetectedBlob selectBestBlobCandidate(const QList<Tracking::DetectedBlob>& blobs);
     bool updateTrackingState(const Tracking::DetectedBlob& blobForAnchor, const Tracking::DetectedBlob& blobToReport,
                             const QList<Tracking::DetectedBlob>& splitCandidates, Tracking::TrackerState nextState,
-                            const FrameProcessingContext& context, const cv::Size& frameSize, QRectF& currentRoi);
+                            const FrameProcessingContext& context, const cv::Size& frameSize, QRectF& currentSearchWindow);
     bool isBlobTouchingBoundary(const Tracking::DetectedBlob& blob, const QRectF& roi);
 
     // Helper functions
     FrameProcessingContext initializeFrameProcessing(const cv::Mat& frame, int sequenceFrameIndex, const QRectF& searchRoi);
-    QRectF adjustRoiPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
+    QRectF adjustSearchWindowPos(const cv::Point2f& wormCenter, const cv::Size& frameSize); // Adjusts fixed-size ROI position
     QList<Tracking::DetectedBlob> findPlausibleBlobsInRoi(const cv::Mat& fullFrame, const QRectF& roi);
     Tracking::DetectedBlob findLargestBlobComponentInMask(const cv::Mat& mask, const QString& debugContextName);
     
@@ -233,13 +233,13 @@ private:
     int m_wormId;                           // Conceptual ID of the worm this tracker instance is for
     TrackingDirection m_direction;          // Forward or Backward from keyframe
     const std::vector<cv::Mat>* m_framesToProcess; // Pointer to frame data (not owned)
-    qreal m_initialRoiEdge;                 // Edge length of the fixed square search ROI
+    qreal m_searchWindowEdge;                 // Edge length of the fixed square search window
     int m_videoKeyFrameNum;                 // Original video keyframe number where tracking starts
     double m_minBlobArea;                   // Plausibility parameter: minimum blob area
     double m_maxBlobArea;                   // Plausibility parameter: maximum blob area (for a single worm)
 
     // --- Transient State (Changes during tracking) ---
-    QRectF m_currentSearchRoi;              // Current fixed-size ROI used for searching in the current frame
+    QRectF m_currentSearchWindow;              // Current fixed-size ROI used for searching in the current frame
     cv::Point2f m_lastKnownPosition;        // Last known centroid of the tracked blob (used as fallback)
     int m_currFrameNum;                     // Index in m_framesToProcess (0 to N-1)
     bool m_trackingActive;                  // Flag to control the tracking loop

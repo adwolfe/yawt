@@ -852,7 +852,7 @@ void TrackingManager::startFullTrackingProcess(
     m_wormObjectsMap.clear();
     for (const auto& info : m_initialWormInfos) {
         if (!m_wormObjectsMap.contains(info.id)) {
-            m_wormObjectsMap[info.id] = new WormObject(info.id, info.initialRoi);
+            m_wormObjectsMap[info.id] = new WormObject(info.id, info.initialSearchWindow);
         }
         m_wormToPhysicalBlobIdMap[info.id] = -1; // Forward tracker
         m_wormToPhysicalBlobIdMap[-info.id] = -1; // Backward tracker
@@ -1143,7 +1143,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
                                            int originalFrameNumber,
                                            const Tracking::DetectedBlob& primaryBlob, // Anchor blob for track history
                                            const Tracking::DetectedBlob& fullBlob,    // Full blob for merge/state processing
-                                           QRectF searchRoiUsed,
+                                           QRectF searchWindowUsed,
                                            Tracking::TrackerState currentState,
                                            const QList<Tracking::DetectedBlob>& splitCandidates)
 {
@@ -1163,7 +1163,7 @@ void TrackingManager::handleFrameUpdate(int reportingConceptualWormId,
     if (wormObject) {
         Tracking::WormTrackPoint point;
         point.frameNumberOriginal = originalFrameNumber;
-        point.roi = searchRoiUsed;
+        point.searchWindow = searchWindowUsed;
 
         if (primaryBlob.isValid) {
             point.position = cv::Point2f(static_cast<float>(primaryBlob.centroid.x()), static_cast<float>(primaryBlob.centroid.y()));
@@ -1599,7 +1599,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
             Tracking::WormTrackPoint splitPoint;
             splitPoint.frameNumberOriginal = frameNumber;
             splitPoint.position = cv::Point2f(static_cast<float>(blobToAssign.centroid.x()), static_cast<float>(blobToAssign.centroid.y()));
-            splitPoint.roi = blobToAssign.boundingBox;
+            splitPoint.searchWindow = blobToAssign.boundingBox;
             splitPoint.quality = Tracking::TrackPointQuality::Split;
             wobj->updateTrackPoint(splitPoint);
         }
@@ -1648,7 +1648,7 @@ void TrackingManager::launchWormTrackers() { /* ... same as your version ... */
     for(QPointer<QThread> t : m_trackerThreads) { if(t) delete t; } m_trackerThreads.clear();
 
     for (const auto& info : m_initialWormInfos) {
-        int wId = info.id; QRectF iRoi = info.initialRoi;
+        int wId = info.id; QRectF iRoi = info.initialSearchWindow;
         if (!m_finalProcessedForwardFrames.empty() || m_keyFrameNum == (m_videoFrameSize.width > 0 ? static_cast<int>(m_videoFps * (m_totalFramesInVideoHint > 0 ? m_totalFramesInVideoHint : 1) / m_videoFps) -1 : 0) ) {
             WormTracker* trk = new WormTracker(wId, iRoi, WormTracker::TrackingDirection::Forward, m_keyFrameNum);
             trk->setFrames(&m_finalProcessedForwardFrames); QThread* thr = new QThread(); trk->moveToThread(thr);
@@ -1853,10 +1853,10 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
                 numberCell(QString::number(point.frameNumberOriginal)),
                 numberCell(QString::number(static_cast<double>(point.position.x), 'f', 4)),
                 numberCell(QString::number(static_cast<double>(point.position.y), 'f', 4)),
-                numberCell(QString::number(point.roi.x(), 'f', 2)),
-                numberCell(QString::number(point.roi.y(), 'f', 2)),
-                numberCell(QString::number(point.roi.width(), 'f', 2)),
-                numberCell(QString::number(point.roi.height(), 'f', 2)),
+                numberCell(QString::number(point.searchWindow.x(), 'f', 2)),
+                numberCell(QString::number(point.searchWindow.y(), 'f', 2)),
+                numberCell(QString::number(point.searchWindow.width(), 'f', 2)),
+                numberCell(QString::number(point.searchWindow.height(), 'f', 2)),
                 numberCell(QString::number(static_cast<int>(point.quality)))
             });
         }
@@ -2666,10 +2666,10 @@ bool TrackingManager::saveWormsJson(const QString& directoryPath) {
             pObj["position"] = posObj;
 
             QJsonObject roiObj;
-            roiObj["x"]      = p.roi.x();
-            roiObj["y"]      = p.roi.y();
-            roiObj["width"]  = p.roi.width();
-            roiObj["height"] = p.roi.height();
+            roiObj["x"]      = p.searchWindow.x();
+            roiObj["y"]      = p.searchWindow.y();
+            roiObj["width"]  = p.searchWindow.width();
+            roiObj["height"] = p.searchWindow.height();
             pObj["roi"] = roiObj;
 
             // Morphology and head/tail come off the track point itself; storage
@@ -3017,10 +3017,10 @@ QJsonObject TrackingManager::initialWormInfoToJson(const Tracking::InitialWormIn
     obj["id"] = worm.id;
 
     QJsonObject roiObj;
-    roiObj["x"] = worm.initialRoi.x();
-    roiObj["y"] = worm.initialRoi.y();
-    roiObj["width"] = worm.initialRoi.width();
-    roiObj["height"] = worm.initialRoi.height();
+    roiObj["x"] = worm.initialSearchWindow.x();
+    roiObj["y"] = worm.initialSearchWindow.y();
+    roiObj["width"] = worm.initialSearchWindow.width();
+    roiObj["height"] = worm.initialSearchWindow.height();
     obj["initialRoi"] = roiObj;
 
     return obj;

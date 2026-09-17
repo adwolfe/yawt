@@ -226,20 +226,20 @@ public:
      * @param wormId The ID of the worm
      * @param frameNumber The frame number to get data for
      * @param outPosition Output parameter for the worm's position (centroid)
-     * @param outRoi Output parameter for the worm's ROI
+     * @param outSearchWindow Output parameter for the search window used on that frame
      * @return True if worm data was found for the frame, false otherwise
      */
-    bool getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outRoi) const;
+    bool getWormDataForFrame(int wormId, int frameNumber, QPointF& outPosition, QRectF& outSearchWindow) const;
     
     /**
      * @brief Get the last known position of a worm before a given frame
      * @param wormId The ID of the worm
      * @param beforeFrame The frame number to search backwards from
      * @param outPosition Output parameter for the last known position
-     * @param outRoi Output parameter for the last known ROI
+     * @param outSearchWindow Output parameter for the search window at that position
      * @return True if a previous valid position was found, false otherwise
      */
-    bool getLastKnownPositionBefore(int wormId, int beforeFrame, QPointF& outPosition, QRectF& outRoi) const;
+    bool getLastKnownPositionBefore(int wormId, int beforeFrame, QPointF& outPosition, QRectF& outSearchWindow) const;
     
     /**
      * @brief Get the total number of items

@@ -227,7 +227,7 @@ private slots:
                            int originalFrameNumber,
                            const Tracking::DetectedBlob& primaryBlob, // Anchor blob for track history
                            const Tracking::DetectedBlob& fullBlob,    // Full blob for merge/state processing
-                           QRectF searchRoiUsed,
+                           QRectF searchWindowUsed,
                            Tracking::TrackerState currentState,
                            const QList<Tracking::DetectedBlob>& splitCandidates = QList<Tracking::DetectedBlob>());
     void handleWormTrackerFinished();

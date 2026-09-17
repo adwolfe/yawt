@@ -1993,7 +1993,7 @@ void MainWindow::onStartTrackingActionTriggered() {
         if(item.type == TableItems::ItemType::Worm) { // Ensure you have a way to designate items as actual worms for tracking
             Tracking::InitialWormInfo info;
             info.id = item.id;
-            info.initialRoi = item.initialBoundingBox;
+            info.initialSearchWindow = item.initialBoundingBox;
             info.color = item.color;
             initialWorms.push_back(info);
         }

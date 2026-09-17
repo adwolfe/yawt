@@ -20,7 +20,7 @@ QJsonObject detectedBlobToJson(const DetectedBlob& db)
     obj["isValid"] = db.isValid;
     obj["area"] = db.area;
     obj["convexHullArea"] = db.convexHullArea;
-    obj["touchesROIboundary"] = db.touchesROIboundary;
+    obj["touchesROIboundary"] = db.touchesSearchWindow;
     obj["assignedHeadTipIdx"] = db.assignedHeadTipIdx;
     obj["assignedTailTipIdx"] = db.assignedTailTipIdx;
     obj["topologyState"] = static_cast<int>(db.topologyState);
@@ -97,7 +97,7 @@ DetectedBlob detectedBlobFromJson(const QJsonObject& obj)
     db.isValid = obj.value("isValid").toBool(false);
     db.area = obj.value("area").toDouble(0.0);
     db.convexHullArea = obj.value("convexHullArea").toDouble(0.0);
-    db.touchesROIboundary = obj.value("touchesROIboundary").toBool(false);
+    db.touchesSearchWindow = obj.value("touchesROIboundary").toBool(false);
     db.assignedHeadTipIdx = obj.value("assignedHeadTipIdx").toInt(-1);
     db.assignedTailTipIdx = obj.value("assignedTailTipIdx").toInt(-1);
     db.topologyState = static_cast<TopologyState>(
@@ -442,7 +442,7 @@ DetectedBlob findClickedBlob(const cv::Mat& binaryImage,
             result.area = cv::contourArea(bestContour); // Already calculated, but store it
             result.contourPoints = bestContour; // These points are relative to binaryImage origin
             result.isValid = true;
-            // touchesROIboundary is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
+            // touchesSearchWindow is not relevant for findClickedBlob as it operates on the whole image or a pre-defined mask.
         }
         YAWT_DEBUG(lcDataCommon) << "findClickedBlob: Selected contour idx:"
                                  << bestContourIdx
@@ -580,7 +580,7 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                 blob.holeContourPoints.push_back(std::move(holeInFullFrame));
             }
 
-            // --- Set touchesROIboundary flag ---
+            // --- Set touchesSearchWindow flag ---
             // Check if the bounding box of the contour (brInSub, which is relative to roiImage)
             // touches the edges of roiImage.
             // roiImage has dimensions actualRoiCv.width and actualRoiCv.height.
@@ -589,9 +589,9 @@ QList<DetectedBlob> findAllPlausibleBlobsInRoi(const cv::Mat& binaryImage,
                 brInSub.y <= 0 ||
                 (brInSub.x + brInSub.width) >= actualRoiCv.width ||
                 (brInSub.y + brInSub.height) >= actualRoiCv.height) {
-                blob.touchesROIboundary = true;
+                blob.touchesSearchWindow = true;
             } else {
-                blob.touchesROIboundary = false;
+                blob.touchesSearchWindow = false;
             }
             // A more precise check could iterate over contour points if needed, but bounding box is usually sufficient.
             // For example, if any point in contourInSub has x=0, y=0, x=actualRoiCv.width-1, or y=actualRoiCv.height-1.
