@@ -226,7 +226,7 @@ void AnalysisSessionModel::loadAndMergeState(
         const QJsonArray groupsArr = root.value("groups").toArray();
         for (const QJsonValue& gv : groupsArr) {
             const QJsonObject gObj = gv.toObject();
-            GroupItem gi;
+            AnalysisGroup gi;
             gi.name = gObj.value("name").toString();
 
             const QJsonArray videosArr = gObj.value("videos").toArray();
@@ -284,12 +284,12 @@ void AnalysisSessionModel::loadAndMergeState(
 
         // Ensure "Unassigned" exists as the first group
         if (m_groups.isEmpty() || m_groups.first().name != "Unassigned")
-            m_groups.prepend(GroupItem{"Unassigned", {}});
+            m_groups.prepend(AnalysisGroup{"Unassigned", {}});
 
     } else {
         // No state file: start fresh with just Unassigned
         m_groups.clear();
-        m_groups.append(GroupItem{"Unassigned", {}});
+        m_groups.append(AnalysisGroup{"Unassigned", {}});
     }
 
     // ── Add any disk videos not yet placed → Unassigned ──────────────────────
@@ -336,7 +336,7 @@ void AnalysisSessionModel::loadAndMergeState(
 AnalysisSessionModel::AnalysisSessionModel(QObject* parent)
     : QAbstractItemModel(parent)
 {
-    m_groups.append(GroupItem{"Unassigned", {}});
+    m_groups.append(AnalysisGroup{"Unassigned", {}});
 
     // Debounce timer for saving check-state changes
     m_saveTimer = new QTimer(this);
@@ -391,7 +391,7 @@ void AnalysisSessionModel::addGroup(const QString& name)
     if (name.trimmed().isEmpty()) return;
     const int row = m_groups.size();
     beginInsertRows({}, row, row);
-    m_groups.append(GroupItem{name, {}});
+    m_groups.append(AnalysisGroup{name, {}});
     ++m_dataRevision;
     endInsertRows();
     saveState();  // structural change

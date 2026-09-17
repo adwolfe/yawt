@@ -87,7 +87,7 @@ public:
      */
     QList<AnalysisGroupData> getGroupedData() const;
 
-    struct GroupItem {
+    struct AnalysisGroup {
         QString          name;
         QList<RunItem> videos;
     };
@@ -203,7 +203,7 @@ private:
                           const QMap<QString, QPair<QString,QString>>& diskVideos);
     void              scheduleStateSave();   // debounced, for check-state changes
 
-    QList<GroupItem> m_groups;
+    QList<AnalysisGroup> m_groups;
     QString          m_dataDir;              // set during scan, used for auto-save
     QTimer*          m_saveTimer = nullptr;  // debounce timer for check-state saves
     quint64          m_dataRevision = 1;
