@@ -63,7 +63,7 @@ inline QString centerlineBranchToString(CenterlineBranch branch)
 struct CenterlineFrameDebug {
     int wormId = -1;
     int frameNumber = -1;
-    int directionStep = 0;
+    int sweepStep = 0;
     bool keyframeBootstrap = false;
 
     Tracking::TopologyState topology = Tracking::TopologyState::Unknown;

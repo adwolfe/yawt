@@ -1112,7 +1112,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
         return fail(QStringLiteral("stored blob is invalid or has no contour"));
     }
     Tracking::DetectedBlob previousBlob;
-    const int previousFrame = frameNumber - (record.directionStep == 0 ? 1 : record.directionStep);
+    const int previousFrame = frameNumber - (record.sweepStep == 0 ? 1 : record.sweepStep);
     const QMap<int, Tracking::DetectedBlob> previousFrameBlobs =
         storage->getDetectedBlobsForFrame(previousFrame);
     const bool hasPreviousBlob =
@@ -1194,7 +1194,7 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     log << "=== Centerline process export (recorded live state) ===\n";
     log << "worm: " << wormId << "  frame: " << frameNumber << "\n";
     log << "outputDir: " << outputDir << "\n";
-    log << "directionStep: " << record.directionStep
+    log << "sweepStep: " << record.sweepStep
         << "  keyframeBootstrap: " << (record.keyframeBootstrap ? "Y" : "N") << "\n";
     log << "topology: " << Tracking::topologyStateToString(record.topology)
         << "  inMergeGroup: " << (record.inMergeGroup ? "Y" : "N") << "\n";

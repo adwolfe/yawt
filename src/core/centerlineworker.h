@@ -66,8 +66,8 @@ signals:
     void progress(int percentage);
     void finished();
     void failed(const QString& reason);
-    // Emitted once per worm with the frames flipped by the direction-based pass.
-    void headTailDirectionSwapEvent(int wormId, QList<int> swappedFrames);
+    // Emitted once per worm with the frames flipped by the motion-based pass.
+    void headTailMotionSwapEvent(int wormId, QList<int> swappedFrames);
     // Emitted once per worm with the frames flipped by the geometry-based pass.
     void headTailGeometrySwapEvent(int wormId, QList<int> swappedFrames);
     // Emitted once per worm after both passes; net set of frames whose

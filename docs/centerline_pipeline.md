@@ -109,11 +109,11 @@ stored in `HeadTailPredictor` for the next frame.
 
 ## Post-sweep passes (per worm, after both directions)
 
-1. **Direction-based head/tail refinement** (`refineHeadTailByDirection`). Over windows
+1. **Motion-based head/tail refinement** (`refineHeadTailByMotion`). Over windows
    of at least a few seconds of frames, compares the worm's motion with its recorded head.
    Windows in which more than `maxReversalFraction` of steps oppose the majority direction
-   are treated as turning events and skipped. Produces `dirSwapped`, emitted as
-   `headTailDirectionSwapEvent`.
+   are treated as turning events and skipped. Produces `motionSwapped`, emitted as
+   `headTailMotionSwapEvent`.
 2. **Geometry-based head/tail refinement** (`refineHeadTailByGeometry`). Collects tip
    geometry features on `Clean` frames and, when the head and tail distributions separate
    significantly (Cohen's d), flips segments whose assignment disagrees. Produces

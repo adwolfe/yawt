@@ -3267,7 +3267,7 @@ const bool captureDebug =
 Debug::CenterlineFrameDebug debugRecord;
 debugRecord.wormId = ctx.wormId;
 debugRecord.frameNumber = tp.frameNumberOriginal;
-debugRecord.directionStep = req.step;
+debugRecord.sweepStep = req.step;
 debugRecord.keyframeBootstrap = req.isKeyframeBootstrap;
 debugRecord.inMergeGroup = inMerge;
 debugRecord.predictorBefore = framePredictor;

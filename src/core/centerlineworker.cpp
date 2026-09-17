@@ -25,7 +25,7 @@
 // as ambiguous (direction reversal / turning event) and skipped.
 //
 // Returns the frame numbers whose centerlines were reversed.
-static QList<int> refineHeadTailByDirection(
+static QList<int> refineHeadTailByMotion(
     TrackingDataStorage* storage,
     QMutex* storageMutex,
     int wormId,
@@ -884,10 +884,10 @@ void CenterlineWorker::doWork()
             }
         }
 
-        const QList<int> dirSwapped = refineHeadTailByDirection(
+        const QList<int> motionSwapped = refineHeadTailByMotion(
             m_storage, m_sharedStorageMutex.data(),
             wormId, sortedPoints, m_fps, m_maxReversalFraction);
-        emit headTailDirectionSwapEvent(wormId, dirSwapped);
+        emit headTailMotionSwapEvent(wormId, motionSwapped);
 
         const QList<int> geoSwapped = refineHeadTailByGeometry(
             m_storage, m_sharedStorageMutex.data(),
@@ -896,7 +896,7 @@ void CenterlineWorker::doWork()
 
         // XOR: a frame flipped by both passes cancels out (net no change).
         QSet<int> netSet;
-        for (int f : dirSwapped) netSet.insert(f);
+        for (int f : motionSwapped) netSet.insert(f);
         for (int f : geoSwapped) {
             if (netSet.contains(f)) netSet.remove(f);
             else netSet.insert(f);

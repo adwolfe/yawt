@@ -398,7 +398,7 @@ private:
     bool m_smoothCenterline = true;
     float m_maxReversalFraction = 0.25f;
     QMap<int, QList<int>> m_headTailSwapData;     // net (XOR) swaps per worm
-    QMap<int, QList<int>> m_dirHeadTailSwapData;  // direction-pass swaps per worm
+    QMap<int, QList<int>> m_motionHeadTailSwapData;  // motion-pass swaps per worm
     QMap<int, QList<int>> m_geoHeadTailSwapData;  // geometry-pass swaps per worm
 
     // General utilities

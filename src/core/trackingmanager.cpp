@@ -2363,7 +2363,7 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
         if (inMergeRun) mergeRunMaxLen = std::max(mergeRunMaxLen, mergeRunCurrent);
 
         // Head/tail swap counts
-        const int dirSwaps = m_dirHeadTailSwapData.value(wormId).size();
+        const int motionSwaps = m_motionHeadTailSwapData.value(wormId).size();
         const int geoSwaps = m_geoHeadTailSwapData.value(wormId).size();
         const int netSwaps = m_headTailSwapData.value(wormId).size();
 
@@ -2412,7 +2412,7 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
 
         // Head/tail refinement
         out << "Head/tail refinement\n";
-        out << QString("  Direction-based swapped frames:  %1\n").arg(lpad(QString::number(dirSwaps), 6));
+        out << QString("  Direction-based swapped frames:  %1\n").arg(lpad(QString::number(motionSwaps), 6));
         out << QString("  Geometry-based swapped frames:   %1\n").arg(lpad(QString::number(geoSwaps), 6));
         out << QString("  Net swapped frames (XOR):        %1\n").arg(lpad(QString::number(netSwaps), 6));
         out << "\n";
@@ -3197,7 +3197,7 @@ void TrackingManager::startCenterlineComputation() {
     m_totalCenterlineWorkers = numThreads;
     m_centerlineStorageMutex = QSharedPointer<QMutex>::create();
     m_headTailSwapData.clear();
-    m_dirHeadTailSwapData.clear();
+    m_motionHeadTailSwapData.clear();
     m_geoHeadTailSwapData.clear();
 
     {
@@ -3232,9 +3232,9 @@ void TrackingManager::startCenterlineComputation() {
         m_centerlineWorkerProgress[workerIndex] = 0;
 
         connect(thread, &QThread::started, worker, &CenterlineWorker::doWork);
-        connect(worker, &CenterlineWorker::headTailDirectionSwapEvent, this,
+        connect(worker, &CenterlineWorker::headTailMotionSwapEvent, this,
                 [this](int wormId, QList<int> swappedFrames) {
-                    m_dirHeadTailSwapData[wormId] = swappedFrames;
+                    m_motionHeadTailSwapData[wormId] = swappedFrames;
                 });
         connect(worker, &CenterlineWorker::headTailGeometrySwapEvent, this,
                 [this](int wormId, QList<int> swappedFrames) {
