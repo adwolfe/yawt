@@ -29,7 +29,7 @@ struct CenterlineState {
 
 struct CenterlineFrameContext {
     int wormId = -1;
-    const std::vector<Tracking::WormTrackPoint>* sortedPoints = nullptr;
+    const Tracking::Track* sortedPoints = nullptr;
     int nPts = 4;
     float refLength = 0.f;
     CenterlineSnakeParams snakeParams;

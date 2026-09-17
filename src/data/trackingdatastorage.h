@@ -142,7 +142,7 @@ public:
      * @param wormId The worm ID (the ID of a Worm-type item)
      * @param trackPoints Vector of track points
      */
-    void setTrackForWorm(int wormId, const std::vector<Tracking::WormTrackPoint>& trackPoints);
+    void setTrackForWorm(int wormId, const Tracking::Track& trackPoints);
     
     /**
      * @brief Clear track data for a specific item

@@ -25,7 +25,7 @@ struct AnalysisWormEntry {
     double  umPerPixel = 0.0;  // from the video (run) this worm belongs to; 0 if unknown
     double  fps = 0.0;         // from the video (run) this worm belongs to; 0 if unknown
     QString videoBaseName;
-    std::vector<Tracking::WormTrackPoint> points;  // sorted by frameNumber
+    Tracking::Track points;  // sorted by frameNumber
 
     // Reference points of the run this worm belongs to (video coordinates).
     bool hasStartPoint = false;

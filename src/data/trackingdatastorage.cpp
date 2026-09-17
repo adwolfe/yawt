@@ -205,7 +205,7 @@ void TrackingDataStorage::setRoiSizeMultiplier(double multiplier) {
  * @brief Replace or set the full track for an item and rebuild frame index.
  * Emits trackRemoved/trackAdded appropriately and signals allDataChanged/itemsChanged for UI/model refresh.
  */
-void TrackingDataStorage::setTrackForWorm(int wormId, const std::vector<Tracking::WormTrackPoint>& trackPoints) {
+void TrackingDataStorage::setTrackForWorm(int wormId, const Tracking::Track& trackPoints) {
     // Check if item exists
     if (getIndexFromId(wormId) < 0) {
         YAWT_WARN(lcDataStorage) << "Tried to set track for non-existent item ID" << wormId;
@@ -701,7 +701,7 @@ QSet<int> TrackingDataStorage::getLostTrackingFrames(int wormId) const {
         return lostFrames; // No tracking data for this worm
     }
     
-    const std::vector<Tracking::WormTrackPoint>& trackPoints = trackIt->second;
+    const Tracking::Track& trackPoints = trackIt->second;
     for (const auto& point : trackPoints) {
         if (point.quality == Tracking::TrackPointQuality::Lost) {
             lostFrames.insert(point.frameNumber);
@@ -896,7 +896,7 @@ void TrackingDataStorage::buildFrameIndex() {
     // Build new index: wormId -> frameNumber -> trackPoint pointer
     for (const auto& trackPair : m_tracks) {
         int wormId = trackPair.first;
-        const std::vector<Tracking::WormTrackPoint>& trackPoints = trackPair.second;
+        const Tracking::Track& trackPoints = trackPair.second;
     
         QMap<int, const Tracking::WormTrackPoint*> frameMap;
         for (const auto& trackPoint : trackPoints) {

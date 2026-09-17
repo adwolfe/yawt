@@ -29,7 +29,7 @@ static QList<int> refineHeadTailByMotion(
     TrackingDataStorage* storage,
     QMutex* storageMutex,
     int wormId,
-    const std::vector<Tracking::WormTrackPoint>& sortedPoints,
+    const Tracking::Track& sortedPoints,
     double fps,
     float maxReversalFraction)
 {
@@ -280,7 +280,7 @@ static QList<int> refineHeadTailByGeometry(
     TrackingDataStorage* storage,
     QMutex* storageMutex,
     int wormId,
-    const std::vector<Tracking::WormTrackPoint>& sortedPoints,
+    const Tracking::Track& sortedPoints,
     double fps)
 {
     QList<int> flippedFrames;
@@ -617,7 +617,7 @@ static void smoothTipsAndRelaxCenterlines(
     TrackingDataStorage* storage,
     QMutex* storageMutex,
     int wormId,
-    const std::vector<Tracking::WormTrackPoint>& sortedPoints,
+    const Tracking::Track& sortedPoints,
     int sgHalfWindow,
     int nPts,
     const Centerline::CenterlineSnakeParams& snakeParams)
@@ -718,7 +718,7 @@ void CenterlineWorker::doWork()
     }
 
     const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    std::vector<std::pair<int, std::vector<Tracking::WormTrackPoint>>> assignedTracks;
+    std::vector<std::pair<int, Tracking::Track>> assignedTracks;
     assignedTracks.reserve(m_wormIds.isEmpty()
                                ? tracks.size()
                                : static_cast<size_t>(m_wormIds.size()));
@@ -753,7 +753,7 @@ void CenterlineWorker::doWork()
     for (const auto& trackEntry : assignedTracks) {
         const int wormId = trackEntry.first;
 
-        std::vector<Tracking::WormTrackPoint> sortedPoints = trackEntry.second;
+        Tracking::Track sortedPoints = trackEntry.second;
         std::sort(sortedPoints.begin(), sortedPoints.end(),
                   [](const Tracking::WormTrackPoint& a,
                      const Tracking::WormTrackPoint& b) {

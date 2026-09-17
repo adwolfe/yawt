@@ -743,7 +743,7 @@ TrackingManager::TrackingManager(TrackingDataStorage* storage,
 void TrackingManager::registerMetaTypes()
 {
 
-    qRegisterMetaType<QMap<int, std::vector<Tracking::WormTrackPoint>>>("QMap<int, std::vector<Tracking::WormTrackPoint>>");
+    qRegisterMetaType<QMap<int, Tracking::Track>>("QMap<int, Tracking::Track>");
     qRegisterMetaType<std::vector<cv::Mat>>("std::vector<cv::Mat>");
     qRegisterMetaType<cv::Size>("cv::Size");
     qRegisterMetaType<Tracking::AllWormTracks>("Tracking::AllWormTracks");
@@ -1120,7 +1120,7 @@ void TrackingManager::handleVideoChunkProcessingError(int chunkId, const QString
 void TrackingManager::rebuildFinalTracks() {
     m_finalTracks.clear();
     for (auto it = m_trackHistory.constBegin(); it != m_trackHistory.constEnd(); ++it) {
-        std::vector<Tracking::WormTrackPoint> points;
+        Tracking::Track points;
         points.reserve(it.value().size());
         for (const auto& kv : it.value()) points.push_back(kv.second);  // std::map: frame order
         m_finalTracks[it.key()] = std::move(points);
@@ -1840,7 +1840,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
     for (auto it = tracks.begin(); it != tracks.end(); ++it) {
         const int sourceItemId = it->first;
         const int exportWormId = sourceToExportId.value(sourceItemId);
-        std::vector<Tracking::WormTrackPoint> sortedTrackPoints = it->second;
+        Tracking::Track sortedTrackPoints = it->second;
         std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
                   [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
                       return lhs.frameNumber < rhs.frameNumber;
@@ -1935,7 +1935,7 @@ bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& trac
         for (auto it = tracks.begin(); it != tracks.end(); ++it) {
             const int sourceItemId = it->first;
             const int exportWormId = sourceToExportId.value(sourceItemId);
-            std::vector<Tracking::WormTrackPoint> sortedTrackPoints = it->second;
+            Tracking::Track sortedTrackPoints = it->second;
             std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
                       [](const Tracking::WormTrackPoint& lhs, const Tracking::WormTrackPoint& rhs) {
                           return lhs.frameNumber < rhs.frameNumber;
@@ -2098,7 +2098,7 @@ void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
         const auto& rawPoints = tracks.at(wormId);
         if (rawPoints.empty()) continue;
 
-        std::vector<Tracking::WormTrackPoint> pts = rawPoints;
+        Tracking::Track pts = rawPoints;
         std::sort(pts.begin(), pts.end(),
                   [](const Tracking::WormTrackPoint& a, const Tracking::WormTrackPoint& b) {
                       return a.frameNumber < b.frameNumber;
@@ -2295,7 +2295,7 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
         if (rawPoints.empty()) continue;
 
         // Sort by frame number
-        std::vector<Tracking::WormTrackPoint> pts = rawPoints;
+        Tracking::Track pts = rawPoints;
         std::sort(pts.begin(), pts.end(),
                   [](const Tracking::WormTrackPoint& a,
                      const Tracking::WormTrackPoint& b) {

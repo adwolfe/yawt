@@ -284,7 +284,7 @@ void AppController::onTrackingManagerAllTracksUpdated(const Tracking::AllWormTra
         // Store tracks into central storage (merge/overwrite per item)
         for (auto it = tracks.begin(); it != tracks.end(); ++it) {
             int wormId = it->first;
-            const std::vector<Tracking::WormTrackPoint>& track = it->second;
+            const Tracking::Track& track = it->second;
             m_storage->setTrackForWorm(wormId, track);
             YAWT_DEBUG(lcCoreAppController) << "stored track for worm" << wormId << "with" << (int)track.size() << "points";
         }

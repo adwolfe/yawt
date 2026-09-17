@@ -356,11 +356,13 @@ struct WormTrackPoint {
     bool hasTips      = false;      // True when headTip/tailTip are valid
 };
 
+/** @brief One worm's track: its points in ascending frame order. */
+using Track = std::vector<WormTrackPoint>;
+
 /**
- * @brief Typedef for storing all tracks.
- * Maps a unique worm ID to its sequence of track points.
+ * @brief All tracks of a run, keyed by worm ID.
  */
-typedef std::map<int, std::vector<WormTrackPoint>> AllWormTracks;
+typedef std::map<int, Track> AllWormTracks;
 
 
 /**

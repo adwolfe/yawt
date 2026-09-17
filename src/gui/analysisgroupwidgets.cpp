@@ -25,7 +25,7 @@
 
 /** Compute per-frame smoothed speed (2-second window). Returns {frame, speed} pairs. */
 static std::vector<std::pair<int,double>> speedTimeline(
-    const std::vector<Tracking::WormTrackPoint>& pts,
+    const Tracking::Track& pts,
     double umPerPixel, double fps)
 {
     std::vector<std::pair<int,double>> result;
@@ -68,7 +68,7 @@ static std::vector<std::pair<int,double>> speedTimeline(
 }
 
 /** Average of all non-zero speed values from speedTimeline(). */
-static double avgSpeed(const std::vector<Tracking::WormTrackPoint>& pts,
+static double avgSpeed(const Tracking::Track& pts,
                        double umPerPixel, double fps)
 {
     auto tl = speedTimeline(pts, umPerPixel, fps);
@@ -78,7 +78,7 @@ static double avgSpeed(const std::vector<Tracking::WormTrackPoint>& pts,
 }
 
 /** Count direction reversals (>90° angle flip) with minimum displacement filter. */
-static int countReversals(const std::vector<Tracking::WormTrackPoint>& pts,
+static int countReversals(const Tracking::Track& pts,
                           double minDx = 2.0)
 {
     std::vector<QPointF> pos;

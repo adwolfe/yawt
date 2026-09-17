@@ -360,7 +360,7 @@ Document fromJson(const QJsonObject& root)
         const int wormId = it.key().toInt(&ok);
         if (!ok || !it.value().isArray()) continue;
         const QJsonArray arr = it.value().toArray();
-        std::vector<Tracking::WormTrackPoint> points;
+        Tracking::Track points;
         points.reserve(static_cast<size_t>(arr.size()));
         for (const QJsonValue& pv : arr) {
             if (!pv.isObject()) continue;
@@ -488,7 +488,7 @@ Tracking::AllWormTracks readTracks(const QString& filePath)
         bool ok = false;
         const int wormId = it.key().toInt(&ok);
         if (!ok || !it.value().isArray()) continue;
-        std::vector<Tracking::WormTrackPoint> points;
+        Tracking::Track points;
         for (const QJsonValue& pv : it.value().toArray()) {
             if (!pv.isObject()) continue;
             // Blob geometry is parsed only far enough to recover bodyLength on

@@ -1254,7 +1254,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         // For each track, paint its path
         for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
             int wormId = it_map->first;
-            const std::vector<Tracking::WormTrackPoint>& trackPoints = it_map->second;
+            const Tracking::Track& trackPoints = it_map->second;
 
             // Only show tracks for items with visible checkbox checked
             bool isVisible = false;

@@ -3122,7 +3122,7 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
 
     auto& predictor = state.predictor;
     auto& prevState = state.prevState;
-    const std::vector<Tracking::WormTrackPoint>& points = *ctx.sortedPoints;
+    const Tracking::Track& points = *ctx.sortedPoints;
     const int i = req.pointIndex;
 
     auto nearestCandidateIdx = [](const Tracking::DetectedBlob& b,
