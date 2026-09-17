@@ -74,7 +74,12 @@
 const double PHYSICAL_BLOB_IOU_THRESHOLD = 0.5;
 const double PHYSICAL_BLOB_CENTROID_MAX_DIST_SQ = 100.0;
 
-// No longer using paused worm resolution
+// Split handling. A WormTracker that detects a split enters TrackerState::PausedForSplit and stops
+// advancing frames, but it is never left waiting on other trackers or on the user: handleFrameUpdate()
+// resolves the split synchronously (processFrameSpecificSplit -> attemptImmediateSplitResolution) and
+// queues WormTracker::resumeTrackingWithAssignedTarget() with the chosen blob, or with an invalid blob
+// to send the tracker to TrackingLost. The "paused" state therefore lasts only until that queued call
+// runs on the tracker's thread. m_splitResolutionMap records the outcome per frame and worm.
 /**
  * @brief Per-frame record of a distinct physical blob (possibly a merge of multiple worms).
  *
@@ -107,9 +112,6 @@ struct FrameSpecificPhysicalBlob {
 
     FrameSpecificPhysicalBlob() : uniqueId(-1), currentArea(0.0), frameNumber(-1), selectedByWormTrackerId(-1) {}
 };
-
-// No longer using pause mechanism - split resolution is immediate
-
 
 // Forward declarations
 class TrackingDataStorage;
