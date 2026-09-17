@@ -53,7 +53,7 @@ void WormTimeline::setWormColors(const QMap<int, QColor>& idColors)
     update();
 }
 
-void WormTimeline::setMergeGroupsByFrame(const QMap<int, QList<QList<int>>>& mergeGroupsByFrame)
+void WormTimeline::setMergeGroupsByFrame(const QMap<int, QList<Tracking::MergeGroup>>& mergeGroupsByFrame)
 {
     m_mergeGroupsByFrame = mergeGroupsByFrame;
     rebuildEventNodes();
@@ -204,7 +204,7 @@ void WormTimeline::rebuildEventNodes()
     int earliestMergeFrame = -1;
     for (int frame = 0; frame < m_totalFrames; ++frame) {
         QMap<QString, QList<int>> currGroups;
-        const QList<QList<int>> groups = m_mergeGroupsByFrame.value(frame);
+        const QList<Tracking::MergeGroup> groups = m_mergeGroupsByFrame.value(frame);
         if (earliestMergeFrame < 0 && !groups.isEmpty()) {
             earliestMergeFrame = frame;
         }

@@ -305,7 +305,7 @@ void TrackingDataStorage::purgeProcessingDataForItem(int itemId) {
 
     auto mergeIt = m_mergeHistory.begin();
     while (mergeIt != m_mergeHistory.end()) {
-        QList<QList<int>>& groups = mergeIt.value();
+        QList<Tracking::MergeGroup>& groups = mergeIt.value();
         for (auto groupIt = groups.begin(); groupIt != groups.end();) {
             groupIt->removeAll(itemId);
             if (groupIt->size() < 2) {
@@ -458,16 +458,16 @@ void TrackingDataStorage::clearAndCompactTrackData() {
  * @brief Persist per-frame conceptual merge groups (for overlays and post-run analysis).
  * Each group is a list of conceptual worm IDs present in the same shared blob at that frame.
  */
-void TrackingDataStorage::setMergeGroupsForFrame(int frameNumber, const QList<QList<int>>& groups) {
+void TrackingDataStorage::setMergeGroupsForFrame(int frameNumber, const QList<Tracking::MergeGroup>& groups) {
     if (frameNumber < 0) return; // silently ignore invalid frame numbers
     m_mergeHistory.insert(frameNumber, groups);
 }
 
-QList<QList<int>> TrackingDataStorage::getMergeGroupsForFrame(int frameNumber) const {
+QList<Tracking::MergeGroup> TrackingDataStorage::getMergeGroupsForFrame(int frameNumber) const {
     return m_mergeHistory.value(frameNumber);
 }
 
-QMap<int, QList<QList<int>>> TrackingDataStorage::getAllMergeGroups() const {
+QMap<int, QList<Tracking::MergeGroup>> TrackingDataStorage::getAllMergeGroups() const {
     return m_mergeHistory;
 }
 

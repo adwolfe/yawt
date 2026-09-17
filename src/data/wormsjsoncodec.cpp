@@ -382,7 +382,7 @@ Document fromJson(const QJsonObject& root)
         bool ok = false;
         const int frame = it.key().toInt(&ok);
         if (!ok || !it.value().isArray()) continue;
-        QList<QList<int>> groups;
+        QList<Tracking::MergeGroup> groups;
         for (const QJsonValue& gv : it.value().toArray()) {
             if (!gv.isArray()) continue;
             QList<int> group;

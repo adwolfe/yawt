@@ -66,7 +66,7 @@ struct Document {
     QList<TableItems::AnnotationItem> items;                        // worm items
     Tracking::AllWormTracks tracks;                              // sorted by frame after read
     QMap<int, QMap<int, Tracking::DetectedBlob>> blobsByFrame;   // frame -> wormId -> blob (filled on read)
-    QMap<int, QList<QList<int>>> mergeGroupsByFrame;
+    QMap<int, QList<Tracking::MergeGroup>> mergeGroupsByFrame;
     QMap<int, Centerline::TipFeatureBaseline> tipBaselines;    // per-worm Welford stats (Phase A)
     QJsonObject mergeState;                                      // TrackingManager's section, passed through
 

@@ -5,6 +5,7 @@
 #include <QColor>
 #include <QList>
 #include <QMap>
+#include "../../data/trackingcommon.h"   // Tracking::MergeGroup
 
 class WormTimeline : public QWidget
 {
@@ -18,7 +19,7 @@ public:
     void setKeyframeFrame(int frame);
     void setCurrentFrame(int frame);
     void setWormColors(const QMap<int, QColor>& idColors);
-    void setMergeGroupsByFrame(const QMap<int, QList<QList<int>>>& mergeGroupsByFrame);
+    void setMergeGroupsByFrame(const QMap<int, QList<Tracking::MergeGroup>>& mergeGroupsByFrame);
 
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
@@ -58,7 +59,7 @@ private:
     int m_keyframeFrame = 0;
     int m_currentFrame = 0;
     QMap<int, QColor> m_wormColors;
-    QMap<int, QList<QList<int>>> m_mergeGroupsByFrame;
+    QMap<int, QList<Tracking::MergeGroup>> m_mergeGroupsByFrame;
 
     QList<EventNode> m_eventNodes;
     QList<MergeSpan> m_mergeSpans;

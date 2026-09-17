@@ -6,6 +6,7 @@
 #include <opencv2/geometry.hpp>
 #include <QPointF>
 #include <QRectF>
+#include <QList>
 #include <QMetaEnum>
 #include <vector> // For std::vector
 #include <limits> // For std::numeric_limits
@@ -355,6 +356,12 @@ struct TrackPoint {
     cv::Point2f tailTip{};          // Assigned tail tip position in video coordinates
     bool hasTips      = false;      // True when headTip/tailTip are valid
 };
+
+/**
+ * @brief The worm IDs that share one blob on one frame.
+ * Per-frame merge history is QList<MergeGroup>; persisted as mergeGroupsByFrame.
+ */
+using MergeGroup = QList<int>;
 
 /** @brief One worm's track: its points in ascending frame order. */
 using Track = std::vector<TrackPoint>;

@@ -76,7 +76,7 @@ signals:
 
 private:
     QMap<int, Tracking::DetectedBlob> getDetectedBlobsForFrame(int frameNumber) const;
-    QList<QList<int>> getMergeGroupsForFrame(int frameNumber) const;
+    QList<Tracking::MergeGroup> getMergeGroupsForFrame(int frameNumber) const;
     Centerline::TipFeatureBaseline getTipBaseline(int wormId) const;
     void setDetectedBlobForFrame(int frameNumber, int wormId, const Tracking::DetectedBlob& blob);
     void recordTipFeatureSample(int wormId, float curvatureMagnitude, float width);

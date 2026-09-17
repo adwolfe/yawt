@@ -57,7 +57,7 @@ struct CenterlineFrameResult {
 
 struct CenterlineFrameIo {
     std::function<QMap<int, Tracking::DetectedBlob>(int)> getDetectedBlobsForFrame;
-    std::function<QList<QList<int>>(int)> getMergeGroupsForFrame;
+    std::function<QList<Tracking::MergeGroup>(int)> getMergeGroupsForFrame;
     std::function<TipFeatureBaseline(int)> getTipBaseline;
     std::function<void(int, int, const Tracking::DetectedBlob&)> setDetectedBlobForFrame;
     std::function<void(int, float, float)> recordTipFeatureSample;

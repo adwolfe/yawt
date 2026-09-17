@@ -364,20 +364,20 @@ public:
      * @param frameNumber Frame index (>=0)
      * @param groups List of groups; each group is a list of conceptual worm IDs
      */
-    void setMergeGroupsForFrame(int frameNumber, const QList<QList<int>>& groups);
+    void setMergeGroupsForFrame(int frameNumber, const QList<Tracking::MergeGroup>& groups);
 
     /**
      * @brief Retrieve merge groups for a frame.
      * @param frameNumber Frame index
      * @return List of groups for that frame, or empty list if none
      */
-    QList<QList<int>> getMergeGroupsForFrame(int frameNumber) const;
+    QList<Tracking::MergeGroup> getMergeGroupsForFrame(int frameNumber) const;
 
     /**
      * @brief Retrieve the full merge history map.
      * @return Map of frame -> list of groups (each group is a list of worm IDs)
      */
-    QMap<int, QList<QList<int>>> getAllMergeGroups() const;
+    QMap<int, QList<Tracking::MergeGroup>> getAllMergeGroups() const;
 
     // --- Per-worm tip-feature baselines (Phase A) ---
     /**
@@ -508,7 +508,7 @@ private:
     double m_roiSizeMultiplier;                            // User-adjustable multiplier
     
     // Per-frame merge history storage: frameNumber -> list of groups (each group is a list of conceptual worm IDs)
-    QMap<int, QList<QList<int>>> m_mergeHistory;
+    QMap<int, QList<Tracking::MergeGroup>> m_mergeHistory;
 
     // Per-frame per-worm detected blob storage: frameNumber -> (wormId -> DetectedBlob)
     QMap<int, QMap<int, Tracking::DetectedBlob>> m_detectedBlobsByFrame;

@@ -2516,7 +2516,7 @@ QString TrackingManager::createRunDirectory(const QString& videoDirectory) {
 
 // Batch-populate merge groups into the central TrackingDataStorage.
 // Converts SharedBlob records (m_frameMergeRecords) into
-// the storage representation: QMap<int, QList<QList<int>>> (frame -> list of groups).
+// the storage representation: QMap<int, QList<Tracking::MergeGroup>> (frame -> list of groups).
 void TrackingManager::populateMergeHistoryInStorage() {
     if (!m_storage) return;
     QMutexLocker locker(&m_dataMutex);
@@ -2525,7 +2525,7 @@ void TrackingManager::populateMergeHistoryInStorage() {
     for (auto it = m_frameMergeRecords.constBegin(); it != m_frameMergeRecords.constEnd(); ++it) {
         int frameNum = it.key();
         const QList<SharedBlob>& blobs = it.value();
-        QList<QList<int>> groups;
+        QList<Tracking::MergeGroup> groups;
         groups.reserve(blobs.size());
         for (const SharedBlob& pb : blobs) {
             QList<int> group;

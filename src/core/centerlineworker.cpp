@@ -532,7 +532,7 @@ QMap<int, Tracking::DetectedBlob> CenterlineWorker::getDetectedBlobsForFrame(int
     return m_storage->getDetectedBlobsForFrame(frameNumber);
 }
 
-QList<QList<int>> CenterlineWorker::getMergeGroupsForFrame(int frameNumber) const
+QList<Tracking::MergeGroup> CenterlineWorker::getMergeGroupsForFrame(int frameNumber) const
 {
     QMutexLocker locker(m_sharedStorageMutex.data());
     return m_storage->getMergeGroupsForFrame(frameNumber);
