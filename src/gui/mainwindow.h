@@ -166,8 +166,8 @@ public slots:
     // Table View and VideoLoader Sync
     void updateVisibleTracksInVideoLoader(const QItemSelection &selected, const QItemSelection &deselected);
     /** 
-     * Handle a newly drawn ROI from the VideoLoader.
-     * Adds the ROI as a worm candidate in the AnnotationTableModel for the current keyframe.
+     * Handle a newly drawn rectangle from the VideoLoader.
+     * Adds it as a Region item (not tracked) in the AnnotationTableModel on the current frame.
      * @param roi Rectangle in video coordinates drawn by the user.
      */
     void handleRoiDefined(const QRectF& roi);
@@ -225,7 +225,7 @@ private:
     ColorDelegate *m_colorDelegate;
     /** Item type delegate created/parented to MainWindow; owned by MainWindow unless reparented. */
     ItemTypeDelegate *m_itemTypeDelegate;
-    /** Proxy models to split worms vs reference items (ROI rectangles and Start/End/Center points) in separate views. */
+    /** Proxy models to split worms vs reference items (Region rectangles and Start/End/Center points) in separate views. */
     ItemTypeFilterProxyModel *m_wormProxyModel = nullptr;
     ItemTypeFilterProxyModel *m_referenceItemsProxy = nullptr;
 

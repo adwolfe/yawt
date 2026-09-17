@@ -175,7 +175,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_referenceItemsProxy = new ItemTypeFilterProxyModel(this);
     m_referenceItemsProxy->setSourceModel(m_annotationTableModel);
     m_referenceItemsProxy->setAllowedTypes(QSet<TableItems::ItemType>{
-        TableItems::ItemType::ROI,
+        TableItems::ItemType::Region,
         TableItems::ItemType::StartPoint,
         TableItems::ItemType::EndPoint,
         TableItems::ItemType::CenterPoint
@@ -900,7 +900,7 @@ void MainWindow::setupConnections() {
             [this, toggleVisibilityForTypes](int logicalIndex) {
         if (logicalIndex != AnnotationTableModel::Column::Show) return;
         toggleVisibilityForTypes(QSet<TableItems::ItemType>{
-            TableItems::ItemType::ROI,
+            TableItems::ItemType::Region,
             TableItems::ItemType::StartPoint,
             TableItems::ItemType::EndPoint,
             TableItems::ItemType::CenterPoint
@@ -1314,7 +1314,7 @@ void MainWindow::handleRoiDefined(const QRectF& roi) {
     QRectF boundingBox = roi;
 
     // Add as ROI type to the model
-    bool added = m_annotationTableModel->addItem(centroid, boundingBox, currentFrame, TableItems::ItemType::ROI);
+    bool added = m_annotationTableModel->addItem(centroid, boundingBox, currentFrame, TableItems::ItemType::Region);
 
     if (added) {
         ui->deleteButton->setEnabled(true);

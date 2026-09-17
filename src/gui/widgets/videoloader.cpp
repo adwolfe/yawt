@@ -962,7 +962,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
             item.type == TableItems::ItemType::EndPoint) {
             return true;
         }
-        if (item.type == TableItems::ItemType::ROI) {
+        if (item.type == TableItems::ItemType::Region) {
             const QRectF& ob = item.originalClickedBoundingBox;
             return ob.isNull() || ob.isEmpty() || ob.width() <= 0.0 || ob.height() <= 0.0;
         }

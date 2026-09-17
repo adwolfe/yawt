@@ -339,7 +339,7 @@ void TrackingDataStorage::purgeProcessingDataForItem(int itemId) {
 }
 
 static bool isRoiPointType(TableItems::ItemType type) {
-    return type == TableItems::ItemType::ROI ||
+    return type == TableItems::ItemType::Region ||
            type == TableItems::ItemType::StartPoint ||
            type == TableItems::ItemType::EndPoint ||
            type == TableItems::ItemType::CenterPoint;

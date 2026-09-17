@@ -175,7 +175,7 @@ void AppController::addRoi(const QRectF& roi, int frame)
     }
 
     bool added = m_annotationModel->addItem(QPointF(roi.x() + roi.width() / 2.0, roi.y() + roi.height() / 2.0),
-                                      roi, frame, TableItems::ItemType::ROI);
+                                      roi, frame, TableItems::ItemType::Region);
     if (!added) {
         qWarning() << "AppController::addRoi: addItem(ROI) returned false";
     }

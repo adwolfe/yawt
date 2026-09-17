@@ -44,7 +44,7 @@ namespace TableItems {
 // Enum for the type of tracked item
 enum class ItemType {
     Worm,
-    ROI,
+    Region,      // a user-drawn rectangle; not tracked (called "ROI" in files written before this rename)
     StartPoint,
     EndPoint,
     CenterPoint,
@@ -55,7 +55,7 @@ enum class ItemType {
 inline QString itemTypeToString(ItemType type) {
     switch (type) {
     case ItemType::Worm: return "Worm";
-    case ItemType::ROI: return "ROI";
+    case ItemType::Region: return "Region";
     case ItemType::StartPoint: return "Start Point";
     case ItemType::EndPoint: return "End Point";
     case ItemType::CenterPoint: return "Center";
@@ -66,7 +66,7 @@ inline QString itemTypeToString(ItemType type) {
 
 inline ItemType stringToItemType(const QString& typeStr) {
     if (typeStr == "Worm") return ItemType::Worm;
-    if (typeStr == "ROI") return ItemType::ROI;
+    if (typeStr == "Region" || typeStr == "ROI") return ItemType::Region;   // "ROI" is the legacy name
     if (typeStr == "Start Point") return ItemType::StartPoint;
     if (typeStr == "End Point") return ItemType::EndPoint;
     if (typeStr == "Control Point") return ItemType::CenterPoint; // legacy name for the center reference point

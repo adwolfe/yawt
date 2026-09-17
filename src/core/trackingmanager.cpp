@@ -2715,7 +2715,7 @@ bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
 
     QList<TableItems::AnnotationItem> referenceItems;
     for (const TableItems::AnnotationItem& item : m_storage->getAllItems()) {
-        if (item.type == TableItems::ItemType::ROI ||
+        if (item.type == TableItems::ItemType::Region ||
             item.type == TableItems::ItemType::StartPoint ||
             item.type == TableItems::ItemType::EndPoint ||
             item.type == TableItems::ItemType::CenterPoint) {

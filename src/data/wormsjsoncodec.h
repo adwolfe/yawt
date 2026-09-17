@@ -33,7 +33,7 @@
  *                       resolutions); passed through untouched
  *
  * roi_points.json (version 1), indented:
- *   version, videoPath, keyFrame, items[] (ROI and Start/End/Center items)
+ *   version, videoPath, keyFrame, items[] (Region and Start/End/Center items)
  *
  * A track point:
  *   frame, quality, position{x,y}, roi{x,y,width,height}   (roi = search window)
