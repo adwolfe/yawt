@@ -55,7 +55,7 @@ Topology values:
 non-lost frame. A throwaway skeleton centerline is built on a temporary copy of each blob
 and its arc length recorded. `refLength` is the median. Nothing is written to storage.
 
-**Sweep 1 — keyframe-outward.** The frame the user clicked on (`ClickedItem::frameOfSelection`)
+**Sweep 1 — keyframe-outward.** The frame the user clicked on (`AnnotationItem::frameOfSelection`)
 is processed first as a **keyframe bootstrap**: there is no previous frame, so head/tail
 are assigned from geometry alone and the predictor is seeded from the result. The pass then
 walks forward from keyframe + 1 to the end, and separately backward from keyframe − 1 to 0,
