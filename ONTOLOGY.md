@@ -46,21 +46,21 @@ declaration and an optional sink.
 
 ```mermaid
 graph TD
-  Video["Video file"] -->|"has one"| DataDir["data directory: <video dir>/yawt/"]
-  DataDir -->|"per video"| VideoDir["yawt/<basename>/"]
-  VideoDir -->|"0..n"| Run["run: PROC_<stamp>/"]
-  DataDir --> Meta["<basename>_metadata.json (umPerPixel, fps, scaleCalibration)"]
+  Video["Video file"] -->|"has one"| DataDir["data directory: &lt;video dir&gt;/yawt/"]
+  DataDir -->|"per video"| VideoDir["yawt/&lt;basename&gt;/"]
+  VideoDir -->|"0..n"| Run["run: PROC_&lt;stamp&gt;/"]
+  DataDir --> Meta["&lt;basename&gt;_metadata.json (umPerPixel, fps, scaleCalibration)"]
   DataDir --> AState["analysis_state.json (analysis groups)"]
 
   Run --> Worms["worms.json"]
   Run --> RoiPts["roi_points.json"]
   Run --> Summary["worm_summary.json"]
 
-  Item["AnnotationItem (id, type, color, frameOfSelection)"] -->|"type = Worm"| Track["Track = vector<TrackPoint>"]
+  Item["AnnotationItem (id, type, color, frameOfSelection)"] -->|"type = Worm"| Track["Track = vector&lt;TrackPoint&gt;"]
   Item -->|"type = Region | StartPoint | EndPoint | CenterPoint"| Ref["reference geometry (not tracked)"]
   Track -->|"per frame"| TP["TrackPoint (frameNumber, position, searchWindow, quality, derived morphology)"]
   TP -.->|"joined by (frameNumber, wormId)"| Blob["DetectedBlob (geometry) + BlobCenterline"]
-  Run -->|"frame -> QList<MergeGroup>"| MG["merge history"]
+  Run -->|"frame -&gt; QList&lt;MergeGroup&gt;"| MG["merge history"]
 
   Group["AnalysisGroup"] -->|"contains"| RunItem["RunItem (one run)"]
   RunItem -->|"contains"| WormItem["WormItem"]
