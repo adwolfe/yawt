@@ -91,7 +91,7 @@
       <item>
        <widget class="QCheckBox" name="smoothCenterlineCheckBox">
         <property name="text">
-         <string>Smooth tips and centerline midpoints (Savitzky-Golay)</string>
+         <string>Smooth centerline midpoint trace (Savitzky-Golay)</string>
         </property>
         <property name="checked">
          <bool>true</bool>

@@ -120,10 +120,11 @@ stored in `HeadTailPredictor` for the next frame.
    `geoSwapped`, emitted as `headTailGeometrySwapEvent`.
 3. **Net swap** = XOR of the two lists (a frame flipped by both passes is unchanged),
    emitted as `headTailSwapEvent` and written to `<basename>_headtail_swaps.xlsx`.
-4. **Tip smoothing** (optional, `setSmoothCenterline`). A degree-2 Savitzky–Golay filter
-   over a window of `2 · sgHalfWindow + 1` frames smooths head and tail tip positions,
-   then `relaxCenterlineToSmoothedTips` re-runs the snake on each `Clean` frame with the
-   smoothed tips pinned.
+4. **Midpoint smoothing** (optional, `setSmoothCenterline`). A degree-2 Savitzky–Golay
+   filter over a window of `2 · sgHalfWindow + 1` consecutive frames smooths the
+   centerline midpoint used for the trace. On `Clean` frames, the filtered midpoint
+   guides a second snake relaxation while the detected head and tail remain pinned.
+   Frames with a filtered midpoint outside the blob mask keep their original centerline.
 
 ## Coordinate frames
 

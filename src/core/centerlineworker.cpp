@@ -593,7 +593,7 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
 //             Step 3: resample to nPoints.
 //             Step 4: snake refinement (Clean only); right-hand-rule veto.
 // Degree-2 Savitzky-Golay smoothing over a 1-D float sequence.
-// Half-window h means we look h frames on each side; boundary frames are left unchanged.
+// Half-window h means we look h samples on each side; boundary samples are unchanged.
 // Formula: c[k] = 3h(h+1) - 1 - 5k^2,  norm = (2h-1)(2h+1)(2h+3)/3
 static std::vector<float> savitzkyGolay(const std::vector<float>& y, int h)
 {
@@ -611,9 +611,9 @@ static std::vector<float> savitzkyGolay(const std::vector<float>& y, int h)
     return out;
 }
 
-// Apply S-G smoothing to tip positions and re-relax the centerline for one worm.
+// Apply S-G smoothing to the trace midpoint and re-relax the centerline for one worm.
 // sortedPoints must be in frame order and already written to storage.
-static void smoothTipsAndRelaxCenterlines(
+static void smoothMidpointsAndRelaxCenterlines(
     TrackingDataStorage* storage,
     QMutex* storageMutex,
     int wormId,
@@ -622,11 +622,10 @@ static void smoothTipsAndRelaxCenterlines(
     int nPts,
     const Centerline::CenterlineSnakeParams& snakeParams)
 {
-    // Gather per-frame tip info for frames with valid, clean-topology blobs.
+    // Gather centerline midpoints for frames with valid, clean-topology blobs.
     struct FrameEntry {
         int frame;
-        cv::Point2f head;
-        cv::Point2f tail;
+        cv::Point2f midpoint;
     };
     // Split into consecutive runs of valid frames; merged/lost breaks a run.
     // We process each run independently so S-G never bridges a gap.
@@ -634,6 +633,10 @@ static void smoothTipsAndRelaxCenterlines(
     std::vector<FrameEntry> current;
 
     for (const auto& tp : sortedPoints) {
+        if (!current.empty() && tp.frameNumber != current.back().frame + 1) {
+            runs.push_back(std::move(current));
+            current.clear();
+        }
         if (tp.quality == Tracking::TrackPointQuality::Merged ||
             tp.quality == Tracking::TrackPointQuality::Lost) {
             if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
@@ -657,13 +660,13 @@ static void smoothTipsAndRelaxCenterlines(
         const int tIdx = blob.centerline.tailTipIdx;
         if (hIdx < 0 || tIdx < 0 ||
             hIdx >= static_cast<int>(blob.centerline.tipCandidates.size()) ||
-            tIdx >= static_cast<int>(blob.centerline.tipCandidates.size())) {
+            tIdx >= static_cast<int>(blob.centerline.tipCandidates.size()) ||
+            blob.centerline.points.empty()) {
             if (!current.empty()) { runs.push_back(std::move(current)); current.clear(); }
             continue;
         }
         current.push_back({tp.frameNumber,
-                           blob.centerline.tipCandidates[hIdx].point,
-                           blob.centerline.tipCandidates[tIdx].point});
+                           blob.centerline.points[blob.centerline.points.size() / 2]});
     }
     if (!current.empty()) runs.push_back(std::move(current));
 
@@ -671,21 +674,18 @@ static void smoothTipsAndRelaxCenterlines(
         const int sz = static_cast<int>(run.size());
         if (sz < 2 * sgHalfWindow + 1) continue;
 
-        // Build per-coordinate time series.
-        std::vector<float> hx(sz), hy(sz), tx(sz), ty(sz);
+        // Build the two midpoint-coordinate time series.
+        std::vector<float> mx(sz), my(sz);
         for (int i = 0; i < sz; ++i) {
-            hx[i] = run[i].head.x;  hy[i] = run[i].head.y;
-            tx[i] = run[i].tail.x;  ty[i] = run[i].tail.y;
+            mx[i] = run[i].midpoint.x;
+            my[i] = run[i].midpoint.y;
         }
-        const auto shx = savitzkyGolay(hx, sgHalfWindow);
-        const auto shy = savitzkyGolay(hy, sgHalfWindow);
-        const auto stx = savitzkyGolay(tx, sgHalfWindow);
-        const auto sty = savitzkyGolay(ty, sgHalfWindow);
+        const auto smx = savitzkyGolay(mx, sgHalfWindow);
+        const auto smy = savitzkyGolay(my, sgHalfWindow);
 
         for (int i = 0; i < sz; ++i) {
-            const cv::Point2f newHead(shx[i], shy[i]);
-            const cv::Point2f newTail(stx[i], sty[i]);
-            if (newHead == run[i].head && newTail == run[i].tail) continue;
+            const cv::Point2f target(smx[i], smy[i]);
+            if (target == run[i].midpoint) continue;
 
             QMap<int, Tracking::DetectedBlob> frameBlobs;
             {
@@ -695,9 +695,8 @@ static void smoothTipsAndRelaxCenterlines(
             if (!frameBlobs.contains(wormId)) continue;
             Tracking::DetectedBlob blob = frameBlobs[wormId];
 
-            blob.centerline.tipCandidates[blob.centerline.headTipIdx].point = newHead;
-            blob.centerline.tipCandidates[blob.centerline.tailTipIdx].point = newTail;
-            Centerline::relaxCenterlineToSmoothedTips(blob, nPts, snakeParams);
+            if (!Centerline::relaxCenterlineToSmoothedMidpoint(
+                    blob, target, nPts, snakeParams)) continue;
 
             QMutexLocker lk(storageMutex);
             storage->setDetectedBlobForFrame(run[i].frame, wormId, blob);
@@ -904,7 +903,7 @@ void CenterlineWorker::doWork()
         emit headTailSwapEvent(wormId, QList<int>(netSet.begin(), netSet.end()));
 
         if (m_smoothCenterline) {
-            smoothTipsAndRelaxCenterlines(
+            smoothMidpointsAndRelaxCenterlines(
                 m_storage, m_sharedStorageMutex.data(),
                 wormId, sortedPoints,
                 m_sgHalfWindow, nPts, m_snakeParams);

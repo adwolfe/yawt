@@ -95,6 +95,7 @@ graph TD
 | **Topology** | Geometric class of a worm's blob. See §5. | `Tracking::TopologyState`, `BlobCenterline::topology` |
 | **Merge group** | The worm ids sharing one blob on one frame. | `Tracking::MergeGroup`; history is frame → `QList<MergeGroup>` |
 | **Centerline** | Ordered polyline from head to tail. | `BlobCenterline::points`; UI: `ViewModeOption::Centerlines` |
+| **Centerline midpoint** | The middle sample of the ordered centerline; used as the alternative to the blob centroid for the displayed animal trace. Analysis plugin `x`/`y` still use the track point's centroid position. | `BlobCenterline::points[points.size() / 2]`, `CenterlineState::midpoint()` |
 | **Skeleton** | The Zhang-Suen raster and its graph, used to find the centerline. | `Centerline::SkeletonGraph` |
 | **Tip** | A body end. **Head** and **tail** are roles assigned to tips. | `TrueTip`, `TipCandidate`, `headTip`, `tailTip`, `headTipIdx`, `tailTipIdx` |
 | **Skeleton endpoint** | A degree-1 node of the skeleton; the usual source of a tip. Distinct from a tip. | `detectEndpoints`, `EndpointResult` |

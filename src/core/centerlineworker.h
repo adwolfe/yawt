@@ -54,7 +54,8 @@ public:
     // 1 = never skip). Default 0.25.
     void setMaxReversalFraction(float fraction);
     // When enabled, applies a Savitzky-Golay (degree-2) filter across frames to
-    // smooth head/tail tip positions, then re-relaxes each affected centerline.
+    // guide centerline midpoints, then re-relaxes each affected centerline while
+    // keeping the detected head/tail positions pinned.
     // halfWindow is the number of frames on each side of the kernel (default 3 → 7-frame window).
     void setSmoothCenterline(bool smooth);
     void setSgHalfWindow(int halfWindow);

@@ -2904,7 +2904,8 @@ static bool refineSnakeCore(const Tracking::DetectedBlob& blob,
                             int nPoints,
                             const Centerline::CenterlineSnakeParams& params,
                             cv::Point2f& outOverlapCenter,
-                            bool& outHasOverlap)
+                            bool& outHasOverlap,
+                            const cv::Point2f* midpointTarget = nullptr)
 {
     outHasOverlap = false;
     if (mask.empty() || v.empty() || blob.contourPoints.empty()) return false;
@@ -2971,7 +2972,13 @@ static bool refineSnakeCore(const Tracking::DetectedBlob& blob,
                 rig = v[i - 2] - 4.f * v[i - 1] + 6.f * v[i] - 4.f * v[i + 1] + v[i + 2];
             }
             const cv::Point2f img = sampleGradient(v[i]);
-            const cv::Point2f force = alpha * tens - beta * rig + lambda * img;
+            cv::Point2f force = alpha * tens - beta * rig + lambda * img;
+            if (midpointTarget && i == n / 2) {
+                // Keep the trace midpoint near its temporally smoothed position
+                // while the image force still draws it toward the medial axis.
+                constexpr float kMidpointGuideWeight = 1.0f;
+                force += kMidpointGuideWeight * (*midpointTarget - v[i]);
+            }
             cv::Point2f candidate = v[i] + tau * force;
             if (!isInsideMask(candidate)) {
                 candidate = nearestContourPoint(blob.contourPoints, candidate);
@@ -4122,9 +4129,10 @@ prevState.turningAngle = flipped ? -curTurning : curTurning;
 
 }
 
-bool relaxCenterlineToSmoothedTips(Tracking::DetectedBlob& blob,
-                                   int nPoints,
-                                   const CenterlineSnakeParams& params)
+bool relaxCenterlineToSmoothedMidpoint(Tracking::DetectedBlob& blob,
+                                      const cv::Point2f& midpointTarget,
+                                      int nPoints,
+                                      const CenterlineSnakeParams& params)
 {
     if (blob.contourPoints.empty()) return false;
     if (blob.centerline.points.empty()) return false;
@@ -4139,6 +4147,10 @@ bool relaxCenterlineToSmoothedTips(Tracking::DetectedBlob& blob,
     cv::Mat mask;
     cv::Rect bounds;
     if (!buildSnakeMask(blob, mask, bounds)) return false;
+    const int mx = static_cast<int>(std::lround(midpointTarget.x - bounds.x));
+    const int my = static_cast<int>(std::lround(midpointTarget.y - bounds.y));
+    if (mx < 0 || my < 0 || mx >= mask.cols || my >= mask.rows ||
+        mask.at<uchar>(my, mx) == 0) return false;
 
     const cv::Point2f pinH = blob.centerline.tipCandidates[hIdx].point;
     const cv::Point2f pinT = blob.centerline.tipCandidates[tIdx].point;
@@ -4148,7 +4160,8 @@ bool relaxCenterlineToSmoothedTips(Tracking::DetectedBlob& blob,
     cv::Point2f overlapCenter(0.f, 0.f);
     bool hasOverlap = false;
     if (!refineSnakeCore(blob, mask, bounds, centerline, pinH, pinT,
-                         nPoints, params, overlapCenter, hasOverlap))
+                         nPoints, params, overlapCenter, hasOverlap,
+                         &midpointTarget))
         return false;
 
     blob.centerline.points.assign(centerline.begin(), centerline.end());
