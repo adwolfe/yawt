@@ -75,6 +75,8 @@ struct RouteCandidate {
     float length = 0.f;                    // resampled arc length
     float turning = 0.f;                   // signed turning head → tail
     float score = 0.f;
+    float orientationCost = 0.f;
+    std::pair<int, int> labeling{-1, -1};   // visible (head, tail) graph indices; -1 = hidden
     QString summary;
 };
 

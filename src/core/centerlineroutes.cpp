@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <numeric>
 
 namespace Centerline {
@@ -24,6 +25,7 @@ constexpr float kOrientationMismatchCost = 6.f;
 constexpr float kOrientationMinTurning = 0.75f * static_cast<float>(CV_PI);
 constexpr float kOrientationMinReferenceTurning = 0.5f * static_cast<float>(CV_PI);
 constexpr float kJunctionTurnWeight = 1.f;
+constexpr float kLabelingMargin = 1.f;          // continuity margin that fixes the head/tail labeling
 constexpr float kForcedNodeMinSeparation = 4.f;  // px from an observed endpoint
 constexpr int   kMaxCandidates = 4000;
 constexpr int   kRankedKept = 8;
@@ -480,6 +482,10 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
                                    (r.retrace ? kRetraceCost : 0.f);
             c.score = shared + endCost(c.headKind, input.head) + endCost(c.tailKind, input.tail) +
                       headCost + tailCost + orientationCost;
+            c.orientationCost = orientationCost;
+            const int startKey = r.start.kind == RouteEndKind::Hidden ? -1 : r.start.graphIndex;
+            const int endKey = r.end.kind == RouteEndKind::Hidden ? -1 : r.end.graphIndex;
+            c.labeling = assignment == 0 ? std::make_pair(startKey, endKey) : std::make_pair(endKey, startKey);
             c.summary = QStringLiteral("route %1%2 len=%3 head=%4(%5,%6) tail=%7(%8,%9) "
                                        "cost: length=%10 ends=%11 headPred=%12 tailPred=%13 "
                                        "junction=%14 orient=%15 turning=%16 total=%17")
@@ -501,6 +507,26 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
         }
     }
 
+    // Continuity decides which visible end is head and which is tail; loop
+    // orientation only chooses among routes with that labeling, unless the
+    // continuity evidence for the labeling is itself close.
+    std::map<std::pair<int, int>, float> bestByLabeling;
+    for (const RouteCandidate& c : scored) {
+        const float base = c.score - c.orientationCost;
+        auto it = bestByLabeling.find(c.labeling);
+        if (it == bestByLabeling.end() || base < it->second) bestByLabeling[c.labeling] = base;
+    }
+    if (bestByLabeling.size() > 1) {
+        std::vector<std::pair<float, std::pair<int, int>>> order;
+        for (const auto& [key, base] : bestByLabeling) order.push_back({base, key});
+        std::sort(order.begin(), order.end());
+        if (order[1].first - order[0].first >= kLabelingMargin) {
+            const auto keep = order[0].second;
+            scored.erase(std::remove_if(scored.begin(), scored.end(),
+                                        [&](const RouteCandidate& c) { return c.labeling != keep; }),
+                         scored.end());
+        }
+    }
     std::sort(scored.begin(), scored.end(),
               [](const RouteCandidate& a, const RouteCandidate& b) { return a.score < b.score; });
     result.decisions << QStringLiteral("route selection: bodyLength=%1 window=[%2,%3] nodes=%4 edges=%5 "
