@@ -69,10 +69,10 @@ Each frame in Sweep 1 runs `Centerline::processFrame`, which is the five steps b
 
 **Step 1 — detect endpoints.** `detectEndpoints(blob, predictor, baseline, inMergeGroup)`
 is a pure function that performs, in order: (a) padded local mask and distance transform,
-(b) Zhang–Suen skeletonisation into a `SkeletonGraph`, (c) pruning to at most two
+(b) Guo–Hall skeletonisation into a `SkeletonGraph`, (c) pruning to at most two
 degree-1 endpoints by longest path, (d) signed curvature along the outer contour with
 local maxima, (e) extension of each skeleton endpoint to the strongest reachable
-curvature peak, plus a bilateral cap-midpoint estimate, (f) topology classification
+curvature peak for non-clean frames, or a terminal-axis boundary intersection for clean frames, (f) topology classification
 (Phase C.2), (g) head/tail assignment (Phase C.1). Results are written back to the blob.
 On `Clean` frames the tip features are sampled into the baseline (Phase A).
 
@@ -138,3 +138,30 @@ the skeleton, distance transform, and `SkeletonGraph::points` are **local** to
 The pass was rewritten from a five-pass design into the sweep/step structure above. The
 design document for that rewrite (`CENTERLINE_REWRITE_PLAN.md`) was deleted from the tree
 in commit `dcce759` and is not the reference for current behaviour; this page is.
+
+### Authoritative visible-tip position and DEBUG cap views
+
+Clean frames fit a terminal body axis to six interior skeleton samples spaced one
+pixel apart along the shortest path between endpoints. The first forward
+intersection of that axis with a contour segment supplies `TrueTip::point`.
+Intersecting segments directly makes the position independent of contour vertex
+density, including `CHAIN_APPROX_SIMPLE` compression. Neither curvature scores
+nor averages of contour corners select clean tips. If the fit is degenerate or
+has no local forward exit, the closest contour-segment point is used instead.
+Non-clean frames retain their existing peak/snap and hidden-tip routing.
+
+The selected point is shared by role assignment, stored candidates, D-1 endpoints,
+snake pins, and predictor updates. Curvature and width remain supporting contour
+features; they do not change the selected clean-frame position.
+
+`TipCandidate::Source::AxisBoundary` identifies axis intersections (yellow in the
+candidate overlay). DEBUG cap views show uniformly spaced interior samples and
+the fitted ray in cyan, the raw skeleton endpoint in white, and the selected
+boundary point in yellow. The log records the fit origin, samples, direction,
+estimator, and reason. Existing cap image filenames are retained.
+
+Run `python3 scripts/test_centerline_endpoints.py build` against a configured
+CMake Unix Makefiles build. An optional second argument specifies a directory for
+DEBUG exports. Regressions include the recorded worm 4 truncation contours and
+worm 1 frames 1534-1541, with checks for boundary membership and invariance to
+contour densification and reversal.

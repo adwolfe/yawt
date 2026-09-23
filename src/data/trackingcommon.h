@@ -183,7 +183,7 @@ Q_ENUM_NS(TrackerState)
  * consumes these candidates plus per-worm baselines + motion history.
  *
  * Two complementary sources:
- *   - SkeletonEndpoint: a degree-1 node of the Zhang-Suen skeleton, mapped to
+ *   - SkeletonEndpoint: a degree-1 node of the Guo-Hall skeleton, mapped to
  *     the nearest outer-contour point. Reliable on clean topology (typically
  *     yields exactly 2 endpoints); often yields 1 on coiled-with-protrusion
  *     blobs and 0 on closed-ring blobs.
@@ -194,13 +194,15 @@ Q_ENUM_NS(TrackerState)
  * Candidates from both sources are merged and deduplicated by planar distance.
  */
 struct TipCandidate {
-    cv::Point2f point;                 // Position on outer contour, in video coordinates
+    cv::Point2f point;                 // Selected tip position, in video coordinates
     float       curvature = 0.f;       // Signed local curvature (1/px); +ve = bulging outward
     float       width     = 0.f;       // Local perpendicular mask thickness (px), ~5px inward from tip
     enum class Source : uint8_t {
         SkeletonEndpoint,
         CurvaturePeak,
-        HypothesizedHidden   // D-3: inferred tip when the other end is occluded
+        HypothesizedHidden,  // D-3: inferred tip when the other end is occluded
+        BilateralCap,       // legacy value retained for compatibility
+        AxisBoundary       // terminal body-axis intersection with contour
     };
     Source source = Source::SkeletonEndpoint;
 };

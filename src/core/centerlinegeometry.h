@@ -14,7 +14,7 @@ struct GraphSearchResult {
     std::vector<int> parents;
 };
 
-// Thin a binary worm mask into a Zhang-Suen one-pixel skeleton.
+// Thin a binary worm mask into a Guo-Hall one-pixel skeleton.
 cv::Mat skeletonizeBinaryMask(const cv::Mat& binaryMask);
 
 // Run weighted Dijkstra over an 8-connected skeleton pixel graph.

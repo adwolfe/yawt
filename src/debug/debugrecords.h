@@ -10,7 +10,7 @@
 namespace Debug {
 
 /**
- * @brief Per-tip debug snapshot of the bilateral cap midpoint computation.
+ * @brief Per-tip debug snapshot of the terminal-axis boundary selection.
  *
  * Populated inside detectEndpoints() for every skeleton endpoint and carried
  * on Debug::EndpointDebug::tipCapDebug (parallel to EndpointResult::tips).
@@ -21,35 +21,22 @@ namespace Debug {
 struct TipCapDebug {
     bool valid = false;
 
-    // Search window parameters (mirroring what detectEndpoints used).
-    cv::Point2f skelEndpoint;   // skeleton degree-1 node projected to contour snap
+    // Raw endpoint and fitted terminal-axis geometry.
+    cv::Point2f skelEndpoint;   // raw skeleton degree-1 node; fit samples extend inward
     cv::Point2f outwardDir;     // normalised direction away from body interior
     float dtAtEp    = 0.f;     // DT value at skeleton endpoint
-    float maxForward = 0.f;    // forward search limit (pixels)
-    float maxSide    = 0.f;    // lateral search limit (pixels)
+    cv::Point2f axisOrigin;    // interior fit origin; ray starts here
+    std::vector<cv::Point2f> axisSamples;
+    bool hasAxis = false;
 
-    // Contour points classified by which half-plane they fall in.
-    std::vector<cv::Point2f> leftCapPoints;    // fwd in window, left of outwardDir
-    std::vector<cv::Point2f> rightCapPoints;   // fwd in window, right of outwardDir
-    // (points outside the window are not stored — they are uncoloured on the canvas)
-
-    // Apex weighted centroids from the top-forward fraction of each side.
-    cv::Point2f leftApex;    // weighted centroid of top-forward left points
-    cv::Point2f rightApex;   // weighted centroid of top-forward right points
-    bool  hasLeft  = false;
-    bool  hasRight = false;
-    float leftPeakFwd  = 0.f;  // forward depth of the leftmost apex contour point
-    float rightPeakFwd = 0.f;  // forward depth of the rightmost apex contour point
-    bool  sanityPassed = false; // did the left/right apex depths agree well enough?
-
-    // Bilateral result.
-    cv::Point2f bilateralTip;
-    bool hasBilateral = false;
-
-    // Old-approach comparison points (for overlay in exporter).
+    // Independent comparison estimates (for overlay in exporter).
     cv::Point2f snapPoint;       // projectedEndpointContourIdx snap (= t.skelPoint)
     cv::Point2f peakOrSnapPoint; // curvature peak if found, else same as snapPoint
     bool hadPeak = false;        // true when a curvature peak was accepted
+
+    cv::Point2f selectedPoint;
+    QString selectedEstimator;
+    QString selectionReason;
 };
 
 /**
@@ -91,7 +78,7 @@ struct EndpointCandidateDebug {
     bool finalExtended = false;
     float finalCurvature = 0.f;
     float finalWidth = 0.f;
-    bool finalHasBilateral = false;
+    bool finalHasAxis = false;
 };
 
 /**
@@ -210,8 +197,7 @@ struct CenterlineFrameDebug {
     std::vector<int> contourCurvaturePeaks;
     std::vector<EndpointCandidateDebug> endpointCandidateDebug;
 
-    // Bilateral cap-midpoint debug — one entry per tip (parallel to tipCandidates).
-    // Populated whenever the new bilateral path ran (Clean frames primarily).
+    // Terminal-axis debug — one entry per detected tip.
     // tipCapRoles[i] is "head" / "tail" / "" matching tipCandidates[i].
     std::vector<TipCapDebug> tipCapDebug;
     std::vector<QString>               tipCapRoles;

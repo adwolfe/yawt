@@ -1175,10 +1175,9 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
 
     // ── Tip-candidate overlay ────────────────────────────────────────────────
     // Phase-B preprocessing dots: head/tail candidates produced per-frame from
-    // the blob's geometry alone (no temporal state). Skeleton-derived
-    // candidates render as filled circles; curvature-peak candidates as
-    // hollow squares — so it's visually obvious which detector surfaced each
-    // tip during debugging.
+    // the blob's geometry, plus hidden tips inferred by the routing stage.
+    // Snap candidates are green circles, axis-boundary estimates yellow circles,
+    // curvature peaks magenta squares, and hidden estimates orange squares.
     if (m_activeViewModes.testFlag(ViewModeOption::TipCandidates) && m_storage && currentFrameIdx >= 0) {
         const QMap<int, Tracking::DetectedBlob> tipBlobs = m_storage->getDetectedBlobsForFrame(currentFrameIdx);
         QSet<int> tipIds = m_visibleTrackIDs;
@@ -1209,6 +1208,10 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                 if (tc.source == Tracking::TipCandidate::Source::SkeletonEndpoint) {
                     // Filled green circle — skeleton degree-1 endpoint.
                     painter.setBrush(QColor(60, 220, 80));
+                    painter.drawEllipse(pt, dotRadius, dotRadius);
+                } else if (tc.source == Tracking::TipCandidate::Source::BilateralCap ||
+                           tc.source == Tracking::TipCandidate::Source::AxisBoundary) {
+                    painter.setBrush(QColor(255, 240, 0));
                     painter.drawEllipse(pt, dotRadius, dotRadius);
                 } else if (tc.source == Tracking::TipCandidate::Source::CurvaturePeak) {
                     // Hollow magenta square — curvature peak.

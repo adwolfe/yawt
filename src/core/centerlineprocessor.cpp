@@ -18,6 +18,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                                Debug::EndpointDebug* debugOut)
 {
     EndpointResult r;
+    if (debugOut) *debugOut = Debug::EndpointDebug{};
 
     if (!blob.isValid) {
         r.topology = Tracking::TopologyState::Lost;
@@ -183,14 +184,16 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             return cv::Point2f(0.f, 0.f);
         }
 
-        int prev = epIdx;
         int cur = r.skeleton.adjacency[epIdx].front();
+        // Pixel adjacency can contain small cycles even at an otherwise clean
+        // body end. Never walk back to an earlier node (especially epIdx).
+        std::vector<int> visited{epIdx, cur};
         cv::Point inner = r.skeleton.points[cur];
         constexpr int kEndpointDirectionSteps = 6;
         for (int step = 1; step < kEndpointDirectionSteps; ++step) {
             int next = -1;
             for (int candidate : r.skeleton.adjacency[cur]) {
-                if (candidate != prev) {
+                if (std::find(visited.begin(), visited.end(), candidate) == visited.end()) {
                     next = candidate;
                     break;
                 }
@@ -198,8 +201,8 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             if (next < 0) {
                 break;
             }
-            prev = cur;
             cur = next;
+            visited.push_back(cur);
             inner = r.skeleton.points[cur];
         }
 
@@ -285,6 +288,8 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         return false;
     };
 
+    const bool cleanVisibleTips = !inMergeGroup && blob.holeContourPoints.empty() &&
+                                  r.skeleton.endpointIndices.size() == 2;
     for (int epIdx : r.skeleton.endpointIndices) {
         const cv::Point& epLocal = r.skeleton.points[epIdx];
         const cv::Point2f epLocalF(static_cast<float>(epLocal.x),
@@ -315,7 +320,8 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         // Skeleton endpoint projected outward to the cap contour. A nearest
         // contour snap often lands on the side of a rounded tip instead of at
         // the end-cap apex.
-        const int snapIdx = projectedEndpointContourIdx(epLocalF, outwardDir, dtAtEp);
+        const int snapIdx = cleanVisibleTips ? nearestContourIdx(epLocalF)
+            : projectedEndpointContourIdx(epLocalF, outwardDir, dtAtEp);
         cv::Point2f snapLocal(0.f, 0.f);
         cv::Point2f snapVideo = epWorld;
         if (snapIdx >= 0) {
@@ -334,6 +340,7 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         float bestScore = -std::numeric_limits<float>::max();
         int reachablePeakCount = 0;
         for (int peakIdx : curvaturePeakIdx) {
+            if (cleanVisibleTips) break;
             if (peakAlreadyUsed(peakIdx)) {
                 continue;
             }
@@ -382,7 +389,9 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
                         .arg(maxPeakShift, 0, 'f', 3);
             }
         }
-        if (preShiftBestPeak < 0) {
+        if (cleanVisibleTips) {
+            endpointDbg.peakRejectReason = QStringLiteral("not used: clean terminal-axis selection");
+        } else if (preShiftBestPeak < 0) {
             endpointDbg.peakRejectReason = reachablePeakCount == 0
                 ? QStringLiteral("no curvature peak inside endpoint search window")
                 : QStringLiteral("no curvature peak selected");
@@ -402,172 +411,17 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             }
         }
 
-        // ── (e2) Bilateral cap midpoint ───────────────────────────────────────
-        //
-        // Instead of relying on a single best-scored contour point (which can
-        // jump 1–2 px between frames when the mask is imperfect), we split the
-        // end-cap contour points into left-of-axis and right-of-axis halves,
-        // then independently find the "apex" on each side — the point with the
-        // greatest forward component along the outward direction. Taking the
-        // midpoint of these two apexes gives a tip estimate that is robust to
-        // one-sided mask noise because both sides' errors partially cancel.
-        //
-        // To further suppress single-pixel outliers we use a weighted centroid
-        // of the top-forward fraction of cap points on each side rather than the
-        // single furthest point. Points in the forward quartile (within
-        // kFwdFraction of the side's own peak) contribute with weight
-        // proportional to their forward depth, so genuine tip pixels dominate.
-        //
-        // A TipCapDebug is populated in parallel for the debug exporter.
-        {
-            constexpr float kFwdFraction = 0.25f; // include points within 25% of apex fwd
+        Debug::TipCapDebug capDbg;
+        capDbg.valid = true;
+        capDbg.skelEndpoint = epWorld;
+        capDbg.outwardDir = outwardDir;
+        capDbg.dtAtEp = dtAtEp;
+        capDbg.snapPoint = snapVideo;
+        capDbg.peakOrSnapPoint = bestPeak >= 0 ? contourLocal[bestPeak] + originOffset : snapVideo;
+        capDbg.hadPeak = bestPeak >= 0;
+        capDbg.selectedEstimator = bestPeak >= 0 ? QStringLiteral("curvature peak") : QStringLiteral("contour snap");
+        capDbg.selectionReason = QStringLiteral("non-clean topology; retained peak/snap routing");
 
-            const cv::Point2f perp(-outwardDir.y, outwardDir.x); // left of D
-
-            // Debug snapshot — always populated so the exporter can show the
-            // search window even when the bilateral computation falls through.
-            Debug::TipCapDebug capDbg;
-            capDbg.valid       = true;
-            capDbg.skelEndpoint = snapVideo;
-            capDbg.outwardDir  = outwardDir;
-            capDbg.dtAtEp      = dtAtEp;
-            capDbg.maxForward  = maxForward;
-            capDbg.maxSide     = maxSide;
-            capDbg.snapPoint       = snapVideo;
-            capDbg.peakOrSnapPoint = snapVideo; // updated below if a peak is found
-            capDbg.hadPeak         = false;
-
-            float leftPeakFwd  = -std::numeric_limits<float>::max();
-            float rightPeakFwd = -std::numeric_limits<float>::max();
-
-            // First pass: find peak forward depth on each side and collect
-            // all cap contour points for the debug snapshot.
-            for (int i = 0; i < nContour; ++i) {
-                const cv::Point2f rel = contourLocal[i] - epLocalF;
-                const float fwd = rel.x * outwardDir.x + rel.y * outwardDir.y;
-                if (fwd < -1.f || fwd > maxForward) continue;
-                const float lat = rel.x * perp.x + rel.y * perp.y;
-                if (std::abs(lat) > maxSide) continue;
-
-                const cv::Point2f videoPt(contourLocal[i].x + originOffset.x,
-                                          contourLocal[i].y + originOffset.y);
-                if (lat >= 0.f) {
-                    capDbg.leftCapPoints.push_back(videoPt);
-                    if (fwd > leftPeakFwd) leftPeakFwd = fwd;
-                }
-                if (lat <= 0.f) {
-                    capDbg.rightCapPoints.push_back(videoPt);
-                    if (fwd > rightPeakFwd) rightPeakFwd = fwd;
-                }
-            }
-
-            const bool hasLeft  = leftPeakFwd  > -std::numeric_limits<float>::max();
-            const bool hasRight = rightPeakFwd > -std::numeric_limits<float>::max();
-            capDbg.hasLeft       = hasLeft;
-            capDbg.hasRight      = hasRight;
-            capDbg.leftPeakFwd   = hasLeft  ? leftPeakFwd  : 0.f;
-            capDbg.rightPeakFwd  = hasRight ? rightPeakFwd : 0.f;
-
-            if (hasLeft && hasRight) {
-                // Sanity: both sides' apexes should be at similar forward depths.
-                // If one side is dramatically deeper the mask is degenerate; skip.
-                const float fwdSpan = std::max(leftPeakFwd, rightPeakFwd) -
-                                      std::min(leftPeakFwd, rightPeakFwd);
-                const float fwdMean = 0.5f * (leftPeakFwd + rightPeakFwd);
-
-                if (fwdSpan <= 0.6f * fwdMean + 2.f) {
-                    capDbg.sanityPassed = true;
-
-                    // Second pass: weighted centroid of points near each apex.
-                    const float leftThresh  = leftPeakFwd  - kFwdFraction * leftPeakFwd;
-                    const float rightThresh = rightPeakFwd - kFwdFraction * rightPeakFwd;
-
-                    cv::Point2f leftSum(0.f, 0.f),  rightSum(0.f, 0.f);
-                    float       leftWt = 0.f,        rightWt = 0.f;
-
-                    for (int i = 0; i < nContour; ++i) {
-                        const cv::Point2f rel = contourLocal[i] - epLocalF;
-                        const float fwd = rel.x * outwardDir.x + rel.y * outwardDir.y;
-                        if (fwd < -1.f || fwd > maxForward) continue;
-                        const float lat = rel.x * perp.x + rel.y * perp.y;
-                        if (std::abs(lat) > maxSide) continue;
-
-                        if (lat >= 0.f && fwd >= leftThresh) {
-                            const float w = fwd + 1.f; // weight by forward depth
-                            leftSum += w * contourLocal[i];
-                            leftWt  += w;
-                        }
-                        if (lat <= 0.f && fwd >= rightThresh) {
-                            const float w = fwd + 1.f;
-                            rightSum += w * contourLocal[i];
-                            rightWt  += w;
-                        }
-                    }
-
-                    if (leftWt > 0.f && rightWt > 0.f) {
-                        const cv::Point2f leftCentroid  = leftSum  * (1.f / leftWt);
-                        const cv::Point2f rightCentroid = rightSum * (1.f / rightWt);
-                        const cv::Point2f midLocal = (leftCentroid + rightCentroid) * 0.5f;
-                        const cv::Point2f bilateralWorld(midLocal.x + originOffset.x,
-                                                         midLocal.y + originOffset.y);
-                        const cv::Point2f leftApexWorld(leftCentroid.x + originOffset.x,
-                                                        leftCentroid.y + originOffset.y);
-                        const cv::Point2f rightApexWorld(rightCentroid.x + originOffset.x,
-                                                         rightCentroid.y + originOffset.y);
-                        capDbg.leftApex      = leftApexWorld;
-                        capDbg.rightApex     = rightApexWorld;
-                        capDbg.bilateralTip  = bilateralWorld;
-                        capDbg.hasBilateral  = true;
-
-                        TrueTip t;
-                        t.skelPoint     = snapVideo;
-                        t.bilateralTip  = bilateralWorld;
-                        t.hasBilateral  = true;
-                        if (bestPeak >= 0) {
-                            const cv::Point2f peakLocal = contourLocal[bestPeak];
-                            const cv::Point2f peakWorld(peakLocal.x + originOffset.x,
-                                                        peakLocal.y + originOffset.y);
-                            t.point     = peakWorld;
-                            t.curvature = curvature[bestPeak];
-                            t.width     = widthAt(peakLocal, bestPeak);
-                            t.extended  = true;
-                            capDbg.peakOrSnapPoint = peakWorld;
-                            capDbg.hadPeak         = true;
-                        } else {
-                            t.point     = snapVideo;
-                            t.curvature = (snapIdx >= 0) ? curvature[snapIdx] : 0.f;
-                            t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
-                            t.extended  = false;
-                        }
-                        r.tips.push_back(t);
-                        endpointDbg.finalTipIdx = static_cast<int>(r.tips.size()) - 1;
-                        endpointDbg.finalTipVideo = t.point;
-                        endpointDbg.finalExtended = t.extended;
-                        endpointDbg.finalCurvature = t.curvature;
-                        endpointDbg.finalWidth = t.width;
-                        endpointDbg.finalHasBilateral = t.hasBilateral;
-                        if (debugOut) debugOut->endpointCandidateDebug.push_back(endpointDbg);
-                        if (t.extended) {
-                            usedPeakIndices.push_back(bestPeak);
-                        }
-                        usedFinalTipPoints.push_back(t.point);
-                        if (debugOut) debugOut->tipCapDebug.push_back(capDbg);
-                        continue; // skip the fallback TrueTip construction below
-                    }
-                }
-            }
-
-            // Fallback path: bilateral not available. Fill in comparison fields.
-            if (bestPeak >= 0) {
-                const cv::Point2f peakWorld(contourLocal[bestPeak].x + originOffset.x,
-                                            contourLocal[bestPeak].y + originOffset.y);
-                capDbg.peakOrSnapPoint = peakWorld;
-                capDbg.hadPeak         = true;
-            }
-            if (debugOut) debugOut->tipCapDebug.push_back(capDbg);
-        }
-
-        // Fallback (no valid bilateral): construct TrueTip with snap/peak only.
         TrueTip t;
         t.skelPoint = snapVideo;
         if (bestPeak >= 0) {
@@ -583,13 +437,103 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
             t.width     = (snapIdx >= 0) ? widthAt(snapLocal, snapIdx) : 0.f;
             t.extended  = false;
         }
+        if (cleanVisibleTips) {
+            // Fit the terminal axis to six uniformly spaced interior samples
+            // on the endpoint-to-endpoint shortest path. Contour vertices do
+            // not participate in the fit or vote for the tip position.
+            const int other = r.skeleton.endpointIndices[0] == epIdx
+                ? r.skeleton.endpointIndices[1] : r.skeleton.endpointIndices[0];
+            const auto search = dijkstraSkeleton(r.skeleton.points, r.skeleton.adjacency, epIdx);
+            std::vector<cv::Point2f> path;
+            if (std::isfinite(search.distances[other])) {
+                for (int node = other; node >= 0; node = search.parents[node]) {
+                    path.push_back(cv::Point2f(r.skeleton.points[node]) + originOffset);
+                    if (node == epIdx) break;
+                }
+                std::reverse(path.begin(), path.end());
+            }
+            float walked = 0.f;
+            float nextSample = 1.f;
+            for (size_t j = 1; j < path.size() && nextSample <= 6.f; ++j) {
+                const float length = cv::norm(path[j] - path[j - 1]);
+                while (nextSample <= 6.f && nextSample <= walked + length) {
+                    capDbg.axisSamples.push_back(path[j - 1] +
+                        (path[j] - path[j - 1]) * ((nextSample - walked) / length));
+                    nextSample += 1.f;
+                }
+                walked += length;
+            }
+            cv::Point2f direction(0.f, 0.f), origin(0.f, 0.f);
+            const int count = static_cast<int>(capDbg.axisSamples.size());
+            if (count >= 3) {
+                for (const auto& sample : capDbg.axisSamples) origin += sample;
+                origin *= 1.f / count;
+                const float meanIndex = 0.5f * (count - 1);
+                for (int j = 0; j < count; ++j)
+                    direction += (meanIndex - j) * (capDbg.axisSamples[j] - origin);
+            }
+            const float norm = cv::norm(direction);
+            capDbg.hasAxis = std::isfinite(norm) && norm > 1e-3f &&
+                cv::pointPolygonTest(contour, origin, false) > 0;
+            if (capDbg.hasAxis) {
+                direction *= 1.f / norm;
+                capDbg.axisOrigin = origin;
+                capDbg.outwardDir = direction;
+            }
+            // Intersect the ray with contour SEGMENTS, not sampled vertices.
+            // The first forward exit from this interior origin is the cap.
+            float nearest = std::numeric_limits<float>::infinity();
+            auto cross = [](cv::Point2f a, cv::Point2f b) { return a.x*b.y - a.y*b.x; };
+            if (capDbg.hasAxis) {
+                for (int j = 0; j < nContour; ++j) {
+                    const cv::Point2f a = cv::Point2f(contour[j]);
+                    const cv::Point2f edge = cv::Point2f(contour[(j + 1) % nContour]) - a;
+                    const float denominator = cross(direction, edge);
+                    if (std::abs(denominator) < 1e-6f) continue;
+                    const float distance = cross(a - origin, edge) / denominator;
+                    const float fraction = cross(a - origin, direction) / denominator;
+                    if (distance >= 0.f && fraction >= -1e-5f && fraction <= 1.f + 1e-5f)
+                        nearest = std::min(nearest, distance);
+                }
+            }
+            // Keep a degenerate fit local; never route a ray across the body.
+            const float limit = cv::norm(origin - epWorld) + maxForward;
+            t.selectedAxis = capDbg.hasAxis && std::isfinite(nearest) && nearest <= limit;
+            if (t.selectedAxis) {
+                t.point = origin + direction * nearest;
+                capDbg.selectedEstimator = QStringLiteral("axis boundary");
+                capDbg.selectionReason = QStringLiteral("first contour exit along fitted terminal axis");
+            } else {
+                // Geometric fallback: closest point on a segment, no curvature score.
+                float best = std::numeric_limits<float>::infinity();
+                for (int j = 0; j < nContour; ++j) {
+                    const cv::Point2f a = cv::Point2f(contour[j]);
+                    const cv::Point2f edge = cv::Point2f(contour[(j + 1) % nContour]) - a;
+                    const float lengthSq = edge.dot(edge);
+                    if (lengthSq <= 0.f) continue;
+                    const float fraction = std::clamp((epWorld-a).dot(edge)/lengthSq, 0.f, 1.f);
+                    const cv::Point2f candidate = a + edge * fraction;
+                    const float distance = cv::norm(candidate - epWorld);
+                    if (distance < best) { best = distance; t.point = candidate; }
+                }
+                capDbg.selectedEstimator = QStringLiteral("nearest boundary");
+                capDbg.selectionReason = QStringLiteral("terminal axis unavailable or no local forward exit");
+            }
+            // Features remain contour-derived, but never select the clean tip.
+            const int featureIdx = nearestContourIdx(t.point - originOffset);
+            t.curvature = curvature[featureIdx];
+            t.width = widthAt(contourLocal[featureIdx], featureIdx);
+            t.extended = false;
+        }
+        capDbg.selectedPoint = t.point;
+        if (debugOut) debugOut->tipCapDebug.push_back(capDbg);
         r.tips.push_back(t);
         endpointDbg.finalTipIdx = static_cast<int>(r.tips.size()) - 1;
         endpointDbg.finalTipVideo = t.point;
         endpointDbg.finalExtended = t.extended;
         endpointDbg.finalCurvature = t.curvature;
         endpointDbg.finalWidth = t.width;
-        endpointDbg.finalHasBilateral = t.hasBilateral;
+        endpointDbg.finalHasAxis = t.selectedAxis;
         if (debugOut) debugOut->endpointCandidateDebug.push_back(endpointDbg);
         if (t.extended) {
             usedPeakIndices.push_back(bestPeak);
@@ -680,9 +624,9 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
         for (size_t i = 0; i < r.tips.size(); ++i) {
             const TrueTip& t = r.tips[i];
             YAWT_DEBUG(lcDataCommon) << QString::asprintf(
-                "  tip[%zu] %s  point=(%.1f,%.1f)  skel=(%.1f,%.1f)  "
+                "  tip[%zu] %s  point=(%.1f,%.1f)  snap=(%.1f,%.1f)  "
                 "k=%+.4f  w=%.2f",
-                i, t.extended ? "ext " : "skel",
+                i, t.selectedAxis ? "axis" : t.extended ? "peak" : "snap",
                 static_cast<double>(t.point.x),
                 static_cast<double>(t.point.y),
                 static_cast<double>(t.skelPoint.x),
@@ -785,25 +729,6 @@ static cv::Point2f blobCentroid(const Tracking::DetectedBlob& blob)
 {
     return cv::Point2f(static_cast<float>(blob.centroid.x()),
                        static_cast<float>(blob.centroid.y()));
-}
-
-// Choose the most reliable endpoint coordinate for a clean two-tip centerline.
-static cv::Point2f trustedTipPointForCleanD1(const Centerline::TrueTip& tip)
-{
-    // Bilateral cap midpoint is the most stable estimate: it averages the
-    // furthest-forward cap contour points on both sides of the body axis, so
-    // single-pixel mask noise on one side is partially cancelled by the other.
-    // Use it whenever it was successfully computed.
-    if (tip.hasBilateral)
-        return tip.bilateralTip;
-
-    // Fallback: use the curvature-peak position only when it sits close to
-    // the raw contour snap (large shifts indicate the peak landed on a body
-    // kink rather than the genuine end-cap).
-    constexpr float kMaxCleanD1Extension = 6.f;
-    if (!tip.extended || ptDist(tip.point, tip.skelPoint) > kMaxCleanD1Extension)
-        return tip.skelPoint;
-    return tip.point;
 }
 
 // Rasterize a blob's outer contour and holes into a local binary mask.
@@ -3352,17 +3277,15 @@ if (captureDebug) {
     captureEndpointDebug(er, epDebug, debugRecord);
 }
 
-// Convert TrueTips → TipCandidates. Source = SkeletonEndpoint
-// for ALL tips so the renderer's filled-green-dot styling
-// applies regardless of whether the position came from the
-// skeleton-snap or the curvature-peak extension.
+// Store the authoritative selected position and its estimator.
 blob.centerline.tipCandidates.clear();
 for (const Centerline::TrueTip& t : er.tips) {
     Tracking::TipCandidate tc;
     tc.point     = t.point;
     tc.curvature = t.curvature;
     tc.width     = t.width;
-    tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
+    tc.source    = t.selectedAxis ? Tracking::TipCandidate::Source::AxisBoundary
+                              : t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
                               : Tracking::TipCandidate::Source::SkeletonEndpoint;
     blob.centerline.tipCandidates.push_back(tc);
 }
@@ -3388,7 +3311,7 @@ debugRecord.assignedHeadTipIdx = blob.centerline.headTipIdx;
 debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
 debugRecord.tipCandidates = blob.centerline.tipCandidates;
 
-// Copy bilateral cap debug — parallel to tipCandidates, with role labels.
+// Copy terminal-axis debug — parallel to tipCandidates, with role labels.
 debugRecord.tipCapDebug = epDebug.tipCapDebug;
 debugRecord.tipCapRoles.resize(epDebug.tipCapDebug.size());
 for (int ci = 0; ci < static_cast<int>(epDebug.tipCapDebug.size()); ++ci) {
@@ -3785,9 +3708,9 @@ if (er.topology == Tracking::TopologyState::Clean &&
         debugRecord.branch = Debug::CenterlineBranch::D1CleanGraphPath;
         debugRecord.decisions << QStringLiteral("D-1 clean skeleton graph path selected");
         if (!centerline.empty())
-            centerline.front() = trustedTipPointForCleanD1(er.tips[blob.centerline.headTipIdx]);
+            centerline.front() = er.tips[blob.centerline.headTipIdx].point;
         if (!centerline.empty())
-            centerline.back() = trustedTipPointForCleanD1(er.tips[blob.centerline.tailTipIdx]);
+            centerline.back() = er.tips[blob.centerline.tailTipIdx].point;
 
         // If D-1 result is suspiciously short the worm is
         // tightly self-coiled but had no visible hole in the
@@ -3817,7 +3740,8 @@ if (er.topology == Tracking::TopologyState::Clean &&
                     tc.point     = t.point;
                     tc.curvature = t.curvature;
                     tc.width     = t.width;
-                    tc.source    = t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
+                    tc.source    = t.selectedAxis ? Tracking::TipCandidate::Source::AxisBoundary
+                              : t.extended ? Tracking::TipCandidate::Source::CurvaturePeak
                                               : Tracking::TipCandidate::Source::SkeletonEndpoint;
                     blob.centerline.tipCandidates.push_back(tc);
                 }
@@ -3859,7 +3783,8 @@ else if (er.topology == Tracking::TopologyState::SelfCrossed) {
                 tc.point     = t.point;
                 tc.curvature = t.curvature;
                 tc.width     = t.width;
-                tc.source    = t.extended
+                tc.source    = t.selectedAxis ? Tracking::TipCandidate::Source::AxisBoundary
+                    : t.extended
                     ? Tracking::TipCandidate::Source::CurvaturePeak
                     : Tracking::TipCandidate::Source::SkeletonEndpoint;
                 holeBlob.centerline.tipCandidates.push_back(tc);
@@ -4085,6 +4010,19 @@ debugRecord.tipCandidates = blob.centerline.tipCandidates;
 debugRecord.assignedHeadTipIdx = blob.centerline.headTipIdx;
 debugRecord.assignedTailTipIdx = blob.centerline.tailTipIdx;
 debugRecord.topology = blob.centerline.topology;
+// Roles can change after bootstrap or routing. Label cap diagnostics only when
+// their selected detection still matches a final assigned candidate.
+for (size_t ci = 0; ci < debugRecord.tipCapDebug.size(); ++ci) {
+    auto& role = debugRecord.tipCapRoles[ci];
+    role.clear();
+    const auto& selected = debugRecord.tipCapDebug[ci].selectedPoint;
+    for (int idx : {blob.centerline.headTipIdx, blob.centerline.tailTipIdx}) {
+        if (idx >= 0 && idx < static_cast<int>(blob.centerline.tipCandidates.size()) &&
+            ptDist(selected, blob.centerline.tipCandidates[idx].point) < 1e-4f) {
+            role = idx == blob.centerline.headTipIdx ? QStringLiteral("head") : QStringLiteral("tail");
+        }
+    }
+}
 if (captureDebug) {
     io.setCenterlineDebugFrame(debugRecord);
 }

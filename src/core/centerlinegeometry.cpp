@@ -14,8 +14,11 @@ namespace Centerline {
 
 constexpr int kCenterlinePaddingPixels = 2;
 
-// Run one Zhang-Suen thinning sub-iteration over a normalized 0/1 mask.
-static void zhangSuenThinningIteration(cv::Mat& image, int iteration)
+// Run one Guo-Hall thinning sub-iteration over a normalized 0/1 mask.
+// Unlike Zhang-Suen, the N(p) test protects the terminal pixel of a diagonal
+// staircase, so a thin oblique tip is not peeled back when its last pixels
+// change between frames.
+static void guoHallThinningIteration(cv::Mat& image, int iteration)
 {
     cv::Mat marker = cv::Mat::zeros(image.size(), CV_8UC1);
 
@@ -39,29 +42,29 @@ static void zhangSuenThinningIteration(cv::Mat& image, int iteration)
             const int p8 = currentRow[col - 1];
             const int p9 = previousRow[col - 1];
 
-            const int neighborCount = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
-            if (neighborCount < 2 || neighborCount > 6) {
+            // C(p): number of distinct 8-connected foreground components
+            // adjacent to p; deleting p must not split the skeleton.
+            const int connectivity =
+                (!p2 && (p3 || p4)) + (!p4 && (p5 || p6)) +
+                (!p6 && (p7 || p8)) + (!p8 && (p9 || p2));
+            if (connectivity != 1) {
                 continue;
             }
 
-            const int transitions =
-                (p2 == 0 && p3 == 1) +
-                (p3 == 0 && p4 == 1) +
-                (p4 == 0 && p5 == 1) +
-                (p5 == 0 && p6 == 1) +
-                (p6 == 0 && p7 == 1) +
-                (p7 == 0 && p8 == 1) +
-                (p8 == 0 && p9 == 1) +
-                (p9 == 0 && p2 == 1);
-            if (transitions != 1) {
+            // N(p) < 2 marks an endpoint (including a diagonal staircase tip);
+            // N(p) > 3 marks an interior pixel.
+            const int n1 = (p9 || p2) + (p3 || p4) + (p5 || p6) + (p7 || p8);
+            const int n2 = (p2 || p3) + (p4 || p5) + (p6 || p7) + (p8 || p9);
+            const int n = std::min(n1, n2);
+            if (n < 2 || n > 3) {
                 continue;
             }
 
-            const bool shouldRemove =
+            const bool keep =
                 iteration == 0
-                    ? (p2 * p4 * p6 == 0 && p4 * p6 * p8 == 0)
-                    : (p2 * p4 * p8 == 0 && p2 * p6 * p8 == 0);
-            if (shouldRemove) {
+                    ? ((p6 || p7 || !p9) && p8)
+                    : ((p2 || p3 || !p5) && p4);
+            if (!keep) {
                 markerRow[col] = 1;
             }
         }
@@ -81,15 +84,16 @@ cv::Mat skeletonizeBinaryMask(const cv::Mat& binaryMask)
 
     cv::threshold(img, img, 0, 255, cv::THRESH_BINARY);
 
-    // Zhang-Suen thinning preserves connected curved bodies much better than
-    // iterative erosion/dilation skeletons for thick, bent worm masks.
+    // Guo-Hall thinning preserves connected curved bodies much better than
+    // iterative erosion/dilation skeletons, and keeps oblique tips that
+    // Zhang-Suen erodes backward along their diagonal staircase.
     img /= 255;
     cv::Mat previous = cv::Mat::zeros(img.size(), CV_8UC1);
     cv::Mat diff;
 
     do {
-        zhangSuenThinningIteration(img, 0);
-        zhangSuenThinningIteration(img, 1);
+        guoHallThinningIteration(img, 0);
+        guoHallThinningIteration(img, 1);
         cv::absdiff(img, previous, diff);
         img.copyTo(previous);
     } while (cv::countNonZero(diff) > 0);
