@@ -108,7 +108,9 @@ enum class CenterlineBranch {
     D2TwoKnownTips,
     D3OneKnownTipHiddenPrediction,
     D4FallbackContourSkeleton,
-    ZeroTipRingCut
+    ZeroTipRingCut,
+    SelfCrossedRouteSelection,
+    SelfCrossedUnresolved
 };
 
 struct DistanceTransformDebug {
@@ -141,6 +143,10 @@ inline QString centerlineBranchToString(CenterlineBranch branch)
         return QStringLiteral("D-4 fallback contour skeleton");
     case CenterlineBranch::ZeroTipRingCut:
         return QStringLiteral("0-tip ring cut");
+    case CenterlineBranch::SelfCrossedRouteSelection:
+        return QStringLiteral("S-1 self-crossed route selection");
+    case CenterlineBranch::SelfCrossedUnresolved:
+        return QStringLiteral("S-0 self-crossed unresolved (no route within body length)");
     case CenterlineBranch::Unknown:
     default:
         return QStringLiteral("Unknown");

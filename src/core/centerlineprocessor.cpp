@@ -1,4 +1,5 @@
 #include "centerlineprocessor.h"
+#include "centerlineroutes.h"
 #include "../utils/loggingcategories.h"
 
 #include <QDebug>
@@ -8,6 +9,11 @@
 #include <queue>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/geometry.hpp>
+
+// Frames an end may stay unobserved before its last position stops mattering.
+static constexpr int kMaxTipAge = 60;
+// Clean-frame length samples needed before the baseline replaces Sweep 0's median.
+static constexpr int kMinBodyLengthSamples = 30;
 
 namespace Centerline {
 
@@ -552,61 +558,29 @@ EndpointResult detectEndpoints(const Tracking::DetectedBlob& blob,
     }
 
     // (g) ── Head/tail assignment ──────────────────────────────────────────
-    // Distance-only assignment, with velocity-extrapolated tiebreak when the
-    // 2-tip cost spread is < 10%. Predictor-less (keyframe) calls return
-    // (-1, -1); the caller bootstraps from the centerline orientation.
-    auto distSq = [](const cv::Point2f& a, const cv::Point2f& b) -> float {
-        const cv::Point2f d = a - b;
-        return d.x * d.x + d.y * d.y;
-    };
-
-    if (r.tips.empty() || !predictor.hasPrev) {
-        // Nothing to do — caller handles bootstrap.
-    } else {
-        const cv::Point2f predHead = predictor.hasVelocity
-            ? predictor.lastHeadPos + predictor.velHead
-            : predictor.lastHeadPos;
-        const cv::Point2f predTail = predictor.hasVelocity
-            ? predictor.lastTailPos + predictor.velTail
-            : predictor.lastTailPos;
+    // Each role is predicted from its last position, with a spread that grows
+    // with the number of frames since it was actually observed, so a stale or
+    // hypothesised position carries less weight than a fresh observation.
+    // Predictor-less (keyframe) calls return (-1, -1); the caller bootstraps.
+    if (!r.tips.empty() && predictor.hasPrev) {
+        const float bodyLength = 2.f * predictor.refDistance;
+        const Centerline::RolePrediction headPred = Centerline::predictRole(
+            predictor.headKnown, predictor.lastHeadPos, predictor.velHead, predictor.headAge);
+        const Centerline::RolePrediction tailPred = Centerline::predictRole(
+            predictor.tailKnown, predictor.lastTailPos, predictor.velTail, predictor.tailAge);
+        auto cost = [&](const cv::Point2f& p, const Centerline::RolePrediction& rp) {
+            return Centerline::roleCost(p, rp, bodyLength);
+        };
 
         if (r.tips.size() == 1) {
-            // One visible tip — assign to whichever role's predicted point
-            // is closer. The other role stays -1 so D-3 can fill it.
-            const float dH = distSq(r.tips[0].point, predHead);
-            const float dT = distSq(r.tips[0].point, predTail);
-            if (dH <= dT) r.headIdx = 0;
-            else          r.tailIdx = 0;
+            // One visible tip; the other role stays -1 for route selection.
+            if (cost(r.tips[0].point, headPred) <= cost(r.tips[0].point, tailPred)) r.headIdx = 0;
+            else r.tailIdx = 0;
         } else {
-            // Two tips — minimum-cost ordered assignment.
-            const float c00 = distSq(r.tips[0].point, predHead) +
-                              distSq(r.tips[1].point, predTail);
-            const float c01 = distSq(r.tips[1].point, predHead) +
-                              distSq(r.tips[0].point, predTail);
-            const float winner = std::min(c00, c01);
-            const float loser  = std::max(c00, c01);
-            const bool spreadIsTight = (winner > 0.f) &&
-                                       ((loser - winner) / winner < 0.10f);
-
-            int headPick = (c00 <= c01) ? 0 : 1;
-            int tailPick = (c00 <= c01) ? 1 : 0;
-
-            // Velocity-extrapolated tiebreak for tight spreads.
-            if (spreadIsTight && predictor.hasVelocity) {
-                const cv::Point2f extrapHead = predictor.lastHeadPos +
-                                               2.f * predictor.velHead;
-                const cv::Point2f extrapTail = predictor.lastTailPos +
-                                               2.f * predictor.velTail;
-                const float c00x = distSq(r.tips[0].point, extrapHead) +
-                                   distSq(r.tips[1].point, extrapTail);
-                const float c01x = distSq(r.tips[1].point, extrapHead) +
-                                   distSq(r.tips[0].point, extrapTail);
-                if (c00x <= c01x) { headPick = 0; tailPick = 1; }
-                else              { headPick = 1; tailPick = 0; }
-            }
-
-            r.headIdx = headPick;
-            r.tailIdx = tailPick;
+            const float c01 = cost(r.tips[0].point, headPred) + cost(r.tips[1].point, tailPred);
+            const float c10 = cost(r.tips[1].point, headPred) + cost(r.tips[0].point, tailPred);
+            r.headIdx = c01 <= c10 ? 0 : 1;
+            r.tailIdx = c01 <= c10 ? 1 : 0;
         }
     }
 
@@ -758,120 +732,6 @@ static void fillBlobMask(cv::Mat& mask,
     }
 }
 
-// Snap a target point to the nearest foreground pixel in a blob mask.
-static bool nearestMaskPoint(const Tracking::DetectedBlob& blob,
-                             const cv::Point2f& target,
-                             cv::Point2f& outPoint)
-{
-    if (blob.contourPoints.empty()) return false;
-
-    cv::Rect bounds = cv::boundingRect(blob.contourPoints);
-    constexpr int kPad = 8;
-    bounds.x -= kPad;
-    bounds.y -= kPad;
-    bounds.width += 2 * kPad;
-    bounds.height += 2 * kPad;
-    if (bounds.width <= 1 || bounds.height <= 1) return false;
-
-    cv::Mat mask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
-    fillBlobMask(mask, blob, bounds, cv::Point2f(0.f, 0.f));
-
-    const int tx = static_cast<int>(std::lround(target.x - bounds.x));
-    const int ty = static_cast<int>(std::lround(target.y - bounds.y));
-    if (tx >= 0 && ty >= 0 && tx < mask.cols && ty < mask.rows &&
-        mask.at<uchar>(ty, tx) != 0) {
-        outPoint = cv::Point2f(static_cast<float>(tx + bounds.x),
-                               static_cast<float>(ty + bounds.y));
-        return true;
-    }
-
-    float bestD2 = std::numeric_limits<float>::max();
-    bool found = false;
-    for (int y = 0; y < mask.rows; ++y) {
-        const uchar* row = mask.ptr<uchar>(y);
-        for (int x = 0; x < mask.cols; ++x) {
-            if (row[x] == 0) continue;
-            const float wx = static_cast<float>(x + bounds.x);
-            const float wy = static_cast<float>(y + bounds.y);
-            const float dx = wx - target.x;
-            const float dy = wy - target.y;
-            const float d2 = dx * dx + dy * dy;
-            if (d2 < bestD2) {
-                bestD2 = d2;
-                outPoint = cv::Point2f(wx, wy);
-                found = true;
-            }
-        }
-    }
-    return found;
-}
-
-// Reassign two self-crossed tip candidates using predictor position and velocity.
-static bool enforceSelfCrossedTwoTipPredictorRoles(
-    Tracking::DetectedBlob& blob,
-    const Centerline::HeadTailPredictor& predictor,
-    QStringList* diagnostics)
-{
-    if (blob.centerline.topology != Tracking::TopologyState::SelfCrossed ||
-        blob.centerline.tipCandidates.size() != 2 ||
-        !predictor.hasPrev) {
-        return false;
-    }
-
-    auto distSq = [](const cv::Point2f& a, const cv::Point2f& b) -> float {
-        const cv::Point2f d = a - b;
-        return d.x * d.x + d.y * d.y;
-    };
-
-    const cv::Point2f predHead = predictor.hasVelocity
-        ? predictor.lastHeadPos + predictor.velHead
-        : predictor.lastHeadPos;
-    const cv::Point2f predTail = predictor.hasVelocity
-        ? predictor.lastTailPos + predictor.velTail
-        : predictor.lastTailPos;
-
-    auto assignmentCost = [&](int headIdx, int tailIdx) -> float {
-        const cv::Point2f& h = blob.centerline.tipCandidates[headIdx].point;
-        const cv::Point2f& t = blob.centerline.tipCandidates[tailIdx].point;
-
-        float cost = distSq(h, predHead) + distSq(t, predTail);
-        cost += 0.5f * (distSq(h, predictor.lastHeadPos) +
-                        distSq(t, predictor.lastTailPos));
-        if (predictor.hasVelocity) {
-            cost += 0.25f * (distSq(h - predictor.lastHeadPos, predictor.velHead) +
-                             distSq(t - predictor.lastTailPos, predictor.velTail));
-        }
-        return cost;
-    };
-
-    const float cost01 = assignmentCost(0, 1);
-    const float cost10 = assignmentCost(1, 0);
-    const int oldHead = blob.centerline.headTipIdx;
-    const int oldTail = blob.centerline.tailTipIdx;
-
-    if (cost01 <= cost10) {
-        blob.centerline.headTipIdx = 0;
-        blob.centerline.tailTipIdx = 1;
-    } else {
-        blob.centerline.headTipIdx = 1;
-        blob.centerline.tailTipIdx = 0;
-    }
-
-    const bool changed =
-        oldHead != blob.centerline.headTipIdx ||
-        oldTail != blob.centerline.tailTipIdx;
-    if (diagnostics) {
-        diagnostics->append(
-            QStringLiteral("SelfCrossed two-tip predictor role check cost01=%1 cost10=%2 selected headIdx=%3 tailIdx=%4%5")
-                .arg(cost01, 0, 'f', 2)
-                .arg(cost10, 0, 'f', 2)
-                .arg(blob.centerline.headTipIdx)
-                .arg(blob.centerline.tailTipIdx)
-                .arg(changed ? QStringLiteral(" reassigned") : QString()));
-    }
-    return changed;
-}
-
 // Reassign two tip candidates by comparing them with previous centerline order.
 static bool enforceTwoTipCenterlineOrderRoles(
     Tracking::DetectedBlob& blob,
@@ -965,296 +825,7 @@ static bool enforceTwoTipCenterlineOrderRoles(
     return changed;
 }
 
-// Pick a zero-tip ring centerline by trying plausible cut lines through the hole.
-static bool selectZeroTipRingCutCenterline(
-    const Tracking::DetectedBlob& blob,
-    const cv::Point2f& predictedHead,
-    const cv::Point2f& predictedTail,
-    bool hasPredictedTips,
-    const cv::Point2f& predictedCenter,
-    bool hasPredictedCenter,
-    float previousCrossSum,
-    float refLength,
-    QStringList* diagnostics,
-    std::vector<cv::Point2f>& outCenterline,
-    cv::Point2f& outCutPoint)
-{
-    outCenterline.clear();
-    outCutPoint = cv::Point2f(-1.f, -1.f);
-    if (blob.holeContourPoints.empty()) {
-        return false;
-    }
-
-    struct CutCandidate {
-        QString label;
-        cv::Point2f a;
-        cv::Point2f b;
-    };
-
-    std::vector<CutCandidate> cuts;
-    if (hasPredictedTips) {
-        cuts.push_back({QStringLiteral("predicted tips"), predictedHead, predictedTail});
-    }
-
-    const std::vector<cv::Point>& hole = blob.holeContourPoints.front();
-    if (hole.size() >= 5) {
-        const cv::RotatedRect rr = cv::fitEllipse(hole);
-        const float ang = static_cast<float>(rr.angle * CV_PI / 180.0);
-        const float halfMajor = std::max(rr.size.width, rr.size.height) * 0.5f + 6.f;
-        const cv::Point2f dir(std::cos(ang), std::sin(ang));
-        cuts.push_back({QStringLiteral("hole ellipse"),
-                        rr.center - dir * halfMajor,
-                        rr.center + dir * halfMajor});
-    }
-
-    struct ScoredCandidate {
-        std::vector<cv::Point2f> points;
-        cv::Point2f cutPoint = {-1.f, -1.f};
-        QString label;
-        float len = 0.f;
-        float endpointDist = 0.f;
-        float centerDist = 0.f;
-        float crossSum = 0.f;
-        float crossPenalty = 0.f;
-        float score = std::numeric_limits<float>::max();
-    };
-
-    std::vector<ScoredCandidate> scored;
-    for (const CutCandidate& cut : cuts) {
-        Tracking::DetectedBlob cutBlob = blob;
-        if (!Centerline::populateCenterlineFromContourWithCut(cutBlob, cut.a, cut.b, 3) ||
-            cutBlob.centerline.points.size() < 2) {
-            if (diagnostics) {
-                diagnostics->append(QStringLiteral("0-tip ring cut candidate %1 failed")
-                                        .arg(cut.label));
-            }
-            continue;
-        }
-
-        ScoredCandidate c;
-        c.label = cut.label;
-        c.cutPoint = (cut.a + cut.b) * 0.5f;
-        c.points.assign(cutBlob.centerline.points.begin(), cutBlob.centerline.points.end());
-        if (hasPredictedTips) {
-            const float forward = ptDist(c.points.front(), predictedHead) +
-                                  ptDist(c.points.back(), predictedTail);
-            const float reversed = ptDist(c.points.front(), predictedTail) +
-                                   ptDist(c.points.back(), predictedHead);
-            if (reversed < forward) {
-                std::reverse(c.points.begin(), c.points.end());
-            }
-            c.endpointDist = std::min(forward, reversed);
-        }
-        c.len = arcLen(c.points);
-        if (hasPredictedCenter && c.points.size() >= 2) {
-            c.centerDist = ptDist(c.points[c.points.size() / 2], predictedCenter);
-        }
-        c.crossSum = centerlineCrossSum(c.points);
-        constexpr float kCrossSumEpsilon = 1e-4f;
-        if (std::abs(previousCrossSum) > kCrossSumEpsilon &&
-            std::abs(c.crossSum) > kCrossSumEpsilon) {
-            c.crossPenalty = (c.crossSum * previousCrossSum > 0.f) ? 0.f : 1.f;
-        }
-
-        constexpr float kEndpointWeight = 3.0f;
-        constexpr float kCenterWeight = 2.0f;
-        constexpr float kCrossMismatchWeight = 100.0f;
-        constexpr float kLengthWeight = 1.0f;
-        c.score = kEndpointWeight * c.endpointDist +
-                  kCenterWeight * c.centerDist +
-                  kCrossMismatchWeight * c.crossPenalty;
-        if (refLength > 0.f) {
-            c.score += kLengthWeight * std::abs(c.len - refLength);
-        }
-        scored.push_back(std::move(c));
-    }
-
-    if (scored.empty()) {
-        return false;
-    }
-
-    int bestIdx = 0;
-    for (int i = 1; i < static_cast<int>(scored.size()); ++i) {
-        if (scored[i].score < scored[bestIdx].score) {
-            bestIdx = i;
-        }
-    }
-
-    if (diagnostics) {
-        diagnostics->append(QStringLiteral("0-tip ring cut candidates=%1 selected=%2")
-                                .arg(static_cast<int>(scored.size()))
-                                .arg(bestIdx));
-        for (int i = 0; i < static_cast<int>(scored.size()); ++i) {
-            const ScoredCandidate& c = scored[i];
-            diagnostics->append(
-                QStringLiteral("0-tip candidate %1 %2: len=%3 endpointDist=%4 centerDist=%5 crossSum=%6 crossPenalty=%7 score=%8%9")
-                    .arg(i)
-                    .arg(c.label)
-                    .arg(c.len, 0, 'f', 2)
-                    .arg(c.endpointDist, 0, 'f', 2)
-                    .arg(c.centerDist, 0, 'f', 2)
-                    .arg(c.crossSum, 0, 'f', 4)
-                    .arg(c.crossPenalty, 0, 'f', 1)
-                    .arg(c.score, 0, 'f', 2)
-                    .arg(i == bestIdx ? QStringLiteral(" SELECTED") : QString()));
-        }
-    }
-
-    outCenterline = scored[bestIdx].points;
-    outCutPoint = scored[bestIdx].cutPoint;
-    return outCenterline.size() >= 2;
-}
-
-// Estimate where a hidden tip emerged by differencing current and previous masks.
-static bool hiddenTipMaskDifferenceCue(const Tracking::DetectedBlob& current,
-                                       const Tracking::DetectedBlob& previous,
-                                       const cv::Point2f& hiddenLast,
-                                       const cv::Point2f& velocityPrediction,
-                                       cv::Point2f& outCue,
-                                       int* outTotalArea = nullptr,
-                                       int* outSelectedArea = nullptr)
-{
-    if (outTotalArea) *outTotalArea = 0;
-    if (outSelectedArea) *outSelectedArea = 0;
-    if (current.contourPoints.empty() || previous.contourPoints.empty() ||
-        hiddenLast.x < 0.f) {
-        return false;
-    }
-
-    cv::Rect bounds = cv::boundingRect(current.contourPoints) |
-                      cv::boundingRect(previous.contourPoints);
-    constexpr int kPad = 8;
-    bounds.x -= kPad;
-    bounds.y -= kPad;
-    bounds.width += 2 * kPad;
-    bounds.height += 2 * kPad;
-    if (bounds.width <= 1 || bounds.height <= 1) {
-        return false;
-    }
-
-    cv::Mat currentMask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
-    cv::Mat previousMask = cv::Mat::zeros(bounds.height, bounds.width, CV_8UC1);
-    fillBlobMask(currentMask, current, bounds, cv::Point2f(0.f, 0.f));
-    fillBlobMask(previousMask, previous, bounds, cv::Point2f(0.f, 0.f));
-
-    cv::Mat inversePrevious;
-    cv::bitwise_not(previousMask, inversePrevious);
-    cv::Mat enteredMask;
-    cv::bitwise_and(currentMask, inversePrevious, enteredMask);
-    if (outTotalArea) {
-        *outTotalArea = cv::countNonZero(enteredMask);
-    }
-
-    cv::Mat labels;
-    cv::Mat stats;
-    cv::Mat centroids;
-    const int componentCount =
-        cv::connectedComponentsWithStats(enteredMask, labels, stats, centroids, 8, CV_32S);
-    if (componentCount <= 1) {
-        return false;
-    }
-
-    int bestLabel = -1;
-    float bestScore = std::numeric_limits<float>::max();
-    for (int label = 1; label < componentCount; ++label) {
-        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
-        if (area < 2) {
-            continue;
-        }
-
-        const cv::Point2f c(
-            static_cast<float>(centroids.at<double>(label, 0) + bounds.x),
-            static_cast<float>(centroids.at<double>(label, 1) + bounds.y));
-        const float dLast = ptDist(c, hiddenLast);
-        const float dVel = (velocityPrediction.x >= 0.f)
-            ? ptDist(c, velocityPrediction)
-            : dLast;
-        const float score = dLast + 0.35f * dVel - 0.20f * std::sqrt(static_cast<float>(area));
-        if (score < bestScore) {
-            bestScore = score;
-            bestLabel = label;
-        }
-    }
-    if (bestLabel < 0) {
-        return false;
-    }
-    if (outSelectedArea) {
-        *outSelectedArea = stats.at<int>(bestLabel, cv::CC_STAT_AREA);
-    }
-
-    cv::Point2f weightedCenter(0.f, 0.f);
-    float totalWeight = 0.f;
-    for (int y = 0; y < labels.rows; ++y) {
-        const int* row = labels.ptr<int>(y);
-        for (int x = 0; x < labels.cols; ++x) {
-            if (row[x] != bestLabel) {
-                continue;
-            }
-            const cv::Point2f p(static_cast<float>(x + bounds.x),
-                                static_cast<float>(y + bounds.y));
-            const float d = ptDist(p, hiddenLast);
-            const float w = 1.f / std::max(1.f, d);
-            weightedCenter += w * p;
-            totalWeight += w;
-        }
-    }
-    if (totalWeight <= 0.f) {
-        return false;
-    }
-    weightedCenter *= 1.f / totalWeight;
-
-    return nearestMaskPoint(current, weightedCenter, outCue);
-}
-
-struct HiddenTipTarget {
-    cv::Point2f target = {-1.f, -1.f};
-    cv::Point2f velocityTarget = {-1.f, -1.f};
-    cv::Point2f maskCue = {-1.f, -1.f};
-    int maskDiffArea = 0;
-    int selectedMaskDiffArea = 0;
-    bool hasTarget = false;
-    bool hasMaskCue = false;
-};
-
-// Predict the target point for a hidden tip from velocity and mask-difference cues.
-static HiddenTipTarget predictHiddenTipTarget(const Tracking::DetectedBlob& current,
-                                              const Tracking::DetectedBlob* previous,
-                                              const cv::Point2f& last,
-                                              const cv::Point2f& velocity,
-                                              bool hasVelocity)
-{
-    HiddenTipTarget result;
-    if (last.x == 0.f && last.y == 0.f) {
-        return result;
-    }
-
-    result.velocityTarget = hasVelocity ? (last + velocity) : last;
-    result.target = result.velocityTarget;
-    result.hasTarget = true;
-
-    if (previous && previous->isValid &&
-        hiddenTipMaskDifferenceCue(current,
-                                   *previous,
-                                   last,
-                                   result.velocityTarget,
-                                   result.maskCue,
-                                   &result.maskDiffArea,
-                                   &result.selectedMaskDiffArea)) {
-        constexpr float kMaskCueWeight = 0.75f;
-        result.target = kMaskCueWeight * result.maskCue +
-                        (1.f - kMaskCueWeight) * result.velocityTarget;
-        result.hasMaskCue = true;
-    }
-
-    cv::Point2f snappedTarget;
-    if (nearestMaskPoint(current, result.target, snappedTarget)) {
-        result.target = snappedTarget;
-    }
-
-    return result;
-}
-
-// ── Skeleton-graph shortest path (used by the new Clean centerline branch) ─
+// ── Skeleton-graph shortest path (Clean centerline branch) ────────────────
 //
 // Run Dijkstra on a prepared skeleton graph and return a video-coordinate
 // start-to-goal path for the clean centerline branch.
@@ -1278,1498 +849,10 @@ static bool skeletonGraphPath(const Centerline::SkeletonGraph& graph,
     return outPath.size() >= 2;
 }
 
-// ── Skeleton-arc helpers for SelfCrossed dispatch (D-2 / D-3) ──────────────
-//
-// For a ring or coiled worm the shortest skeleton path goes the wrong way —
-// it takes the short arc across the ring rather than tracing the body axis
-// all the way around. The three helpers below let the caller enumerate BOTH
-// arcs of the skeleton between a source and a goal node, then pick the arc
-// whose consecutive-segment cross-sum sign matches the previous frame's
-// right-hand-rule state, falling back to arc-length proximity to refLength
-// when no previous state is available.
-
-// Nearest skeleton graph node (by squared Euclidean distance) to a video point.
-// Find the skeleton graph node nearest to a video-coordinate point.
-static int nearestSkeletonNode(const Centerline::SkeletonGraph& graph,
-                                const cv::Point2f& videoPt,
-                                const cv::Point2f& originOffset)
-{
-    int best = -1;
-    float bestD2 = std::numeric_limits<float>::max();
-    for (int i = 0; i < static_cast<int>(graph.points.size()); ++i) {
-        const cv::Point& p = graph.points[i];
-        const float dx = (p.x + originOffset.x) - videoPt.x;
-        const float dy = (p.y + originOffset.y) - videoPt.y;
-        const float d2 = dx * dx + dy * dy;
-        if (d2 < bestD2) { bestD2 = d2; best = i; }
-    }
-    return best;
-}
-
-// Skeleton node that is geodesically farthest from srcIdx (Dijkstra on graph).
-// Useful as a D-3 fallback when the predictor has no previous position.
-// Find the reachable skeleton node farthest from a source node.
-static int farthestSkeletonNode(const Centerline::SkeletonGraph& graph, int srcIdx)
-{
-    const int n = static_cast<int>(graph.points.size());
-    if (srcIdx < 0 || srcIdx >= n) return -1;
-    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
-    dist[srcIdx] = 0.0;
-    using Entry = std::pair<double, int>;
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-    pq.push({0.0, srcIdx});
-    while (!pq.empty()) {
-        const auto [d, cur] = pq.top();
-        pq.pop();
-        if (d > dist[cur]) continue;
-        const cv::Point& cp = graph.points[cur];
-        for (int nb : graph.adjacency[cur]) {
-            const cv::Point& np = graph.points[nb];
-            const int dx = np.x - cp.x, dy = np.y - cp.y;
-            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
-            const double nd = d + w;
-            if (nd < dist[nb]) { dist[nb] = nd; pq.push({nd, nb}); }
-        }
-    }
-    int best = srcIdx;
-    double bestD = 0.0;
-    for (int i = 0; i < n; ++i) {
-        if (std::isfinite(dist[i]) && dist[i] > bestD) { bestD = dist[i]; best = i; }
-    }
-    return best;
-}
-
-// Enumerate both skeleton arcs between srcIdx and goalIdx.
-//   outA = Dijkstra shortest arc.
-//   outB = complementary arc (Dijkstra with the first hop of A forbidden).
-// Returns true when both arcs exist (≥2 points each).  Returns false for
-// open-curve skeletons where srcIdx has only one neighbour — the caller
-// should then just use the single path from skeletonGraphPath().
-// Split a cyclic skeleton into the two arcs connecting a source and goal node.
-static bool skeletonBothArcs(const Centerline::SkeletonGraph& graph,
-                              int srcIdx, int goalIdx,
-                              const cv::Point2f& originOffset,
-                              std::vector<cv::Point2f>& outA,
-                              std::vector<cv::Point2f>& outB)
-{
-    outA.clear();
-    outB.clear();
-    const int N = static_cast<int>(graph.points.size());
-    if (srcIdx < 0 || goalIdx < 0 || srcIdx == goalIdx ||
-        srcIdx >= N || goalIdx >= N) return false;
-
-    using Entry = std::pair<double, int>;
-
-    // ── Arc A: standard Dijkstra, keeping parent indices so we can
-    //    reconstruct the node-index sequence (not just video coords).
-    std::vector<double> distA(N, std::numeric_limits<double>::infinity());
-    std::vector<int>    parentA(N, -1);
-    distA[srcIdx] = 0.0;
-    {
-        std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-        pq.push({0.0, srcIdx});
-        while (!pq.empty()) {
-            const auto [d, cur] = pq.top();
-            pq.pop();
-            if (d > distA[cur]) continue;
-            if (cur == goalIdx) break;
-            const cv::Point& cp = graph.points[cur];
-            for (int nb : graph.adjacency[cur]) {
-                const cv::Point& np = graph.points[nb];
-                const int dx = np.x - cp.x, dy = np.y - cp.y;
-                const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
-                const double nd = d + w;
-                if (nd < distA[nb]) { distA[nb] = nd; parentA[nb] = cur; pq.push({nd, nb}); }
-            }
-        }
-    }
-    if (!std::isfinite(distA[goalIdx])) return false;
-
-    // Reconstruct arcA as a sequence of graph node indices.
-    std::vector<int> arcAIdx;
-    for (int cur = goalIdx; cur != -1; ) {
-        arcAIdx.push_back(cur);
-        if (cur == srcIdx) break;
-        cur = parentA[cur];
-    }
-    std::reverse(arcAIdx.begin(), arcAIdx.end());
-    if (arcAIdx.empty() || arcAIdx.front() != srcIdx) return false;
-
-    outA.clear();
-    for (int idx : arcAIdx) {
-        const cv::Point& p = graph.points[idx];
-        outA.emplace_back(p.x + originOffset.x, p.y + originOffset.y);
-    }
-
-    // ── Find the blocking edge for arc B ─────────────────────────────────
-    //
-    // We want arc B to take the alternative path through the ring.  Blocking
-    // the edge from srcIdx only works when srcIdx itself has ≥2 neighbours
-    // (pure ring).  For a ring-with-protrusion the tip (srcIdx) is a degree-1
-    // node: it has one neighbour, the protrusion base, so there is no choice
-    // at srcIdx.  The choice happens at the JUNCTION — the first node on
-    // arcA that has degree ≥ 3 (where the protrusion meets the ring loop).
-    //
-    // Blocking the arc A edge at the junction forces Dijkstra to go around
-    // the other side of the ring for arcB, which is what we want.
-    //
-    // Fallback: if arcA has no junction (open curve or pure ring), block at
-    // srcIdx as before.  A pure ring has every node at degree 2, so the
-    // junction search fails and we fall back to blocking at srcIdx — which
-    // IS valid for a pure ring because srcIdx has degree 2.
-    int blockFrom = -1, blockTo = -1;
-    for (size_t k = 0; k + 1 < arcAIdx.size(); ++k) {
-        if (static_cast<int>(graph.adjacency[arcAIdx[k]].size()) >= 3) {
-            blockFrom = arcAIdx[k];
-            blockTo   = arcAIdx[k + 1];
-            break;
-        }
-    }
-    if (blockFrom < 0) {
-        // No junction found: pure ring or open curve.
-        // For a pure ring every node has degree 2 so blocking at srcIdx works.
-        // For an open curve (degree-1 src, no ring) blockTo stays -1 and the
-        // second Dijkstra will fail, correctly returning false.
-        blockFrom = srcIdx;
-        blockTo   = (arcAIdx.size() >= 2) ? arcAIdx[1] : -1;
-    }
-    if (blockTo < 0) return false;
-
-    // ── Arc B: Dijkstra with blockFrom→blockTo forbidden ─────────────────
-    std::vector<double> distB(N, std::numeric_limits<double>::infinity());
-    std::vector<int>    parentB(N, -1);
-    distB[srcIdx] = 0.0;
-    {
-        std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-        pq.push({0.0, srcIdx});
-        while (!pq.empty()) {
-            const auto [d, cur] = pq.top();
-            pq.pop();
-            if (d > distB[cur]) continue;
-            if (cur == goalIdx) break;
-            const cv::Point& cp = graph.points[cur];
-            for (int nb : graph.adjacency[cur]) {
-                if (cur == blockFrom && nb == blockTo) continue; // forbidden
-                const cv::Point& np = graph.points[nb];
-                const int ddx = np.x - cp.x, ddy = np.y - cp.y;
-                const double w = (ddx != 0 && ddy != 0) ? std::sqrt(2.0) : 1.0;
-                const double nd = d + w;
-                if (nd < distB[nb]) { distB[nb] = nd; parentB[nb] = cur; pq.push({nd, nb}); }
-            }
-        }
-    }
-    if (!std::isfinite(distB[goalIdx])) return false;
-
-    std::vector<cv::Point2f> revB;
-    for (int cur = goalIdx; cur != -1; ) {
-        const cv::Point& p = graph.points[cur];
-        revB.emplace_back(p.x + originOffset.x, p.y + originOffset.y);
-        if (cur == srcIdx) break;
-        cur = parentB[cur];
-        if (cur == -1) return false;
-    }
-    outB.assign(revB.rbegin(), revB.rend());
-    return outB.size() >= 2;
-}
-
-// Pick one of two skeleton arcs.
-// Primary selector: the arc whose consecutive-segment cross-sum matches the
-// sign of the previous frame's cross-sum. Fallback when the previous cross-sum
-// is too close to zero or both/neither match: pick the arc whose arcLen is
-// closer to refLength.
-// Last resort: return arcA.
-// Choose between two candidate arcs using turn direction and length heuristics.
-static std::vector<cv::Point2f> pickArcByRHR(
-    const std::vector<cv::Point2f>& arcA,
-    const std::vector<cv::Point2f>& arcB,
-    float prevTurningAngle,
-    float angleThreshold,
-    float refLength)
-{
-    const float turA = centerlineCrossSum(arcA);
-    const float turB = centerlineCrossSum(arcB);
-    constexpr float kCrossSumEpsilon = 1e-4f;
-    (void)angleThreshold;
-
-    if (std::abs(prevTurningAngle) > kCrossSumEpsilon) {
-        const bool aOk = (turA * prevTurningAngle > 0.f);
-        const bool bOk = (turB * prevTurningAngle > 0.f);
-        if (aOk && !bOk) return arcA;
-        if (bOk && !aOk) return arcB;
-        // Both or neither match sign — fall through to length.
-    }
-    if (refLength > 0.f) {
-        const float lenA = arcLen(arcA);
-        const float lenB = arcLen(arcB);
-        return (std::abs(lenA - refLength) <= std::abs(lenB - refLength)) ? arcA : arcB;
-    }
-    return arcA;
-}
-
-// Convert a skeleton node-index path into video-coordinate points.
-static std::vector<cv::Point2f> nodesToVideoPath(const Centerline::SkeletonGraph& graph,
-                                                 const std::vector<int>& nodePath,
-                                                 const cv::Point2f& originOffset)
-{
-    std::vector<cv::Point2f> path;
-    path.reserve(nodePath.size());
-    for (int idx : nodePath) {
-        const cv::Point& p = graph.points[idx];
-        path.emplace_back(static_cast<float>(p.x) + originOffset.x,
-                          static_cast<float>(p.y) + originOffset.y);
-    }
-    return path;
-}
-
-// Measure the weighted path length for a skeleton node-index path.
-static float nodePathLength(const Centerline::SkeletonGraph& graph,
-                            const std::vector<int>& nodePath,
-                            int endExclusive = -1)
-{
-    if (nodePath.size() < 2) return 0.f;
-    const int limit = endExclusive < 0
-        ? static_cast<int>(nodePath.size())
-        : std::min(endExclusive, static_cast<int>(nodePath.size()));
-    float len = 0.f;
-    for (int i = 1; i < limit; ++i) {
-        const cv::Point& a = graph.points[nodePath[i - 1]];
-        const cv::Point& b = graph.points[nodePath[i]];
-        const int dx = b.x - a.x;
-        const int dy = b.y - a.y;
-        len += (dx != 0 && dy != 0) ? std::sqrt(2.f) : 1.f;
-    }
-    return len;
-}
-
-// Find the shortest skeleton node path between two graph nodes.
-static bool shortestNodePath(const Centerline::SkeletonGraph& graph,
-                             int startIdx,
-                             int goalIdx,
-                             std::vector<int>& outPath)
-{
-    outPath.clear();
-    const int n = static_cast<int>(graph.points.size());
-    if (startIdx < 0 || goalIdx < 0 || startIdx >= n || goalIdx >= n) return false;
-
-    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
-    std::vector<int> parent(n, -1);
-    dist[startIdx] = 0.0;
-
-    using Entry = std::pair<double, int>;
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-    pq.push({0.0, startIdx});
-
-    while (!pq.empty()) {
-        const auto [d, cur] = pq.top();
-        pq.pop();
-        if (d > dist[cur]) continue;
-        if (cur == goalIdx) break;
-        const cv::Point& cp = graph.points[cur];
-        for (int nb : graph.adjacency[cur]) {
-            const cv::Point& np = graph.points[nb];
-            const int dx = np.x - cp.x;
-            const int dy = np.y - cp.y;
-            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
-            const double nd = d + w;
-            if (nd < dist[nb]) {
-                dist[nb] = nd;
-                parent[nb] = cur;
-                pq.push({nd, nb});
-            }
-        }
-    }
-
-    if (!std::isfinite(dist[goalIdx])) return false;
-    for (int cur = goalIdx; cur != -1; cur = parent[cur]) {
-        outPath.push_back(cur);
-        if (cur == startIdx) break;
-    }
-    if (outPath.empty() || outPath.back() != startIdx) {
-        outPath.clear();
-        return false;
-    }
-    std::reverse(outPath.begin(), outPath.end());
-    return true;
-}
-
-// Find the nearest junction reachable from a source node.
-static int nearestReachableJunction(const Centerline::SkeletonGraph& graph,
-                                    int srcIdx)
-{
-    const int n = static_cast<int>(graph.points.size());
-    if (srcIdx < 0 || srcIdx >= n) return -1;
-
-    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
-    dist[srcIdx] = 0.0;
-    using Entry = std::pair<double, int>;
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-    pq.push({0.0, srcIdx});
-
-    while (!pq.empty()) {
-        const auto [d, cur] = pq.top();
-        pq.pop();
-        if (d > dist[cur]) continue;
-        if (cur != srcIdx && static_cast<int>(graph.adjacency[cur].size()) >= 3) {
-            return cur;
-        }
-        const cv::Point& cp = graph.points[cur];
-        for (int nb : graph.adjacency[cur]) {
-            const cv::Point& np = graph.points[nb];
-            const int dx = np.x - cp.x;
-            const int dy = np.y - cp.y;
-            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
-            const double nd = d + w;
-            if (nd < dist[nb]) {
-                dist[nb] = nd;
-                pq.push({nd, nb});
-            }
-        }
-    }
-    return -1;
-}
-
-// Return whether a skeleton node has junction-like graph degree.
-static bool isJunctionNode(const Centerline::SkeletonGraph& graph, int idx)
-{
-    return idx >= 0 && idx < static_cast<int>(graph.adjacency.size()) &&
-           static_cast<int>(graph.adjacency[idx].size()) >= 3;
-}
-
-struct JunctionPort {
-    int clusterNode = -1;
-    int outsideNode = -1;
-};
-
-struct JunctionCluster {
-    int id = -1;
-    std::vector<int> nodes;
-    std::vector<char> contains;
-};
-
-struct LoopReturnPath {
-    std::vector<int> nodes; // cluster port node -> outside path -> return cluster node
-    float length = 0.f;
-};
-
-struct JunctionSelection {
-    bool valid = false;
-    bool fallbackUsed = false;
-    int clusterCount = 0;
-    int selectedCluster = -1;
-    int junctionIdx = -1;
-    int incomingIdx = -1;
-    std::vector<int> trunk;
-    JunctionCluster cluster;
-    std::vector<JunctionCluster> allClusters;
-    QStringList diagnostics;
-};
-
-// Group adjacent junction nodes into connected junction clusters.
-// Uses a proximity radius in addition to direct adjacency so that diagonal X
-// crossings — which the thinning algorithm often represents as two degree-3
-// nodes a pixel or two apart rather than one degree-4 node — are merged into
-// a single cluster.
-static std::vector<JunctionCluster> findJunctionClusters(const Centerline::SkeletonGraph& graph)
-{
-    const int n = static_cast<int>(graph.points.size());
-    std::vector<JunctionCluster> clusters;
-    std::vector<char> visited(static_cast<size_t>(n), 0);
-
-    // Junction nodes within this many pixels are merged into the same cluster
-    // even when not directly connected in the skeleton adjacency list.
-    constexpr int kMergeRadiusPx = 3;
-
-    for (int i = 0; i < n; ++i) {
-        if (visited[static_cast<size_t>(i)] || !isJunctionNode(graph, i)) {
-            continue;
-        }
-
-        JunctionCluster cluster;
-        cluster.id = static_cast<int>(clusters.size());
-        cluster.contains.assign(static_cast<size_t>(n), 0);
-
-        std::queue<int> q;
-        q.push(i);
-        visited[static_cast<size_t>(i)] = 1;
-        while (!q.empty()) {
-            const int cur = q.front();
-            q.pop();
-            cluster.nodes.push_back(cur);
-            cluster.contains[static_cast<size_t>(cur)] = 1;
-
-            // Direct skeleton neighbors (existing behavior).
-            for (int nb : graph.adjacency[cur]) {
-                if (visited[static_cast<size_t>(nb)] || !isJunctionNode(graph, nb)) {
-                    continue;
-                }
-                visited[static_cast<size_t>(nb)] = 1;
-                q.push(nb);
-            }
-
-            // Proximity sweep: absorb any unvisited junction node within
-            // kMergeRadiusPx. Handles diagonal / shallow-angle crossings.
-            const cv::Point& cp = graph.points[cur];
-            for (int j = 0; j < n; ++j) {
-                if (visited[static_cast<size_t>(j)] || !isJunctionNode(graph, j)) {
-                    continue;
-                }
-                const cv::Point& jp = graph.points[j];
-                const int dx = cp.x - jp.x;
-                const int dy = cp.y - jp.y;
-                if (dx * dx + dy * dy <= kMergeRadiusPx * kMergeRadiusPx) {
-                    visited[static_cast<size_t>(j)] = 1;
-                    q.push(j);
-                }
-            }
-        }
-        clusters.push_back(std::move(cluster));
-    }
-
-    return clusters;
-}
-
-// Find graph ports where a junction cluster connects to non-cluster branches.
-static std::vector<JunctionPort> clusterPorts(const Centerline::SkeletonGraph& graph,
-                                              const JunctionCluster& cluster)
-{
-    std::vector<JunctionPort> ports;
-    for (int node : cluster.nodes) {
-        for (int nb : graph.adjacency[node]) {
-            if (cluster.contains[static_cast<size_t>(nb)]) {
-                continue;
-            }
-            const auto duplicate = std::find_if(
-                ports.begin(), ports.end(),
-                [&](const JunctionPort& p) {
-                    return p.clusterNode == node && p.outsideNode == nb;
-                });
-            if (duplicate == ports.end()) {
-                ports.push_back({node, nb});
-            }
-        }
-    }
-    return ports;
-}
-
-// Find the shortest path from a source node to any node in a junction cluster.
-static bool shortestPathToCluster(const Centerline::SkeletonGraph& graph,
-                                  int srcIdx,
-                                  const JunctionCluster& cluster,
-                                  std::vector<int>& outPath)
-{
-    outPath.clear();
-    const int n = static_cast<int>(graph.points.size());
-    if (srcIdx < 0 || srcIdx >= n || cluster.nodes.empty()) {
-        return false;
-    }
-
-    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
-    std::vector<int> parent(n, -1);
-    dist[srcIdx] = 0.0;
-    using Entry = std::pair<double, int>;
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-    pq.push({0.0, srcIdx});
-
-    int goal = -1;
-    while (!pq.empty()) {
-        const auto [d, cur] = pq.top();
-        pq.pop();
-        if (d > dist[cur]) continue;
-        if (cur != srcIdx && cluster.contains[static_cast<size_t>(cur)]) {
-            goal = cur;
-            break;
-        }
-        const cv::Point& cp = graph.points[cur];
-        for (int nb : graph.adjacency[cur]) {
-            const cv::Point& np = graph.points[nb];
-            const int dx = np.x - cp.x;
-            const int dy = np.y - cp.y;
-            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
-            const double nd = d + w;
-            if (nd < dist[nb]) {
-                dist[nb] = nd;
-                parent[nb] = cur;
-                pq.push({nd, nb});
-            }
-        }
-    }
-    if (goal < 0) {
-        return false;
-    }
-
-    for (int cur = goal; cur != -1; cur = parent[cur]) {
-        outPath.push_back(cur);
-        if (cur == srcIdx) break;
-    }
-    if (outPath.empty() || outPath.back() != srcIdx) {
-        outPath.clear();
-        return false;
-    }
-    std::reverse(outPath.begin(), outPath.end());
-    return outPath.size() >= 2;
-}
-
-// Find a path through the interior of a junction cluster between two ports.
-static std::vector<int> clusterInternalPath(const Centerline::SkeletonGraph& graph,
-                                            const JunctionCluster& cluster,
-                                            int startNode,
-                                            int goalNode)
-{
-    if (startNode == goalNode) {
-        return {startNode};
-    }
-    const int n = static_cast<int>(graph.points.size());
-    if (startNode < 0 || goalNode < 0 || startNode >= n || goalNode >= n ||
-        !cluster.contains[static_cast<size_t>(startNode)] ||
-        !cluster.contains[static_cast<size_t>(goalNode)]) {
-        return {};
-    }
-
-    std::vector<int> parent(static_cast<size_t>(n), -1);
-    std::queue<int> q;
-    q.push(startNode);
-    parent[static_cast<size_t>(startNode)] = startNode;
-    while (!q.empty()) {
-        const int cur = q.front();
-        q.pop();
-        if (cur == goalNode) break;
-        for (int nb : graph.adjacency[cur]) {
-            if (!cluster.contains[static_cast<size_t>(nb)] ||
-                parent[static_cast<size_t>(nb)] >= 0) {
-                continue;
-            }
-            parent[static_cast<size_t>(nb)] = cur;
-            q.push(nb);
-        }
-    }
-    if (parent[static_cast<size_t>(goalNode)] < 0) {
-        return {};
-    }
-
-    std::vector<int> path;
-    for (int cur = goalNode; cur != startNode; cur = parent[static_cast<size_t>(cur)]) {
-        path.push_back(cur);
-    }
-    path.push_back(startNode);
-    std::reverse(path.begin(), path.end());
-    return path;
-}
-
-// Find the loop branch that leaves and returns to a junction through different ports.
-static bool findLoopReturnPath(const Centerline::SkeletonGraph& graph,
-                               const JunctionCluster& cluster,
-                               const JunctionPort& startPort,
-                               LoopReturnPath& out)
-{
-    out = LoopReturnPath{};
-    const int n = static_cast<int>(graph.points.size());
-    if (startPort.clusterNode < 0 || startPort.outsideNode < 0 ||
-        startPort.clusterNode >= n || startPort.outsideNode >= n) {
-        return false;
-    }
-
-    std::vector<double> dist(n, std::numeric_limits<double>::infinity());
-    std::vector<int> parent(n, -1);
-    dist[startPort.outsideNode] = 0.0;
-    using Entry = std::pair<double, int>;
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> pq;
-    pq.push({0.0, startPort.outsideNode});
-
-    int returnNode = -1;
-    while (!pq.empty()) {
-        const auto [d, cur] = pq.top();
-        pq.pop();
-        if (d > dist[cur]) continue;
-
-        const cv::Point& cp = graph.points[cur];
-        for (int nb : graph.adjacency[cur]) {
-            const bool immediateBacktrack =
-                cur == startPort.outsideNode && nb == startPort.clusterNode;
-            if (immediateBacktrack) {
-                continue;
-            }
-            if (cluster.contains[static_cast<size_t>(nb)]) {
-                returnNode = nb;
-                parent[static_cast<size_t>(nb)] = cur;
-                dist[static_cast<size_t>(nb)] = d + ptDist(
-                    cv::Point2f(static_cast<float>(cp.x), static_cast<float>(cp.y)),
-                    cv::Point2f(static_cast<float>(graph.points[nb].x),
-                                static_cast<float>(graph.points[nb].y)));
-                pq = {};
-                break;
-            }
-            if (cluster.contains[static_cast<size_t>(cur)]) {
-                continue;
-            }
-            const cv::Point& np = graph.points[nb];
-            const int dx = np.x - cp.x;
-            const int dy = np.y - cp.y;
-            const double w = (dx != 0 && dy != 0) ? std::sqrt(2.0) : 1.0;
-            const double nd = d + w;
-            if (nd < dist[nb]) {
-                dist[nb] = nd;
-                parent[nb] = cur;
-                pq.push({nd, nb});
-            }
-        }
-    }
-    if (returnNode < 0) {
-        return false;
-    }
-
-    std::vector<int> rev;
-    for (int cur = returnNode; cur != -1; cur = parent[static_cast<size_t>(cur)]) {
-        rev.push_back(cur);
-        if (cur == startPort.outsideNode) break;
-    }
-    if (rev.empty() || rev.back() != startPort.outsideNode) {
-        return false;
-    }
-    std::reverse(rev.begin(), rev.end());
-
-    out.nodes.clear();
-    out.nodes.push_back(startPort.clusterNode);
-    out.nodes.insert(out.nodes.end(), rev.begin(), rev.end());
-    out.length = nodePathLength(graph, out.nodes);
-    return out.nodes.size() >= 3;
-}
-
-// Compute the minimum distance from a skeleton node path to a target point.
-static float minPathDistanceToPoint(const Centerline::SkeletonGraph& graph,
-                                    const std::vector<int>& nodes,
-                                    const cv::Point2f& target,
-                                    const cv::Point2f& originOffset)
-{
-    float best = std::numeric_limits<float>::max();
-    for (int idx : nodes) {
-        const cv::Point& p = graph.points[idx];
-        const cv::Point2f video(static_cast<float>(p.x) + originOffset.x,
-                                static_cast<float>(p.y) + originOffset.y);
-        best = std::min(best, ptDist(video, target));
-    }
-    return best;
-}
-
-// Select a zero-tip ring centerline directly from ring skeleton graph routes.
-static bool selectZeroTipRingGraphCenterline(
-    const Centerline::SkeletonGraph& graph,
-    const cv::Point2f& originOffset,
-    const cv::Point2f& predictedHead,
-    const cv::Point2f& predictedTail,
-    const cv::Point2f& predictedCenter,
-    bool hasPredictedCenter,
-    float previousCrossSum,
-    float refLength,
-    QStringList* diagnostics,
-    std::vector<cv::Point2f>& outCenterline)
-{
-    outCenterline.clear();
-    const int headNode = nearestSkeletonNode(graph, predictedHead, originOffset);
-    const int tailNode = nearestSkeletonNode(graph, predictedTail, originOffset);
-    if (headNode < 0 || tailNode < 0 || headNode == tailNode) {
-        if (diagnostics) {
-            diagnostics->append(QStringLiteral("0-tip graph route failed: invalid predicted endpoint nodes head=%1 tail=%2")
-                                    .arg(headNode)
-                                    .arg(tailNode));
-        }
-        return false;
-    }
-
-    std::vector<std::vector<cv::Point2f>> paths;
-    const float minUsableLen = refLength > 0.f ? std::max(6.f, 0.5f * refLength) : 6.f;
-
-    const std::vector<JunctionCluster> clusters = findJunctionClusters(graph);
-    for (const JunctionCluster& cluster : clusters) {
-        if (cluster.nodes.empty()) {
-            continue;
-        }
-        std::vector<int> hTrunk;
-        if (!shortestPathToCluster(graph, headNode, cluster, hTrunk) || hTrunk.size() < 2) {
-            continue;
-        }
-        const int hClusterNode = hTrunk.back();
-        const int hIncoming = hTrunk[hTrunk.size() - 2];
-
-        std::vector<int> tTrunk;
-        if (!shortestPathToCluster(graph, tailNode, cluster, tTrunk) || tTrunk.size() < 2) {
-            continue;
-        }
-        const int tClusterNode = tTrunk.back();
-        const int tIncoming = tTrunk[tTrunk.size() - 2];
-        if (hIncoming == tIncoming) {
-            continue;
-        }
-
-        std::vector<int> internal = clusterInternalPath(graph, cluster, hClusterNode, tClusterNode);
-        if (internal.empty()) {
-            continue;
-        }
-        std::vector<int> full = hTrunk;
-        full.insert(full.end(), internal.begin() + 1, internal.end());
-        std::reverse(tTrunk.begin(), tTrunk.end());
-        full.insert(full.end(), tTrunk.begin() + 1, tTrunk.end());
-        if (full.size() >= 2 && nodePathLength(graph, full) >= minUsableLen) {
-            paths.push_back(nodesToVideoPath(graph, full, originOffset));
-        }
-
-        const std::vector<JunctionPort> ports = clusterPorts(graph, cluster);
-        for (const JunctionPort& port : ports) {
-            if (port.outsideNode == hIncoming || port.outsideNode == tIncoming) {
-                continue;
-            }
-            LoopReturnPath loop;
-            if (!findLoopReturnPath(graph, cluster, port, loop) ||
-                loop.length < minUsableLen) {
-                continue;
-            }
-            std::vector<int> loopToTail =
-                clusterInternalPath(graph, cluster, loop.nodes.back(), tClusterNode);
-            if (loopToTail.empty()) {
-                continue;
-            }
-            std::vector<int> loopFull = hTrunk;
-            loopFull.insert(loopFull.end(), internal.begin() + 1, internal.end());
-            loopFull.insert(loopFull.end(), loop.nodes.begin() + 1, loop.nodes.end());
-            loopFull.insert(loopFull.end(), loopToTail.begin() + 1, loopToTail.end());
-            std::vector<int> tailToCluster = tTrunk;
-            std::reverse(tailToCluster.begin(), tailToCluster.end());
-            loopFull.insert(loopFull.end(), tailToCluster.begin() + 1, tailToCluster.end());
-            if (loopFull.size() >= 2 && nodePathLength(graph, loopFull) >= minUsableLen) {
-                paths.push_back(nodesToVideoPath(graph, loopFull, originOffset));
-            }
-        }
-    }
-
-    if (paths.empty()) {
-        if (diagnostics) {
-            diagnostics->append(QStringLiteral("0-tip graph route failed: no skeleton path between predicted endpoint nodes"));
-        }
-        return false;
-    }
-
-    struct Candidate {
-        std::vector<cv::Point2f> points;
-        float len = 0.f;
-        float endpointDist = 0.f;
-        float centerDist = 0.f;
-        float crossSum = 0.f;
-        float crossPenalty = 0.f;
-        float score = std::numeric_limits<float>::max();
-    };
-
-    std::vector<Candidate> candidates;
-    for (std::vector<cv::Point2f> path : paths) {
-        if (path.size() < 2) {
-            continue;
-        }
-        const float forward = ptDist(path.front(), predictedHead) +
-                              ptDist(path.back(), predictedTail);
-        const float reversed = ptDist(path.front(), predictedTail) +
-                               ptDist(path.back(), predictedHead);
-        if (reversed < forward) {
-            std::reverse(path.begin(), path.end());
-        }
-
-        Candidate c;
-        c.points = std::move(path);
-        c.endpointDist = std::min(forward, reversed);
-        c.len = arcLen(c.points);
-        if (hasPredictedCenter && c.points.size() >= 2) {
-            c.centerDist = ptDist(c.points[c.points.size() / 2], predictedCenter);
-        }
-        c.crossSum = centerlineCrossSum(c.points);
-        constexpr float kCrossSumEpsilon = 1e-4f;
-        if (std::abs(previousCrossSum) > kCrossSumEpsilon &&
-            std::abs(c.crossSum) > kCrossSumEpsilon) {
-            c.crossPenalty = (c.crossSum * previousCrossSum > 0.f) ? 0.f : 1.f;
-        }
-
-        constexpr float kEndpointWeight = 3.0f;
-        constexpr float kCenterWeight = 2.0f;
-        constexpr float kCrossMismatchWeight = 100.0f;
-        constexpr float kLengthWeight = 1.0f;
-        c.score = kEndpointWeight * c.endpointDist +
-                  kCenterWeight * c.centerDist +
-                  kCrossMismatchWeight * c.crossPenalty;
-        if (refLength > 0.f) {
-            c.score += kLengthWeight * std::abs(c.len - refLength);
-        }
-        candidates.push_back(std::move(c));
-    }
-
-    if (candidates.empty()) {
-        return false;
-    }
-
-    int bestIdx = 0;
-    for (int i = 1; i < static_cast<int>(candidates.size()); ++i) {
-        if (candidates[i].score < candidates[bestIdx].score) {
-            bestIdx = i;
-        }
-    }
-
-    if (diagnostics) {
-        diagnostics->append(QStringLiteral("0-tip graph route candidates=%1 selected=%2 headNode=(%3,%4) tailNode=(%5,%6)")
-                                .arg(static_cast<int>(candidates.size()))
-                                .arg(bestIdx)
-                                .arg(graph.points[headNode].x)
-                                .arg(graph.points[headNode].y)
-                                .arg(graph.points[tailNode].x)
-                                .arg(graph.points[tailNode].y));
-        for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
-            const Candidate& c = candidates[i];
-            diagnostics->append(
-                QStringLiteral("0-tip graph candidate %1: len=%2 endpointDist=%3 centerDist=%4 crossSum=%5 crossPenalty=%6 score=%7%8")
-                    .arg(i)
-                    .arg(c.len, 0, 'f', 2)
-                    .arg(c.endpointDist, 0, 'f', 2)
-                    .arg(c.centerDist, 0, 'f', 2)
-                    .arg(c.crossSum, 0, 'f', 4)
-                    .arg(c.crossPenalty, 0, 'f', 1)
-                    .arg(c.score, 0, 'f', 2)
-                    .arg(i == bestIdx ? QStringLiteral(" SELECTED") : QString()));
-        }
-    }
-
-    outCenterline = candidates[bestIdx].points;
-    return outCenterline.size() >= 2;
-}
-
-// Select the junction that best represents the loop-aware self-crossing route.
-static JunctionSelection selectLoopAwareJunction(const Centerline::SkeletonGraph& graph,
-                                                 int srcIdx,
-                                                 const cv::Point2f& predictedHidden,
-                                                 const cv::Point2f& originOffset,
-                                                 float refLength)
-{
-    JunctionSelection selection;
-    const std::vector<JunctionCluster> clusters = findJunctionClusters(graph);
-    selection.clusterCount = static_cast<int>(clusters.size());
-    selection.allClusters = clusters;
-
-    const float minTrunkLen = refLength > 0.f ? std::max(3.f, 0.10f * refLength) : 3.f;
-    float bestScore = std::numeric_limits<float>::max();
-    int bestLoopCount = 0;
-    float bestLoopLength = 0.f;
-
-    for (const JunctionCluster& cluster : clusters) {
-        std::vector<int> trunk;
-        if (!shortestPathToCluster(graph, srcIdx, cluster, trunk) || trunk.size() < 2) {
-            selection.diagnostics << QStringLiteral("cluster %1 unreachable")
-                                         .arg(cluster.id);
-            continue;
-        }
-        const int incomingIdx = trunk[trunk.size() - 2];
-        const std::vector<JunctionPort> ports = clusterPorts(graph, cluster);
-
-        const float trunkLen = nodePathLength(graph, trunk);
-        if (trunkLen < minTrunkLen) {
-            selection.diagnostics << QStringLiteral("cluster %1 rejected short trunk=%2 min=%3 rep=(%4,%5)")
-                                         .arg(cluster.id)
-                                         .arg(trunkLen, 0, 'f', 2)
-                                         .arg(minTrunkLen, 0, 'f', 2)
-                                         .arg(graph.points[trunk.back()].x)
-                                         .arg(graph.points[trunk.back()].y);
-            continue;
-        }
-
-        int loopCount = 0;
-        float clusterBestLoopLength = std::numeric_limits<float>::max();
-        float clusterBestHiddenDist = std::numeric_limits<float>::max();
-        const float minLoopLength = refLength > 0.f ? std::max(6.f, 0.20f * refLength) : 6.f;
-        for (const JunctionPort& port : ports) {
-            if (port.outsideNode == incomingIdx) {
-                continue;
-            }
-            LoopReturnPath loop;
-            if (!findLoopReturnPath(graph, cluster, port, loop)) {
-                continue;
-            }
-            if (loop.length < minLoopLength) {
-                continue;
-            }
-            ++loopCount;
-            clusterBestLoopLength = std::min(clusterBestLoopLength, loop.length);
-            clusterBestHiddenDist = std::min(
-                clusterBestHiddenDist,
-                minPathDistanceToPoint(graph, loop.nodes, predictedHidden, originOffset));
-        }
-
-        const bool hasLoop = loopCount > 0;
-        const float loopLenForLog = hasLoop ? clusterBestLoopLength : 0.f;
-        selection.diagnostics << QStringLiteral("cluster %1 rep=(%2,%3) trunk=%4 ports=%5 returningLoops=%6 bestLoop=%7")
-                                     .arg(cluster.id)
-                                     .arg(graph.points[trunk.back()].x)
-                                     .arg(graph.points[trunk.back()].y)
-                                     .arg(trunkLen, 0, 'f', 2)
-                                     .arg(static_cast<int>(ports.size()))
-                                     .arg(loopCount)
-                                     .arg(loopLenForLog, 0, 'f', 2);
-        if (!hasLoop) {
-            continue;
-        }
-
-        float score = trunkLen;
-        if (refLength > 0.f) {
-            score += 0.25f * std::abs(clusterBestLoopLength - refLength);
-        }
-        if (std::isfinite(clusterBestHiddenDist)) {
-            score += 0.5f * clusterBestHiddenDist;
-        }
-        if (score < bestScore) {
-            bestScore = score;
-            selection.valid = true;
-            selection.fallbackUsed = false;
-            selection.selectedCluster = cluster.id;
-            selection.junctionIdx = trunk.back();
-            selection.incomingIdx = incomingIdx;
-            selection.trunk = std::move(trunk);
-            selection.cluster = cluster;
-            bestLoopCount = loopCount;
-            bestLoopLength = clusterBestLoopLength;
-        }
-    }
-
-    if (selection.valid) {
-        // junctionIdx = trunk.back() — the cluster node where the path from the
-        // known tip enters the cluster. This is the natural anchor point for arc
-        // dispatch since it sits on the incoming route.
-        selection.diagnostics << QStringLiteral("selected loop-valid cluster %1 returningLoops=%2 bestLoop=%3")
-                                     .arg(selection.selectedCluster)
-                                     .arg(bestLoopCount)
-                                     .arg(bestLoopLength, 0, 'f', 2);
-        return selection;
-    }
-
-    const int fallback = nearestReachableJunction(graph, srcIdx);
-    if (fallback >= 0) {
-        std::vector<int> trunk;
-        if (shortestNodePath(graph, srcIdx, fallback, trunk) && trunk.size() >= 2) {
-            const float trunkLen = nodePathLength(graph, trunk);
-            if (trunkLen < minTrunkLen) {
-                selection.diagnostics << QStringLiteral("fallback nearest degree-3 node rejected short trunk=%1 min=%2 node=(%3,%4)")
-                                             .arg(trunkLen, 0, 'f', 2)
-                                             .arg(minTrunkLen, 0, 'f', 2)
-                                             .arg(graph.points[fallback].x)
-                                             .arg(graph.points[fallback].y);
-                return selection;
-            }
-
-            JunctionCluster cluster;
-            const int n = static_cast<int>(graph.points.size());
-            cluster.id = -1;
-            cluster.nodes = {fallback};
-            cluster.contains.assign(static_cast<size_t>(n), 0);
-            cluster.contains[static_cast<size_t>(fallback)] = 1;
-
-            selection.valid = true;
-            selection.fallbackUsed = true;
-            selection.selectedCluster = -1;
-            selection.junctionIdx = fallback;
-            selection.incomingIdx = trunk[trunk.size() - 2];
-            selection.trunk = std::move(trunk);
-            selection.cluster = std::move(cluster);
-            selection.diagnostics << QStringLiteral("no loop-valid junction found; fallback nearest degree-3 node=(%1,%2)")
-                                         .arg(graph.points[fallback].x)
-                                         .arg(graph.points[fallback].y);
-        }
-    }
-    return selection;
-}
-
-// Trace a simple skeleton branch from a starting node until a stop condition.
-static std::vector<int> traceSkeletonBranch(const Centerline::SkeletonGraph& graph,
-                                            int junctionIdx,
-                                            int incomingIdx,
-                                            int firstBranchIdx)
-{
-    std::vector<int> path;
-    const int n = static_cast<int>(graph.points.size());
-    if (junctionIdx < 0 || incomingIdx < 0 || firstBranchIdx < 0 ||
-        junctionIdx >= n || incomingIdx >= n || firstBranchIdx >= n) {
-        return path;
-    }
-
-    std::vector<char> visited(static_cast<size_t>(n), 0);
-    path.push_back(junctionIdx);
-    path.push_back(firstBranchIdx);
-    visited[static_cast<size_t>(junctionIdx)] = 1;
-    visited[static_cast<size_t>(firstBranchIdx)] = 1;
-
-    int prev = junctionIdx;
-    int cur = firstBranchIdx;
-    while (true) {
-        std::vector<int> candidates;
-        for (int nb : graph.adjacency[cur]) {
-            if (nb == prev) continue;
-            if (nb == junctionIdx) {
-                path.push_back(nb);
-                return path;
-            }
-            if (!visited[static_cast<size_t>(nb)]) candidates.push_back(nb);
-        }
-        if (candidates.empty()) break;
-
-        const cv::Point& pp = graph.points[prev];
-        const cv::Point& cp = graph.points[cur];
-        const cv::Point2f inVec(static_cast<float>(cp.x - pp.x),
-                                static_cast<float>(cp.y - pp.y));
-        int best = candidates.front();
-        float bestDot = -std::numeric_limits<float>::max();
-        const float inNorm = std::max(1e-6f, std::hypot(inVec.x, inVec.y));
-        for (int nb : candidates) {
-            const cv::Point& np = graph.points[nb];
-            const cv::Point2f outVec(static_cast<float>(np.x - cp.x),
-                                     static_cast<float>(np.y - cp.y));
-            const float outNorm = std::max(1e-6f, std::hypot(outVec.x, outVec.y));
-            const float dot = (inVec.x * outVec.x + inVec.y * outVec.y) / (inNorm * outNorm);
-            if (dot > bestDot) {
-                bestDot = dot;
-                best = nb;
-            }
-        }
-
-        prev = cur;
-        cur = best;
-        path.push_back(cur);
-        visited[static_cast<size_t>(cur)] = 1;
-    }
-
-    return path;
-}
-
-// Trace a branch leaving a junction cluster through one of its ports.
-static std::vector<int> traceSkeletonBranchFromCluster(const Centerline::SkeletonGraph& graph,
-                                                       const JunctionCluster& cluster,
-                                                       int clusterNode,
-                                                       int firstBranchIdx)
-{
-    std::vector<int> path;
-    const int n = static_cast<int>(graph.points.size());
-    if (clusterNode < 0 || firstBranchIdx < 0 ||
-        clusterNode >= n || firstBranchIdx >= n ||
-        !cluster.contains[static_cast<size_t>(clusterNode)] ||
-        cluster.contains[static_cast<size_t>(firstBranchIdx)]) {
-        return path;
-    }
-
-    std::vector<char> visited(static_cast<size_t>(n), 0);
-    path.push_back(clusterNode);
-    path.push_back(firstBranchIdx);
-    for (int node : cluster.nodes) {
-        visited[static_cast<size_t>(node)] = 1;
-    }
-    visited[static_cast<size_t>(firstBranchIdx)] = 1;
-
-    int prev = clusterNode;
-    int cur = firstBranchIdx;
-    while (true) {
-        std::vector<int> candidates;
-        for (int nb : graph.adjacency[cur]) {
-            if (nb == prev) continue;
-            if (cluster.contains[static_cast<size_t>(nb)]) {
-                path.push_back(nb);
-                return path;
-            }
-            if (!visited[static_cast<size_t>(nb)]) candidates.push_back(nb);
-        }
-        if (candidates.empty()) break;
-
-        const cv::Point& pp = graph.points[prev];
-        const cv::Point& cp = graph.points[cur];
-        const cv::Point2f inVec(static_cast<float>(cp.x - pp.x),
-                                static_cast<float>(cp.y - pp.y));
-        int best = candidates.front();
-        float bestDot = -std::numeric_limits<float>::max();
-        const float inNorm = std::max(1e-6f, std::hypot(inVec.x, inVec.y));
-        for (int nb : candidates) {
-            const cv::Point& np = graph.points[nb];
-            const cv::Point2f outVec(static_cast<float>(np.x - cp.x),
-                                     static_cast<float>(np.y - cp.y));
-            const float outNorm = std::max(1e-6f, std::hypot(outVec.x, outVec.y));
-            const float dot = (inVec.x * outVec.x + inVec.y * outVec.y) / (inNorm * outNorm);
-            if (dot > bestDot) {
-                bestDot = dot;
-                best = nb;
-            }
-        }
-
-        prev = cur;
-        cur = best;
-        path.push_back(cur);
-        visited[static_cast<size_t>(cur)] = 1;
-    }
-
-    return path;
-}
-
-// Trace a skeleton branch from startNode through firstStepNode by greedy
-// dot-product continuation, with no cluster-membership stop condition.
-// preVisited marks nodes that must not be revisited (e.g. the incoming trunk).
-static std::vector<int> traceSkeletonBranchFree(
-    const Centerline::SkeletonGraph& graph,
-    int startNode,
-    int firstStepNode,
-    const std::vector<char>& preVisited)
-{
-    std::vector<int> path;
-    const int n = static_cast<int>(graph.points.size());
-    if (startNode < 0 || firstStepNode < 0 || startNode >= n || firstStepNode >= n)
-        return path;
-
-    std::vector<char> visited = preVisited;
-    path.push_back(startNode);
-    path.push_back(firstStepNode);
-    visited[static_cast<size_t>(startNode)]     = 1;
-    visited[static_cast<size_t>(firstStepNode)] = 1;
-
-    int prev = startNode;
-    int cur  = firstStepNode;
-    while (true) {
-        std::vector<int> cands;
-        for (int nb : graph.adjacency[cur]) {
-            if (!visited[static_cast<size_t>(nb)]) cands.push_back(nb);
-        }
-        if (cands.empty()) break;
-
-        const cv::Point& pp = graph.points[prev];
-        const cv::Point& cp = graph.points[cur];
-        const cv::Point2f inVec(static_cast<float>(cp.x - pp.x),
-                                static_cast<float>(cp.y - pp.y));
-        const float inNorm = std::max(1e-6f, std::hypot(inVec.x, inVec.y));
-        int best = cands.front();
-        float bestDot = -std::numeric_limits<float>::max();
-        for (int nb : cands) {
-            const cv::Point& np = graph.points[nb];
-            const cv::Point2f outVec(static_cast<float>(np.x - cp.x),
-                                     static_cast<float>(np.y - cp.y));
-            const float outNorm = std::max(1e-6f, std::hypot(outVec.x, outVec.y));
-            const float dot = (inVec.x * outVec.x + inVec.y * outVec.y) / (inNorm * outNorm);
-            if (dot > bestDot) { bestDot = dot; best = nb; }
-        }
-        prev = cur;
-        cur  = best;
-        path.push_back(cur);
-        visited[static_cast<size_t>(cur)] = 1;
-    }
-    return path;
-}
-
-struct D3RouteDebug {
-    bool available = false;
-    bool startIsHead = false;
-    int selectedCandidate = -1;
-    int junctionClusterCount = 0;
-    int selectedJunctionCluster = -1;
-    bool junctionFallbackUsed = false;
-    cv::Point2f start = {-1.f, -1.f};
-    cv::Point2f junction = {-1.f, -1.f};
-    cv::Point2f center = {-1.f, -1.f};
-    cv::Point2f end = {-1.f, -1.f};
-    std::vector<std::vector<cv::Point2f>> candidatePaths;
-    // Video-coordinate positions for every node in every junction cluster.
-    // Parallel to selectedJunctionCluster (same id).
-    std::vector<std::vector<cv::Point2f>> allJunctionClusterNodes;
-    QStringList junctionDiagnostics;
-};
-
-// D-3 hidden-tip routing: walk from the known visible tip to the first
-// skeleton junction, score every outgoing branch as a whole candidate path,
-// then continue along the best branch until its distance to the predicted
-// hidden position is minimized. This avoids the failure mode where Dijkstra
-// terminates by the shortest route to the node nearest Tpred and the failure
-// mode where one noisy junction pixel decides the branch orientation.
-// Route from a visible tip toward an actual or predicted hidden target.
-static bool skeletonPathTowardPredictedHidden(const Centerline::SkeletonGraph& graph,
-                                              int srcIdx,
-                                              const cv::Point2f& predictedHidden,
-                                              bool targetIsActualTip,
-                                              bool pathStartsAtHead,
-                                              const cv::Point2f& predictedCenter,
-                                              bool hasPredictedCenter,
-                                              const cv::Point2f& originOffset,
-                                              const std::vector<cv::Point2f>& previousCenterline,
-                                              float prevTurningAngle,
-                                              float angleThreshold,
-                                              int nPoints,
-                                              float refLength,
-                                              QStringList* diagnostics,
-                                              D3RouteDebug* routeDebug,
-                                              std::vector<cv::Point2f>& outPath)
-{
-    outPath.clear();
-    (void)previousCenterline;
-    (void)angleThreshold;
-    (void)nPoints;
-    JunctionSelection junction = selectLoopAwareJunction(graph, srcIdx, predictedHidden,
-                                                         originOffset, refLength);
-    if (!junction.valid || junction.trunk.size() < 2) {
-        return false;
-    }
-    const int junctionIdx = junction.junctionIdx;
-    const int incomingIdx = junction.incomingIdx;
-    const std::vector<int>& trunk = junction.trunk;
-
-    if (diagnostics) {
-        diagnostics->append(QStringLiteral("D-3 junction clusters=%1 selected=%2 fallback=%3")
-                                .arg(junction.clusterCount)
-                                .arg(junction.selectedCluster)
-                                .arg(junction.fallbackUsed ? "Y" : "N"));
-        for (const QString& detail : junction.diagnostics) {
-            diagnostics->append(QStringLiteral("D-3 junction %1").arg(detail));
-        }
-    }
-    if (routeDebug) {
-        routeDebug->available = true;
-        routeDebug->selectedCandidate = -1;
-        routeDebug->junctionClusterCount = junction.clusterCount;
-        routeDebug->selectedJunctionCluster = junction.selectedCluster;
-        routeDebug->junctionFallbackUsed = junction.fallbackUsed;
-        routeDebug->start = cv::Point2f(
-            static_cast<float>(graph.points[srcIdx].x) + originOffset.x,
-            static_cast<float>(graph.points[srcIdx].y) + originOffset.y);
-        routeDebug->junction = cv::Point2f(
-            static_cast<float>(graph.points[junctionIdx].x) + originOffset.x,
-            static_cast<float>(graph.points[junctionIdx].y) + originOffset.y);
-        routeDebug->center = predictedCenter;
-        routeDebug->end = predictedHidden;
-        routeDebug->candidatePaths.clear();
-        routeDebug->junctionDiagnostics = junction.diagnostics;
-        routeDebug->allJunctionClusterNodes.clear();
-        for (const JunctionCluster& cl : junction.allClusters) {
-            std::vector<cv::Point2f> videoNodes;
-            videoNodes.reserve(cl.nodes.size());
-            for (int node : cl.nodes) {
-                videoNodes.emplace_back(
-                    static_cast<float>(graph.points[node].x) + originOffset.x,
-                    static_cast<float>(graph.points[node].y) + originOffset.y);
-            }
-            routeDebug->allJunctionClusterNodes.push_back(std::move(videoNodes));
-        }
-    }
-
-    struct BranchCandidate {
-        std::vector<int> nodes; // junction -> ...
-        std::vector<int> fullNodes;
-        int bestIndex = -1;
-        float hiddenDist = std::numeric_limits<float>::max();
-        float centerDist = 0.f;
-        float crossSum = 0.f;
-        float crossPenalty = 0.f;
-        float pathLen = 0.f;
-        float totalScore = std::numeric_limits<float>::max();
-        bool centerImplausible = false;
-    };
-
-    // Cluster-aware path length: segments where both endpoints are inside the
-    // selected junction cluster count at 50% to avoid over-penalising branches
-    // that pass through a thick cluster region on their way out.
-    const auto clusterAwarePathLength = [&](const std::vector<int>& nodes) -> float {
-        constexpr float kClusterSegWeight = 0.5f;
-        float len = 0.f;
-        for (int i = 1; i < static_cast<int>(nodes.size()); ++i) {
-            const cv::Point& a = graph.points[nodes[i - 1]];
-            const cv::Point& b = graph.points[nodes[i]];
-            const int dx = b.x - a.x, dy = b.y - a.y;
-            const float seg = (dx != 0 && dy != 0) ? std::sqrt(2.f) : 1.f;
-            const bool inCluster =
-                junction.cluster.contains[static_cast<size_t>(nodes[i - 1])] &&
-                junction.cluster.contains[static_cast<size_t>(nodes[i])];
-            len += inCluster ? kClusterSegWeight * seg : seg;
-        }
-        return len;
-    };
-
-    // Pre-mark trunk nodes as visited so branch traces don't backtrack.
-    std::vector<char> trunkVisited(static_cast<size_t>(graph.points.size()), 0);
-    for (int node : trunk) trunkVisited[static_cast<size_t>(node)] = 1;
-
-    // Explore one branch per non-incoming neighbour of junctionIdx.
-    // Using direct neighbours (rather than cluster ports) means we correctly
-    // explore arms that are absorbed into a large cluster and have no port.
-    std::vector<BranchCandidate> candidates;
-    for (int nb : graph.adjacency[junctionIdx]) {
-        if (nb == incomingIdx) continue;
-        BranchCandidate c;
-        std::vector<int> branch = traceSkeletonBranchFree(graph, junctionIdx, nb, trunkVisited);
-        if (branch.size() < 2) continue;
-        c.nodes = branch;  // branch[0] == junctionIdx
-        if (c.nodes.size() < 2) continue;
-
-        std::vector<float> cumulative(c.nodes.size(), 0.f);
-        for (int i = 1; i < static_cast<int>(c.nodes.size()); ++i) {
-            const cv::Point& a = graph.points[c.nodes[i - 1]];
-            const cv::Point& b = graph.points[c.nodes[i]];
-            const int sx = b.x - a.x;
-            const int sy = b.y - a.y;
-            cumulative[i] = cumulative[i - 1] +
-                ((sx != 0 && sy != 0) ? std::sqrt(2.f) : 1.f);
-        }
-
-        const float trunkLen = nodePathLength(graph, trunk);
-        const float minUsableLen = refLength > 0.f ? 0.75f * refLength : 0.f;
-        int bestLongEnoughIndex = -1;
-        float bestLongEnoughDist = std::numeric_limits<float>::max();
-        float bestDist = std::numeric_limits<float>::max();
-        for (int i = 1; i < static_cast<int>(c.nodes.size()); ++i) {
-            const cv::Point& p = graph.points[c.nodes[i]];
-            const float wx = static_cast<float>(p.x) + originOffset.x;
-            const float wy = static_cast<float>(p.y) + originOffset.y;
-            const float dx = wx - predictedHidden.x;
-            const float dy = wy - predictedHidden.y;
-            const float dist = std::sqrt(dx * dx + dy * dy);
-            if (dist < bestDist) {
-                bestDist = dist;
-                c.bestIndex = i;
-            }
-            if (trunkLen + cumulative[i] >= minUsableLen &&
-                dist < bestLongEnoughDist) {
-                bestLongEnoughDist = dist;
-                bestLongEnoughIndex = i;
-            }
-        }
-        if (targetIsActualTip) {
-            c.bestIndex = static_cast<int>(c.nodes.size()) - 1;
-            const cv::Point& endPoint = graph.points[c.nodes[c.bestIndex]];
-            c.hiddenDist = ptDist(cv::Point2f(static_cast<float>(endPoint.x) + originOffset.x,
-                                              static_cast<float>(endPoint.y) + originOffset.y),
-                                  predictedHidden);
-        } else if (bestLongEnoughIndex >= 1) {
-            c.bestIndex = bestLongEnoughIndex;
-            c.hiddenDist = bestLongEnoughDist;
-        } else {
-            c.hiddenDist = bestDist;
-        }
-        if (c.bestIndex < 1) continue;
-
-        c.fullNodes = trunk;
-        c.fullNodes.insert(c.fullNodes.end(),
-                           c.nodes.begin() + 1,
-                           c.nodes.begin() + c.bestIndex + 1);
-        if (targetIsActualTip) {
-            const int targetNode = nearestSkeletonNode(graph, predictedHidden, originOffset);
-            if (targetNode >= 0 && !c.fullNodes.empty() && c.fullNodes.back() != targetNode) {
-                std::vector<int> extension;
-                if (shortestNodePath(graph, c.fullNodes.back(), targetNode, extension) &&
-                    extension.size() >= 2) {
-                    c.fullNodes.insert(c.fullNodes.end(), extension.begin() + 1, extension.end());
-                    c.hiddenDist = 0.f;
-                }
-            }
-        }
-        c.pathLen = clusterAwarePathLength(c.fullNodes);
-        if (hasPredictedCenter && c.fullNodes.size() >= 2) {
-            const float halfLen = 0.5f * c.pathLen;
-            float walked = 0.f;
-            cv::Point2f midpoint(
-                static_cast<float>(graph.points[c.fullNodes.back()].x) + originOffset.x,
-                static_cast<float>(graph.points[c.fullNodes.back()].y) + originOffset.y);
-            for (int i = 1; i < static_cast<int>(c.fullNodes.size()); ++i) {
-                const cv::Point& a = graph.points[c.fullNodes[i - 1]];
-                const cv::Point& b = graph.points[c.fullNodes[i]];
-                const int sx = b.x - a.x;
-                const int sy = b.y - a.y;
-                const float segLen = (sx != 0 && sy != 0) ? std::sqrt(2.f) : 1.f;
-                if (walked + segLen >= halfLen) {
-                    const float t = (halfLen - walked) / std::max(segLen, 1e-6f);
-                    midpoint = cv::Point2f(
-                        (static_cast<float>(a.x) + t * static_cast<float>(sx)) + originOffset.x,
-                        (static_cast<float>(a.y) + t * static_cast<float>(sy)) + originOffset.y);
-                    break;
-                }
-                walked += segLen;
-            }
-            c.centerDist = ptDist(midpoint, predictedCenter);
-        }
-        const std::vector<cv::Point2f> candidatePath =
-            nodesToVideoPath(graph, c.fullNodes, originOffset);
-        if (routeDebug) {
-            routeDebug->candidatePaths.push_back(candidatePath);
-        }
-        if (pathStartsAtHead) {
-            c.crossSum = centerlineCrossSum(candidatePath);
-        } else {
-            std::vector<cv::Point2f> headToTailPath = candidatePath;
-            std::reverse(headToTailPath.begin(), headToTailPath.end());
-            c.crossSum = centerlineCrossSum(headToTailPath);
-        }
-        constexpr float kCrossSumEpsilon = 1e-4f;
-        if (std::abs(prevTurningAngle) > kCrossSumEpsilon &&
-            std::abs(c.crossSum) > kCrossSumEpsilon) {
-            c.crossPenalty = (c.crossSum * prevTurningAngle > 0.f) ? 0.f : 1.f;
-        }
-
-        constexpr float kHiddenWeight = 3.0f;
-        constexpr float kCenterWeight = 2.0f;
-        constexpr float kCrossMismatchWeight = 100.0f;
-        constexpr float kLengthWeight = 1.0f;
-        c.totalScore =
-            kHiddenWeight * c.hiddenDist +
-            kCenterWeight * c.centerDist +
-            kCrossMismatchWeight * c.crossPenalty;
-        if (refLength > 0.f) {
-            c.totalScore += kLengthWeight * std::abs(c.pathLen - refLength);
-        }
-        // Center-plausibility gate: if the predicted center is available and
-        // the path midpoint is far from it (> 30% of body length), add a
-        // large penalty. This prevents a short junction-cutthrough from
-        // winning purely on a lucky RHR cross-sum sign — such paths never
-        // pass through the body's mid-region.
-        if (hasPredictedCenter && refLength > 0.f &&
-            c.centerDist > 0.30f * refLength) {
-            constexpr float kCenterImplausiblePenalty = 80.0f;
-            c.totalScore += kCenterImplausiblePenalty;
-            c.centerImplausible = true;
-        }
-        candidates.push_back(std::move(c));
-    }
-    if (candidates.empty()) return false;
-
-    int bestCandidate = -1;
-    float bestScore = std::numeric_limits<float>::max();
-    for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
-        const BranchCandidate& c = candidates[i];
-        if (c.totalScore < bestScore) {
-            bestScore = c.totalScore;
-            bestCandidate = i;
-        }
-    }
-    if (bestCandidate < 0) return false;
-
-    if (diagnostics) {
-        diagnostics->append(QStringLiteral("%1 whole-path candidates=%2 selected=%3")
-                                .arg(targetIsActualTip ? "D-2" : "D-3")
-                                .arg(static_cast<int>(candidates.size()))
-                                .arg(bestCandidate));
-        for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
-            const BranchCandidate& c = candidates[i];
-            diagnostics->append(
-                QStringLiteral("%1 candidate %2: len=%3 targetDist=%4 centerDist=%5 crossSum=%6 crossPenalty=%7 centerImplausible=%8 score=%9%10")
-                    .arg(targetIsActualTip ? "D-2" : "D-3")
-                    .arg(i)
-                    .arg(c.pathLen, 0, 'f', 2)
-                    .arg(c.hiddenDist, 0, 'f', 2)
-                    .arg(c.centerDist, 0, 'f', 2)
-                    .arg(c.crossSum, 0, 'f', 4)
-                    .arg(c.crossPenalty, 0, 'f', 1)
-                    .arg(c.centerImplausible ? "Y" : "N")
-                    .arg(c.totalScore, 0, 'f', 2)
-                    .arg(i == bestCandidate ? QStringLiteral(" SELECTED") : QString()));
-        }
-    }
-
-    const BranchCandidate& picked = candidates[bestCandidate];
-    if (routeDebug) {
-        routeDebug->selectedCandidate = bestCandidate;
-    }
-    outPath = nodesToVideoPath(graph, picked.fullNodes, originOffset);
-    return outPath.size() >= 2;
-}
-
 // Build a copy of a blob with a synthetic circular hole punched at the
-// distance-transform maximum.  Used as a fallback when a Clean-topology
-// D-1 path is suspiciously short (worm tightly self-coiled but no hole
-// visible in the mask yet).  The hole radius is 80% of the DT value at
+// distance-transform maximum.  Used when a Clean-topology D-1 path is
+// suspiciously short (worm tightly self-coiled but no hole visible in the
+// mask yet).  The hole radius is 80% of the DT value at
 // the peak (≈ the local body half-width).
 static bool addSyntheticHoleAtDTMax(const Tracking::DetectedBlob& src,
                                      const cv::Mat& distTransform,
@@ -3032,13 +1115,17 @@ static void captureEndpointDebug(const Centerline::EndpointResult& er,
     }
 }
 
-
 namespace Centerline {
 
 // Public wrapper for the processor's internal polyline length helper.
 float arcLength(const std::vector<cv::Point2f>& points)
 {
     return arcLen(points);
+}
+
+float resampledArcLength(const std::vector<cv::Point2f>& points, int nPoints)
+{
+    return arcLen(resample(points, nPoints));
 }
 
 // Run one frame of the centerline pipeline and update predictor/previous-frame state.
@@ -3069,16 +1156,29 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
         return bestIdx;
     };
 
+    // Rebuild the predictor from stored frames in sweep order. Each end keeps
+    // its most recent position (observed or hypothesised) plus the number of
+    // frames since it was last actually observed; velocity is carried only for
+    // an end observed in both of the two preceding frames.
     auto loadPreviousFrameContext =
         [&](int frameNumber, int frameStep,
             Centerline::HeadTailPredictor& outPredictor,
-            CenterlineState& outPrevState,
-            float& outLocalRefLength) -> bool {
+            CenterlineState& outPrevState) -> bool {
         auto blobAt = [&](int f, Tracking::DetectedBlob& out) -> bool {
             const QMap<int, Tracking::DetectedBlob> blobs = io.getDetectedBlobsForFrame(f);
             if (!blobs.contains(ctx.wormId)) return false;
             out = blobs[ctx.wormId];
             return out.isValid && !out.contourPoints.empty();
+        };
+        struct RoleSample { bool present = false; bool observed = false; cv::Point2f point; };
+        auto roleSample = [](const Tracking::DetectedBlob& b, int idx) {
+            RoleSample r;
+            if (idx < 0 || idx >= static_cast<int>(b.centerline.tipCandidates.size())) return r;
+            const auto& tc = b.centerline.tipCandidates[idx];
+            r.present = true;
+            r.observed = tc.source != Tracking::TipCandidate::Source::HypothesizedHidden;
+            r.point = tc.point;
+            return r;
         };
 
         Tracking::DetectedBlob prevBlob;
@@ -3087,51 +1187,52 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
         }
 
         outPredictor = Centerline::HeadTailPredictor{};
-        const auto prevHead =
-            (prevBlob.centerline.headTipIdx >= 0 &&
-             prevBlob.centerline.headTipIdx < static_cast<int>(prevBlob.centerline.tipCandidates.size()))
-                ? prevBlob.centerline.tipCandidates[prevBlob.centerline.headTipIdx].point
-                : cv::Point2f(-1.f, -1.f);
-        const auto prevTail =
-            (prevBlob.centerline.tailTipIdx >= 0 &&
-             prevBlob.centerline.tailTipIdx < static_cast<int>(prevBlob.centerline.tipCandidates.size()))
-                ? prevBlob.centerline.tipCandidates[prevBlob.centerline.tailTipIdx].point
-                : cv::Point2f(-1.f, -1.f);
-        outPredictor.lastHeadPos = prevHead;
-        outPredictor.lastTailPos = prevTail;
-        outPredictor.hasPrev = (prevHead.x >= 0.f || prevTail.x >= 0.f);
+        struct RoleTrack {
+            bool known = false; cv::Point2f estimate; int age = kMaxTipAge;
+            bool foundObserved = false; RoleSample first, second;
+        } head, tail;
+        constexpr int kLookback = kMaxTipAge + 1;
+        for (int k = 1; k <= kLookback; ++k) {
+            Tracking::DetectedBlob b;
+            if (k == 1) b = prevBlob;
+            else if (!blobAt(frameNumber - k * frameStep, b)) continue;
+            for (auto [track, idx] : {std::pair<RoleTrack*, int>{&head, b.centerline.headTipIdx},
+                                      std::pair<RoleTrack*, int>{&tail, b.centerline.tailTipIdx}}) {
+                const RoleSample sample = roleSample(b, idx);
+                if (k == 1) track->first = sample;
+                if (k == 2) track->second = sample;
+                if (!sample.present || track->foundObserved) continue;
+                if (!track->known) { track->known = true; track->estimate = sample.point; }
+                if (sample.observed) { track->foundObserved = true; track->age = k - 1; }
+            }
+            if (head.foundObserved && tail.foundObserved) break;
+        }
+        auto finish = [](const RoleTrack& t, cv::Point2f& pos, cv::Point2f& vel, bool& known, int& age) {
+            known = t.known;
+            pos = t.known ? t.estimate : cv::Point2f(0.f, 0.f);
+            age = t.known ? t.age : kMaxTipAge;
+            vel = (t.first.observed && t.second.observed) ? t.first.point - t.second.point
+                                                          : cv::Point2f(0.f, 0.f);
+        };
+        finish(head, outPredictor.lastHeadPos, outPredictor.velHead,
+               outPredictor.headKnown, outPredictor.headAge);
+        finish(tail, outPredictor.lastTailPos, outPredictor.velTail,
+               outPredictor.tailKnown, outPredictor.tailAge);
+        outPredictor.hasPrev = outPredictor.headKnown || outPredictor.tailKnown;
 
         Tracking::DetectedBlob prevPrevBlob;
-        if (blobAt(frameNumber - (2 * frameStep), prevPrevBlob)) {
-            const auto prevPrevHead =
-                (prevPrevBlob.centerline.headTipIdx >= 0 &&
-                 prevPrevBlob.centerline.headTipIdx < static_cast<int>(prevPrevBlob.centerline.tipCandidates.size()))
-                    ? prevPrevBlob.centerline.tipCandidates[prevPrevBlob.centerline.headTipIdx].point
-                    : cv::Point2f(-1.f, -1.f);
-            const auto prevPrevTail =
-                (prevPrevBlob.centerline.tailTipIdx >= 0 &&
-                 prevPrevBlob.centerline.tailTipIdx < static_cast<int>(prevPrevBlob.centerline.tipCandidates.size()))
-                    ? prevPrevBlob.centerline.tipCandidates[prevPrevBlob.centerline.tailTipIdx].point
-                    : cv::Point2f(-1.f, -1.f);
-            if (prevPrevHead.x >= 0.f && prevHead.x >= 0.f)
-                outPredictor.velHead = prevHead - prevPrevHead;
-            if (prevPrevTail.x >= 0.f && prevTail.x >= 0.f)
-                outPredictor.velTail = prevTail - prevPrevTail;
-            const bool havePrevPrevCenter =
-                prevPrevBlob.centerline.points.size() >= 2 &&
-                prevBlob.centerline.points.size() >= 2;
-            if (havePrevPrevCenter) {
-                const cv::Point2f prevPrevCenter =
-                    prevPrevBlob.centerline.points[prevPrevBlob.centerline.points.size() / 2];
-                const cv::Point2f prevCenter =
-                    prevBlob.centerline.points[prevBlob.centerline.points.size() / 2];
-                outPredictor.velCenter = prevCenter - prevPrevCenter;
-            }
-            outPredictor.hasVelocity =
-                (prevPrevHead.x >= 0.f && prevHead.x >= 0.f) ||
-                (prevPrevTail.x >= 0.f && prevTail.x >= 0.f) ||
-                havePrevPrevCenter;
+        const bool havePrevPrev = blobAt(frameNumber - (2 * frameStep), prevPrevBlob);
+        const bool havePrevPrevCenter = havePrevPrev &&
+            prevPrevBlob.centerline.points.size() >= 2 &&
+            prevBlob.centerline.points.size() >= 2;
+        if (havePrevPrevCenter) {
+            outPredictor.velCenter =
+                prevBlob.centerline.points[prevBlob.centerline.points.size() / 2] -
+                prevPrevBlob.centerline.points[prevPrevBlob.centerline.points.size() / 2];
         }
+        outPredictor.hasVelocity = havePrevPrevCenter ||
+            (head.first.observed && head.second.observed) ||
+            (tail.first.observed && tail.second.observed);
 
         outPrevState = CenterlineState{};
         if (prevBlob.centerline.points.size() >= 2) {
@@ -3141,13 +1242,8 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
             outPrevState.blob = prevBlob;
             outPrevState.valid = true;
             outPrevState.turningAngle = centerlineCrossSum(outPrevState.points);
-            outLocalRefLength = arcLen(outPrevState.points);
             outPredictor.lastCenterPos =
                 outPrevState.points[outPrevState.points.size() / 2];
-        }
-
-        if (outLocalRefLength > 0.f) {
-            outPredictor.refDistance = std::max(8.f, 0.5f * outLocalRefLength);
         }
         return outPredictor.hasPrev || outPrevState.valid;
     };
@@ -3183,22 +1279,21 @@ CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
 
     Centerline::HeadTailPredictor framePredictor = predictor;
     CenterlineState framePrevState = prevState;
-    float frameRefLength = ctx.refLength;
     if (!req.isKeyframeBootstrap) {
-        float localRefLength = frameRefLength;
-        if (loadPreviousFrameContext(tp.frameNumber, req.step,
-                                     framePredictor,
-                                     framePrevState,
-                                     localRefLength)) {
-            if (localRefLength > 0.f) {
-                frameRefLength = localRefLength;
-            }
-        }
+        loadPreviousFrameContext(tp.frameNumber, req.step, framePredictor, framePrevState);
     }
 
 // ── STEP 1: detect endpoints, write back tip data ───────────
 const Centerline::TipFeatureBaseline baseline =
     io.getTipBaseline(ctx.wormId);
+// Expected body length: the clean-frame baseline once it is established,
+// otherwise the Sweep 0 median. Never the previous frame's own output, so one
+// bad frame cannot shrink the reference for the next.
+const float frameRefLength =
+    baseline.lengthSamples >= kMinBodyLengthSamples ? baseline.meanBodyLength : ctx.refLength;
+if (frameRefLength > 0.f) {
+    framePredictor.refDistance = std::max(8.f, 0.5f * frameRefLength);
+}
 const bool captureDebug =
     ctx.captureDebug;
 Debug::CenterlineFrameDebug debugRecord;
@@ -3297,10 +1392,11 @@ debugRecord.decisions << QStringLiteral("detectEndpoints topology=%1 tips=%2 hea
                              .arg(static_cast<int>(blob.centerline.tipCandidates.size()))
                              .arg(blob.centerline.headTipIdx)
                              .arg(blob.centerline.tailTipIdx);
-enforceSelfCrossedTwoTipPredictorRoles(blob,
-                                       framePredictor,
-                                       &debugRecord.decisions);
-if (framePrevState.valid) {
+// Self-crossed roles are chosen together with the route in Step 2. For a
+// clean frame following a clean frame, the previous centerline's order is a
+// reliable second opinion on the two visible tips.
+if (er.topology == Tracking::TopologyState::Clean && framePrevState.valid &&
+    framePrevState.blob.centerline.topology == Tracking::TopologyState::Clean) {
     enforceTwoTipCenterlineOrderRoles(blob,
                                       framePrevState.points,
                                       framePrevState.blobCentroid,
@@ -3359,334 +1455,75 @@ bool hasOverlap = false;
 bool snakeRan = false;
 const cv::Point2f originOffset(static_cast<float>(er.localBounds.x),
                                static_cast<float>(er.localBounds.y));
-// angleThreshold used by both RHR arc-pick (Step 2) and RHR veto (Step 4).
-const float angleThreshold = static_cast<float>(
-    std::max(0.0, ctx.snakeParams.orientationAngleThreshold));
+// Route selection for self-crossed skeletons (see centerlineroutes.h). Writes
+// the centerline head→tail into `centerline`, registers hidden ends as
+// hypothesised tips on `target`, and sets its head/tail roles. Returns false
+// when no route fits the body-length window.
+bool routeTrusted = false;
+auto runRouteSelection = [&](Tracking::DetectedBlob& target,
+                             const Centerline::EndpointResult& dispEr) -> bool {
+    Centerline::RouteSelectionInput in;
+    in.graph = &dispEr.skeleton;
+    in.distTransform = dispEr.distTransform;
+    in.localBounds = dispEr.localBounds;
+    for (size_t t = 0; t < dispEr.tips.size() && t < dispEr.skeleton.endpointIndices.size(); ++t)
+        in.observedTips.push_back({dispEr.skeleton.endpointIndices[t], dispEr.tips[t].point});
+    in.head = Centerline::predictRole(framePredictor.headKnown, framePredictor.lastHeadPos,
+                                      framePredictor.velHead, framePredictor.headAge);
+    in.tail = Centerline::predictRole(framePredictor.tailKnown, framePredictor.lastTailPos,
+                                      framePredictor.velTail, framePredictor.tailAge);
+    in.bodyLength = frameRefLength;
+    in.nPoints = ctx.nPts;
+    in.hasOrientationReference = state.hasOrientationReference && !req.isKeyframeBootstrap;
+    in.orientationReference = state.orientationReference;
+    debugRecord.decisions << QStringLiteral("route selection predictions: head=%1 (%2,%3) age=%4  tail=%5 (%6,%7) age=%8")
+        .arg(in.head.valid ? "Y" : "N")
+        .arg(in.head.position.x, 0, 'f', 1).arg(in.head.position.y, 0, 'f', 1).arg(in.head.age)
+        .arg(in.tail.valid ? "Y" : "N")
+        .arg(in.tail.position.x, 0, 'f', 1).arg(in.tail.position.y, 0, 'f', 1).arg(in.tail.age);
 
-// Shared lambda: skeleton-arc dispatch for SelfCrossed frames.
-// Finds both arcs of the skeleton from the known tip to the
-// target (actual or predicted), picks by RHR then length, and
-// registers the arc's far terminus as the hypothesised tip when
-// there is no actual target.
-auto runSkeletonArcDispatch =
-    [&](const Tracking::DetectedBlob& dispBlob,
-        const Centerline::EndpointResult& dispEr,
-        const cv::Point2f& dispOrigin) -> bool {
-    const int hIdx = dispBlob.centerline.headTipIdx;
-    const int tIdx = dispBlob.centerline.tailTipIdx;
-    const bool hasHead = (hIdx >= 0 &&
-        hIdx < static_cast<int>(dispBlob.centerline.tipCandidates.size()));
-    const bool hasTail = (tIdx >= 0 &&
-        tIdx < static_cast<int>(dispBlob.centerline.tipCandidates.size()));
-    if (!hasHead && !hasTail) return false;
+    const Centerline::RouteSelectionResult sel = Centerline::selectSelfCrossedRoute(in);
+    debugRecord.decisions << sel.decisions;
+    debugRecord.d3RouteDebugAvailable = true;
+    debugRecord.d3CandidatePaths.clear();
+    for (size_t k = 0; k < sel.ranked.size() && k < 4; ++k)
+        debugRecord.d3CandidatePaths.push_back(sel.ranked[k].points);
+    debugRecord.d3SelectedCandidate = sel.found ? 0 : -1;
+    debugRecord.d3RouteJunction = cv::Point2f(-1.f, -1.f);
+    debugRecord.d3RouteCenter = cv::Point2f(-1.f, -1.f);
+    if (!sel.found) return false;
 
-    const int knownIdx   = hasHead ? hIdx : tIdx;
-    const cv::Point2f knownPos = dispBlob.centerline.tipCandidates[knownIdx].point;
-    const int srcNode = nearestSkeletonNode(dispEr.skeleton, knownPos, dispOrigin);
-    if (srcNode < 0) return false;
+    centerline = sel.best.points;
+    debugRecord.d3RouteStartIsHead = true;
+    debugRecord.d3RouteStart = centerline.front();
+    debugRecord.d3RouteEnd = centerline.back();
 
-    // Target: actual other tip (D-2) or predicted position (D-3).
-    const bool hasActualTarget = hasHead && hasTail;
-    cv::Point2f targetPos(-1.f, -1.f);
-    const bool hasPredictedCenter =
-        framePredictor.lastCenterPos.x != 0.f ||
-        framePredictor.lastCenterPos.y != 0.f;
-    cv::Point2f predictedCenter = framePredictor.hasVelocity
-        ? framePredictor.lastCenterPos + framePredictor.velCenter
-        : framePredictor.lastCenterPos;
-    if (hasPredictedCenter) {
-        cv::Point2f snappedCenter;
-        if (nearestMaskPoint(dispBlob, predictedCenter, snappedCenter)) {
-            predictedCenter = snappedCenter;
-        }
-    }
-    if (hasActualTarget) {
-        targetPos = dispBlob.centerline.tipCandidates[hasHead ? tIdx : hIdx].point;
-    } else if (framePredictor.hasPrev) {
-        const bool hiddenIsHead = !hasHead;
-        const cv::Point2f& last = hiddenIsHead
-            ? framePredictor.lastHeadPos : framePredictor.lastTailPos;
-        const cv::Point2f& vel  = hiddenIsHead
-            ? framePredictor.velHead    : framePredictor.velTail;
-        if (last.x != 0.f || last.y != 0.f) {
-            const Tracking::DetectedBlob* previousBlob =
-                framePrevState.valid ? &framePrevState.blob : nullptr;
-            const HiddenTipTarget predicted = predictHiddenTipTarget(
-                dispBlob, previousBlob, last, vel, framePredictor.hasVelocity);
-            debugRecord.hiddenTipMaskDiffArea = predicted.maskDiffArea;
-            debugRecord.hiddenTipMaskDiffSelectedArea = predicted.selectedMaskDiffArea;
-            if (predicted.hasTarget) {
-                targetPos = predicted.target;
-
-                // Find the self-crossing junction for additional mask-discard heuristics.
-                cv::Point2f junctionPos(-1.f, -1.f);
-                {
-                    const JunctionSelection jsel = selectLoopAwareJunction(
-                        dispEr.skeleton, srcNode, predicted.velocityTarget,
-                        dispOrigin, frameRefLength);
-                    if (jsel.valid && !jsel.fallbackUsed) {
-                        const cv::Point& jp = dispEr.skeleton.points[jsel.junctionIdx];
-                        junctionPos = cv::Point2f(
-                            static_cast<float>(jp.x) + dispOrigin.x,
-                            static_cast<float>(jp.y) + dispOrigin.y);
-                    }
-                }
-                debugRecord.hiddenTipJunction = junctionPos;
-
-                bool maskAccepted = predicted.hasMaskCue;
-                if (maskAccepted) {
-                    // Heuristic 1: mask closer to the known tip than to the hidden-tip
-                    // last position → mask activity is at the wrong end, discard it.
-                    const float distMaskToKnown  = ptDist(predicted.maskCue, knownPos);
-                    const float distMaskToHidden = ptDist(predicted.maskCue, last);
-                    if (distMaskToKnown < distMaskToHidden) {
-                        maskAccepted = false;
-                        debugRecord.decisions << QStringLiteral(
-                            "D-3 mask cue closer to known tip (%1 < %2); ignoring mask")
-                                .arg(distMaskToKnown, 0, 'f', 1)
-                                .arg(distMaskToHidden, 0, 'f', 1);
-                    }
-                    // Heuristic 2: velocity guess is significantly closer to the junction
-                    // than the mask → mask is far from where the tip is heading, discard it.
-                    if (maskAccepted && junctionPos.x >= 0.f) {
-                        const float distVelToJunction  = ptDist(predicted.velocityTarget, junctionPos);
-                        const float distMaskToJunction = ptDist(predicted.maskCue, junctionPos);
-                        constexpr float kJunctionProximityFactor = 1.5f;
-                        if (distVelToJunction * kJunctionProximityFactor < distMaskToJunction) {
-                            maskAccepted = false;
-                            debugRecord.decisions << QStringLiteral(
-                                "D-3 velocity guess closer to junction than mask (%1 vs %2); ignoring mask")
-                                    .arg(distVelToJunction, 0, 'f', 1)
-                                    .arg(distMaskToJunction, 0, 'f', 1);
-                        }
-                    }
-                }
-
-                if (!maskAccepted) {
-                    // No reliable mask cue: blend velocity (75%) with junction (25%).
-                    // Fall back to pure velocity if no valid junction was found.
-                    if (junctionPos.x >= 0.f) {
-                        constexpr float kVelWeight = 0.75f;
-                        targetPos = kVelWeight * predicted.velocityTarget
-                                    + (1.f - kVelWeight) * junctionPos;
-                    } else {
-                        targetPos = predicted.velocityTarget;
-                    }
-                    cv::Point2f snapped;
-                    if (nearestMaskPoint(dispBlob, targetPos, snapped))
-                        targetPos = snapped;
-                }
-
-                debugRecord.hiddenTipTarget = targetPos;
-                debugRecord.decisions << QStringLiteral("D-3 predicted hidden target at (%1,%2)")
-                                             .arg(targetPos.x, 0, 'f', 2)
-                                             .arg(targetPos.y, 0, 'f', 2);
-                debugRecord.decisions << QStringLiteral("D-3 mask-diff area total=%1 selected=%2")
-                                             .arg(predicted.maskDiffArea)
-                                             .arg(predicted.selectedMaskDiffArea);
+    auto registerEnd = [&](const cv::Point2f& point, Centerline::RouteEndKind kind) -> int {
+        auto& candidates = target.centerline.tipCandidates;
+        if (kind != Centerline::RouteEndKind::Hidden) {
+            for (int idx = 0; idx < static_cast<int>(candidates.size()); ++idx) {
+                if (candidates[idx].source != Tracking::TipCandidate::Source::HypothesizedHidden &&
+                    ptDist(candidates[idx].point, point) < 0.5f)
+                    return idx;
             }
         }
-    }
-
-    if (!hasActualTarget && (targetPos.x != -1.f || targetPos.y != -1.f) &&
-        framePrevState.valid &&
-        framePrevState.blob.centerline.topology == Tracking::TopologyState::SelfCrossed &&
-        dispEr.topology == Tracking::TopologyState::SelfCrossed) {
-        const QMap<int, Tracking::DetectedBlob> prevPrevBlobs =
-            io.getDetectedBlobsForFrame(tp.frameNumber - (2 * req.step));
-        const bool prevPrevSelfCrossed =
-            prevPrevBlobs.contains(ctx.wormId) &&
-            prevPrevBlobs[ctx.wormId].centerline.topology == Tracking::TopologyState::SelfCrossed;
-        const bool secondSelfCrossedFrame = !prevPrevSelfCrossed;
-        if (secondSelfCrossedFrame) {
-            const JunctionSelection junction = selectLoopAwareJunction(
-                dispEr.skeleton, srcNode, targetPos, dispOrigin, frameRefLength);
-            if (junction.valid && !junction.fallbackUsed) {
-                const cv::Point& jp = dispEr.skeleton.points[junction.junctionIdx];
-                const cv::Point2f junctionPoint(
-                    static_cast<float>(jp.x) + dispOrigin.x,
-                    static_cast<float>(jp.y) + dispOrigin.y);
-                const float bumpRadius = frameRefLength > 0.f
-                    ? std::max(8.f, 0.35f * frameRefLength)
-                    : 12.f;
-                const float curvatureThreshold =
-                    baseline.curvatureSamples >= 4
-                        ? std::max(0.12f, 0.75f * baseline.meanAbsCurvature)
-                        : 0.12f;
-                bool hasSecondBumpNearJunction = false;
-                for (int tipIdx = 0; tipIdx < static_cast<int>(dispEr.tips.size()); ++tipIdx) {
-                    if (tipIdx == knownIdx) {
-                        continue;
-                    }
-                    const Centerline::TrueTip& tip = dispEr.tips[tipIdx];
-                    if (ptDist(tip.point, junctionPoint) <= bumpRadius &&
-                        std::abs(tip.curvature) >= curvatureThreshold) {
-                        hasSecondBumpNearJunction = true;
-                        break;
-                    }
-                }
-                debugRecord.decisions << QStringLiteral("D-3 second SelfCrossed frame: junction target candidate=(%1,%2) secondBump=%3")
-                                             .arg(junctionPoint.x, 0, 'f', 2)
-                                             .arg(junctionPoint.y, 0, 'f', 2)
-                                             .arg(hasSecondBumpNearJunction ? "Y" : "N");
-                if (!hasSecondBumpNearJunction) {
-                    targetPos = junctionPoint;
-                    debugRecord.hiddenTipTarget = targetPos;
-                    debugRecord.decisions << QStringLiteral("D-3 second SelfCrossed frame: hidden target overridden to loop junction");
-                }
-            }
+        Tracking::TipCandidate tc;
+        tc.point = point;
+        tc.source = kind == Centerline::RouteEndKind::Hidden
+            ? Tracking::TipCandidate::Source::HypothesizedHidden
+            : Tracking::TipCandidate::Source::SkeletonEndpoint;
+        candidates.push_back(tc);
+        if (kind == Centerline::RouteEndKind::Hidden) {
+            debugRecord.hiddenTipHypothesized = true;
+            debugRecord.hiddenTipFinal = point;
         }
-    }
-
-    int goalNode = -1;
-    if (targetPos.x != -1.f || targetPos.y != -1.f) {
-        goalNode = nearestSkeletonNode(dispEr.skeleton, targetPos, dispOrigin);
-    } else {
-        goalNode = farthestSkeletonNode(dispEr.skeleton, srcNode);
-    }
-    if (!hasActualTarget && goalNode == srcNode &&
-        dispEr.topology == Tracking::TopologyState::SelfCrossed) {
-        const float targetToKnown = ptDist(targetPos, knownPos);
-        const bool weakMaskDiff =
-            debugRecord.hiddenTipMaskDiffArea > 0 &&
-            debugRecord.hiddenTipMaskDiffArea < 0.35f * frameRefLength;
-        if (targetToKnown < 0.25f * frameRefLength || weakMaskDiff) {
-            const JunctionSelection junction = selectLoopAwareJunction(
-                dispEr.skeleton, srcNode, targetPos, dispOrigin, frameRefLength);
-            if (junction.valid && !junction.fallbackUsed) {
-                const cv::Point& jp = dispEr.skeleton.points[junction.junctionIdx];
-                targetPos = cv::Point2f(static_cast<float>(jp.x) + dispOrigin.x,
-                                        static_cast<float>(jp.y) + dispOrigin.y);
-                goalNode = nearestSkeletonNode(dispEr.skeleton, targetPos, dispOrigin);
-                debugRecord.hiddenTipTarget = targetPos;
-                debugRecord.decisions << QStringLiteral("D-3 degenerate hidden target near known tip; overridden to loop junction (%1,%2)")
-                                             .arg(targetPos.x, 0, 'f', 2)
-                                             .arg(targetPos.y, 0, 'f', 2);
-            }
-        }
-    }
-    if (goalNode < 0 || goalNode == srcNode) return false;
-
-    // SelfCrossed routing is loop-aware for both D-2 and D-3.
-    // D-2 has an actual second tip target; D-3 has a predicted
-    // hidden target. In both cases, avoid the crossing shortcut by
-    // routing through the loop-valid junction candidates first.
-    std::vector<cv::Point2f> arcA, arcB;
-    std::vector<cv::Point2f> chosen;
-    if ((targetPos.x != -1.f || targetPos.y != -1.f) &&
-        [&]() {
-            std::vector<cv::Point2f> previousForRoute;
-            if (framePrevState.valid) {
-                previousForRoute = framePrevState.points;
-                if (!hasHead) {
-                    std::reverse(previousForRoute.begin(), previousForRoute.end());
-                }
-            }
-            D3RouteDebug routeDebug;
-            routeDebug.startIsHead = hasHead;
-            const bool ok = skeletonPathTowardPredictedHidden(dispEr.skeleton,
-                                                               srcNode,
-                                                               targetPos,
-                                                               hasActualTarget,
-                                                               hasHead,
-                                                               predictedCenter,
-                                                               hasPredictedCenter,
-                                                               dispOrigin,
-                                                               previousForRoute,
-                                                               framePrevState.turningAngle,
-                                                               angleThreshold,
-                                                               ctx.nPts,
-                                                               frameRefLength,
-                                                               &debugRecord.decisions,
-                                                               &routeDebug,
-                                                               chosen);
-            if (routeDebug.available) {
-                debugRecord.d3RouteDebugAvailable = true;
-                debugRecord.d3RouteStartIsHead = routeDebug.startIsHead;
-                debugRecord.d3SelectedCandidate = routeDebug.selectedCandidate;
-                debugRecord.d3JunctionClusterCount = routeDebug.junctionClusterCount;
-                debugRecord.d3SelectedJunctionCluster = routeDebug.selectedJunctionCluster;
-                debugRecord.d3JunctionFallbackUsed = routeDebug.junctionFallbackUsed;
-                debugRecord.d3RouteStart = routeDebug.start;
-                debugRecord.d3RouteJunction = routeDebug.junction;
-                debugRecord.d3RouteCenter = routeDebug.center;
-                debugRecord.d3RouteEnd = routeDebug.end;
-                debugRecord.d3CandidatePaths = routeDebug.candidatePaths;
-                debugRecord.d3JunctionDiagnostics = routeDebug.junctionDiagnostics;
-                debugRecord.d3JunctionClusterNodes = routeDebug.allJunctionClusterNodes;
-            }
-            return ok;
-        }()) {
-        debugRecord.decisions << QStringLiteral("%1 loop-aware whole-path dispatch selected centerline")
-                                     .arg(hasActualTarget ? "D-2" : "D-3");
-    } else if (skeletonBothArcs(dispEr.skeleton, srcNode, goalNode,
-                                dispOrigin, arcA, arcB)) {
-        chosen = pickArcByRHR(arcA, arcB,
-                              framePrevState.turningAngle,
-                              angleThreshold, frameRefLength);
-    } else if (!arcA.empty()) {
-        chosen = arcA; // open-curve skeleton: only one arc
-    } else {
-        return false;
-    }
-    if (chosen.size() < 2) return false;
-
-    // Snap endpoints to the actual tip positions if curvature-extended.
-    // Takes into account known may be head OR tail
-    if (hasActualTarget) {
-        // D-2: Both are known. Ensure orientation matches Head->Tail assumption.
-        if (hasHead && dispEr.tips[hIdx].extended) chosen.front() = dispEr.tips[hIdx].point;
-        if (hasTail && dispEr.tips[tIdx].extended) chosen.back()  = dispEr.tips[tIdx].point;
-    } else {
-        // D-3: Only one is known. 'chosen.front()' is ALWAYS the known tip.
-        const int knownIdx = hasHead ? hIdx : tIdx;
-        if (dispEr.tips[knownIdx].extended) {
-            chosen.front() = dispEr.tips[knownIdx].point;
-        }
-    }
-    if (!hasActualTarget && framePredictor.hasPrev) {
-        const cv::Point2f& knownLast = hasHead
-            ? framePredictor.lastHeadPos : framePredictor.lastTailPos;
-        const cv::Point2f& knownVel = hasHead
-            ? framePredictor.velHead : framePredictor.velTail;
-        if (knownLast.x != 0.f || knownLast.y != 0.f) {
-            cv::Point2f knownPred = framePredictor.hasVelocity
-                ? (knownLast + knownVel)
-                : knownLast;
-            cv::Point2f snappedKnown;
-            if (nearestMaskPoint(dispBlob, knownPred, snappedKnown)) {
-                knownPred = snappedKnown;
-            }
-            chosen.front() = knownPred;
-        }
-    }
-
-    centerline = std::move(chosen);
-
-    // D-3: register the arc terminus as the hypothesised hidden tip.
-    if (!hasActualTarget) {
-        const bool havePredictedHidden =
-            targetPos.x != -1.f || targetPos.y != -1.f;
-        const cv::Point2f hiddenPoint =
-            havePredictedHidden ? targetPos : centerline.back();
-        centerline.back() = hiddenPoint;
-        debugRecord.hiddenTipHypothesized = true;
-        debugRecord.hiddenTipTarget = targetPos;
-        debugRecord.hiddenTipFinal = hiddenPoint;
-        Tracking::TipCandidate hyp;
-        hyp.point  = hiddenPoint;
-        hyp.source = Tracking::TipCandidate::Source::HypothesizedHidden;
-        blob.centerline.tipCandidates.push_back(hyp);
-        const int newIdx = static_cast<int>(blob.centerline.tipCandidates.size()) - 1;
-        if (hasHead) blob.centerline.tailTipIdx = newIdx;
-        else {
-            blob.centerline.headTipIdx = newIdx;
-            std::reverse(centerline.begin(), centerline.end());
-        }
-        debugRecord.decisions << QStringLiteral("D-3 registered hypothesized hidden tip at (%1,%2)")
-                                     .arg(hiddenPoint.x, 0, 'f', 2)
-                                     .arg(hiddenPoint.y, 0, 'f', 2);
-    }
+        return static_cast<int>(candidates.size()) - 1;
+    };
+    target.centerline.headTipIdx = registerEnd(centerline.front(), sel.best.headKind);
+    target.centerline.tailTipIdx = registerEnd(centerline.back(), sel.best.tailKind);
+    routeTrusted = sel.best.headKind != Centerline::RouteEndKind::Hidden &&
+                   sel.best.tailKind != Centerline::RouteEndKind::Hidden &&
+                   std::abs(sel.best.length - frameRefLength) <= 0.08f * frameRefLength;
     return true;
 };
 
@@ -3715,7 +1552,7 @@ if (er.topology == Tracking::TopologyState::Clean &&
         // If D-1 result is suspiciously short the worm is
         // tightly self-coiled but had no visible hole in the
         // mask. Punch a synthetic hole at the DT maximum and
-        // re-run the SelfCrossed skeleton-arc dispatch.
+        // choose a route through the resulting loop.
         if (frameRefLength > 0.f &&
             arcLen(centerline) < 0.5f * frameRefLength) {
             Tracking::DetectedBlob holeBlob;
@@ -3726,11 +1563,6 @@ if (er.topology == Tracking::TopologyState::Clean &&
                 const Centerline::EndpointResult er2 =
                     Centerline::detectEndpoints(
                         holeBlob, framePredictor, baseline, inMerge);
-                const cv::Point2f origin2(
-                    static_cast<float>(er2.localBounds.x),
-                    static_cast<float>(er2.localBounds.y));
-                // Temporarily swap blob state so the lambda
-                // writes into the right place.
                 std::vector<cv::Point2f> prevCl = centerline;
                 Tracking::DetectedBlob savedBlob = blob;
                 blob = holeBlob;
@@ -3749,8 +1581,7 @@ if (er.topology == Tracking::TopologyState::Clean &&
                 blob.centerline.tailTipIdx = er2.tailIdx;
                 blob.centerline.topology      = er2.topology;
                 centerline.clear();
-                if (!runSkeletonArcDispatch(blob, er2, origin2)) {
-                    // Restore if synthetic-hole dispatch also failed.
+                if (!runRouteSelection(blob, er2)) {
                     blob = savedBlob;
                     centerline = prevCl;
                     debugRecord.decisions << QStringLiteral("synthetic hole retry failed; restored D-1 path");
@@ -3764,128 +1595,17 @@ if (er.topology == Tracking::TopologyState::Clean &&
     }
 }
 else if (er.topology == Tracking::TopologyState::SelfCrossed) {
-    // ── Hole-first: ensure the blob has a ring hole ──────────────
-    // If no contour hole exists, punch a synthetic one at the
-    // distance-transform maximum (the widest body cross-section).
-    // This ensures the 0-tip ring-cut routing always has a hole
-    // to work with, and unifies the no-hole SelfCrossed case
-    // rather than silently falling through to D-4.
-    if (blob.holeContourPoints.empty()) {
-        Tracking::DetectedBlob holeBlob;
-        if (addSyntheticHoleAtDTMax(blob, er.distTransform,
-                                    er.localBounds, holeBlob)) {
-            const Centerline::EndpointResult er2 =
-                Centerline::detectEndpoints(
-                    holeBlob, framePredictor, baseline, inMerge);
-            holeBlob.centerline.tipCandidates.clear();
-            for (const Centerline::TrueTip& t : er2.tips) {
-                Tracking::TipCandidate tc;
-                tc.point     = t.point;
-                tc.curvature = t.curvature;
-                tc.width     = t.width;
-                tc.source    = t.selectedAxis ? Tracking::TipCandidate::Source::AxisBoundary
-                    : t.extended
-                    ? Tracking::TipCandidate::Source::CurvaturePeak
-                    : Tracking::TipCandidate::Source::SkeletonEndpoint;
-                holeBlob.centerline.tipCandidates.push_back(tc);
-            }
-            holeBlob.centerline.headTipIdx = er2.headIdx;
-            holeBlob.centerline.tailTipIdx = er2.tailIdx;
-            holeBlob.centerline.topology      = er2.topology;
-            blob = holeBlob;
-            er   = er2;
-            debugRecord.syntheticHoleUsed = true;
-            debugRecord.decisions << QStringLiteral(
-                "SelfCrossed no-hole: punched synthetic hole at DT max, re-detected endpoints");
-        }
+    // One route selector handles every self-crossed case (two, one, or no
+    // visible tips). A frame with no route inside the body-length window is
+    // left unresolved rather than given an implausible centerline.
+    if (runRouteSelection(blob, er)) {
+        debugRecord.branch = Debug::CenterlineBranch::SelfCrossedRouteSelection;
+    } else {
+        debugRecord.branch = Debug::CenterlineBranch::SelfCrossedUnresolved;
     }
-
-    // Derive local origin from the (potentially updated) er so
-    // skeleton node lookups are in the right coordinate frame.
-    const cv::Point2f scOrigin(
-        static_cast<float>(er.localBounds.x),
-        static_cast<float>(er.localBounds.y));
-
-    // ── Tip-count dispatch ────────────────────────────────────────
-    const int hIdx = blob.centerline.headTipIdx;
-    const int tIdx = blob.centerline.tailTipIdx;
-    const bool hasHead = (hIdx >= 0 && hIdx < static_cast<int>(blob.centerline.tipCandidates.size()));
-    const bool hasTail = (tIdx >= 0 && tIdx < static_cast<int>(blob.centerline.tipCandidates.size()));
-
-    if (hasHead || hasTail) {
-        // D-2 (two tips) / D-3 (one tip): trace the skeleton
-        // arc from the known tip to the target, picking the arc
-        // whose cross-sum sign matches the previous frame (RHR).
-        debugRecord.branch = (hasHead && hasTail)
-            ? Debug::CenterlineBranch::D2TwoKnownTips
-            : Debug::CenterlineBranch::D3OneKnownTipHiddenPrediction;
-        debugRecord.decisions << QStringLiteral("%1 skeleton-arc dispatch attempted")
-                                     .arg(Debug::centerlineBranchToString(debugRecord.branch));
-        runSkeletonArcDispatch(blob, er, scOrigin);
-    }
-    else if (!blob.holeContourPoints.empty()) {
-        // 0 tips, ring (real or synthetic): route between predicted
-        // endpoint positions using the ring skeleton or a cut.
-        debugRecord.branch = Debug::CenterlineBranch::ZeroTipRingCut;
-        const bool hasPredictedTips =
-            framePredictor.hasPrev &&
-            (debugRecord.predictedHead.x != 0.f || debugRecord.predictedHead.y != 0.f) &&
-            (debugRecord.predictedTail.x != 0.f || debugRecord.predictedTail.y != 0.f);
-        const bool hasCenterPrediction =
-            framePredictor.lastCenterPos.x != 0.f ||
-            framePredictor.lastCenterPos.y != 0.f;
-        cv::Point2f cutPoint(-1.f, -1.f);
-        bool zeroTipOk = false;
-        if (hasPredictedTips) {
-            zeroTipOk = selectZeroTipRingGraphCenterline(er.skeleton,
-                                                          scOrigin,
-                                                          debugRecord.predictedHead,
-                                                          debugRecord.predictedTail,
-                                                          debugRecord.predictedCenter,
-                                                          hasCenterPrediction,
-                                                          framePrevState.turningAngle,
-                                                          frameRefLength,
-                                                          &debugRecord.decisions,
-                                                          centerline);
-        }
-        if (!zeroTipOk) {
-            zeroTipOk = selectZeroTipRingCutCenterline(blob,
-                                                       debugRecord.predictedHead,
-                                                       debugRecord.predictedTail,
-                                                       hasPredictedTips,
-                                                       debugRecord.predictedCenter,
-                                                       hasCenterPrediction,
-                                                       framePrevState.turningAngle,
-                                                       frameRefLength,
-                                                       &debugRecord.decisions,
-                                                       centerline,
-                                                       cutPoint);
-            if (zeroTipOk) {
-                blob.centerline.cutPoint = cutPoint;
-                blob.centerline.hasCutPoint = true;
-            }
-        }
-
-        if (zeroTipOk) {
-            Tracking::TipCandidate hypHead;
-            hypHead.point = centerline.front();
-            hypHead.source = Tracking::TipCandidate::Source::HypothesizedHidden;
-            Tracking::TipCandidate hypTail;
-            hypTail.point = centerline.back();
-            hypTail.source = Tracking::TipCandidate::Source::HypothesizedHidden;
-            blob.centerline.tipCandidates.push_back(hypHead);
-            blob.centerline.tipCandidates.push_back(hypTail);
-            blob.centerline.headTipIdx = static_cast<int>(blob.centerline.tipCandidates.size()) - 2;
-            blob.centerline.tailTipIdx = static_cast<int>(blob.centerline.tipCandidates.size()) - 1;
-            debugRecord.decisions << QStringLiteral("0-tip ring supplied predictor-scored centerline");
-        }
-    }
-    // Implicit: if 0 tips and synthetic hole punch also failed,
-    // blob.holeContourPoints remains empty and centerline stays
-    // empty → falls through to the D-4 fallback below.
 }
 
-if (centerline.empty()) {
+if (centerline.empty() && debugRecord.branch != Debug::CenterlineBranch::SelfCrossedUnresolved) {
     // D-4 fallback: legacy contour-skeleton path.
     debugRecord.fallbackUsed = true;
     debugRecord.branch = Debug::CenterlineBranch::D4FallbackContourSkeleton;
@@ -3929,9 +1649,9 @@ if (cleanWithTwoTips) {
     io.recordBodyLengthSample(ctx.wormId, arcLen(centerline));
 }
 
-// ── STEP 4: snake refinement (Clean only) + RHR veto ────────
-// SelfCrossed centerlines are produced by skeleton-arc dispatch
-// (D-2/D-3) which traces the skeleton directly; no snake pass.
+// ── STEP 4: snake refinement (Clean only) ──────────────────
+// SelfCrossed centerlines come from S-1 route selection, which traces the
+// skeleton directly; no snake pass.
 if (er.topology == Tracking::TopologyState::Clean) {
     cv::Mat mask;
     cv::Rect bounds;
@@ -3956,25 +1676,10 @@ if (er.topology == Tracking::TopologyState::Clean) {
     }
 }
 
-// Right-hand-rule orientation veto. The consecutive-segment
-// cross-sum negates when traversal direction is reversed; worms
-// don't instantaneously flip their coiling sense, so a sign flip
-// across frames is strong evidence of a wrong orientation pick.
+// Orientation is enforced while choosing self-crossed routes; a finished
+// centerline is never reversed afterwards.
 const float curTurning = centerlineCrossSum(centerline);
-bool flipped = false;
-constexpr float kCrossSumEpsilon = 1e-4f;
-const bool allowRhrFlip =
-    debugRecord.branch != Debug::CenterlineBranch::D1CleanGraphPath;
-if (allowRhrFlip &&
-    framePrevState.valid &&
-    std::abs(framePrevState.turningAngle) > kCrossSumEpsilon &&
-    std::abs(curTurning) > kCrossSumEpsilon &&
-    curTurning * framePrevState.turningAngle < 0.f) {
-    std::reverse(centerline.begin(), centerline.end());
-    flipped = true;
-    std::swap(blob.centerline.headTipIdx, blob.centerline.tailTipIdx);
-    debugRecord.decisions << QStringLiteral("RHR orientation veto flipped centerline");
-}
+const bool flipped = false;
 
 // Keyframe bootstrap re-derivation: now that we have a
 // centerline, set head/tail from its natural orientation
@@ -4028,20 +1733,25 @@ if (captureDebug) {
 }
 
 // ── STEP 5: predictor update ────────────────────────────────
+// Mirrors loadPreviousFrameContext for the carried state: a hypothesised end
+// updates the position estimate but not the observation age or velocity.
 const int hIdx = blob.centerline.headTipIdx;
 const int tIdx = blob.centerline.tailTipIdx;
-if (hIdx >= 0 && hIdx < static_cast<int>(blob.centerline.tipCandidates.size())) {
-    const cv::Point2f newH = blob.centerline.tipCandidates[hIdx].point;
-    if (predictor.hasPrev)
-        predictor.velHead = newH - predictor.lastHeadPos;
-    predictor.lastHeadPos = newH;
-}
-if (tIdx >= 0 && tIdx < static_cast<int>(blob.centerline.tipCandidates.size())) {
-    const cv::Point2f newT = blob.centerline.tipCandidates[tIdx].point;
-    if (predictor.hasPrev)
-        predictor.velTail = newT - predictor.lastTailPos;
-    predictor.lastTailPos = newT;
-}
+auto updateRole = [&](int idx, cv::Point2f& last, cv::Point2f& vel, bool& known, int& age) {
+    if (idx < 0 || idx >= static_cast<int>(blob.centerline.tipCandidates.size())) {
+        age = std::min(age + 1, kMaxTipAge);
+        vel = cv::Point2f(0.f, 0.f);
+        return;
+    }
+    const auto& tc = blob.centerline.tipCandidates[idx];
+    const bool observed = tc.source != Tracking::TipCandidate::Source::HypothesizedHidden;
+    vel = (observed && known && age == 0) ? tc.point - last : cv::Point2f(0.f, 0.f);
+    age = observed ? 0 : std::min(age + 1, kMaxTipAge);
+    last = tc.point;
+    known = true;
+};
+updateRole(hIdx, predictor.lastHeadPos, predictor.velHead, predictor.headKnown, predictor.headAge);
+updateRole(tIdx, predictor.lastTailPos, predictor.velTail, predictor.tailKnown, predictor.tailAge);
 if (centerline.size() >= 2) {
     const cv::Point2f newC = centerline[centerline.size() / 2];
     if (predictor.hasPrev)
@@ -4054,7 +1764,18 @@ predictor.hasPrev = true;
 if (frameRefLength > 0.f)
     predictor.refDistance = std::max(8.f, 0.5f * frameRefLength);
 
-// CenterlineState carry for next frame's RHR check.
+// Keep the loop orientation of the latest trusted centerline: a clean frame
+// with two visible tips, or a self-crossed route whose ends are both visible
+// and whose length matches the body. Frames with hypothesised ends leave it.
+if ((cleanWithTwoTips && debugRecord.branch == Debug::CenterlineBranch::D1CleanGraphPath) ||
+    routeTrusted) {
+    state.hasOrientationReference = true;
+    state.orientationReference = Centerline::signedTurning(centerline);
+    debugRecord.decisions << QStringLiteral("orientation reference updated to %1")
+                                 .arg(state.orientationReference, 0, 'f', 2);
+}
+
+// Carried previous-frame state.
 prevState.points       = centerline;
 prevState.blobCentroid = blobCentroid(blob);
 prevState.blob         = blob;

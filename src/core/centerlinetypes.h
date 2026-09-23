@@ -184,21 +184,6 @@ struct CenterlineSnakeParams {
     int    nPoints    = 20;     // Number of resampled points along the centerline.
                                 // More points reduce kinking on highly curved bodies
                                 // at the cost of slightly more computation.
-
-    // ── Orientation consistency (right-hand rule) ─────────────────────────
-    // The total signed turning angle of a polyline (∫κ ds, discrete sum of
-    // signed inter-segment angles) is negated when traversal direction is
-    // reversed. We track this quantity from frame to frame and veto any
-    // candidate whose sign disagrees with the previous frame's sign — i.e.
-    // we enforce that the centerline is always traversed head→tail in the
-    // same rotational sense (CCW or CW).
-    //
-    // When the worm is nearly straight the turning angle is close to zero
-    // and the orientation is geometrically ambiguous; the veto is skipped
-    // for frames whose |angle| < orientationAngleThreshold (radians).
-    // 0.5 rad ≈ 29° is a reasonable starting point: it activates once the
-    // worm bends noticeably but stays quiet on straight-body frames.
-    double orientationAngleThreshold = 0.50;  // radians
 };
 
 /**
@@ -219,6 +204,14 @@ struct HeadTailPredictor {
     cv::Point2f velTail      = {0.f, 0.f};
     cv::Point2f velCenter    = {0.f, 0.f};
     float       refDistance  = 30.f;      // Normalising scale for the distance term (~½ body length).
+    // Per-end knowledge. `known` means lastXPos holds a position for that end.
+    // `age` counts frames since the end was last observed as a real tip
+    // (0 = observed in the previous frame); a hypothesised hidden position
+    // never resets it. Velocities are only carried while age is 0.
+    bool        headKnown    = false;
+    bool        tailKnown    = false;
+    int         headAge      = 0;
+    int         tailAge      = 0;
 };
 
 /**

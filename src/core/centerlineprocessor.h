@@ -39,6 +39,10 @@ struct CenterlineFrameContext {
 struct CenterlineSweepState {
     HeadTailPredictor predictor;
     CenterlineState prevState;
+    // Signed turning (head→tail) of the last trusted centerline. Held through a
+    // self-contact so route selection can keep the loop's sense of rotation.
+    bool hasOrientationReference = false;
+    float orientationReference = 0.f;
 };
 
 struct CenterlineFrameRequest {
@@ -67,6 +71,9 @@ struct CenterlineFrameIo {
 
 // Measure the arc length of an ordered centerline polyline.
 float arcLength(const std::vector<cv::Point2f>& points);
+
+// Arc length after resampling to nPoints, the measure the body-length baseline uses.
+float resampledArcLength(const std::vector<cv::Point2f>& points, int nPoints);
 
 // Run the live centerline-analysis pipeline for one worm/frame and update sweep state.
 CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,

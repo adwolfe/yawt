@@ -200,7 +200,7 @@ struct TipCandidate {
     enum class Source : uint8_t {
         SkeletonEndpoint,
         CurvaturePeak,
-        HypothesizedHidden,  // D-3: inferred tip when the other end is occluded
+        HypothesizedHidden,  // S-1: inferred end position when that end is not visible
         BilateralCap,       // legacy value retained for compatibility
         AxisBoundary       // terminal body-axis intersection with contour
     };
@@ -216,7 +216,7 @@ struct TipCandidate {
  * (ring or hidden tip), shared with another worm (merged), or unavailable.
  *
  * Set by detectEndpoints() once per blob per pass; consumed by the
- * centerline-refinement dispatch to pick D-1/D-2/D-3/D-4 branches.
+ * centerline dispatch to pick D-1, S-1, or D-4.
  */
 enum class TopologyState : uint8_t {
     Unknown,        // Default, before classification.

@@ -573,11 +573,11 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
 }
 
 // 2-sweep / 5-step pipeline. docs/centerline_pipeline.md defines the
-// vocabulary (Phase A/B/C, Sweep, Step, D-1..D-4). Structure:
+// vocabulary (Phase A/B/C, Sweep, Step, D-1, D-4, S-0/S-1). Structure:
 //
 //   Sweep 0 — read-only walk over all non-merged, non-lost frames; build a
 //             throwaway skeleton centerline per frame; collect arc lengths;
-//             refLength = median.
+//             refLength = median of resampled lengths (the baseline measure).
 //
 //   Sweep 1 — keyframe-outward bidirectional per-frame loop. Each frame:
 //             Step 1: detectEndpoints() → tip data + topology + assignment.
@@ -586,12 +586,12 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
 //                     blob.centerline.topology. On Clean frames, sample baseline.
 //             Step 2: build centerline.
 //                       Clean    → skeleton-graph Dijkstra head→tail.
-//                       Ring     → synthetic-hole punch + re-skeletonize.
-//                       SC       → skeleton-arc dispatch with optional
-//                                  HypothesizedHidden tip candidate.
+//                       SC       → S-1 route selection (centerlineroutes.cpp),
+//                                  hidden ends stored as HypothesizedHidden;
+//                                  S-0 leaves the frame unresolved.
 //                       fallback → populateCenterlineFromContour (D-4).
 //             Step 3: resample to nPoints.
-//             Step 4: snake refinement (Clean only); right-hand-rule veto.
+//             Step 4: snake refinement (Clean only).
 // Degree-2 Savitzky-Golay smoothing over a 1-D float sequence.
 // Half-window h means we look h samples on each side; boundary samples are unchanged.
 // Formula: c[k] = 3h(h+1) - 1 - 5k^2,  norm = (2h-1)(2h+1)(2h+3)/3
@@ -782,7 +782,8 @@ void CenterlineWorker::doWork()
                 temp.centerline.points.size() >= 2) {
                 std::vector<cv::Point2f> p(temp.centerline.points.begin(),
                                            temp.centerline.points.end());
-                validLengths.push_back(Centerline::arcLength(p));
+                // Same measure as the clean-frame baseline, so the two agree.
+                validLengths.push_back(Centerline::resampledArcLength(p, nPts));
             }
         }
 

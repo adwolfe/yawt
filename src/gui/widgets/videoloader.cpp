@@ -1222,7 +1222,7 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
                     painter.drawRect(QRectF(pt.x() - dotRadius, pt.y() - dotRadius,
                                             dotRadius * 2.0, dotRadius * 2.0));
                 } else {
-                    // Hollow orange square — D-3 hypothesized hidden tip.
+                    // Hollow orange square — hypothesized hidden end (S-1).
                     painter.setBrush(Qt::NoBrush);
                     QPen hypPen(QColor(255, 165, 0), 1.6);
                     hypPen.setCosmetic(true);

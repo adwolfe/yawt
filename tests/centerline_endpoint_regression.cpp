@@ -1,15 +1,18 @@
 #include "core/centerlinegeometry.h"
 #include "core/centerlineprocessor.h"
+#include "core/centerlineroutes.h"
 #include "data/trackingdatastorage.h"
 #include "debug/debugdatastore.h"
 #include "debug/debugexporter.h"
 #include <QCoreApplication>
 #include <opencv2/imgproc.hpp>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include "truncated_head_contours.h"
 #include "visible_cap_contours.h"
 #include "oblique_tail_contours.h"
+#include "self_contact_sequence_contours.h"
 
 static void require(bool ok, const char* message) {
     if (!ok) throw std::runtime_error(message);
@@ -210,6 +213,144 @@ int main(int argc, char** argv) {
             std::cout << "Frame " << 1563 + frame << " selected tail=" << tailTip << '\n';
             require(tailTip.x > 949.5 && tailTip.y > 864.5, "selected tail left the oblique terminal cap");
         }
+        // Self-contact sequences, swept backward from a clean frame as the
+        // worker does. Every self-crossed centerline must fit the learned body
+        // length (or be left unresolved), and each continuously visible end
+        // must keep its role. Ground truth points are that end's skeleton
+        // endpoint, traced frame to frame independently of the pipeline.
+        struct RoleTrace { const char* name; std::vector<std::pair<int, cv::Point2f>> points; };
+        auto runSequence = [&](int firstFrame, int lastFrame, const std::vector<RoleTrace>& traces) {
+            std::map<int, Tracking::DetectedBlob> blobs;
+            Tracking::Track track;
+            for (const auto& seq : selfContactSequence) {
+                if (seq.frame < firstFrame || seq.frame > lastFrame) continue;
+                Tracking::DetectedBlob b;
+                b.isValid = true;
+                b.contourPoints = seq.contour;
+                b.holeContourPoints = seq.holes;
+                const cv::Moments m = cv::moments(seq.contour);
+                b.centroid = {m.m10 / m.m00, m.m01 / m.m00};
+                blobs[seq.frame] = b;
+                Tracking::TrackPoint tp;
+                tp.frameNumber = seq.frame;
+                tp.position = {static_cast<float>(b.centroid.x()), static_cast<float>(b.centroid.y())};
+                tp.quality = Tracking::TrackPointQuality::Single;
+                track.push_back(tp);
+            }
+            Centerline::TipFeatureBaseline baseline;   // worm 5 baseline from the recorded run
+            baseline.meanBodyLength = 39.7182f; baseline.lengthSamples = 1273;
+            baseline.meanAbsCurvature = 0.322216f; baseline.curvatureSamples = 2546;
+            baseline.meanWidth = 0.475839f; baseline.widthSamples = 2546;
+            Centerline::CenterlineFrameContext seqContext = context;
+            seqContext.wormId = 5;
+            seqContext.sortedPoints = &track;
+            seqContext.refLength = baseline.meanBodyLength;
+            Centerline::CenterlineFrameIo seqIo = io;
+            seqIo.getDetectedBlobsForFrame = [&](int f) {
+                QMap<int, Tracking::DetectedBlob> out;
+                if (blobs.count(f)) out.insert(5, blobs[f]);
+                return out;
+            };
+            seqIo.setDetectedBlobForFrame = [&](int f, int, const auto& b) { blobs[f] = b; };
+            seqIo.getTipBaseline = [&](int) { return baseline; };
+            std::map<int, Debug::CenterlineFrameDebug> records;
+            Centerline::CenterlineSweepState seqState;
+            for (int idx = static_cast<int>(track.size()) - 1; idx >= 0; --idx) {
+                const bool bootstrap = idx == static_cast<int>(track.size()) - 1;
+                auto r = Centerline::processFrame(seqContext, {idx, -1, bootstrap}, seqState, seqIo);
+                require(r.processed, "sequence frame was not processed");
+                records[track[idx].frameNumber] = r.debugRecord;
+            }
+            auto roleNear = [&](int f, const cv::Point2f& p) -> char {
+                const auto& cl = blobs[f].centerline;
+                int best = -1;
+                float bestDist = 4.f;
+                for (int k = 0; k < static_cast<int>(cl.tipCandidates.size()); ++k) {
+                    if (cl.tipCandidates[k].source == Tracking::TipCandidate::Source::HypothesizedHidden) continue;
+                    const float d = cv::norm(cl.tipCandidates[k].point - p);
+                    if (d <= bestDist) { bestDist = d; best = k; }
+                }
+                if (best >= 0 && best == cl.headTipIdx) return 'H';
+                if (best >= 0 && best == cl.tailTipIdx) return 'T';
+                return '-';
+            };
+            int unresolved = 0;
+            for (int f = lastFrame; f >= firstFrame; --f) {
+                const auto& rec = records[f];
+                const auto& cl = blobs[f].centerline;
+                const std::vector<cv::Point2f> pts(cl.points.begin(), cl.points.end());
+                const float length = pts.size() >= 2 ? Centerline::resampledArcLength(pts, seqContext.nPts) : 0.f;
+                if (rec.topology == Tracking::TopologyState::SelfCrossed) {
+                    if (pts.size() < 2) ++unresolved;
+                    else require(length >= Centerline::kRouteMinLengthFraction * baseline.meanBodyLength - 0.5f &&
+                                 length <= Centerline::kRouteMaxLengthFraction * baseline.meanBodyLength + 0.5f,
+                                 "self-crossed centerline outside the body-length window");
+                }
+                std::cout << "Frame " << f << ' ' << qPrintable(Debug::centerlineBranchToString(rec.branch))
+                          << " len=" << length;
+                if (pts.size() >= 2) std::cout << " head=" << pts.front() << " tail=" << pts.back();
+                std::cout << '\n';
+            }
+            if (argc > 1) {
+                for (const auto& [f, rec] : records) {
+                    TrackingDataStorage storage;
+                    storage.setDetectedBlobForFrame(f, 5, blobs[f]);
+                    if (blobs.count(f + 1)) storage.setDetectedBlobForFrame(f + 1, 5, blobs[f + 1]);
+                    Debug::DebugDataStore store;
+                    store.setCenterlineFrame(rec);
+                    QString error;
+                    require(Debug::DebugExporter::exportCenterlineFrame(&storage, &store, 5, f,
+                        QString::fromLocal8Bit(argv[1]) + QStringLiteral("/worm5_frame%1").arg(f), &error),
+                        qPrintable(error));
+                }
+            }
+            for (const auto& trace : traces) {
+                const char expected = roleNear(trace.points.front().first, trace.points.front().second);
+                require(expected != '-', "role trace anchor has no role");
+                std::cout << trace.name << " anchor role " << expected << ':';
+                for (const auto& [f, p] : trace.points) {
+                    const char role = roleNear(f, p);
+                    std::cout << ' ' << f << role;
+                    if (role != expected) {
+                        std::cout << '\n';
+                        throw std::runtime_error(std::string(trace.name) + " changed role at frame " + std::to_string(f));
+                    }
+                }
+                std::cout << '\n';
+            }
+            std::cout << "Frames " << firstFrame << '-' << lastFrame << " unresolved self-crossed frames: "
+                      << unresolved << '\n';
+            return unresolved;
+        };
+        // Set 2: the end at the top right of frame 590 stays visible through
+        // the whole omega turn while the other end is hidden in the loop.
+        RoleTrace visibleEnd{"set 543-590 visible end", {
+            {590, {669, 992}}, {589, {669, 995}}, {588, {670, 998}}, {587, {671, 1001}},
+            {585, {680, 1011}}, {584, {683, 1011}}, {583, {683, 1011}}, {582, {682, 1008}},
+            {581, {681, 1008}}, {580, {679, 1009}}, {579, {680, 1013}}, {578, {680, 1013}},
+            {577, {680, 1015}}, {576, {678, 1016}}, {575, {674, 1014}}, {574, {673, 1012}},
+            {573, {674, 1011}}, {572, {674, 1011}}, {571, {673, 1008}}, {570, {675, 1007}},
+            {569, {674, 1007}}, {568, {676, 1005}}, {567, {676, 1004}}, {566, {676, 1003}},
+            {565, {676, 1003}}, {564, {677, 1002}}, {563, {677, 1002}}, {562, {677, 1001}},
+            {561, {677, 1001}}, {560, {678, 1000}}, {559, {679, 1000}}, {558, {679, 1000}},
+            {557, {677, 1001}}, {556, {677, 1001}}, {555, {677, 1001}}, {554, {677, 999}},
+            {553, {678, 998}}, {552, {678, 998}}, {551, {678, 998}}, {550, {677, 999}},
+            {549, {678, 998}}, {548, {677, 998}}, {547, {677, 998}}}};
+        const int unresolvedSet2 = runSequence(543, 590, {visibleEnd});
+        // Set 1: the right end of 791 stays visible until 787; a second visible
+        // stretch runs from 783 to the clean frames at 767-766. Which physical
+        // end reappears after the 786-784 contact is not established, so the
+        // two stretches are checked separately.
+        RoleTrace entering{"set 766-791 entering end", {
+            {791, {616, 988}}, {790, {614, 986}}, {789, {610, 985}}, {788, {606, 984}}, {787, {603, 985}}}};
+        RoleTrace leaving{"set 766-791 leaving end", {
+            {783, {604, 992}}, {782, {603, 996}}, {781, {605, 995}}, {780, {606, 997}},
+            {779, {607, 1001}}, {778, {605, 1005}}, {777, {602, 1004}}, {776, {602, 1004}},
+            {775, {603, 1001}}, {774, {604, 997}}, {773, {606, 996}}, {772, {606, 996}},
+            {771, {607, 996}}, {770, {608, 995}}, {769, {608, 995}}, {768, {607, 994}},
+            {767, {607, 991}}, {766, {607, 991}}}};
+        const int unresolvedSet1 = runSequence(766, 791, {entering, leaving});
+        require(unresolvedSet1 + unresolvedSet2 <= 6, "too many unresolved self-crossed frames");
         std::cout << "Endpoint regression checks passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
