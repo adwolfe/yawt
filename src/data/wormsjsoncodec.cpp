@@ -3,6 +3,10 @@
 #include "../utils/yawtjsonio.h"
 
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QDateTime>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -415,9 +419,39 @@ Document fromJson(const QJsonObject& root)
     return doc;
 }
 
+namespace {
+QString indexPath(const QString& filePath)
+{
+    return filePath + QStringLiteral(".index.json");
+}
+
+void writeWormIndex(const QString& filePath, const QList<int>& ids)
+{
+    const QFileInfo source(filePath);
+    if (!source.exists()) return;
+    QJsonArray array;
+    for (int id : ids) array.append(id);
+    QJsonObject root;
+    root["version"] = 1;
+    root["sourceSize"] = QString::number(source.size());
+    root["sourceModified"] = QString::number(source.lastModified().toMSecsSinceEpoch());
+    root["wormIds"] = array;
+    QSaveFile file(indexPath(filePath));
+    if (file.open(QIODevice::WriteOnly)) {
+        const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Compact);
+        if (file.write(bytes) == bytes.size()) file.commit();
+    }
+}
+} // namespace
+
 bool write(const QString& filePath, const Document& doc, QString* error)
 {
-    return YawtJsonIO::writeCompressedJsonDocument(filePath, QJsonDocument(toJson(doc)), error);
+    if (!YawtJsonIO::writeCompressedJsonDocument(filePath, QJsonDocument(toJson(doc)), error)) return false;
+    QList<int> ids;
+    for (const auto& item : doc.items)
+        if (item.type == TableItems::ItemType::Worm) ids.append(item.id);
+    writeWormIndex(filePath, ids);
+    return true;
 }
 
 bool read(const QString& filePath, Document& outDoc, QString* error)
@@ -464,6 +498,23 @@ QList<TableItems::AnnotationItem> readRoiPoints(const QString& filePath)
 QList<int> readWormIds(const QString& filePath)
 {
     QList<int> ids;
+    const QFileInfo source(filePath);
+    QFile index(indexPath(filePath));
+    if (source.exists() && index.open(QIODevice::ReadOnly)) {
+        const QJsonObject cached = QJsonDocument::fromJson(index.readAll()).object();
+        if (cached.value("version").toInt() == 1
+            && cached.value("sourceSize").toString() == QString::number(source.size())
+            && cached.value("sourceModified").toString() == QString::number(source.lastModified().toMSecsSinceEpoch())
+            && cached.value("wormIds").isArray()) {
+            bool valid = true;
+            for (const auto& value : cached.value("wormIds").toArray()) {
+                if (!value.isDouble()) { valid = false; break; }
+                ids.append(value.toInt());
+            }
+            if (valid) return ids;
+            ids.clear();
+        }
+    }
     QJsonObject root;
     if (!readRoot(filePath, root, nullptr)) return ids;
     for (const QJsonValue& v : root.value("items").toArray()) {
@@ -474,6 +525,11 @@ QList<int> readWormIds(const QString& filePath)
             ids.append(obj.value("id").toInt());
         }
     }
+    // Legacy runs get an index on first discovery; read-only folders simply
+    // fall back to the original document on subsequent scans.
+    const QFileInfo after(filePath);
+    if (after.size() == source.size() && after.lastModified() == source.lastModified())
+        writeWormIndex(filePath, ids);
     return ids;
 }
 

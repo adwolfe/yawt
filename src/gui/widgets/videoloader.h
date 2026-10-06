@@ -28,6 +28,7 @@
 #include <QAtomicInt>
 
 #include <functional>
+#include <memory>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -39,47 +40,7 @@
 // Forward declarations
 class TrackingDataStorage;
 
-// Cached frame structure
-struct CachedFrame {
-    int frameNumber;
-    cv::Mat rawFrame;
-    cv::Mat thresholdedFrame;
-    QDateTime lastAccessed;
-    bool isValid;
-
-    CachedFrame() : frameNumber(-1), isValid(false) {}
-    CachedFrame(int fn, const cv::Mat& raw)
-        : frameNumber(fn), rawFrame(raw), isValid(true), lastAccessed(QDateTime::currentDateTime()) {}
-};
-
-// Thread-safe LRU frame cache
-class FrameCache {
-public:
-    explicit FrameCache(int maxCacheSize = 50);
-    ~FrameCache();
-
-    // Cache operations
-    void insertFrame(int frameNumber, const cv::Mat& frame);
-    bool getFrame(int frameNumber, cv::Mat& outFrame);
-    bool hasFrame(int frameNumber) const;
-    void clear();
-    void setMaxSize(int maxSize);
-
-    // Statistics
-    int size() const;
-    int maxSize() const;
-    double hitRate() const;
-
-private:
-    void evictLRU();
-    void updateAccessTime(int frameNumber);
-
-    mutable QMutex m_mutex;
-    QMap<int, CachedFrame> m_frames;
-    int m_maxSize;
-    mutable QAtomicInt m_hits;
-    mutable QAtomicInt m_requests;
-};
+#include "framecache.h"
 
 // Frame loader declarations moved to a separate header: src/gui/widgets/frameloader.h
 // Forward-declare the worker class here to avoid exposing internal types.
@@ -141,6 +102,7 @@ public:
     bool isVideoLoaded() const;
     int getTotalFrames() const;
     double getFPS() const;
+    double loadedUmPerPixel() const { return m_loadedUmPerPixel; }
     int getCurrentFrameNumber() const;
     QImage getCurrentQImageFrame() const;
     // Return a QImage for an arbitrary frame number. This may consult the internal cache
@@ -149,6 +111,7 @@ public:
     QImage getQImageForFrame(int frameNumber) const;
     // Return a QImage for an arbitrary frame number, loading from disk synchronously if missing
     // and inserting into the cache. Intended for paused/stepped usage.
+    // Returns the cached image, or queues a read and returns null until it arrives.
     QImage getOrLoadQImageForFrame(int frameNumber);
     // Populate the cache with a small sequential window around a center frame.
     void cacheWindowAroundFrame(int centerFrame, int radius);
@@ -189,6 +152,7 @@ public:
 
 public slots:
     // --- Control Slots ---
+    // Returns whether the request was accepted; completion is reported by videoLoaded/videoLoadFailed.
     bool loadVideo(const QString &filePath);
     void play();
     void pause();
@@ -252,7 +216,9 @@ public slots:
 
 signals:
     // --- UI Update Signals ---
+    void videoLoadStarted(const QString& filePath);
     void videoLoaded(const QString& filePath, int totalFrames, double fps, QSize frameSize);
+    void cachedFrameAvailable(int frameNumber);
     void videoLoadFailed(const QString& filePath, const QString& errorMessage);
     void videoProcessingStarted(const QString& message);
     void videoProcessingProgress(int currentStep, int totalSteps, const QString& message);
@@ -307,7 +273,7 @@ private slots:
 
 private:
     // --- Helper Methods ---
-    bool openVideoFile(const QString &filePath);
+    void presentFrame(int frameNumber, const cv::Mat& frame, bool suppressEmit);
     void displayFrame(int frameNumber, bool suppressEmit = false); // Will now consider ViewMode for QImage content
     void convertCvMatToQImage(const cv::Mat &mat, QImage &qimg) const;
     QRectF calculateTargetRect() const;
@@ -330,7 +296,6 @@ private:
     void updateTimerInterval();
     void emitThresholdParametersChanged();
     QColor getTrackColor(int wormId) const; // Used for drawing tracks
-    QString createDataDirectory(const QString& videoFilePath); // Creates "yawt" directory for data storage
     void rebuildCenterlineMidpointCache();
 
     // Frame caching and loading helpers
@@ -340,12 +305,15 @@ private:
     void stopFrameLoader();
 
 private slots:
-    void onFrameLoaded(int frameNumber, cv::Mat frame);
-    void onFrameLoadError(int frameNumber, QString error);
+    void onFrameLoaded(quint64 generation, int frameNumber, cv::Mat frame);
+    void onFrameLoadError(quint64 generation, int frameNumber, QString error);
 
 private:
     // --- OpenCV Video Members ---
-    cv::VideoCapture videoCapture;
+    quint64 m_videoGeneration = 0;
+    bool m_videoReady = false;
+    double m_loadedUmPerPixel = 0.0;
+    bool m_pendingSeekSuppressEmit = false;
     cv::Mat currentCvFrame;          // Holds the raw/original current frame from video
     cv::Mat m_thresholdedFrame_mono; // Holds the binary thresholded version of currentCvFrame
 
@@ -422,7 +390,7 @@ private:
     QString m_dataDirectory;  // Path to the "yawt" directory for data storage
 
     // --- Frame Caching and Background Loading ---
-    FrameCache* m_frameCache;                  // Thread-safe frame cache
+    std::shared_ptr<FrameCache> m_frameCache;                  // Thread-safe frame cache
     FrameLoader* m_frameLoader;                // Background frame loader
     QThread* m_frameLoaderThread;              // Thread for background loading
     int m_lastPreloadCenter;                   // Last center frame for preloading

@@ -241,6 +241,8 @@ GroupTrackXYWidget::GroupTrackXYWidget(AnalysisSessionModel* model, Mode mode, Q
     if (m_model) {
         connect(m_model, &QAbstractItemModel::modelReset,
                 this, &GroupTrackXYWidget::refreshData);
+        connect(m_model, &AnalysisSessionModel::analysisDataReady,
+                this, &GroupTrackXYWidget::refreshData);
         connect(m_model, &AnalysisSessionModel::checkedWormIdsChanged,
                 this, &GroupTrackXYWidget::refreshData);
         refreshData();
@@ -404,6 +406,8 @@ GroupSpeedTimelineWidget::GroupSpeedTimelineWidget(AnalysisSessionModel* model, 
     setMinimumSize(320, 200);
     if (m_model) {
         connect(m_model, &QAbstractItemModel::modelReset,     this, &GroupSpeedTimelineWidget::refreshData);
+        connect(m_model, &AnalysisSessionModel::analysisDataReady,
+                this, &GroupSpeedTimelineWidget::refreshData);
         connect(m_model, &AnalysisSessionModel::checkedWormIdsChanged, this, &GroupSpeedTimelineWidget::refreshData);
         refreshData();
     }
@@ -536,6 +540,8 @@ GroupSpeedBoxWidget::GroupSpeedBoxWidget(AnalysisSessionModel* model, QWidget* p
     setMinimumSize(200, 180);
     if (m_model) {
         connect(m_model, &QAbstractItemModel::modelReset,     this, &GroupSpeedBoxWidget::refreshData);
+        connect(m_model, &AnalysisSessionModel::analysisDataReady,
+                this, &GroupSpeedBoxWidget::refreshData);
         connect(m_model, &AnalysisSessionModel::checkedWormIdsChanged, this, &GroupSpeedBoxWidget::refreshData);
         refreshData();
     }
@@ -632,6 +638,8 @@ GroupReversalWidget::GroupReversalWidget(AnalysisSessionModel* model, QWidget* p
     setMinimumSize(200, 180);
     if (m_model) {
         connect(m_model, &QAbstractItemModel::modelReset,     this, &GroupReversalWidget::refreshData);
+        connect(m_model, &AnalysisSessionModel::analysisDataReady,
+                this, &GroupReversalWidget::refreshData);
         connect(m_model, &AnalysisSessionModel::checkedWormIdsChanged, this, &GroupReversalWidget::refreshData);
         refreshData();
     }

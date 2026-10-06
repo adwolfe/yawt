@@ -74,6 +74,10 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QProgressBar>
+#include <QFutureWatcher>
+#include <QtConcurrent>
+#include "../data/wormsjsoncodec.h"
+#include <memory>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -325,7 +329,7 @@ MainWindow::MainWindow(QWidget *parent)
         connect(m_analysisPanel, &AnalysisPanel::directoryScanStarted,
                 this, [this](int totalSteps) {
                     if (!m_directoryScanProgressBar) return;
-                    m_directoryScanProgressBar->setRange(0, qMax(1, totalSteps));
+                    m_directoryScanProgressBar->setRange(0, totalSteps > 0 ? totalSteps : 0);
                     m_directoryScanProgressBar->setValue(0);
                     m_directoryScanProgressBar->setFormat(QStringLiteral("Scanning %p%"));
                     m_directoryScanProgressBar->setVisible(true);
@@ -334,7 +338,7 @@ MainWindow::MainWindow(QWidget *parent)
         connect(m_analysisPanel, &AnalysisPanel::directoryScanProgress,
                 this, [this](int currentStep, int totalSteps, const QString& message) {
                     if (!m_directoryScanProgressBar) return;
-                    m_directoryScanProgressBar->setRange(0, qMax(1, totalSteps));
+                    m_directoryScanProgressBar->setRange(0, totalSteps > 0 ? totalSteps : 0);
                     m_directoryScanProgressBar->setValue(qBound(0, currentStep, qMax(1, totalSteps)));
                     ui->statusbar->showMessage(message.isEmpty()
                                                    ? QStringLiteral("Scanning analysis directory...")
@@ -479,7 +483,7 @@ void MainWindow::onPixelSizeSpinEditingFinished()
 {
     if (m_currentVideoDataDir.isEmpty() || m_currentVideoBaseName.isEmpty()) return;
     const double umPerPixel = ui->pixelSizeSpinBoxD->value();
-    VideoMetadataStore::saveUmPerPixel(
+    VideoMetadataStore::saveUmPerPixelAsync(
         m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel);
 }
 
@@ -527,7 +531,7 @@ void MainWindow::onVideoScaleMeasured(double pixelLength)
 
         // Persist to this video's metadata JSON immediately.
         if (!m_currentVideoDataDir.isEmpty() && !m_currentVideoBaseName.isEmpty())
-            VideoMetadataStore::saveUmPerPixel(
+            VideoMetadataStore::saveUmPerPixelAsync(
                 m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel);
     }
 
@@ -562,16 +566,32 @@ void MainWindow::setupConnections() {
             this, [this](const QString& dir) {
         if (!m_analysisPanel || dir.isEmpty()) return;
         const QString dataDir = QDir(dir).absoluteFilePath("yawt");
-        if (QDir(dataDir).exists())
-            m_analysisPanel->setDataDirectory(dataDir);
+        m_analysisPanel->setDataDirectory(dataDir);
     });
 
     // VideoLoader basic signals
+    connect(ui->videoLoader, &VideoLoader::videoLoadStarted, this, [this](const QString&) {
+        ++m_runLoadGeneration;
+        ++m_debugExportGeneration;
+        m_debugExportPending = false;
+        disconnect(m_runVideoConnection);
+    });
     connect(ui->videoLoader, &VideoLoader::videoLoaded, this, &MainWindow::initiateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateFrameDisplay);
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, &MainWindow::updateMiniLoaderCrop);
+    connect(ui->videoLoader, &VideoLoader::cachedFrameAvailable, this, [this](int frame) {
+        const int current = ui->videoLoader->getCurrentFrameNumber();
+        if (qAbs(frame - current) <= 2)
+            updateMiniLoaderCrop(current, ui->videoLoader->getCurrentQImageFrame());
+    });
+    connect(ui->videoLoader, &VideoLoader::videoLoadFailed, this,
+            [this](const QString& path, const QString& error) {
+        disconnect(m_runVideoConnection);
+        ++m_runLoadGeneration;
+        QMessageBox::warning(this, "Load Video", QString("Could not load %1:\n%2").arg(path, error));
+    });
     connect(ui->videoLoader, &VideoLoader::frameChanged, this, [this](int, const QImage&) {
-        if (m_debugTabActive) runDebugExport(true);
+        if (m_debugTabActive) { ++m_debugExportGeneration; runDebugExport(true); }
     });
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
     auto* cropCursorLabel = new QLabel(statusBar());
@@ -875,7 +895,7 @@ void MainWindow::setupConnections() {
     // Debug tab auto-export on worm selection change
     connect(ui->wormTableView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, [this](const QItemSelection&, const QItemSelection&) {
-        if (m_debugTabActive) runDebugExport(true);
+        if (m_debugTabActive) { ++m_debugExportGeneration; runDebugExport(true); }
     });
 
     // Playback speed control
@@ -1504,114 +1524,108 @@ void MainWindow::loadRunFromDirectoryPath(const QString& directoryPath) {
 }
 
 bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
-    if (selectedDir.isEmpty()) {
-        return false;
-    }
-
-    QDir runDir(selectedDir);
-    QString wormsPath = runDir.absoluteFilePath("worms.json");
-    QString thresholdPath = runDir.absoluteFilePath("thresholding.json");
-    QString roiPath = runDir.absoluteFilePath("roi_points.json");
-    QStringList trackFiles = runDir.entryList(QStringList() << "*_tracks.csv" << "*_tracks.xlsx", QDir::Files);
-
-    if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath) || trackFiles.isEmpty()) {
-        QMessageBox::warning(this, "Load Run", "Selected folder is missing required files (worms.json, thresholding.json, and a *_tracks.csv or *_tracks.xlsx export).");
-        return false;
-    }
-
-    QDir cursor(runDir);
-    QString yawtPath;
-    while (true) {
-        if (cursor.dirName() == "yawt") {
-            yawtPath = cursor.absolutePath();
-            break;
+    if (selectedDir.isEmpty()) return false;
+    const quint64 generation = ++m_runLoadGeneration;
+    disconnect(m_runVideoConnection);
+    struct LoadedRun {
+        QString error;
+        QString videoPath;
+        QString videoDir;
+        QString runDir;
+        QJsonObject threshold;
+        WormsJson::Document worms;
+        QList<TableItems::AnnotationItem> roi;
+    };
+    auto* watcher = new QFutureWatcher<std::shared_ptr<LoadedRun>>(this);
+    statusBar()->showMessage("Loading run...");
+    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedRun>>::finished, this,
+            [this, watcher, generation]() {
+        const auto run = watcher->result();
+        watcher->deleteLater();
+        if (generation != m_runLoadGeneration) return;
+        if (!run->error.isEmpty()) {
+            QMessageBox::warning(this, "Load Run", run->error);
+            return;
         }
-        if (!cursor.cdUp()) break;
-    }
-    if (yawtPath.isEmpty()) {
-        QMessageBox::warning(this, "Load Run", "Could not locate a parent 'yawt' directory for the selected run.");
-        return false;
-    }
-
-    QDir dataDir(yawtPath);
-    if (!dataDir.cdUp()) {
-        QMessageBox::warning(this, "Load Run", "Could not locate the video directory above 'yawt'.");
-        return false;
-    }
-    QString videoDirPath = dataDir.absolutePath();
-
-    QString videoBaseName = QFileInfo(runDir.absolutePath()).dir().dirName();
-    QDir videoDir(videoDirPath);
-    QString videoPath;
-    QStringList videoFiles = videoDir.entryList(QDir::Files | QDir::Readable);
-    for (const QString& fileName : videoFiles) {
-        QFileInfo fi(videoDir.absoluteFilePath(fileName));
-        if (fi.completeBaseName() == videoBaseName) {
-            videoPath = fi.absoluteFilePath();
-            break;
-        }
-    }
-    if (videoPath.isEmpty()) {
-        QMessageBox::warning(this, "Load Run", "Could not find a video matching the run name in the directory above 'yawt'.");
-        return false;
-    }
-
-    if (ui->videoLoader) {
-        ui->videoLoader->pause();
-    }
-    if (m_trackingDataStorage) {
         m_trackingDataStorage->clearAllData();
-    }
-    if (ui->videoLoader) {
-        ui->videoLoader->updateItemsToDisplay(QList<TableItems::AnnotationItem>());
-        ui->videoLoader->setTracksToDisplay(Tracking::AllWormTracks());
-        ui->videoLoader->setVisibleTrackIDs(QSet<int>());
-    }
-    m_hasCompletedTracking = false;
-
-    ui->dirSelected->setText(QFileInfo(videoDirPath).absoluteFilePath());
-    ui->videoTreeView->setRootDirectory(QFileInfo(videoDirPath).absoluteFilePath());
-
-    if (!ui->videoLoader->loadVideo(videoPath)) {
-        QMessageBox::warning(this, "Load Run", "Failed to load the associated video.");
-        return false;
-    }
-
-    if (!applyThresholdSettingsFromJsonFile(thresholdPath)) {
-        QMessageBox::warning(this, "Load Run", "Failed to load thresholding settings.");
-        return false;
-    }
-
-    if (!m_trackingDataStorage || !m_trackingDataStorage->loadFromWormsJson(wormsPath)) {
-        QMessageBox::warning(this, "Load Run", "Failed to load worms.json.");
-        return false;
-    }
-
-    int loadedKeyFrame = 0;
-    {
-        QJsonParseError err;
-        const QJsonDocument doc = YawtJsonIO::readJsonDocument(wormsPath, &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            loadedKeyFrame = doc.object().value("keyFrame").toInt(0);
+        m_hasCompletedTracking = false;
+        ui->dirSelected->setText(run->videoDir);
+        ui->videoTreeView->setRootDirectory(run->videoDir);
+        if (!ui->videoLoader->loadVideo(run->videoPath)) return;
+        // loadVideo now accepts a request; apply the prepared run only after
+        // the worker has successfully opened the matching video.
+        const quint64 videoGeneration = m_runLoadGeneration;
+        m_runVideoConnection = connect(ui->videoLoader, &VideoLoader::videoLoaded, this,
+                [this, run, videoGeneration](const QString& path, int, double, QSize) {
+            if (videoGeneration != m_runLoadGeneration || path != run->videoPath) return;
+            const int keyFrame = run->worms.keyFrame;
+            applyThresholdSettings(run->threshold);
+            m_trackingDataStorage->applyWormsDocument(std::move(run->worms));
+            m_trackingDataStorage->applyRoiPoints(run->roi);
+            if (m_appController)
+                m_appController->setLoadedRunContext(path, run->runDir, keyFrame);
+            ui->videoLoader->updateItemsToDisplay(m_trackingDataStorage->getAllItems());
+            ui->videoLoader->setTracksToDisplay(m_trackingDataStorage->getAllTracks());
+            ui->videoLoader->setVisibleTrackIDs(m_trackingDataStorage->getAllItemIds());
+            resizeTableColumns();
+            updateWormTimeline();
+            statusBar()->showMessage("Run loaded", 3000);
+        }, Qt::SingleShotConnection);
+    });
+    watcher->setFuture(QtConcurrent::run([selectedDir]() {
+        auto run = std::make_shared<LoadedRun>();
+        const QDir directory(selectedDir);
+        run->runDir = directory.absolutePath();
+        const QString wormsPath = directory.filePath("worms.json");
+        const QString thresholdPath = directory.filePath("thresholding.json");
+        if (!QFileInfo::exists(wormsPath) || !QFileInfo::exists(thresholdPath)
+            || directory.entryList({"*_tracks.csv", "*_tracks.xlsx"}, QDir::Files).isEmpty()) {
+            run->error = "Selected folder is missing required files (worms.json, thresholding.json, and a *_tracks.csv or *_tracks.xlsx export).";
+            return run;
         }
-    }
-    if (m_appController) {
-        m_appController->setLoadedRunContext(videoPath, runDir.absolutePath(), loadedKeyFrame);
-    }
-
-    if (QFileInfo::exists(roiPath)) {
-        if (!m_trackingDataStorage->loadFromRoiJson(roiPath)) {
-            QMessageBox::warning(this, "Load Run", "Failed to load roi_points.json.");
-            return false;
+        QDir cursor(directory);
+        while (cursor.dirName() != "yawt") {
+            if (!cursor.cdUp()) {
+                run->error = "Could not locate a parent 'yawt' directory for the selected run.";
+                return run;
+            }
         }
-    }
-
-    ui->videoLoader->updateItemsToDisplay(m_trackingDataStorage->getAllItems());
-    ui->videoLoader->setTracksToDisplay(m_trackingDataStorage->getAllTracks());
-    ui->videoLoader->setVisibleTrackIDs(m_trackingDataStorage->getAllItemIds());
-
-    resizeTableColumns();
-    updateWormTimeline();
+        cursor.cdUp();
+        run->videoDir = cursor.absolutePath();
+        const QString baseName = QFileInfo(run->runDir).dir().dirName();
+        for (const QString& name : cursor.entryList(QDir::Files | QDir::Readable)) {
+            if (QFileInfo(name).completeBaseName() == baseName) {
+                run->videoPath = cursor.filePath(name);
+                break;
+            }
+        }
+        if (run->videoPath.isEmpty()) {
+            run->error = "Could not find a video matching the run name above 'yawt'.";
+            return run;
+        }
+        QJsonParseError parseError;
+        const auto threshold = YawtJsonIO::readJsonDocument(thresholdPath, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !threshold.isObject()) {
+            run->error = "Failed to load thresholding settings.";
+            return run;
+        }
+        run->threshold = threshold.object();
+        if (!WormsJson::read(wormsPath, run->worms, &run->error)) {
+            if (run->error.isEmpty()) run->error = "Failed to load worms.json.";
+            return run;
+        }
+        const QString roiPath = directory.filePath("roi_points.json");
+        if (QFileInfo::exists(roiPath)) {
+            const auto roi = YawtJsonIO::readJsonDocument(roiPath, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !roi.isObject()) {
+                run->error = "Failed to load roi_points.json.";
+                return run;
+            }
+            for (const auto& item : roi.object().value("items").toArray())
+                if (item.isObject()) run->roi.append(WormsJson::itemFromJson(item.toObject()));
+        }
+        return run;
+    }));
     return true;
 }
 
@@ -1632,15 +1646,9 @@ void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, 
     m_currentVideoBaseName = QFileInfo(filePath).completeBaseName();
     {
         QSignalBlocker blocker(ui->pixelSizeSpinBoxD);
-        double umPerPixel = 0.0;
-        if (!m_currentVideoDataDir.isEmpty()
-            && VideoMetadataStore::loadUmPerPixel(
-                   m_currentVideoDataDir, m_currentVideoBaseName, umPerPixel)) {
-            ui->pixelSizeSpinBoxD->setValue(umPerPixel);
-        } else {
-            ui->pixelSizeSpinBoxD->setValue(0.0);
-        }
+        ui->pixelSizeSpinBoxD->setValue(ui->videoLoader->loadedUmPerPixel());
     }
+    m_lastMiniLoaderFrame = -1;
 
     if (m_analysisPanel) {
         m_analysisPanel->setVideoFps(m_videoFps);
@@ -1697,23 +1705,6 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         return;
     }
 
-    if (!m_isVideoPlaying && ui->videoLoader) {
-        if (m_lastMiniLoaderFrame < 0) {
-            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-        } else if (currentFrameNumber > m_lastMiniLoaderFrame) {
-            if (currentFrameNumber - m_lastMiniLoaderFrame == 1) {
-                if (!ui->videoLoader->prefetchNextSequentialFrame()) {
-                    ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-                }
-            } else {
-                ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-            }
-        } else if (currentFrameNumber < m_lastMiniLoaderFrame) {
-            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-        }
-        m_lastMiniLoaderFrame = currentFrameNumber;
-    }
-
     // Get the crop size from AnnotationTableModel
     QSizeF cropSize = m_annotationTableModel->getCurrentFixedRoiSize();
     if (cropSize.isEmpty()) {
@@ -1761,6 +1752,23 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     top = qBound(0.0, top, currentFrame.height() - cropHeight);
 
     const QPointF cropOffset(left, top);
+    if (!m_isVideoPlaying && ui->videoLoader) {
+        if (m_lastMiniLoaderFrame < 0) {
+            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+        } else if (currentFrameNumber > m_lastMiniLoaderFrame) {
+            if (currentFrameNumber - m_lastMiniLoaderFrame == 1) {
+                if (!ui->videoLoader->prefetchNextSequentialFrame()) {
+                    ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+                }
+            } else {
+                ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+            }
+        } else if (currentFrameNumber < m_lastMiniLoaderFrame) {
+            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
+        }
+        m_lastMiniLoaderFrame = currentFrameNumber;
+    }
+
     QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
                    static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
 
@@ -1834,23 +1842,8 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     }
 }
 
-bool MainWindow::applyThresholdSettingsFromJsonFile(const QString& filePath) {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return false;
-    }
-
-    QByteArray data = file.readAll();
-    file.close();
-
-    QJsonParseError parseError;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        return false;
-    }
-
+bool MainWindow::applyThresholdSettings(const QJsonObject& obj) {
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
-    QJsonObject obj = doc.object();
     settings.algorithm = static_cast<Thresholding::ThresholdAlgorithm>(
         obj.value("algorithm").toInt(static_cast<int>(settings.algorithm)));
     settings.globalThresholdValue = obj.value("globalThresholdValue").toInt(settings.globalThresholdValue);
@@ -2416,69 +2409,89 @@ void MainWindow::runDebugExport(bool silent)
         return;
     }
 
-    const QString videoDir = QDir(dataDir).absoluteFilePath(videoBaseName);
-    const QStringList runDirs = QDir(videoDir).entryList(
-        QStringList() << "PROC_*", QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-    if (runDirs.isEmpty()) {
-        if (!silent) QMessageBox::warning(this, "Export Process",
-            QString("No run directory found under:\n%1\n\nRun tracking first.")
-                .arg(videoDir));
+    if (m_debugExportBusy) {
+        m_debugExportPending = true;
         return;
     }
-
-    const QString outDir = QDir(QDir(videoDir).absoluteFilePath(runDirs.constLast()))
-        .absoluteFilePath(QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
-    if (!QDir().mkpath(outDir)) {
-        if (!silent) QMessageBox::warning(this, "Export Process",
-            QString("Could not create output directory:\n%1").arg(outDir));
+    Debug::DebugExporter::Snapshot snapshot;
+    QString error;
+    if (!Debug::DebugExporter::captureCenterlineFrame(m_trackingDataStorage,
+            m_appController ? m_appController->debugDataStore() : nullptr,
+            wormId, frame, snapshot, &error)) {
+        ui->centerlineDebugStatusLabel->setText(error);
+        if (!silent) QMessageBox::warning(this, "Export Process", error);
         return;
     }
-
+    const quint64 generation = m_debugExportGeneration;
+    m_debugExportBusy = true;
     ui->exportProcessButton->setEnabled(false);
-    ui->centerlineDebugStatusLabel->setText(
-        QString("worm %1  frame %2").arg(wormId).arg(frame));
-    if (!silent) QApplication::processEvents();
-
-    QString err;
-    const bool ok = Debug::DebugExporter::exportCenterlineFrame(
-        m_trackingDataStorage,
-        m_appController ? m_appController->debugDataStore() : nullptr,
-        wormId, frame, outDir, &err);
-
-    ui->exportProcessButton->setEnabled(true);
-    if (ok) {
-        m_debugExportDir = outDir;
-        populateDebugImageTable(outDir);
-    } else {
-        ui->centerlineDebugStatusLabel->setText(QString("Export failed: %1").arg(err));
-        if (!silent) QMessageBox::warning(this, "Export Process",
-            QString("Export failed: %1").arg(err));
-    }
+    ui->centerlineDebugStatusLabel->setText(QString("Exporting worm %1 frame %2...").arg(wormId).arg(frame));
+    struct ExportResult {
+        QString directory;
+        QString error;
+        QStringList files;
+        QHash<QString, QImage> images;
+    };
+    auto* watcher = new QFutureWatcher<ExportResult>(this);
+    connect(watcher, &QFutureWatcher<ExportResult>::finished, this,
+            [this, watcher, generation, wormId, frame, silent]() {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        m_debugExportBusy = false;
+        ui->exportProcessButton->setEnabled(true);
+        if (generation == m_debugExportGeneration) {
+            if (result.error.isEmpty()) {
+                m_debugExportDir = result.directory;
+                m_debugImages = result.images;
+                ui->debugImageTable->clearContents();
+                ui->debugImageTable->setRowCount(result.files.size());
+                for (int i = 0; i < result.files.size(); ++i) {
+                    const QString path = QDir(result.directory).filePath(result.files[i]);
+                    auto* item = new QTableWidgetItem(QFileInfo(result.files[i]).completeBaseName());
+                    item->setData(Qt::UserRole, path);
+                    ui->debugImageTable->setItem(i, 0, item);
+                }
+                ui->debugImageTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+                if (!result.files.isEmpty()) ui->debugImageTable->selectRow(0);
+                ui->centerlineDebugStatusLabel->setText(QString("worm %1  frame %2").arg(wormId).arg(frame));
+            } else {
+                ui->centerlineDebugStatusLabel->setText(result.error);
+                if (!silent) QMessageBox::warning(this, "Export Process", result.error);
+            }
+        }
+        if (m_debugExportPending) {
+            m_debugExportPending = false;
+            if (m_debugTabActive) QTimer::singleShot(0, this, [this]() { runDebugExport(true); });
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([snapshot = std::move(snapshot), dataDir, videoBaseName, wormId, frame]() {
+        ExportResult result;
+        const QDir videoDir(QDir(dataDir).filePath(videoBaseName));
+        const QStringList runs = videoDir.entryList({"PROC_*"}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        if (runs.isEmpty()) {
+            result.error = "No run directory found. Run tracking first.";
+            return result;
+        }
+        result.directory = QDir(videoDir.filePath(runs.constLast()))
+            .filePath(QString("DEBUG/worm%1_frame%2").arg(wormId).arg(frame));
+        try {
+            if (!Debug::DebugExporter::exportCenterlineFrame(snapshot, result.directory, &result.error)) return result;
+            const QDir directory(result.directory);
+            result.files = directory.entryList({"*.png"}, QDir::Files, QDir::Name);
+            for (const QString& file : result.files) {
+                const QString path = directory.filePath(file);
+                result.images.insert(path, QImage(path));
+            }
+        } catch (const cv::Exception& ex) {
+            result.error = QString::fromUtf8(ex.what());
+        }
+        return result;
+    }));
 }
 
 void MainWindow::onExportProcessClicked()
 {
     runDebugExport(false);
-}
-
-void MainWindow::populateDebugImageTable(const QString& dir)
-{
-    ui->debugImageTable->clearContents();
-    ui->debugImageTable->setRowCount(0);
-
-    const QStringList pngFiles = QDir(dir).entryList(
-        QStringList() << "*.png", QDir::Files, QDir::Name);
-
-    ui->debugImageTable->setRowCount(pngFiles.size());
-    for (int i = 0; i < pngFiles.size(); ++i) {
-        auto* item = new QTableWidgetItem(QFileInfo(pngFiles[i]).completeBaseName());
-        item->setData(Qt::UserRole, QDir(dir).absoluteFilePath(pngFiles[i]));
-        ui->debugImageTable->setItem(i, 0, item);
-    }
-    ui->debugImageTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-
-    if (!pngFiles.isEmpty())
-        ui->debugImageTable->selectRow(0);
 }
 
 void MainWindow::onDebugImageTableSelectionChanged()
@@ -2489,7 +2502,7 @@ void MainWindow::onDebugImageTableSelectionChanged()
     const QString path = selected.first()->data(Qt::UserRole).toString();
     if (path.isEmpty()) return;
 
-    const QImage img(path);
+    const QImage img = m_debugImages.value(path);
     if (img.isNull()) return;
 
     ui->miniLoader->updateWithCroppedFrame(
@@ -2500,6 +2513,7 @@ void MainWindow::onDebugImageTableSelectionChanged()
 void MainWindow::onDebugTabChanged(bool active)
 {
     m_debugTabActive = active;
+    ++m_debugExportGeneration;
 
     if (active) {
         runDebugExport(true);

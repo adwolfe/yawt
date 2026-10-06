@@ -3,6 +3,8 @@
 #include <QDir>
 #include <QCoreApplication>
 #include <QStandardPaths>
+#include <QFileInfo>
+#include <QDebug>
 
 QString YawtPaths::userDataDir()
 {
@@ -58,4 +60,43 @@ bool YawtPaths::ensureProjectPluginDir(const QString& dataDir)
 {
     if (dataDir.isEmpty()) return false;
     return QDir().mkpath(projectPluginDir(dataDir));
+}
+
+QString YawtPaths::ensureVideoDataDirectory(const QString& videoFilePath) {
+    QFileInfo videoInfo(videoFilePath);
+    QString videoDirectory = videoInfo.absolutePath();
+    QString dataDirPath = QDir(videoDirectory).absoluteFilePath("yawt");
+
+    // Try to create the directory in the same folder as the video
+    QDir dataDir(dataDirPath);
+    if (!dataDir.exists()) {
+        if (QDir().mkpath(dataDirPath)) {
+            qDebug() << "Created data directory:" << dataDirPath;
+            return dataDirPath;
+        } else {
+            qWarning() << "Failed to create data directory in video folder:" << dataDirPath;
+            qWarning() << "Falling back to user's home directory";
+
+            // Fallback to user's home directory
+            QString homeDirectory = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+            QString fallbackDataDir = QDir(homeDirectory).absoluteFilePath("yawt");
+
+            QDir fallbackDir(fallbackDataDir);
+            if (!fallbackDir.exists()) {
+                if (QDir().mkpath(fallbackDataDir)) {
+                    qDebug() << "Created data directory in home:" << fallbackDataDir;
+                    return fallbackDataDir;
+                } else {
+                    qWarning() << "Failed to create data directory in home folder:" << fallbackDataDir;
+                    return QString(); // Return empty string if all attempts fail
+                }
+            } else {
+                qDebug() << "Using existing data directory in home:" << fallbackDataDir;
+                return fallbackDataDir;
+            }
+        }
+    } else {
+        qDebug() << "Using existing data directory:" << dataDirPath;
+        return dataDirPath;
+    }
 }

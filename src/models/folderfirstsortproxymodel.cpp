@@ -14,22 +14,15 @@ bool FolderFirstSortProxyModel::lessThan(const QModelIndex &source_left, const Q
         return QSortFilterProxyModel::lessThan(source_left, source_right);
     }
 
-    QFileInfo leftFileInfo(model->filePath(source_left));
-    QFileInfo rightFileInfo(model->filePath(source_right));
-
-    // Primary sort: Folders before files
-    if (leftFileInfo.isDir() && !rightFileInfo.isDir()) {
-        return true; // Left (folder) comes before right (file)
-    }
-    if (!leftFileInfo.isDir() && rightFileInfo.isDir()) {
-        return false; // Left (file) comes after right (folder)
-    }
+    const bool leftIsDir = model->isDir(source_left);
+    const bool rightIsDir = model->isDir(source_right);
+    if (leftIsDir != rightIsDir) return leftIsDir;
 
     // Secondary sort: If both are dirs or both are files, sort by the current sort column's data
     // QSortFilterProxyModel handles the actual data comparison based on sortColumn() and sortOrder()
     // and its own lessThan implementation for standard types if we don't override further.
     // For basic alphabetical sorting by name (column 0) when types are the same:
-    if (leftFileInfo.isDir() == rightFileInfo.isDir()) { // Both are folders or both are files
+    if (leftIsDir == rightIsDir) { // Both are folders or both are files
         // Use QFileInfo::fileName() for case-insensitive comparison if desired,
         // or rely on the base class to compare based on the model's data for the sort column.
         // The default QSortFilterProxyModel::lessThan will compare the data provided by

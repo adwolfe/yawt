@@ -1,10 +1,13 @@
 #include "frameloader.h"
-#include "videoloader.h"
+#include "framecache.h"
+#include "../../utils/yawtpaths.h"
 
 #include <QDebug>
 #include "../../utils/loggingcategories.h"
 #include <QMutexLocker>
 #include <QThread>
+#include <QFileInfo>
+#include "../../data/videometadatastore.h"
 #include <algorithm>
 
 // ============================================================================
@@ -17,41 +20,54 @@ FrameLoader::FrameLoader(QObject* parent)
 
 FrameLoader::~FrameLoader() {
     stop();
-    QMutexLocker captureLocker(&m_captureMutex);
     if (m_videoCapture.isOpened()) {
         m_videoCapture.release();
     }
 }
 
-void FrameLoader::setVideoPath(const QString& path) {
-    QMutexLocker queueLocker(&m_queueMutex);
+void FrameLoader::setVideoPath(const QString& path, quint64 generation) {
+    QMutexLocker locker(&m_queueMutex);
     m_requestQueue.clear();
-    queueLocker.unlock();
-
-    // Hold m_captureMutex for the entire release+open to prevent loadFrame()
-    // from accessing m_videoCapture concurrently (it may be called from the
-    // worker thread with m_queueMutex already released).
-    QMutexLocker captureLocker(&m_captureMutex);
-
-    if (m_videoCapture.isOpened()) {
-        m_videoCapture.release();
-    }
-
     m_videoPath = path;
-    if (!path.isEmpty()) {
+    m_generation = generation;
+    m_openPending = true;
+    // Serialize invalidation with worker insertion so an old frame cannot enter
+    // the new video's cache after it has been cleared.
+    if (m_frameCache) m_frameCache->clear();
+    m_waitCondition.wakeOne();
+}
+
+void FrameLoader::openVideo(const QString& path, quint64 generation) {
+    try {
+        m_videoCapture.release();
         if (!m_videoCapture.open(path.toStdString())) {
-            YAWT_WARN(lcGuiVideoLoader) << "FrameLoader: Failed to open video:" << path;
+            emit videoOpenFailed(generation, "Failed to open video file with OpenCV.");
             return;
         }
-        YAWT_INFO(lcGuiVideoLoader) << "FrameLoader: Video opened successfully:" << path;
+        const int count = static_cast<int>(m_videoCapture.get(cv::CAP_PROP_FRAME_COUNT));
+        const QSize size(static_cast<int>(m_videoCapture.get(cv::CAP_PROP_FRAME_WIDTH)),
+                         static_cast<int>(m_videoCapture.get(cv::CAP_PROP_FRAME_HEIGHT)));
+        double fps = m_videoCapture.get(cv::CAP_PROP_FPS);
+        if (fps <= 0) fps = 25.0;
+        if (count <= 0 || size.isEmpty()) {
+            emit videoOpenFailed(generation, "Video has no frames or invalid dimensions.");
+            return;
+        }
+        const QString dataDir = YawtPaths::ensureVideoDataDirectory(path);
+        double umPerPixel = 0.0;
+        if (!dataDir.isEmpty())
+            VideoMetadataStore::loadUmPerPixel(dataDir, QFileInfo(path).completeBaseName(), umPerPixel);
+        emit videoOpened(generation, count, fps, size, dataDir, umPerPixel);
+    } catch (const cv::Exception& ex) {
+        emit videoOpenFailed(generation, QString::fromUtf8(ex.what()));
     }
 }
 
-void FrameLoader::setFrameCache(FrameCache* cache) {
+void FrameLoader::setFrameCache(std::shared_ptr<FrameCache> cache) {
     // Store a pointer to the shared FrameCache so the loader thread can
     // insert loaded frames directly into the cache without involving the UI thread.
     QMutexLocker locker(&m_queueMutex);
-    m_frameCache = cache;
+    m_frameCache = std::move(cache);
     YAWT_DEBUG(lcGuiVideoLoader) << "FrameLoader: frame cache set:" << (m_frameCache != nullptr);
 }
 
@@ -97,11 +113,10 @@ void FrameLoader::requestSingleFrame(int frameNumber, int priority) {
         return;
     }
 
-    // Avoid duplicate requests
-    for (const FrameLoadRequest& req : m_requestQueue) {
-        if (req.frameNumber == frameNumber) {
-            return;
-        }
+    for (auto it = m_requestQueue.begin(); it != m_requestQueue.end();) {
+        if (it->frameNumber == frameNumber || (priority >= 100 && it->priority >= 100))
+            it = m_requestQueue.erase(it);
+        else ++it;
     }
 
     m_requestQueue.enqueue(FrameLoadRequest(frameNumber, priority));
@@ -123,72 +138,55 @@ void FrameLoader::stop() {
 }
 
 void FrameLoader::processRequests() {
-    YAWT_INFO(lcGuiVideoLoader) << "FrameLoader: Started processing requests";
     m_isProcessing = true;
-
-    while (!m_stopRequested) {
+    for (;;) {
         QMutexLocker locker(&m_queueMutex);
-
-        if (m_requestQueue.isEmpty()) {
-            m_waitCondition.wait(&m_queueMutex, 1000); // Wait up to 1 second
+        if (m_stopRequested) break;
+        if (m_openPending) {
+            const QString path = m_videoPath;
+            const quint64 generation = m_generation;
+            m_openPending = false;
+            locker.unlock();
+            openVideo(path, generation);
             continue;
         }
-
-        // Sort queue by priority
-        QList<FrameLoadRequest> requests;
-        while (!m_requestQueue.isEmpty()) {
-            requests.append(m_requestQueue.dequeue());
+        if (m_requestQueue.isEmpty()) {
+            m_waitCondition.wait(&m_queueMutex);
+            continue;
         }
-        std::sort(requests.begin(), requests.end(), std::greater<FrameLoadRequest>());
-
-        // Process highest priority request
-        FrameLoadRequest request = requests.first();
-        requests.removeFirst();
-
-        // Put remaining requests back
-        for (const auto& req : requests) {
-            m_requestQueue.enqueue(req);
-        }
-
+        auto best = std::max_element(m_requestQueue.begin(), m_requestQueue.end());
+        const FrameLoadRequest request = *best;
+        m_requestQueue.erase(best);
+        const quint64 generation = m_generation;
         locker.unlock();
-
-        // Load the frame (outside of lock)
-        loadFrame(request.frameNumber);
-
-        // Small delay to prevent overwhelming the system
-        QThread::msleep(5);
+        loadFrame(request.frameNumber, generation);
     }
-
+    m_videoCapture.release();
     m_isProcessing = false;
-    YAWT_INFO(lcGuiVideoLoader) << "FrameLoader: Stopped processing requests";
 }
 
-void FrameLoader::loadFrame(int frameNumber) {
-    QMutexLocker captureLocker(&m_captureMutex);
-
-    if (!m_videoCapture.isOpened() || frameNumber < 0) {
-        emit frameLoadError(frameNumber, "Video not opened or invalid frame number");
-        return;
-    }
-
+void FrameLoader::loadFrame(int frameNumber, quint64 generation) {
     try {
-        if (!m_videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
-            emit frameLoadError(frameNumber, "Failed to seek to frame");
+        if (!m_videoCapture.isOpened() || frameNumber < 0) {
+            emit frameLoadError(generation, frameNumber, "Video not opened or invalid frame number");
             return;
         }
-
-        cv::Mat frame;
-        if (m_videoCapture.read(frame) && !frame.empty()) {
-            captureLocker.unlock(); // Release before potentially expensive cache/signal work
-            if (m_frameCache) {
-                m_frameCache->insertFrame(frameNumber, frame);
-            }
-
-            emit frameLoaded(frameNumber, frame);
-        } else {
-            emit frameLoadError(frameNumber, "Failed to read frame");
+        // Sequential reads avoid seeking back to a keyframe for every frame.
+        if (static_cast<int>(m_videoCapture.get(cv::CAP_PROP_POS_FRAMES)) != frameNumber
+            && !m_videoCapture.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(frameNumber))) {
+            emit frameLoadError(generation, frameNumber, "Failed to seek to frame");
+            return;
         }
+        cv::Mat frame;
+        if (!m_videoCapture.read(frame) || frame.empty()) {
+            emit frameLoadError(generation, frameNumber, "Failed to read frame");
+            return;
+        }
+        QMutexLocker locker(&m_queueMutex);
+        if (generation != m_generation || m_stopRequested) return;
+        if (m_frameCache) m_frameCache->insertFrame(frameNumber, frame);
+        emit frameLoaded(generation, frameNumber, frame);
     } catch (const cv::Exception& ex) {
-        emit frameLoadError(frameNumber, QString("OpenCV exception: %1").arg(ex.what()));
+        emit frameLoadError(generation, frameNumber, QString::fromUtf8(ex.what()));
     }
 }

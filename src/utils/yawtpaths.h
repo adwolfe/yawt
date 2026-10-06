@@ -33,6 +33,10 @@ public:
      */
     static QStringList pluginSearchDirs(const QString& dataDir = {});
 
+    /** Create the data folder beside a video, falling back to the home folder.
+     *  Call from a worker: checking/creating directories may block. */
+    static QString ensureVideoDataDirectory(const QString& videoFilePath);
+
     /** Create the user data and user plugin directories. Returns true if both exist. */
     static bool ensureUserDirsExist();
 

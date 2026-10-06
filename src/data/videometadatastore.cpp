@@ -6,6 +6,50 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDebug>
+#include <QSaveFile>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QThreadPool>
+#include <QFuture>
+#include <QtConcurrent>
+#include <functional>
+
+namespace {
+QMutex writeMutex;
+
+struct MetadataWriter {
+    QThreadPool pool;
+    QMutex mutex;
+    QFuture<void> lastWrite;
+    MetadataWriter() { pool.setMaxThreadCount(1); }
+    ~MetadataWriter() { pool.waitForDone(); }
+};
+
+MetadataWriter& writer()
+{
+    static MetadataWriter instance;
+    return instance;
+}
+
+void queueWrite(std::function<bool()> save)
+{
+    auto& state = writer();
+    QMutexLocker locker(&state.mutex);
+    state.lastWrite = QtConcurrent::run(&state.pool, [save = std::move(save)]() {
+        if (!save()) qWarning() << "[VideoMetadataStore] Could not save metadata";
+    });
+}
+
+// Readers used by discovery/opening run on workers and must see earlier saves.
+void waitForPendingWrites()
+{
+    auto& state = writer();
+    QMutexLocker locker(&state.mutex);
+    auto lastWrite = state.lastWrite;
+    locker.unlock();
+    lastWrite.waitForFinished();
+}
+} // namespace
 
 static QJsonObject readRoot(const QString& path)
 {
@@ -19,11 +63,11 @@ static QJsonObject readRoot(const QString& path)
 
 static bool writeRoot(const QString& path, const QJsonObject& root)
 {
-    QFileInfo(path).dir().mkpath(".");   // ensure directory exists
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    return true;
+    if (!QFileInfo(path).dir().mkpath(".")) return false;
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    return file.write(bytes) == bytes.size() && file.commit();
 }
 
 QString VideoMetadataStore::metadataPath(const QString& dataDir,
@@ -53,6 +97,7 @@ bool VideoMetadataStore::saveScale(const QString& dataDir,
                                     const QString& videoBaseName,
                                     const ScaleCalibration& cal)
 {
+    QMutexLocker locker(&writeMutex);
     const QString path = metadataPath(dataDir, videoBaseName);
 
     // Read existing root so we don't clobber other sections.
@@ -92,6 +137,7 @@ bool VideoMetadataStore::saveUmPerPixel(const QString& dataDir,
                                          const QString& videoBaseName,
                                          double umPerPixel)
 {
+    QMutexLocker locker(&writeMutex);
     const QString path = metadataPath(dataDir, videoBaseName);
     QJsonObject root = readRoot(path);
     root["version"]    = 1;
@@ -107,6 +153,7 @@ bool VideoMetadataStore::loadUmPerPixel(const QString& dataDir,
                                          const QString& videoBaseName,
                                          double& umPerPixel)
 {
+    waitForPendingWrites();
     const QString path = metadataPath(dataDir, videoBaseName);
     QJsonObject root = readRoot(path);
     if (root.isEmpty()) return false;
@@ -127,6 +174,7 @@ bool VideoMetadataStore::saveFps(const QString& dataDir,
                                   const QString& videoBaseName,
                                   double fps)
 {
+    QMutexLocker locker(&writeMutex);
     if (fps <= 0) return false;
     const QString path = metadataPath(dataDir, videoBaseName);
     QJsonObject root = readRoot(path);
@@ -174,4 +222,33 @@ bool VideoMetadataStore::loadScale(const QString& dataDir,
     cal.timestamp     = QDateTime::fromString(
                             scale.value("timestamp").toString(), Qt::ISODate);
     return cal.isValid();
+}
+
+void VideoMetadataStore::loadAnalysisMetadata(const QString& dataDir, const QString& videoBaseName,
+                                               double& umPerPixel, double& fps)
+{
+    waitForPendingWrites();
+    const QJsonObject root = readRoot(metadataPath(dataDir, videoBaseName));
+    umPerPixel = root.value("umPerPixel").toDouble();
+    if (!root.contains("umPerPixel")) {
+        const double legacy = root.value("pixelSizeUm").toDouble();
+        umPerPixel = legacy > 0 ? 1.0 / legacy : 0.0;
+    }
+    if (umPerPixel <= 0) umPerPixel = 0.0;
+    fps = root.value("fps").toDouble();
+    if (fps <= 0) fps = 0.0;
+}
+
+void VideoMetadataStore::saveScaleAsync(const QString& dataDir, const QString& videoBaseName,
+                                       const ScaleCalibration& cal)
+{
+    queueWrite([dataDir, videoBaseName, cal]() { return saveScale(dataDir, videoBaseName, cal); });
+}
+
+void VideoMetadataStore::saveUmPerPixelAsync(const QString& dataDir, const QString& videoBaseName,
+                                            double umPerPixel)
+{
+    queueWrite([dataDir, videoBaseName, umPerPixel]() {
+        return saveUmPerPixel(dataDir, videoBaseName, umPerPixel);
+    });
 }

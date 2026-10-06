@@ -107,6 +107,9 @@ bool writeRoiPoints(const QString& filePath, const QString& videoPath, int keyFr
 QList<TableItems::AnnotationItem> readRoiPoints(const QString& filePath);
 
 // ── Light readers for the Analysis tab ───────────────────────────────────────
+// Reads a small optional <filePath>.index.json sidecar, validated by source size
+// and modification time. Legacy runs fall back to the full document and gain an
+// index when writable. Failure to write an index never prevents loading.
 QList<int>              readWormIds(const QString& filePath);
 Tracking::AllWormTracks readTracks(const QString& filePath);    // no blob geometry materialised
 QJsonObject             readMergeState(const QString& filePath); // empty when absent

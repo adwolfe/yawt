@@ -1,3 +1,5 @@
+#include <QFutureWatcher>
+#include <QtConcurrent>
 #include "analysispanel.h"
 #include "analysissessionmodel.h"
 #include "analysisgroupwidgets.h"
@@ -177,6 +179,12 @@ void AnalysisPanel::setup(const Widgets& widgets)
             this, &AnalysisPanel::directoryScanProgress);
     connect(m_sessionModel, &AnalysisSessionModel::directoryScanFinished,
             this, &AnalysisPanel::directoryScanFinished);
+    connect(m_sessionModel, &AnalysisSessionModel::directoryScanFinished, this, [this]() {
+        if (!w.wormListView) return;
+        w.wormListView->collapseAll();
+        for (int i = 0; i < m_sessionModel->rowCount(); ++i)
+            w.wormListView->expand(m_sessionModel->index(i, 0));
+    });
 
     // When any worm's check state changes, forward to plots
     connect(m_sessionModel, &AnalysisSessionModel::checkedWormIdsChanged,
@@ -227,19 +235,28 @@ void AnalysisPanel::setDataDirectory(const QString& dataDir, bool forceRescan)
 
     m_dataDir = dataDir;
     m_sessionModel->scanDataDirectory(dataDir);
-    if (w.wormListView) {
-        w.wormListView->collapseAll();
-        const int groupCount = m_sessionModel->rowCount();
-        for (int i = 0; i < groupCount; ++i)
-            w.wormListView->expand(m_sessionModel->index(i, 0));
-    }
     loadPlugins();
 }
 
 void AnalysisPanel::loadPlugins()
 {
     if (!w.plotSelector) return;
+    const quint64 generation = ++m_pluginGeneration;
+    const QString dataDir = m_dataDir;
+    auto* watcher = new QFutureWatcher<QList<PlotPluginSpec>>(this);
+    connect(watcher, &QFutureWatcher<QList<PlotPluginSpec>>::finished, this,
+            [this, watcher, generation]() {
+        const auto plugins = watcher->future().takeResult();
+        watcher->deleteLater();
+        if (generation == m_pluginGeneration) applyPlugins(plugins);
+    });
+    watcher->setFuture(QtConcurrent::run([dataDir]() {
+        return PluginLoader::loadAll(YawtPaths::pluginSearchDirs(dataDir));
+    }));
+}
 
+void AnalysisPanel::applyPlugins(const QList<PlotPluginSpec>& loadedPlugins)
+{
     // Close and remove any existing plugin sub-windows
     for (auto* sw : m_pluginSubWindows.values()) {
         if (sw && w.mdiArea) w.mdiArea->removeSubWindow(sw);
@@ -251,9 +268,6 @@ void AnalysisPanel::loadPlugins()
     while (w.plotSelector->count() > kPlotCount)
         delete w.plotSelector->takeItem(kPlotCount);
 
-    // Load plugins from all search dirs (project > user > bundled)
-    const QStringList searchDirs = YawtPaths::pluginSearchDirs(m_dataDir);
-    const QList<PlotPluginSpec> loadedPlugins = PluginLoader::loadAll(searchDirs);
     m_plugins.clear();
 
     // Add valid plugins to the selector with a separator label first

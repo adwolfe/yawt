@@ -3,10 +3,8 @@
 #include "../data/wormsjsoncodec.h"
 #include "../utils/yawtjsonio.h"
 
-#include <QCoreApplication>
 #include <QDataStream>
 #include <QDir>
-#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -17,6 +15,9 @@
 #include <QMimeData>
 #include <QPixmap>
 #include <QTimer>
+#include <QFutureWatcher>
+#include <QtConcurrent>
+#include <QSaveFile>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Static helpers
@@ -47,51 +48,6 @@ Tracking::AllWormTracks AnalysisSessionModel::loadTracksFromJson(const QString& 
 {
     // Sorted by frame; blob geometry is not materialised (see WormsJson::readTracks).
     return WormsJson::readTracks(wormsJsonPath);
-}
-
-/**
- * Build the list of human-readable warnings for a video run.
- * Currently checks:
- *  1. Pixel scale missing (umPerPixel == 0)
- *  2. Start point or end point absent from roi_points.json
- */
-QStringList AnalysisSessionModel::buildWarnings(const QString& runDir,
-                                                const QString& dataDir,
-                                                const QString& baseName,
-                                                double umPerPixel)
-{
-    QStringList warnings;
-
-    if (umPerPixel <= 0.0)
-        warnings << "No pixel scale set (µm/pixel is unknown)";
-
-    // Check roi_points.json for StartPoint and EndPoint
-    const QString roiPath = QDir(runDir).absoluteFilePath("roi_points.json");
-    QFile f(roiPath);
-    if (!f.open(QIODevice::ReadOnly)) {
-        warnings << "Missing start point and end point (roi_points.json not found)";
-    } else {
-        QJsonParseError err;
-        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        bool hasStart = false, hasEnd = false;
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            for (const QJsonValue& v : doc.object().value("items").toArray()) {
-                const QString type = v.toObject().value("type").toString();
-                if (type == "Start Point") hasStart = true;
-                if (type == "End Point")   hasEnd   = true;
-            }
-        }
-        if (!hasStart && !hasEnd)
-            warnings << "Missing start point and end point";
-        else if (!hasStart)
-            warnings << "Missing start point";
-        else if (!hasEnd)
-            warnings << "Missing end point";
-    }
-
-    Q_UNUSED(dataDir)
-    Q_UNUSED(baseName)
-    return warnings;
 }
 
 void AnalysisSessionModel::loadRoiReferencePoints(RunItem& vid)
@@ -145,9 +101,8 @@ QString AnalysisSessionModel::stateFilePath(const QString& dataDir)
     return QDir(dataDir).absoluteFilePath("analysis_state.json");
 }
 
-void AnalysisSessionModel::saveState() const
+QJsonObject AnalysisSessionModel::stateJson() const
 {
-    if (m_dataDir.isEmpty()) return;
 
     QJsonArray groupsArr;
     for (const auto& g : m_groups) {
@@ -173,9 +128,20 @@ void AnalysisSessionModel::saveState() const
     root["version"] = 1;
     root["groups"]  = groupsArr;
 
-    QFile f(stateFilePath(m_dataDir));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return root;
+}
+
+void AnalysisSessionModel::saveState()
+{
+    if (m_dataDir.isEmpty() || m_loadedDataDir != m_dataDir) return;
+    const QString path = stateFilePath(m_dataDir);
+    const QByteArray bytes = QJsonDocument(stateJson()).toJson(QJsonDocument::Indented);
+    // Only values cross the thread boundary; never access the live model there.
+    m_lastSave = QtConcurrent::run(&m_savePool, [path, bytes]() {
+        QSaveFile file(path);
+        if (file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size())
+            file.commit();
+    });
 }
 
 void AnalysisSessionModel::scheduleStateSave()
@@ -199,25 +165,11 @@ void AnalysisSessionModel::scheduleStateSave()
  *  - A disk video not in the state at all is added to "Unassigned".
  */
 void AnalysisSessionModel::loadAndMergeState(
-    const QString& dataDir,
-    const QMap<QString, QPair<QString,QString>>& diskVideos)
+    QMap<QString, RunItem> diskVideos,
+    const QJsonObject& root)
 {
-    // ── Load state file ───────────────────────────────────────────────────────
-    QJsonObject root;
-    {
-        QFile f(stateFilePath(dataDir));
-        if (f.open(QIODevice::ReadOnly)) {
-            QJsonParseError err;
-            const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-            if (err.error == QJsonParseError::NoError && doc.isObject())
-                root = doc.object();
-        }
-    }
-
     // Track which disk videos have been placed somewhere
     QSet<QString> placed;
-    int processedVideos = 0;
-    const int totalVideos = qMax(1, diskVideos.size());
 
     if (!root.isEmpty()) {
         // ── Restore groups from state ─────────────────────────────────────────
@@ -238,26 +190,13 @@ void AnalysisSessionModel::loadAndMergeState(
                 // Does this video still exist on disk?
                 if (!diskVideos.contains(baseName)) continue;
 
-                const auto& [diskRunDir, diskStamp] = diskVideos[baseName];
+                RunItem vid = diskVideos.take(baseName);
+                const QString diskStamp = vid.runStamp;
                 placed.insert(baseName);
-                emit directoryScanProgress(++processedVideos,
-                                           totalVideos,
-                                           QStringLiteral("Loading %1").arg(baseName));
-                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
-
-                // Load the worms.json for the current (possibly updated) proc
-                const QString wormsJson = QDir(diskRunDir).absoluteFilePath("worms.json");
-                const QList<int> wormIds = parseWormIds(wormsJson);
-                if (wormIds.isEmpty()) continue;
-
-                RunItem vid;
-                vid.baseName  = baseName;
-                vid.runDir   = diskRunDir;
-                vid.runStamp = diskStamp;
-                VideoMetadataStore::loadUmPerPixel(dataDir, baseName, vid.umPerPixel);
-                VideoMetadataStore::loadFps(dataDir, baseName, vid.fps);
-                vid.warnings  = buildWarnings(diskRunDir, dataDir, baseName, vid.umPerPixel);
-                loadRoiReferencePoints(vid);
+                const QList<WormItem> discoveredWorms = vid.worms;
+                vid.worms.clear();
+                QList<int> wormIds;
+                for (const auto& worm : discoveredWorms) wormIds.append(worm.id);
 
                 const bool reprocessed = (diskStamp != savedStamp);
 
@@ -293,29 +232,13 @@ void AnalysisSessionModel::loadAndMergeState(
     }
 
     // ── Add any disk videos not yet placed → Unassigned ──────────────────────
-    for (auto it = diskVideos.constBegin(); it != diskVideos.constEnd(); ++it) {
+    for (auto it = diskVideos.begin(); it != diskVideos.end(); ++it) {
         if (placed.contains(it.key())) continue;
 
-        const QString& baseName   = it.key();
-        const QString& diskRunDir = it.value().first;
-        const QString& diskStamp  = it.value().second;
-        emit directoryScanProgress(++processedVideos,
-                                   totalVideos,
-                                   QStringLiteral("Loading %1").arg(baseName));
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
-
-        const QString wormsJson = QDir(diskRunDir).absoluteFilePath("worms.json");
-        const QList<int> wormIds = parseWormIds(wormsJson);
-        if (wormIds.isEmpty()) continue;
-
-        RunItem vid;
-        vid.baseName  = baseName;
-        vid.runDir   = diskRunDir;
-        vid.runStamp = diskStamp;
-        VideoMetadataStore::loadUmPerPixel(dataDir, baseName, vid.umPerPixel);
-        VideoMetadataStore::loadFps(dataDir, baseName, vid.fps);
-        vid.warnings  = buildWarnings(diskRunDir, dataDir, baseName, vid.umPerPixel);
-        loadRoiReferencePoints(vid);
+        RunItem vid = std::move(it.value());
+        QList<int> wormIds;
+        for (const auto& worm : vid.worms) wormIds.append(worm.id);
+        vid.worms.clear();
 
         for (int i = 0; i < wormIds.size(); ++i) {
             WormItem w;
@@ -337,6 +260,7 @@ AnalysisSessionModel::AnalysisSessionModel(QObject* parent)
     : QAbstractItemModel(parent)
 {
     m_groups.append(AnalysisGroup{"Unassigned", {}});
+    m_savePool.setMaxThreadCount(1);
 
     // Debounce timer for saving check-state changes
     m_saveTimer = new QTimer(this);
@@ -344,46 +268,107 @@ AnalysisSessionModel::AnalysisSessionModel(QObject* parent)
     connect(m_saveTimer, &QTimer::timeout, this, &AnalysisSessionModel::saveState);
 }
 
+AnalysisSessionModel::~AnalysisSessionModel()
+{
+    if (m_scanCancelled) m_scanCancelled->store(true);
+    if (m_saveTimer->isActive()) saveState();
+    m_savePool.waitForDone();
+}
+
 void AnalysisSessionModel::scanDataDirectory(const QString& dataDir)
 {
-    m_dataDir = dataDir;
-
-    // ── Build disk inventory: baseName → (runDir, runStamp) ────────────────
-    QMap<QString, QPair<QString,QString>> diskVideos;
-    const QStringList videoDirs = QDir(dataDir).entryList(
-        QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
-
-    emit directoryScanStarted(qMax(1, videoDirs.size()));
-    int scannedDirs = 0;
-    for (const QString& baseName : videoDirs) {
-        emit directoryScanProgress(++scannedDirs,
-                                   qMax(1, videoDirs.size()),
-                                   QStringLiteral("Scanning %1").arg(baseName));
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 10);
-
-        const QString subDir  = QDir(dataDir).absoluteFilePath(baseName);
-        const QString runDir = findMostRecentRun(subDir);
-        if (runDir.isEmpty()) continue;
-        const QString stamp   = QFileInfo(runDir).fileName().mid(5); // strip "PROC_"
-        diskVideos[baseName]  = {runDir, stamp};
+    if (m_scanCancelled) m_scanCancelled->store(true);
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
+    m_scanCancelled = cancelled;
+    const bool sameDirectory = dataDir == m_dataDir && dataDir == m_loadedDataDir;
+    if (!sameDirectory) {
+        if (m_saveTimer->isActive()) saveState();
+        m_saveTimer->stop();
+        m_loadedDataDir.clear();
+        beginResetModel();
+        m_groups = {AnalysisGroup{"Unassigned", {}}};
+        ++m_dataRevision;
+        endResetModel();
     }
+    m_dataDir = dataDir;
+    const quint64 generation = ++m_scanGeneration;
+    emit directoryScanStarted(0); // Indeterminate until the worker finishes discovery.
 
-    emit directoryScanStarted(qMax(1, diskVideos.size()));
-
-    // ── Merge with saved state (preserves group assignments) ─────────────────
-    beginResetModel();
-    loadAndMergeState(dataDir, diskVideos);
-
-    // Recalculate colors for every group
-    for (int g = 0; g < m_groups.size(); ++g)
-        recalcGroupColors(g);
-
-    ++m_dataRevision;
-    endResetModel();
-    emit directoryScanFinished();
-
-    // Persist the (possibly updated) state immediately
-    saveState();
+    struct ScanResult {
+        QMap<QString, RunItem> runs;
+        QJsonObject state;
+    };
+    auto* watcher = new QFutureWatcher<ScanResult>(this);
+    connect(watcher, &QFutureWatcher<ScanResult>::finished, this,
+            [this, watcher, generation, sameDirectory]() {
+        ScanResult result = watcher->future().takeResult();
+        watcher->deleteLater();
+        if (generation != m_scanGeneration) return;
+        // Preserve edits made while a refresh was running, plus loaded tracks
+        // whose source file has not changed.
+        const QJsonObject state = sameDirectory ? stateJson() : result.state;
+        for (auto& group : m_groups) {
+            for (auto& previous : group.videos) {
+                auto it = result.runs.find(previous.baseName);
+                if (it != result.runs.end() && it->runDir == previous.runDir
+                    && it->sourceSize == previous.sourceSize
+                    && it->sourceModified == previous.sourceModified) {
+                    it->tracks = std::move(previous.tracks);
+                    it->tracksLoaded = previous.tracksLoaded;
+                }
+            }
+        }
+        beginResetModel();
+        loadAndMergeState(std::move(result.runs), state);
+        for (int g = 0; g < m_groups.size(); ++g) recalcGroupColors(g);
+        ++m_dataRevision;
+        m_loadedDataDir = m_dataDir;
+        endResetModel();
+        emit directoryScanFinished();
+        emit analysisDataReady();
+        scheduleStateSave();
+    });
+    // Wait for the last queued state write in the worker, never on the GUI.
+    QFuture<void> lastSave = m_lastSave;
+    watcher->setFuture(QtConcurrent::run([dataDir, cancelled, lastSave]() mutable {
+        ScanResult result;
+        if (cancelled->load()) return result;
+        lastSave.waitForFinished();
+        if (cancelled->load()) return result;
+        QFile stateFile(stateFilePath(dataDir));
+        if (stateFile.open(QIODevice::ReadOnly))
+            result.state = QJsonDocument::fromJson(stateFile.readAll()).object();
+        const QDir directory(dataDir);
+        const QStringList videoDirs = directory.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QString& baseName : videoDirs) {
+            if (cancelled->load()) return result;
+            const QString runDir = findMostRecentRun(directory.absoluteFilePath(baseName));
+            if (runDir.isEmpty()) continue;
+            const QString wormsPath = QDir(runDir).absoluteFilePath("worms.json");
+            const QList<int> ids = parseWormIds(wormsPath);
+            if (ids.isEmpty()) continue;
+            RunItem vid;
+            vid.baseName = baseName;
+            vid.runDir = runDir;
+            vid.runStamp = QFileInfo(runDir).fileName().mid(5);
+            const QFileInfo source(wormsPath);
+            vid.sourceSize = source.size();
+            vid.sourceModified = source.lastModified().toMSecsSinceEpoch();
+            VideoMetadataStore::loadAnalysisMetadata(dataDir, baseName, vid.umPerPixel, vid.fps);
+            loadRoiReferencePoints(vid);
+            if (vid.umPerPixel <= 0) vid.warnings << "No pixel scale set (µm/pixel is unknown)";
+            if (!vid.hasStartPoint && !vid.hasEndPoint) vid.warnings << "Missing start point and end point";
+            else if (!vid.hasStartPoint) vid.warnings << "Missing start point";
+            else if (!vid.hasEndPoint) vid.warnings << "Missing end point";
+            for (int id : ids) {
+                WormItem worm;
+                worm.id = id;
+                vid.worms.append(worm);
+            }
+            result.runs.insert(baseName, std::move(vid));
+        }
+        return result;
+    }));
 }
 
 void AnalysisSessionModel::addGroup(const QString& name)
@@ -436,10 +421,44 @@ AnalysisSessionModel::getGroupedData() const
         gd.name = g.name;
 
         for (const auto& vid : g.videos) {
+            const bool anyChecked = std::any_of(vid.worms.begin(), vid.worms.end(),
+                                               [](const WormItem& w) { return w.checked; });
+            if (!anyChecked) continue;
             if (!vid.tracksLoaded) {
                 const QString wormsJson = QDir(vid.runDir).absoluteFilePath("worms.json");
-                vid.tracks = loadTracksFromJson(wormsJson);
-                vid.tracksLoaded = true;
+                const QString pendingKey = wormsJson + QString::number(vid.sourceModified)
+                    + ":" + QString::number(vid.sourceSize);
+                if (!m_tracksPending.contains(pendingKey)) {
+                    m_tracksPending.insert(pendingKey);
+                    auto* self = const_cast<AnalysisSessionModel*>(this);
+                    auto* watcher = new QFutureWatcher<Tracking::AllWormTracks>(self);
+                    const QString runDir = vid.runDir;
+                    const qint64 modified = vid.sourceModified;
+                    const qint64 size = vid.sourceSize;
+                    const QString dataDir = m_dataDir;
+                    connect(watcher, &QFutureWatcher<Tracking::AllWormTracks>::finished, self,
+                            [self, watcher, runDir, modified, size, pendingKey, dataDir]() {
+                        auto tracks = watcher->future().takeResult();
+                        watcher->deleteLater();
+                        self->m_tracksPending.remove(pendingKey);
+                        if (self->m_dataDir != dataDir) return;
+                        for (auto& group : self->m_groups) {
+                            for (auto& run : group.videos) {
+                                if (run.runDir != runDir || run.sourceModified != modified
+                                    || run.sourceSize != size) continue;
+                                run.tracks = std::move(tracks);
+                                run.tracksLoaded = true;
+                                ++self->m_dataRevision;
+                                emit self->analysisDataReady();
+                                return;
+                            }
+                        }
+                    });
+                    watcher->setFuture(QtConcurrent::run([wormsJson]() {
+                        return loadTracksFromJson(wormsJson);
+                    }));
+                }
+                continue;
             }
 
             for (const auto& worm : vid.worms) {

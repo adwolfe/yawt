@@ -94,6 +94,8 @@ private:
     static const char* kPlotNames[kPlotCount];
 
     void loadPlugins();
+    void applyPlugins(const QList<PlotPluginSpec>& loadedPlugins);
+    quint64 m_pluginGeneration = 0;
 
     TrackingDataStorage* m_storage      = nullptr;
     QSet<int>            m_selectedWormIds;

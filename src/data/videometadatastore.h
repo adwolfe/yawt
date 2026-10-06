@@ -57,6 +57,10 @@ public:
                           const QString& videoBaseName,
                           const ScaleCalibration& cal);
 
+    /** Queue a scale save on the serial metadata writer. Failures are logged. */
+    static void saveScaleAsync(const QString& dataDir, const QString& videoBaseName,
+                               const ScaleCalibration& cal);
+
     /** Load the "scaleCalibration" section. Returns false if the file doesn't
      *  exist or has no valid calibration — @p cal is left untouched in that case. */
     static bool loadScale(const QString& dataDir,
@@ -69,11 +73,19 @@ public:
                                const QString& videoBaseName,
                                double umPerPixel);
 
+    /** Queue a spatial-resolution save on the serial metadata writer. */
+    static void saveUmPerPixelAsync(const QString& dataDir, const QString& videoBaseName,
+                                    double umPerPixel);
+
     /** Load the spatial resolution (µm/pixel). Returns false if not found;
      *  @p umPerPixel is left untouched in that case. */
     static bool loadUmPerPixel(const QString& dataDir,
                                const QString& videoBaseName,
                                double& umPerPixel);
+
+    /** Read scale and fps in one file access. Missing values are returned as zero. */
+    static void loadAnalysisMetadata(const QString& dataDir, const QString& videoBaseName,
+                                     double& umPerPixel, double& fps);
 
     /** Save the video frame rate (frames per second). Preserves all other metadata sections. */
     static bool saveFps(const QString& dataDir,

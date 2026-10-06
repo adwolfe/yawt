@@ -819,11 +819,11 @@ static void writeHiddenPredictionMaskDiffStage(const Tracking::DetectedBlob& cur
 
 namespace Debug {
 
-bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
+bool DebugExporter::captureCenterlineFrame(const TrackingDataStorage* storage,
                                           const DebugDataStore* debugStore,
                                           int wormId,
                                           int frameNumber,
-                                          const QString& outputDir,
+                                          Snapshot& snapshot,
                                           QString* outErrorMsg)
 {
     auto fail = [&](const QString& message) -> bool {
@@ -839,13 +839,6 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     if (!debugStore) {
         return fail(QStringLiteral("no debug storage"));
     }
-    if (outputDir.isEmpty()) {
-        return fail(QStringLiteral("empty output directory"));
-    }
-    if (!QDir().mkpath(outputDir)) {
-        return fail(QStringLiteral("could not create output directory"));
-    }
-
     CenterlineFrameDebug record;
     if (!debugStore->getCenterlineFrame(wormId, frameNumber, record)) {
         return fail(QStringLiteral("No centerline debug record exists for worm %1 frame %2. Run/rerun centerline first.")
@@ -873,6 +866,41 @@ bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
     if (hasPreviousBlob) {
         previousBlob = previousFrameBlobs[wormId];
     }
+
+    snapshot.wormId = wormId;
+    snapshot.frameNumber = frameNumber;
+    snapshot.record = std::move(record);
+    snapshot.blob = blob;
+    snapshot.previousBlob = std::move(previousBlob);
+    snapshot.hasPreviousBlob = hasPreviousBlob;
+    return true;
+}
+
+bool DebugExporter::exportCenterlineFrame(const TrackingDataStorage* storage,
+                                         const DebugDataStore* debugStore,
+                                         int wormId, int frameNumber,
+                                         const QString& outputDir, QString* error)
+{
+    Snapshot snapshot;
+    if (!captureCenterlineFrame(storage, debugStore, wormId, frameNumber, snapshot, error)) return false;
+    return exportCenterlineFrame(snapshot, outputDir, error);
+}
+
+bool DebugExporter::exportCenterlineFrame(const Snapshot& snapshot,
+                                         const QString& outputDir, QString* outErrorMsg)
+{
+    auto fail = [&](const QString& message) {
+        if (outErrorMsg) *outErrorMsg = message;
+        return false;
+    };
+    if (outputDir.isEmpty() || !QDir().mkpath(outputDir))
+        return fail(QStringLiteral("could not create output directory"));
+    const int wormId = snapshot.wormId;
+    const int frameNumber = snapshot.frameNumber;
+    const auto& record = snapshot.record;
+    const auto& blob = snapshot.blob;
+    const auto& previousBlob = snapshot.previousBlob;
+    const bool hasPreviousBlob = snapshot.hasPreviousBlob;
 
     const cv::Rect bounds = computeExportBounds(blob);
 

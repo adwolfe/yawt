@@ -135,9 +135,14 @@ PluginPlotWidget::PluginPlotWidget(const PlotPluginSpec& spec,
     connect(&m_watcher, &QFutureWatcher<PluginEngine::PluginResult>::finished,
             this, &PluginPlotWidget::onComputationFinished);
 
-    if (m_model)
+    if (m_model) {
         connect(m_model, &AnalysisSessionModel::checkedWormIdsChanged,
                 this, &PluginPlotWidget::refreshData);
+        connect(m_model, &AnalysisSessionModel::analysisDataReady,
+                this, &PluginPlotWidget::refreshData);
+        connect(m_model, &QAbstractItemModel::modelReset,
+                this, &PluginPlotWidget::refreshData);
+    }
 
     QTimer::singleShot(0, this, &PluginPlotWidget::refreshData);
 }

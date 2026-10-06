@@ -13,6 +13,11 @@
 #include <QSet>
 #include <QString>
 #include <QTimer>
+#include <QThreadPool>
+#include <QFuture>
+#include <QJsonObject>
+#include <atomic>
+#include <memory>
 
 /**
  * AnalysisSessionModel — 3-level tree model for the Analysis tab worm list.
@@ -60,6 +65,8 @@ public:
         // Track data is loaded lazily from worms.json when analysis plots request it.
         // Scanning a project folder only needs worm IDs/metadata and should stay fast.
         mutable bool tracksLoaded = false;
+        qint64 sourceSize = -1;
+        qint64 sourceModified = 0;
         mutable Tracking::AllWormTracks tracks;
         double umPerPixel = 0.0;   // µm/pixel from _metadata.json (0 if unknown)
         double fps        = 0.0;   // frames/s from _metadata.json (0 if unknown)
@@ -83,7 +90,8 @@ public:
      * Build a snapshot of all checked worms organised by group.
      * Groups with no checked worms are omitted.
      * Track points are sorted by frameNumber.
-     * Call this from paintEvent; the data is a deep copy (safe after model resets).
+     * Missing tracks are requested asynchronously; analysisDataReady signals
+     * when a new snapshot can be requested. The returned copy survives resets.
      */
     QList<AnalysisGroupData> getGroupedData() const;
 
@@ -94,8 +102,9 @@ public:
 
     // ── Construction / population ─────────────────────────────────────────────
     explicit AnalysisSessionModel(QObject* parent = nullptr);
+    ~AnalysisSessionModel() override;
 
-    /** Scan a data directory (the yawt/ folder beside the videos), populate "Unassigned" with all found runs. */
+    /** Discover runs on a worker, then apply the latest result on the GUI thread. */
     void scanDataDirectory(const QString& dataDir);
 
     /** Add a user-named group at the end of the group list. */
@@ -154,6 +163,7 @@ signals:
     void directoryScanStarted(int totalSteps);
     void directoryScanProgress(int currentStep, int totalSteps, const QString& message);
     void directoryScanFinished();
+    void analysisDataReady();
 
 private:
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -187,25 +197,28 @@ private:
     static QList<int>                parseWormIds(const QString& wormsJsonPath);
     static Tracking::AllWormTracks   loadTracksFromJson(const QString& wormsJsonPath);
     static QString                   findMostRecentRun(const QString& videoSubDir);
-    static QStringList               buildWarnings(const QString& runDir,
-                                                   const QString& dataDir,
-                                                   const QString& baseName,
-                                                   double umPerPixel);
     static void                      loadRoiReferencePoints(RunItem& vid);
     static QColor     colormapColor(int index, int total);
     static QIcon      makeColorIcon(const QColor& c);
 
     // Persistence helpers
     static QString    stateFilePath(const QString& dataDir);
-    void              saveState() const;
+    QJsonObject       stateJson() const;
+    void              saveState();
     void              loadAndMergeState(
-                          const QString& dataDir,
-                          const QMap<QString, QPair<QString,QString>>& diskVideos);
+                          QMap<QString, RunItem> diskVideos,
+                          const QJsonObject& root);
     void              scheduleStateSave();   // debounced, for check-state changes
 
     QList<AnalysisGroup> m_groups;
+    QString          m_loadedDataDir;
     QString          m_dataDir;              // set during scan, used for auto-save
     QTimer*          m_saveTimer = nullptr;  // debounce timer for check-state saves
+    std::shared_ptr<std::atomic_bool> m_scanCancelled;
+    quint64          m_scanGeneration = 0;
+    QFuture<void>    m_lastSave;
+    QThreadPool      m_savePool; // Serialize writes so an older snapshot cannot overwrite a newer one.
+    mutable QSet<QString> m_tracksPending;
     quint64          m_dataRevision = 1;
     quint64          m_checkRevision = 1;
 };

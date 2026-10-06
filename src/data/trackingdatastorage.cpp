@@ -353,6 +353,11 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
         return false;
     }
 
+    applyWormsDocument(std::move(doc));
+    return true;
+}
+
+void TrackingDataStorage::applyWormsDocument(WormsJson::Document doc) {
     clearAllData();
 
     bool hasMetrics = false;
@@ -396,7 +401,6 @@ bool TrackingDataStorage::loadFromWormsJson(const QString& filePath) {
 
     emit allDataChanged();
     emit itemsChanged(m_items);
-    return true;
 }
 
 bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
@@ -405,12 +409,17 @@ bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
         return false;
     }
 
+    applyRoiPoints(WormsJson::readRoiPoints(filePath));
+    return true;
+}
+
+void TrackingDataStorage::applyRoiPoints(const QList<TableItems::AnnotationItem>& items) {
     QSet<int> existingIds;
     for (const auto& item : std::as_const(m_items)) {
         existingIds.insert(item.id);
     }
 
-    for (TableItems::AnnotationItem item : WormsJson::readRoiPoints(filePath)) {
+    for (TableItems::AnnotationItem item : items) {
         if (!isRoiPointType(item.type)) continue;
 
         if (item.id <= 0 || existingIds.contains(item.id)) {
@@ -426,7 +435,6 @@ bool TrackingDataStorage::loadFromRoiJson(const QString& filePath) {
     recalculateGlobalMetricsAndROIs();
     emit allDataChanged();
     emit itemsChanged(m_items);
-    return true;
 }
 
 /**

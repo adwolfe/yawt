@@ -61,6 +61,8 @@
  * - globalMetricsUpdated is emitted whenever global metric ranges or fixed ROI size change.
  * - itemVisibilityChanged communicates visibility toggles for selective UI redraws.
  */
+namespace WormsJson { struct Document; }
+
 class TrackingDataStorage : public QObject {
     Q_OBJECT
 
@@ -166,6 +168,8 @@ public:
      * @return True if the file was loaded and parsed successfully
      */
     bool loadFromWormsJson(const QString& filePath);
+    void applyWormsDocument(WormsJson::Document doc);
+    void applyRoiPoints(const QList<TableItems::AnnotationItem>& items);
 
     /**
      * @brief Load ROI/point items from a separate JSON file (does not clear existing data).

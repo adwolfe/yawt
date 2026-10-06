@@ -79,6 +79,7 @@ set(SOURCES
     src/gui/widgets/wormtimeline.cpp
    # src/gui/widgets/cachestatuswidget.cpp
     src/gui/widgets/videofiletreeview.cpp
+    src/gui/widgets/framecache.cpp
     src/gui/widgets/frameloader.cpp
     src/gui/widgets/videoloader.cpp
     src/gui/widgets/liveview.cpp
@@ -151,6 +152,7 @@ set(HEADERS
     src/gui/widgets/wormtimeline.h
   #  src/gui/widgets/cachestatuswidget.h
     src/gui/widgets/videofiletreeview.h
+    src/gui/widgets/framecache.h
     src/gui/widgets/frameloader.h
     src/gui/widgets/videoloader.h
     src/gui/widgets/liveview.h

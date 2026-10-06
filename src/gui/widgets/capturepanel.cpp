@@ -319,7 +319,7 @@ void CapturePanel::onRecordingStarted(const QString& path)
     if (m_currentUmPerPixel > 0 && !m_outputDirectory.isEmpty()) {
         const QString dataDir  = QDir(m_outputDirectory).filePath("yawt");
         const QString baseName = QFileInfo(path).completeBaseName();
-        VideoMetadataStore::saveUmPerPixel(dataDir, baseName, m_currentUmPerPixel);
+        VideoMetadataStore::saveUmPerPixelAsync(dataDir, baseName, m_currentUmPerPixel);
     }
 }
 
@@ -469,10 +469,10 @@ void CapturePanel::onScaleMeasured(double pixelLength)
         cal.physicalValue  = m_scalePhysicalValue;
         cal.pixelLength    = pixelLength;
         cal.timestamp      = QDateTime::currentDateTime();
-        VideoMetadataStore::saveScale(dataDir, "capture_calibration", cal);
+        VideoMetadataStore::saveScaleAsync(dataDir, "capture_calibration", cal);
         // Also write the canonical µm/pixel for this project-level calibration file.
         if (m_currentUmPerPixel > 0)
-            VideoMetadataStore::saveUmPerPixel(dataDir, "capture_calibration", m_currentUmPerPixel);
+            VideoMetadataStore::saveUmPerPixelAsync(dataDir, "capture_calibration", m_currentUmPerPixel);
     }
 
     emit pixelScaleSet(pixelsPerUnit, m_scaleUnit);

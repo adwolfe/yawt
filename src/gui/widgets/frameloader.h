@@ -8,6 +8,8 @@
 #include <QMutex>
 #include <QWaitCondition>
 #include <QDateTime>
+#include <QSize>
+#include <memory>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -30,21 +32,12 @@ class FrameCache;
 struct FrameLoadRequest {
     int frameNumber;
     int priority; // Higher number = higher priority
-    QDateTime requestTime;
-
     FrameLoadRequest(int fn = -1, int prio = 1)
-        : frameNumber(fn), priority(prio), requestTime(QDateTime::currentDateTime()) {}
+        : frameNumber(fn), priority(prio) {}
 
-    // Sorting: higher priority first; for equal priority newer requests first.
-    bool operator<(const FrameLoadRequest& other) const {
-        if (priority != other.priority) return priority < other.priority;
-        return requestTime > other.requestTime; // Newer requests first for same priority
-    }
+    // Equal-priority prefetch requests keep FIFO order for sequential decoding.
+    bool operator<(const FrameLoadRequest& other) const { return priority < other.priority; }
 
-    bool operator>(const FrameLoadRequest& other) const {
-        if (priority != other.priority) return priority > other.priority;
-        return requestTime < other.requestTime; // Older requests last for same priority
-    }
 };
 
 /**
@@ -60,37 +53,42 @@ public:
     explicit FrameLoader(QObject* parent = nullptr);
     ~FrameLoader();
 
-    void setVideoPath(const QString& path);
+    void setVideoPath(const QString& path, quint64 generation);
     void requestFrames(const QList<int>& frameNumbers, int priority = 1);
     void requestSingleFrame(int frameNumber, int priority = 1);
     void clearRequests();
 
     // Provide the loader with a pointer to the shared FrameCache so it can
     // insert loaded frames directly into the cache from the worker thread.
-    void setFrameCache(FrameCache* cache);
+    void setFrameCache(std::shared_ptr<FrameCache> cache);
 
     void stop();
 
 signals:
     /// Emitted when a frame has been successfully loaded.
-    void frameLoaded(int frameNumber, cv::Mat frame);
+    void videoOpened(quint64 generation, int totalFrames, double fps, QSize size,
+                     const QString& dataDir, double umPerPixel);
+    void videoOpenFailed(quint64 generation, const QString& error);
+    void frameLoaded(quint64 generation, int frameNumber, cv::Mat frame);
 
     /// Emitted when loading a frame failed for any reason.
-    void frameLoadError(int frameNumber, QString error);
+    void frameLoadError(quint64 generation, int frameNumber, QString error);
 
 public slots:
     /// Main request processing loop. Intended to be connected to QThread::started().
     void processRequests();
 
 private:
-    void loadFrame(int frameNumber);
+    void loadFrame(int frameNumber, quint64 generation);
+    void openVideo(const QString& path, quint64 generation);
 
     QString m_videoPath;
     cv::VideoCapture m_videoCapture;
-    FrameCache* m_frameCache;
+    std::shared_ptr<FrameCache> m_frameCache;
     QQueue<FrameLoadRequest> m_requestQueue;
     mutable QMutex m_queueMutex;
-    mutable QMutex m_captureMutex; // Protects m_videoCapture across threads
+    quint64 m_generation = 0;
+    bool m_openPending = false;
     QWaitCondition m_waitCondition;
     bool m_stopRequested;
     bool m_isProcessing;

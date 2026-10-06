@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QJsonObject>
 #include <QItemSelection>
 #include <QButtonGroup>
 #include <QResizeEvent>
@@ -194,11 +195,16 @@ private:
     void updateWormTimeline();
     // Updates the hh:mm:ss label next to framePosition based on m_videoFps.
     void updateVideoTimeLabel(int frameNumber);
-    bool applyThresholdSettingsFromJsonFile(const QString& filePath);
+    bool applyThresholdSettings(const QJsonObject& obj);
+    quint64 m_runLoadGeneration = 0;
+    QMetaObject::Connection m_runVideoConnection;
     bool loadRunFromDirectoryInternal(const QString& directoryPath);
-    void populateDebugImageTable(const QString& dir);
     void onDebugTabChanged(bool active);
     void runDebugExport(bool silent);
+    bool m_debugExportBusy = false;
+    bool m_debugExportPending = false;
+    quint64 m_debugExportGeneration = 0;
+    QHash<QString, QImage> m_debugImages;
 
     /**
      * Keep the mirrored play/pause buttons in sync with the current playback state.
