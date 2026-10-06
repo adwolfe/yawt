@@ -57,6 +57,9 @@ struct RouteSelectionInput {
     RolePrediction       tail;
     float                bodyLength = 0.f;   // expected resampled arc length
     int                  nPoints = 20;
+    // Extra places a hidden end may lie (e.g. the ends of neighbouring anchor
+    // centerlines); each gets a skeleton node unless a visible endpoint is near.
+    std::vector<cv::Point2f> hintPoints;
     // Loop orientation (signed turning, head→tail) captured before contact.
     bool                 hasOrientationReference = false;
     float                orientationReference = 0.f;
@@ -88,6 +91,39 @@ struct RouteSelectionResult {
     int  rejectedByLength = 0;
     QStringList decisions;
 };
+
+// One skeleton route, independent of which end is head. Points run from the
+// walk's start to its end, resampled to nPoints.
+struct RouteOption {
+    std::vector<cv::Point2f> points;
+    RouteEndKind startKind = RouteEndKind::Hidden;
+    RouteEndKind endKind = RouteEndKind::Hidden;
+    int startGraphIndex = -1;   // skeleton index for a visible end, else -1
+    int endGraphIndex = -1;
+    bool retrace = false;
+    float length = 0.f;         // resampled arc length
+    float lengthCost = 0.f;     // deviation from body length
+    float junctionCost = 0.f;   // sharp turns inside junctions
+    QString path;
+};
+
+struct RouteEnumeration {
+    std::vector<RouteOption> options;   // only routes inside the body-length window
+    int generated = 0;
+    int rejectedByLength = 0;
+    int nodes = 0;
+    int edges = 0;
+    QStringList decisions;
+};
+
+// List every route through a self-crossed skeleton that fits the body length.
+// Role predictions and hint points only add nodes where a hidden end may lie.
+RouteEnumeration enumerateSelfCrossedRoutes(const RouteSelectionInput& input);
+
+// Per-end cost of a route end, independent of role history.
+float routeEndCost(RouteEndKind kind);
+float routeRetraceCost();
+QString routeEndKindName(RouteEndKind kind);
 
 // Length window accepted for a self-crossed route, as fractions of body length.
 constexpr float kRouteMinLengthFraction = 0.75f;

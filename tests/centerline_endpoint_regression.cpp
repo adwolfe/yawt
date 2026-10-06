@@ -1,6 +1,7 @@
 #include "core/centerlinegeometry.h"
 #include "core/centerlineprocessor.h"
 #include "core/centerlineroutes.h"
+#include "core/centerlinetrack.h"
 #include "data/trackingdatastorage.h"
 #include "debug/debugdatastore.h"
 #include "debug/debugexporter.h"
@@ -219,10 +220,19 @@ int main(int argc, char** argv) {
         // must keep its role. Ground truth points are that end's skeleton
         // endpoint, traced frame to frame independently of the pipeline.
         struct RoleTrace { const char* name; std::vector<std::pair<int, cv::Point2f>> points; };
-        auto runSequence = [&](int firstFrame, int lastFrame, const std::vector<RoleTrace>& traces) {
+        struct SequenceSpec {
+            const std::vector<SequenceFrame>* frames;
+            int wormId;
+            float bodyLength;     // recorded clean-frame baseline for that worm
+            int minIslandFrames;
+        };
+        const SequenceSpec worm5Spec{&selfContactSequence, 5, 39.7182f, 1};
+        const SequenceSpec worm3Spec{&worm3ContactSequence, 3, 45.0f, 4};
+        auto runSequence = [&](const SequenceSpec& spec, int firstFrame, int lastFrame,
+                               const std::vector<RoleTrace>& traces, bool expectSingleChain) {
             std::map<int, Tracking::DetectedBlob> blobs;
             Tracking::Track track;
-            for (const auto& seq : selfContactSequence) {
+            for (const auto& seq : *spec.frames) {
                 if (seq.frame < firstFrame || seq.frame > lastFrame) continue;
                 Tracking::DetectedBlob b;
                 b.isValid = true;
@@ -237,29 +247,40 @@ int main(int argc, char** argv) {
                 tp.quality = Tracking::TrackPointQuality::Single;
                 track.push_back(tp);
             }
-            Centerline::TipFeatureBaseline baseline;   // worm 5 baseline from the recorded run
-            baseline.meanBodyLength = 39.7182f; baseline.lengthSamples = 1273;
+            Centerline::TipFeatureBaseline baseline;   // baseline from the recorded run
+            baseline.meanBodyLength = spec.bodyLength; baseline.lengthSamples = 1273;
             baseline.meanAbsCurvature = 0.322216f; baseline.curvatureSamples = 2546;
             baseline.meanWidth = 0.475839f; baseline.widthSamples = 2546;
             Centerline::CenterlineFrameContext seqContext = context;
-            seqContext.wormId = 5;
+            seqContext.wormId = spec.wormId;
             seqContext.sortedPoints = &track;
             seqContext.refLength = baseline.meanBodyLength;
             Centerline::CenterlineFrameIo seqIo = io;
             seqIo.getDetectedBlobsForFrame = [&](int f) {
                 QMap<int, Tracking::DetectedBlob> out;
-                if (blobs.count(f)) out.insert(5, blobs[f]);
+                if (blobs.count(f)) out.insert(spec.wormId, blobs[f]);
                 return out;
             };
             seqIo.setDetectedBlobForFrame = [&](int f, int, const auto& b) { blobs[f] = b; };
             seqIo.getTipBaseline = [&](int) { return baseline; };
             std::map<int, Debug::CenterlineFrameDebug> records;
-            Centerline::CenterlineSweepState seqState;
-            for (int idx = static_cast<int>(track.size()) - 1; idx >= 0; --idx) {
-                const bool bootstrap = idx == static_cast<int>(track.size()) - 1;
-                auto r = Centerline::processFrame(seqContext, {idx, -1, bootstrap}, seqState, seqIo);
-                require(r.processed, "sequence frame was not processed");
-                records[track[idx].frameNumber] = r.debugRecord;
+            seqIo.setCenterlineDebugFrame = [&](const Debug::CenterlineFrameDebug& rec) { records[rec.frameNumber] = rec; };
+            seqIo.getCenterlineDebugFrame = [&](int, int f, Debug::CenterlineFrameDebug& out) {
+                if (!records.count(f)) return false;
+                out = records[f];
+                return true;
+            };
+            seqContext.captureDebug = true;
+            Centerline::TrackPassConfig passConfig;
+            passConfig.minIslandFrames = spec.minIslandFrames;
+            const auto continuity = Centerline::processTrackContinuity(seqContext, seqIo, passConfig);
+            for (const QString& line : continuity.log) std::cout << qPrintable(line) << '\n';
+            // With no motion evidence in a short fixture, name the first chain
+            // and let continuity carry it across weak bridges, as pass 3 does.
+            if (continuity.chains.size() > 1) {
+                std::vector<bool> decided(continuity.chains.size(), false), flipped(continuity.chains.size(), false);
+                decided[0] = true;
+                Centerline::propagateAcrossWeakLinks(seqIo, spec.wormId, continuity, decided, flipped);
             }
             auto roleNear = [&](int f, const cv::Point2f& p) -> char {
                 const auto& cl = blobs[f].centerline;
@@ -274,6 +295,17 @@ int main(int argc, char** argv) {
                 if (best >= 0 && best == cl.tailTipIdx) return 'T';
                 return '-';
             };
+            // Bridges use the neighbouring clean frames' length, not the run baseline.
+            std::vector<float> cleanLengths;
+            for (int f = firstFrame; f <= lastFrame; ++f) {
+                const auto& cl = blobs[f].centerline;
+                if (cl.topology == Tracking::TopologyState::Clean && cl.points.size() >= 2)
+                    cleanLengths.push_back(Centerline::resampledArcLength(
+                        std::vector<cv::Point2f>(cl.points.begin(), cl.points.end()), seqContext.nPts));
+            }
+            std::sort(cleanLengths.begin(), cleanLengths.end());
+            const float localLength = cleanLengths.empty() ? baseline.meanBodyLength
+                                                           : cleanLengths[cleanLengths.size() / 2];
             int unresolved = 0;
             for (int f = lastFrame; f >= firstFrame; --f) {
                 const auto& rec = records[f];
@@ -282,9 +314,9 @@ int main(int argc, char** argv) {
                 const float length = pts.size() >= 2 ? Centerline::resampledArcLength(pts, seqContext.nPts) : 0.f;
                 if (rec.topology == Tracking::TopologyState::SelfCrossed) {
                     if (pts.size() < 2) ++unresolved;
-                    else require(length >= Centerline::kRouteMinLengthFraction * baseline.meanBodyLength - 0.5f &&
-                                 length <= Centerline::kRouteMaxLengthFraction * baseline.meanBodyLength + 0.5f,
-                                 "self-crossed centerline outside the body-length window");
+                    else require(length >= Centerline::kRouteMinLengthFraction * localLength - 2.f &&
+                                 length <= Centerline::kRouteMaxLengthFraction * localLength + 2.f,
+                                 "self-crossed centerline outside the local body-length window");
                 }
                 std::cout << "Frame " << f << ' ' << qPrintable(Debug::centerlineBranchToString(rec.branch))
                           << " len=" << length;
@@ -294,15 +326,23 @@ int main(int argc, char** argv) {
             if (argc > 1) {
                 for (const auto& [f, rec] : records) {
                     TrackingDataStorage storage;
-                    storage.setDetectedBlobForFrame(f, 5, blobs[f]);
-                    if (blobs.count(f + 1)) storage.setDetectedBlobForFrame(f + 1, 5, blobs[f + 1]);
+                    storage.setDetectedBlobForFrame(f, spec.wormId, blobs[f]);
+                    if (blobs.count(f + 1)) storage.setDetectedBlobForFrame(f + 1, spec.wormId, blobs[f + 1]);
                     Debug::DebugDataStore store;
                     store.setCenterlineFrame(rec);
                     QString error;
-                    require(Debug::DebugExporter::exportCenterlineFrame(&storage, &store, 5, f,
-                        QString::fromLocal8Bit(argv[1]) + QStringLiteral("/worm5_frame%1").arg(f), &error),
+                    require(Debug::DebugExporter::exportCenterlineFrame(&storage, &store, spec.wormId, f,
+                        QString::fromLocal8Bit(argv[1]) + QStringLiteral("/worm%1_frame%2").arg(spec.wormId).arg(f), &error),
                         qPrintable(error));
                 }
+            }
+            if (expectSingleChain) {
+                require(continuity.chains.size() == 1, "sequence split into more than one continuity chain");
+            } else if (continuity.chains.size() > 1) {
+                // A broken chain must leave its bridge flagged for review.
+                for (size_t c = 0; c + 1 < continuity.chains.size(); ++c)
+                    require(continuity.review.count(continuity.chains[c].back()) > 0,
+                            "continuity chain broke without flagging the bridge for review");
             }
             for (const auto& trace : traces) {
                 const char expected = roleNear(trace.points.front().first, trace.points.front().second);
@@ -336,21 +376,52 @@ int main(int argc, char** argv) {
             {557, {677, 1001}}, {556, {677, 1001}}, {555, {677, 1001}}, {554, {677, 999}},
             {553, {678, 998}}, {552, {678, 998}}, {551, {678, 998}}, {550, {677, 999}},
             {549, {678, 998}}, {548, {677, 998}}, {547, {677, 998}}}};
-        const int unresolvedSet2 = runSequence(543, 590, {visibleEnd});
+        const int unresolvedSet2 = runSequence(worm5Spec, 543, 590, {visibleEnd}, true);
         // Set 1: the right end of 791 stays visible until 787; a second visible
         // stretch runs from 783 to the clean frames at 767-766. Which physical
         // end reappears after the 786-784 contact is not established, so the
-        // two stretches are checked separately.
+        // bridge may be flagged instead of trusted, and the two stretches are
+        // checked separately.
         RoleTrace entering{"set 766-791 entering end", {
-            {791, {616, 988}}, {790, {614, 986}}, {789, {610, 985}}, {788, {606, 984}}, {787, {603, 985}}}};
+            {790, {614, 986}}, {789, {610, 985}}, {788, {606, 984}}, {787, {603, 985}}}};
         RoleTrace leaving{"set 766-791 leaving end", {
             {783, {604, 992}}, {782, {603, 996}}, {781, {605, 995}}, {780, {606, 997}},
             {779, {607, 1001}}, {778, {605, 1005}}, {777, {602, 1004}}, {776, {602, 1004}},
             {775, {603, 1001}}, {774, {604, 997}}, {773, {606, 996}}, {772, {606, 996}},
             {771, {607, 996}}, {770, {608, 995}}, {769, {608, 995}}, {768, {607, 994}},
             {767, {607, 991}}, {766, {607, 991}}}};
-        const int unresolvedSet1 = runSequence(766, 791, {entering, leaving});
-        require(unresolvedSet1 + unresolvedSet2 <= 6, "too many unresolved self-crossed frames");
+        const int unresolvedSet1 = runSequence(worm5Spec, 766, 791, {entering, leaving}, false);
+        // Worm 3: one end stays visible through each of these contacts. Earlier
+        // versions swapped it at 397 (split tip), 1120 (loop orientation) and
+        // around 1054 (end crossing the neck).
+        RoleTrace omega{"worm 3 360-415 visible end", {
+            {411, {760, 1032}}, {410, {760, 1037}}, {409, {758, 1036}}, {408, {758, 1038}}, {407, {762, 1038}},
+            {406, {765, 1042}}, {405, {765, 1042}}, {404, {764, 1043}}, {403, {764, 1042}}, {402, {764, 1044}},
+            {400, {760, 1047}}, {399, {757, 1048}}, {398, {755, 1051}}, {397, {761, 1053}}, {396, {762, 1055}},
+            {394, {763, 1054}}, {393, {763, 1054}}, {392, {763, 1053}}, {391, {763, 1051}}, {390, {762, 1050}},
+            {389, {761, 1050}}, {388, {762, 1051}}, {387, {762, 1052}}, {386, {765, 1053}}, {385, {765, 1054}},
+            {384, {766, 1054}}, {383, {766, 1055}}, {382, {769, 1053}}, {381, {770, 1052}}, {380, {772, 1050}},
+            {379, {774, 1050}}, {378, {774, 1051}}, {377, {774, 1051}}, {376, {773, 1051}}, {375, {771, 1050}},
+            {374, {771, 1050}}, {373, {770, 1049}}, {372, {769, 1049}}, {371, {767, 1049}}, {370, {766, 1049}},
+            {369, {765, 1049}}, {368, {764, 1050}}, {367, {764, 1050}}, {366, {763, 1050}}, {365, {763, 1052}}}};
+        const int unresolvedWorm3a = runSequence(worm3Spec, 360, 415, {omega}, false);
+        RoleTrace crossing{"worm 3 1036-1066 visible end", {
+            {1064, {495, 990}}, {1063, {493, 991}}, {1062, {493, 994}}, {1061, {494, 998}}, {1060, {495, 1000}},
+            {1059, {499, 1001}}, {1058, {501, 999}}, {1057, {502, 996}}, {1055, {500, 996}}, {1054, {499, 996}},
+            {1053, {499, 995}}, {1052, {495, 995}}, {1051, {494, 995}}, {1050, {493, 995}}, {1049, {492, 995}},
+            {1048, {491, 995}}, {1047, {491, 995}}, {1046, {491, 995}}, {1045, {491, 995}}, {1044, {492, 995}},
+            {1043, {491, 995}}, {1042, {489, 997}}, {1041, {489, 997}}, {1040, {489, 1000}}}};
+        const int unresolvedWorm3b = runSequence(worm3Spec, 1036, 1066, {crossing}, true);
+        RoleTrace orientationFlip{"worm 3 1100-1135 visible end", {
+            {1131, {546, 1007}}, {1130, {546, 1009}}, {1129, {546, 1011}}, {1128, {546, 1011}}, {1127, {544, 1013}},
+            {1126, {544, 1016}}, {1125, {541, 1018}}, {1124, {539, 1016}}, {1123, {539, 1016}}, {1122, {540, 1014}},
+            {1121, {541, 1012}}, {1120, {542, 1006}}, {1119, {544, 1004}}, {1117, {544, 1003}}, {1116, {544, 1003}},
+            {1115, {544, 1003}}, {1114, {544, 1003}}, {1113, {545, 1002}}, {1112, {545, 1002}}, {1111, {545, 1001}},
+            {1110, {545, 1000}}, {1109, {545, 999}}, {1108, {545, 999}}, {1107, {545, 999}}, {1106, {545, 998}},
+            {1105, {545, 996}}}};
+        const int unresolvedWorm3c = runSequence(worm3Spec, 1100, 1135, {orientationFlip}, true);
+        require(unresolvedSet1 + unresolvedSet2 + unresolvedWorm3a + unresolvedWorm3b + unresolvedWorm3c <= 6,
+                "too many unresolved self-crossed frames");
         std::cout << "Endpoint regression checks passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

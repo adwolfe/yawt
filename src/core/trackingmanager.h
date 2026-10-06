@@ -283,7 +283,9 @@ private:
     void rebuildFinalTracks();   // m_trackHistory -> m_finalTracks (sorted by frame)
     QString trackWorkbookOutputPath() const;
     bool outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFileName) const;
-    void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData, const QString& outputPath) const;
+    void exportHeadTailSwapXlsx(const QMap<int, QList<int>>& swapData,
+                                const QMap<int, QList<int>>& reviewData,
+                                const QString& outputPath) const;
     void exportProcessingSummary(const QString& outputPath) const;
     double calculateIoU(const QRectF& r1, const QRectF& r2) const;
     void assembleProcessedFrames(); // For parallel video processing
@@ -383,6 +385,7 @@ private:
     bool m_smoothCenterline = true;
     float m_maxReversalFraction = 0.25f;
     QMap<int, QList<int>> m_headTailSwapData;     // net (XOR) swaps per worm
+    QMap<int, QList<int>> m_centerlineReviewData; // frames flagged for human review per worm
     QMap<int, QList<int>> m_motionHeadTailSwapData;  // motion-pass swaps per worm
     QMap<int, QList<int>> m_geoHeadTailSwapData;  // geometry-pass swaps per worm
 

@@ -67,6 +67,8 @@ struct CenterlineFrameIo {
     std::function<void(int, float, float)> recordTipFeatureSample;
     std::function<void(int, float)> recordBodyLengthSample;
     std::function<void(const Debug::CenterlineFrameDebug&)> setCenterlineDebugFrame;
+    // Optional: read back a recorded DEBUG frame so later passes can keep it in step.
+    std::function<bool(int wormId, int frameNumber, Debug::CenterlineFrameDebug&)> getCenterlineDebugFrame;
 };
 
 // Measure the arc length of an ordered centerline polyline.
@@ -74,6 +76,14 @@ float arcLength(const std::vector<cv::Point2f>& points);
 
 // Arc length after resampling to nPoints, the measure the body-length baseline uses.
 float resampledArcLength(const std::vector<cv::Point2f>& points, int nPoints);
+
+// Resample an ordered polyline to nPoints evenly spaced points.
+std::vector<cv::Point2f> resamplePolyline(const std::vector<cv::Point2f>& points, int nPoints);
+
+// Copy detectEndpoints' skeleton, tip and contour diagnostics into a debug record.
+void captureEndpointDiagnostics(const EndpointResult& er,
+                                const Debug::EndpointDebug& endpointDebug,
+                                Debug::CenterlineFrameDebug& record);
 
 // Run the live centerline-analysis pipeline for one worm/frame and update sweep state.
 CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,

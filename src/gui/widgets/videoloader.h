@@ -264,6 +264,8 @@ signals:
     void zoomFactorChanged(double newZoomFactor);
 
     void interactionModeChanged(InteractionMode newMode);
+    // Source-video cursor coordinates in crop mode; (-1, -1) when outside the video.
+    void cropCursorPositionChanged(const QPointF& videoPosition);
     void activeViewModesChanged(VideoLoader::ViewModeOptions newModes);
 
     void thresholdParametersChanged(const Thresholding::ThresholdSettings& newSettings);
@@ -294,6 +296,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;

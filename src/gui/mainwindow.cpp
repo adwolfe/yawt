@@ -53,6 +53,8 @@
 
 #include <QStandardPaths>
 #include <QFileDialog>
+#include <QLabel>
+#include <QStatusBar>
 #include <QIcon>
 #include <QMessageBox>
 #include <QDebug>
@@ -572,6 +574,21 @@ void MainWindow::setupConnections() {
         if (m_debugTabActive) runDebugExport(true);
     });
     connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, &MainWindow::syncInteractionModeButtons);
+    auto* cropCursorLabel = new QLabel(statusBar());
+    cropCursorLabel->setToolTip(QStringLiteral("Cursor position in source-video pixels, measured from the top left"));
+    statusBar()->addPermanentWidget(cropCursorLabel);
+    cropCursorLabel->hide();
+    connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this,
+            [cropCursorLabel](VideoLoader::InteractionMode mode) {
+                cropCursorLabel->setText(QStringLiteral("X: —  Y: —"));
+                cropCursorLabel->setVisible(mode == VideoLoader::InteractionMode::Crop);
+            });
+    connect(ui->videoLoader, &VideoLoader::cropCursorPositionChanged, this,
+            [cropCursorLabel](const QPointF& position) {
+                cropCursorLabel->setText(position.x() >= 0 && position.y() >= 0
+                    ? QStringLiteral("X: %1  Y: %2").arg(qFloor(position.x())).arg(qFloor(position.y()))
+                    : QStringLiteral("X: —  Y: —"));
+            });
     connect(ui->videoLoader, &VideoLoader::activeViewModesChanged, this, &MainWindow::syncViewModeOptionButtons); // Updated signal
     // When an ROI is drawn in VideoLoader, add it as an ROI item in the AnnotationTableModel
     connect(ui->videoLoader, &VideoLoader::roiDefined, this, &MainWindow::handleRoiDefined);

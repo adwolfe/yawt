@@ -74,6 +74,9 @@ signals:
     // Emitted once per worm after both passes; net set of frames whose
     // centerline is reversed (XOR of direction and geometry flips).
     void headTailSwapEvent(int wormId, QList<int> swappedFrames);
+    // Emitted once per worm with the frames whose centerline was flagged for
+    // human review (reason stored on BlobCenterline::reviewReason).
+    void centerlineReviewEvent(int wormId, QList<int> reviewFrames);
 
 private:
     QMap<int, Tracking::DetectedBlob> getDetectedBlobsForFrame(int frameNumber) const;

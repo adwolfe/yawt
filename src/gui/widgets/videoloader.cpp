@@ -6,8 +6,12 @@
 #include <cmath>
 #include "../../utils/loggingcategories.h"
 #include "../../utils/cvimageutils.h"
+#include "../../utils/debugutils.h"
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QApplication>
+#include <QClipboard>
+#include <QPushButton>
 #include <QPainterPath>
 #include <QPointer>
 #include <QRandomGenerator>
@@ -22,6 +26,34 @@
 #define DEFAULT_CROP_FOURCC cv::VideoWriter::fourcc('H', '2', '6', '4')
 
 namespace {
+// Source-video pixels, using the same rounding and bounds as crop export.
+QRect cropPixelRect(const QRectF& selection, const QSize& frameSize, bool circle,
+                    bool evenDimensions = true) {
+    QRect crop(qRound(selection.x()), qRound(selection.y()),
+               qRound(selection.width()), qRound(selection.height()));
+    crop.moveLeft(qMax(0, crop.x()));
+    crop.moveTop(qMax(0, crop.y()));
+    crop.setWidth(qMin(crop.width(), frameSize.width() - crop.x()));
+    crop.setHeight(qMin(crop.height(), frameSize.height() - crop.y()));
+    if (circle && crop.width() > 0 && crop.height() > 0) {
+        const int side = qMin(qMin(crop.width(), crop.height()),
+                              qMin(frameSize.width(), frameSize.height()));
+        crop.setSize(QSize(side, side));
+        crop.moveLeft(qBound(0, crop.x(), frameSize.width() - side));
+        crop.moveTop(qBound(0, crop.y(), frameSize.height() - side));
+    }
+    if (evenDimensions && crop.isValid()) {
+        crop.setWidth(crop.width() - crop.width() % 2);
+        crop.setHeight(crop.height() - crop.height() % 2);
+    }
+    return crop;
+}
+
+QString cropFilter(const QRect& crop) {
+    return QStringLiteral("crop=%1:%2:%3:%4")
+        .arg(crop.width()).arg(crop.height()).arg(crop.x()).arg(crop.y());
+}
+
 QRectF squareFromDiagonal(const QPointF& start, const QPointF& end) {
     const qreal dx = end.x() - start.x();
     const qreal dy = end.y() - start.y();
@@ -944,6 +976,32 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         painter.drawRect(QRect(m_roiStartPointWidget, m_roiEndPointWidget).normalized());
     }
 
+    if (m_currentInteractionMode == InteractionMode::Crop && DebugUtils::isDebugCaptureEnabled()) {
+        QRectF selection = m_activeCropCircleRect;
+        if (m_cropShape == CropShape::Rectangle && m_isDefiningRoi) {
+            const QPointF start = mapPointToVideo(m_roiStartPointWidget);
+            const QPointF end = mapPointToVideo(m_roiEndPointWidget);
+            if (start.x() >= 0 && end.x() >= 0)
+                selection = QRectF(start, end).normalized();
+        }
+        const QRect crop = cropPixelRect(selection, originalFrameSize,
+                                         m_cropShape == CropShape::Circle);
+        if (crop.isValid()) {
+            const QString text = QStringLiteral("X: %1  Y: %2  Width: %3  Height: %4\n%5%6")
+                .arg(crop.x()).arg(crop.y()).arg(crop.width()).arg(crop.height())
+                .arg(cropFilter(crop))
+                .arg(m_cropShape == CropShape::Circle ? QStringLiteral(" (bounding box)") : QString());
+            painter.save();
+            const QRect textBounds = painter.fontMetrics().boundingRect(
+                QRect(0, 0, width(), height()), Qt::AlignLeft, text);
+            const QRect panel(8, 8, textBounds.width() + 16, textBounds.height() + 12);
+            painter.fillRect(panel, QColor(0, 0, 0, 200));
+            painter.setPen(Qt::white);
+            painter.drawText(panel.adjusted(8, 6, -8, -6), Qt::AlignLeft, text);
+            painter.restore();
+        }
+    }
+
     auto drawPointMarker = [&](const QPointF& centerWidget, const QColor& color) {
         QPen pointPen(color, 2);
         painter.setPen(pointPen);
@@ -1553,6 +1611,8 @@ void VideoLoader::mouseMoveEvent(QMouseEvent* event) {
     QPointF currentPos = event->position();
     QPointF delta = currentPos - m_lastMousePos;
     m_lastMousePos = currentPos;
+    if (m_currentInteractionMode == InteractionMode::Crop)
+        emit cropCursorPositionChanged(mapPointToVideo(currentPos));
     if (!isVideoLoaded()) {
         QWidget::mouseMoveEvent(event);
         return;
@@ -1602,6 +1662,12 @@ void VideoLoader::mouseMoveEvent(QMouseEvent* event) {
         QWidget::mouseMoveEvent(event);
     }
 }
+void VideoLoader::leaveEvent(QEvent* event) {
+    if (m_currentInteractionMode == InteractionMode::Crop)
+        emit cropCursorPositionChanged(QPointF(-1, -1));
+    QWidget::leaveEvent(event);
+}
+
 void VideoLoader::mouseReleaseEvent(QMouseEvent* event) {
     if (!isVideoLoaded()) {
         QWidget::mouseReleaseEvent(event);
@@ -1908,12 +1974,44 @@ void VideoLoader::handleRoiDefinedForCrop(
         return;
     }
     const CropShape cropShape = m_cropShape;
-    const QString confirmMessage = cropShape == CropShape::Circle
+    const QRect pixelRect = cropPixelRect(cropRoiVideoCoords, originalFrameSize,
+                                          cropShape == CropShape::Circle);
+    if (!pixelRect.isValid()) {
+        setInteractionMode(InteractionMode::PanZoom);
+        return;
+    }
+    const QString filter = cropFilter(pixelRect);
+    QString confirmMessage = cropShape == CropShape::Circle
         ? QStringLiteral("Crop video to circular ROI?")
         : QStringLiteral("Crop video to ROI?");
-    if (QMessageBox::question(this, "Confirm Crop", confirmMessage,
-                              QMessageBox::Yes | QMessageBox::No) ==
-        QMessageBox::Yes) {
+    const bool debugEnabled = DebugUtils::isDebugCaptureEnabled();
+    if (debugEnabled) {
+        confirmMessage += QStringLiteral(
+        "\n\nSource-video pixels (origin at top left):\n"
+        "X: %1  Y: %2  Width: %3  Height: %4\n\nffmpeg: -vf \"%5\"%6")
+        .arg(pixelRect.x()).arg(pixelRect.y()).arg(pixelRect.width()).arg(pixelRect.height())
+        .arg(filter)
+        .arg(cropShape == CropShape::Circle
+                 ? QStringLiteral("\nThe ffmpeg filter crops the bounding box; it does not apply the circular mask.")
+                 : QString());
+    }
+    QMessageBox confirmation(QMessageBox::Question, QStringLiteral("Confirm Crop"),
+                             confirmMessage, QMessageBox::Yes | QMessageBox::No, this);
+    confirmation.setTextFormat(Qt::PlainText);
+    QPushButton* copyButton = nullptr;
+    if (debugEnabled) {
+        confirmation.setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        copyButton = confirmation.addButton(QStringLiteral("Copy ffmpeg filter"), QMessageBox::ActionRole);
+        connect(copyButton, &QPushButton::clicked, this, [filter]() {
+            QApplication::clipboard()->setText(filter);
+        });
+    }
+    // Action buttons close QMessageBox too: reopen after copying so export remains optional.
+    int response;
+    do {
+        response = confirmation.exec();
+    } while (copyButton && confirmation.clickedButton() == copyButton);
+    if (response == QMessageBox::Yes) {
         const QString sourceFilePath = currentFilePath;
         const double fallbackFps = framesPerSecond;
         const QRectF cropRect = cropRoiVideoCoords;
@@ -2012,23 +2110,9 @@ bool VideoLoader::performVideoCrop(
         return false;
     }
 
-    cv::Rect cvCR(static_cast<int>(qRound(cropRectVideoCoords.x())),
-                  static_cast<int>(qRound(cropRectVideoCoords.y())),
-                  static_cast<int>(qRound(cropRectVideoCoords.width())),
-                  static_cast<int>(qRound(cropRectVideoCoords.height())));
-    cvCR.x = qMax(0, cvCR.x);
-    cvCR.y = qMax(0, cvCR.y);
-    cvCR.width = qMin(cvCR.width, firstFrame.cols - cvCR.x);
-    cvCR.height = qMin(cvCR.height, firstFrame.rows - cvCR.y);
-
-    if (cropShape == CropShape::Circle) {
-        int side = qMin(cvCR.width, cvCR.height);
-        side = qMin(side, qMin(firstFrame.cols, firstFrame.rows));
-        cvCR.width = side;
-        cvCR.height = side;
-        cvCR.x = qBound(0, cvCR.x, firstFrame.cols - cvCR.width);
-        cvCR.y = qBound(0, cvCR.y, firstFrame.rows - cvCR.height);
-    }
+    const QRect pixelRect = cropPixelRect(cropRectVideoCoords,
+        QSize(firstFrame.cols, firstFrame.rows), cropShape == CropShape::Circle, false);
+    cv::Rect cvCR(pixelRect.x(), pixelRect.y(), pixelRect.width(), pixelRect.height());
 
     if (cvCR.width <= 0 || cvCR.height <= 0) {
         origVid.release();

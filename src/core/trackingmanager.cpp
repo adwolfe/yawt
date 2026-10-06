@@ -2415,6 +2415,8 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
         out << QString("  Direction-based swapped frames:  %1\n").arg(lpad(QString::number(motionSwaps), 6));
         out << QString("  Geometry-based swapped frames:   %1\n").arg(lpad(QString::number(geoSwaps), 6));
         out << QString("  Net swapped frames (XOR):        %1\n").arg(lpad(QString::number(netSwaps), 6));
+        out << QString("  Frames flagged for review:       %1\n")
+                   .arg(lpad(QString::number(m_centerlineReviewData.value(wormId).size()), 6));
         out << "\n";
     }
 
@@ -2426,11 +2428,14 @@ void TrackingManager::exportProcessingSummary(const QString& outputPath) const
 // OUTPUT: {runDir}/{basename}_headtail_swaps.xlsx
 // FORMAT: XLSX (Office Open XML, written as a ZIP with hand-built XML)
 // DATA:   One sheet with a row per frame and one column per worm;
-//           cells contain "SWAP" on frames where the head/tail assignment was reversed,
-//           blank otherwise.
-// TRIGGER: Written at tracking finalization only when at least one swap was detected.
+//           cells contain "SWAP" on frames where the post-pass head/tail naming
+//           reversed the continuity pass's labels, "REVIEW" on frames flagged for
+//           human assessment, "SWAP REVIEW" for both, blank otherwise.
+// TRIGGER: Written at tracking finalization when any swap or review flag exists.
 void TrackingManager::exportHeadTailSwapXlsx(
-    const QMap<int, QList<int>>& swapData, const QString& outputPath) const
+    const QMap<int, QList<int>>& swapData,
+    const QMap<int, QList<int>>& reviewData,
+    const QString& outputPath) const
 {
     if (outputPath.isEmpty() || !m_storage) return;
 
@@ -2446,14 +2451,18 @@ void TrackingManager::exportHeadTailSwapXlsx(
     if (minFrame > maxFrame) return;
 
     // Sorted worm IDs (columns).
-    QList<int> wormIds = swapData.keys();
+    QSet<int> wormIdSet;
+    for (int wid : swapData.keys()) wormIdSet.insert(wid);
+    for (int wid : reviewData.keys()) wormIdSet.insert(wid);
+    QList<int> wormIds(wormIdSet.begin(), wormIdSet.end());
     std::sort(wormIds.begin(), wormIds.end());
 
-    // Build a fast-lookup set of swapped frames per worm.
-    QMap<int, QSet<int>> swapSets;
-    for (int wid : wormIds)
-        for (int f : swapData[wid])
-            swapSets[wid].insert(f);
+    // Build fast-lookup sets of swapped and flagged frames per worm.
+    QMap<int, QSet<int>> swapSets, reviewSets;
+    for (int wid : wormIds) {
+        for (int f : swapData.value(wid)) swapSets[wid].insert(f);
+        for (int f : reviewData.value(wid)) reviewSets[wid].insert(f);
+    }
 
     // Build sheet rows: header + one row per frame.
     QList<WorkbookRow> rows;
@@ -2467,9 +2476,12 @@ void TrackingManager::exportHeadTailSwapXlsx(
     for (int f = minFrame; f <= maxFrame; ++f) {
         WorkbookRow row;
         row.append(numberCell(QString::number(f)));
-        for (int wid : wormIds)
-            row.append(swapSets.value(wid).contains(f)
-                ? stringCell("SWAP") : stringCell(""));
+        for (int wid : wormIds) {
+            QStringList marks;
+            if (swapSets.value(wid).contains(f)) marks << QStringLiteral("SWAP");
+            if (reviewSets.value(wid).contains(f)) marks << QStringLiteral("REVIEW");
+            row.append(stringCell(marks.join(QLatin1Char(' '))));
+        }
         rows.append(row);
     }
 
@@ -2983,6 +2995,7 @@ void TrackingManager::startCenterlineComputation() {
     m_totalCenterlineWorkers = numThreads;
     m_centerlineStorageMutex = QSharedPointer<QMutex>::create();
     m_headTailSwapData.clear();
+    m_centerlineReviewData.clear();
     m_motionHeadTailSwapData.clear();
     m_geoHeadTailSwapData.clear();
 
@@ -3029,6 +3042,10 @@ void TrackingManager::startCenterlineComputation() {
         connect(worker, &CenterlineWorker::headTailSwapEvent, this,
                 [this](int wormId, QList<int> swappedFrames) {
                     m_headTailSwapData[wormId] = swappedFrames;
+                });
+        connect(worker, &CenterlineWorker::centerlineReviewEvent, this,
+                [this](int wormId, QList<int> reviewFrames) {
+                    m_centerlineReviewData[wormId] = reviewFrames;
                 });
         connect(worker, &CenterlineWorker::progress, this,
                 [this, workerIndex](int percentage) {
@@ -3095,9 +3112,9 @@ void TrackingManager::handleCenterlineFinished() {
     }
 
     // Export head/tail swap report alongside the other output files.
-    if (!m_headTailSwapData.isEmpty() && !dir.isEmpty()) {
+    if ((!m_headTailSwapData.isEmpty() || !m_centerlineReviewData.isEmpty()) && !dir.isEmpty()) {
         const QString path = QDir(dir).filePath(baseName + "_headtail_swaps.xlsx");
-        exportHeadTailSwapXlsx(m_headTailSwapData, path);
+        exportHeadTailSwapXlsx(m_headTailSwapData, m_centerlineReviewData, path);
         emit trackingStatusUpdate("Head/tail swap report saved: " + path);
     }
 

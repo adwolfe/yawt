@@ -97,6 +97,7 @@ set(SOURCES
     src/core/centerlineprocessor.cpp
     src/core/centerlinegeometry.cpp
     src/core/centerlineroutes.cpp
+    src/core/centerlinetrack.cpp
     src/core/appcontroller.cpp
 
     # Core processing
@@ -170,6 +171,7 @@ set(HEADERS
     src/core/centerlineprocessor.h
     src/core/centerlinegeometry.h
     src/core/centerlineroutes.h
+    src/core/centerlinetrack.h
     src/core/appcontroller.h
 
     # Core processing

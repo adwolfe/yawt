@@ -158,6 +158,10 @@ QJsonObject blobCenterlineToJson(const BlobCenterline& cl)
     obj["headTipIdx"] = cl.headTipIdx;
     obj["tailTipIdx"] = cl.tailTipIdx;
     obj["topology"] = static_cast<int>(cl.topology);
+    if (cl.needsReview) {
+        obj["needsReview"] = true;
+        obj["reviewReason"] = cl.reviewReason;
+    }
     return obj;
 }
 
@@ -176,6 +180,8 @@ BlobCenterline blobCenterlineFromJson(const QJsonObject& obj)
     cl.tailTipIdx = obj.value("tailTipIdx").toInt(-1);
     cl.topology = static_cast<TopologyState>(
         obj.value("topology").toInt(static_cast<int>(TopologyState::Unknown)));
+    cl.needsReview = obj.value("needsReview").toBool(false);
+    cl.reviewReason = obj.value("reviewReason").toString();
     return cl;
 }
 

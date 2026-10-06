@@ -110,7 +110,8 @@ enum class CenterlineBranch {
     D4FallbackContourSkeleton,
     ZeroTipRingCut,
     SelfCrossedRouteSelection,
-    SelfCrossedUnresolved
+    SelfCrossedUnresolved,
+    ContactBridge
 };
 
 struct DistanceTransformDebug {
@@ -145,6 +146,8 @@ inline QString centerlineBranchToString(CenterlineBranch branch)
         return QStringLiteral("0-tip ring cut");
     case CenterlineBranch::SelfCrossedRouteSelection:
         return QStringLiteral("S-1 self-crossed route selection");
+    case CenterlineBranch::ContactBridge:
+        return QStringLiteral("B-1 contact bridge (both-sided sequence)");
     case CenterlineBranch::SelfCrossedUnresolved:
         return QStringLiteral("S-0 self-crossed unresolved (no route within body length)");
     case CenterlineBranch::Unknown:

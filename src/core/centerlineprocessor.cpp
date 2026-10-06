@@ -1128,6 +1128,18 @@ float resampledArcLength(const std::vector<cv::Point2f>& points, int nPoints)
     return arcLen(resample(points, nPoints));
 }
 
+std::vector<cv::Point2f> resamplePolyline(const std::vector<cv::Point2f>& points, int nPoints)
+{
+    return resample(points, nPoints);
+}
+
+void captureEndpointDiagnostics(const EndpointResult& er,
+                                const Debug::EndpointDebug& endpointDebug,
+                                Debug::CenterlineFrameDebug& record)
+{
+    captureEndpointDebug(er, endpointDebug, record);
+}
+
 // Run one frame of the centerline pipeline and update predictor/previous-frame state.
 CenterlineFrameResult processFrame(const CenterlineFrameContext& ctx,
                                    const CenterlineFrameRequest& req,

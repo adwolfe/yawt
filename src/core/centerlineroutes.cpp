@@ -261,9 +261,9 @@ float signedTurning(const std::vector<cv::Point2f>& points)
     return total;
 }
 
-RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
+RouteEnumeration enumerateSelfCrossedRoutes(const RouteSelectionInput& input)
 {
-    RouteSelectionResult result;
+    RouteEnumeration result;
     if (!input.graph || input.graph->points.size() < 2 || input.bodyLength <= 0.f) {
         result.decisions << QStringLiteral("route selection skipped: missing skeleton or body length");
         return result;
@@ -282,19 +282,23 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
     std::vector<int> endpointPixels;
     for (int i = 0; i < static_cast<int>(graph.points.size()); ++i)
         if (graph.adjacency[i].size() == 1) endpointPixels.push_back(i);
-    for (const RolePrediction* role : {&input.head, &input.tail}) {
-        if (!role->valid) continue;
+    std::vector<cv::Point2f> hints = input.hintPoints;
+    for (const RolePrediction* role : {&input.head, &input.tail})
+        if (role->valid) hints.push_back(role->position);
+    for (const cv::Point2f& hint : hints) {
         bool explained = false;
         for (int e : endpointPixels)
-            explained |= cv::norm(video(e) - role->position) <= kForcedNodeMinSeparation;
+            explained |= cv::norm(video(e) - hint) <= kForcedNodeMinSeparation;
         if (explained) continue;
         int nearest = -1;
         float best = std::numeric_limits<float>::max();
         for (int i = 0; i < static_cast<int>(graph.points.size()); ++i) {
-            const float d = cv::norm(video(i) - role->position);
+            const float d = cv::norm(video(i) - hint);
             if (d < best) { best = d; nearest = i; }
         }
-        if (nearest >= 0 && best <= 0.5f * L) forcedPixels.push_back(nearest);
+        if (nearest >= 0 && best <= 0.5f * L &&
+            std::find(forcedPixels.begin(), forcedPixels.end(), nearest) == forcedPixels.end())
+            forcedPixels.push_back(nearest);
     }
     const RouteGraph rg = buildRouteGraph(graph, forcedPixels);
 
@@ -414,36 +418,17 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
         walk(start, initial, -1);
     }
     result.generated = static_cast<int>(raw.size());
-
-    // An end seen in the previous frame rarely disappears in the next, while an
-    // end that is already hidden usually stays hidden.
-    auto endCost = [](RouteEndKind kind, const RolePrediction& role) {
-        switch (kind) {
-        case RouteEndKind::ObservedTip: return 0.f;
-        case RouteEndKind::ShortBranch: return kShortBranchCost;
-        case RouteEndKind::Hidden:
-        default: return (role.valid && role.age == 0) ? kVanishingEndCost : kHiddenEndCost;
-        }
-    };
-    auto kindName = [](RouteEndKind kind) {
-        switch (kind) {
-        case RouteEndKind::ObservedTip: return QStringLiteral("tip");
-        case RouteEndKind::ShortBranch: return QStringLiteral("short");
-        case RouteEndKind::Hidden:
-        default: return QStringLiteral("hidden");
-        }
-    };
-
-    std::vector<RouteCandidate> scored;
+    result.nodes = static_cast<int>(rg.nodes.size());
+    result.edges = static_cast<int>(rg.edges.size());
     for (const RawRoute& r : raw) {
         if (r.points.size() < 2) continue;
-        const std::vector<cv::Point2f> sampled = resamplePolyline(r.points, input.nPoints);
-        const float length = polylineLength(sampled);
-        if (length < minLength || length > maxLength) {
+        RouteOption o;
+        o.points = resamplePolyline(r.points, input.nPoints);
+        o.length = polylineLength(o.points);
+        if (o.length < minLength || o.length > maxLength) {
             ++result.rejectedByLength;
             continue;
         }
-        float junctionCost = 0.f;
         for (int j : r.junctionPointIndices) {
             const int back = std::max(0, j - 4);
             const int ahead = std::min(static_cast<int>(r.points.size()) - 1, j + 4);
@@ -452,22 +437,73 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
                                                      r.points[ahead] - r.points[j]));
             const float excess = std::max(0.f, turn - 0.25f * static_cast<float>(CV_PI)) /
                                  (0.5f * static_cast<float>(CV_PI));
-            junctionCost += kJunctionTurnWeight * excess * excess;
+            o.junctionCost += kJunctionTurnWeight * excess * excess;
         }
-        const float lengthDev = (length - L) / (kLengthSigmaFraction * L);
-        const float shared = 0.5f * lengthDev * lengthDev + junctionCost +
-                             (r.retrace ? kRetraceCost : 0.f);
+        const float lengthDev = (o.length - L) / (kLengthSigmaFraction * L);
+        o.lengthCost = 0.5f * lengthDev * lengthDev;
+        o.startKind = r.start.kind;
+        o.endKind = r.end.kind;
+        o.startGraphIndex = r.start.graphIndex;
+        o.endGraphIndex = r.end.graphIndex;
+        o.retrace = r.retrace;
+        o.path = r.path;
+        result.options.push_back(std::move(o));
+    }
+    return result;
+}
 
+float routeEndCost(RouteEndKind kind)
+{
+    switch (kind) {
+    case RouteEndKind::ObservedTip: return 0.f;
+    case RouteEndKind::ShortBranch: return kShortBranchCost;
+    case RouteEndKind::Hidden:
+    default: return kHiddenEndCost;
+    }
+}
+
+float routeRetraceCost() { return kRetraceCost; }
+
+QString routeEndKindName(RouteEndKind kind)
+{
+    switch (kind) {
+    case RouteEndKind::ObservedTip: return QStringLiteral("tip");
+    case RouteEndKind::ShortBranch: return QStringLiteral("short");
+    case RouteEndKind::Hidden:
+    default: return QStringLiteral("hidden");
+    }
+}
+
+RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
+{
+    RouteSelectionResult result;
+    const RouteEnumeration routes = enumerateSelfCrossedRoutes(input);
+    result.generated = routes.generated;
+    result.rejectedByLength = routes.rejectedByLength;
+    result.decisions << routes.decisions;
+    if (!input.graph || input.bodyLength <= 0.f) return result;
+    const float L = input.bodyLength;
+
+    // An end seen in the previous frame rarely disappears in the next, while an
+    // end that is already hidden usually stays hidden.
+    auto endCost = [](RouteEndKind kind, const RolePrediction& role) {
+        if (kind == RouteEndKind::Hidden && role.valid && role.age == 0) return kVanishingEndCost;
+        return routeEndCost(kind);
+    };
+
+    std::vector<RouteCandidate> scored;
+    for (const RouteOption& o : routes.options) {
+        const float shared = o.lengthCost + o.junctionCost + (o.retrace ? kRetraceCost : 0.f);
         for (int assignment = 0; assignment < 2; ++assignment) {
             RouteCandidate c;
-            c.points = sampled;
-            c.headKind = r.start.kind;
-            c.tailKind = r.end.kind;
+            c.points = o.points;
+            c.headKind = o.startKind;
+            c.tailKind = o.endKind;
             if (assignment == 1) {
                 std::reverse(c.points.begin(), c.points.end());
                 std::swap(c.headKind, c.tailKind);
             }
-            c.length = length;
+            c.length = o.length;
             c.turning = signedTurning(c.points);
             const float headCost = roleCost(c.points.front(), input.head, L);
             const float tailCost = roleCost(c.points.back(), input.tail, L);
@@ -479,27 +515,27 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
                 orientationCost = kOrientationMismatchCost;
             }
             const float endsCost = endCost(c.headKind, input.head) + endCost(c.tailKind, input.tail) +
-                                   (r.retrace ? kRetraceCost : 0.f);
+                                   (o.retrace ? kRetraceCost : 0.f);
             c.score = shared + endCost(c.headKind, input.head) + endCost(c.tailKind, input.tail) +
                       headCost + tailCost + orientationCost;
             c.orientationCost = orientationCost;
-            const int startKey = r.start.kind == RouteEndKind::Hidden ? -1 : r.start.graphIndex;
-            const int endKey = r.end.kind == RouteEndKind::Hidden ? -1 : r.end.graphIndex;
+            const int startKey = o.startKind == RouteEndKind::Hidden ? -1 : o.startGraphIndex;
+            const int endKey = o.endKind == RouteEndKind::Hidden ? -1 : o.endGraphIndex;
             c.labeling = assignment == 0 ? std::make_pair(startKey, endKey) : std::make_pair(endKey, startKey);
             c.summary = QStringLiteral("route %1%2 len=%3 head=%4(%5,%6) tail=%7(%8,%9) "
                                        "cost: length=%10 ends=%11 headPred=%12 tailPred=%13 "
                                        "junction=%14 orient=%15 turning=%16 total=%17")
-                .arg(r.path, assignment == 1 ? QStringLiteral(" reversed") : QString())
-                .arg(length, 0, 'f', 1)
-                .arg(kindName(c.headKind))
+                .arg(o.path, assignment == 1 ? QStringLiteral(" reversed") : QString())
+                .arg(o.length, 0, 'f', 1)
+                .arg(routeEndKindName(c.headKind))
                 .arg(c.points.front().x, 0, 'f', 1).arg(c.points.front().y, 0, 'f', 1)
-                .arg(kindName(c.tailKind))
+                .arg(routeEndKindName(c.tailKind))
                 .arg(c.points.back().x, 0, 'f', 1).arg(c.points.back().y, 0, 'f', 1)
-                .arg(0.5f * lengthDev * lengthDev, 0, 'f', 2)
+                .arg(o.lengthCost, 0, 'f', 2)
                 .arg(endsCost, 0, 'f', 2)
                 .arg(headCost, 0, 'f', 2)
                 .arg(tailCost, 0, 'f', 2)
-                .arg(junctionCost, 0, 'f', 2)
+                .arg(o.junctionCost, 0, 'f', 2)
                 .arg(orientationCost, 0, 'f', 1)
                 .arg(c.turning, 0, 'f', 2)
                 .arg(c.score, 0, 'f', 2);
@@ -531,8 +567,9 @@ RouteSelectionResult selectSelfCrossedRoute(const RouteSelectionInput& input)
               [](const RouteCandidate& a, const RouteCandidate& b) { return a.score < b.score; });
     result.decisions << QStringLiteral("route selection: bodyLength=%1 window=[%2,%3] nodes=%4 edges=%5 "
                                        "generated=%6 rejectedByLength=%7 scored=%8 orientationRef=%9")
-        .arg(L, 0, 'f', 1).arg(minLength, 0, 'f', 1).arg(maxLength, 0, 'f', 1)
-        .arg(rg.nodes.size()).arg(rg.edges.size())
+        .arg(L, 0, 'f', 1)
+        .arg(kRouteMinLengthFraction * L, 0, 'f', 1).arg(kRouteMaxLengthFraction * L, 0, 'f', 1)
+        .arg(routes.nodes).arg(routes.edges)
         .arg(result.generated).arg(result.rejectedByLength).arg(scored.size())
         .arg(input.hasOrientationReference ? QString::number(input.orientationReference, 'f', 2)
                                            : QStringLiteral("none"));

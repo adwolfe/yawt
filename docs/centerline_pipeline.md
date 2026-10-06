@@ -2,7 +2,7 @@
 
 This page defines the code names that appear in comments and debug output for the
 post-tracking centerline pass: **Phase A / B / C**, **Sweep 0 / 1**, **Step 1–5**,
-**D-1 … D-4**, **S-0 / S-1**, and the retired **D-2 / D-3 / 0-tip ring cut**. The names date from the pass's incremental
+**Pass 1–2**, **D-1 … D-4**, **B-1**, **S-0 / S-1**, and the retired **D-2 / D-3 / 0-tip ring cut**. The names date from the pass's incremental
 development and are kept because they are embedded in log lines, the Debug tab, and
 `Debug::CenterlineBranch`. This is the only place they are defined.
 
@@ -47,7 +47,7 @@ Topology values:
 | `Merged` | The worm is in a merge group on this frame (`inMergeGroup` overrides the geometric result) |
 | `Lost` | No valid blob |
 
-## Sweeps (how frames are visited)
+## Sweep 0 and passes (how frames are visited)
 
 `CenterlineWorker::doWork` processes worms one at a time. For each worm:
 
@@ -55,15 +55,34 @@ Topology values:
 non-lost frame. A throwaway skeleton centerline is built on a temporary copy of each blob
 and its arc length recorded. `refLength` is the median. Nothing is written to storage.
 
-**Sweep 1 — keyframe-outward.** The frame the user clicked on (`AnnotationItem::frameOfSelection`)
-is processed first as a **keyframe bootstrap**: there is no previous frame, so head/tail
-are assigned from geometry alone and the predictor is seeded from the result. The pass then
-walks forward from keyframe + 1 to the end, and separately backward from keyframe − 1 to 0,
-each direction carrying its own `CenterlineSweepState` (predictor plus previous centerline).
-If a frame is skipped (merged frame with `skipMergedFrames` on, or lost), the next processed
-frame is treated as a fresh bootstrap.
+**Pass 1 — clean islands.** Every frame runs `Centerline::processFrame` on its own (no
+predictor; the steps below). Consecutive clean frames are linked into **islands**: each
+frame's centerline is compared with the previous one, both as-is and reversed (mean
+point-to-point distance), and reversed if that matches better, so each physical end is
+tracked without being named. A frame whose shape jumps by more than a third of the body
+length, or matches both ways about equally, starts a new island. Islands of at least one
+second of frames (`kMinIslandSeconds`) **anchor** contact bridges; shorter ones are solved
+as part of the neighbouring gap. Frame order does not matter, so the keyframe plays no role.
 
-Each frame in Sweep 1 runs `Centerline::processFrame`, which is the five steps below.
+**Pass 2 — contact bridges** (`Centerline::processTrackContinuity`, `centerlinetrack.cpp`).
+Every **gap** between anchors (self-crossed frames, short clean runs, merged or lost frames)
+is solved as one sequence with both neighbouring islands fixed. Each self-crossed frame lists
+its candidate routes (`enumerateSelfCrossedRoutes`, with the neighbouring islands' length as
+the body length); a shortest-path search then picks one route per frame, in either
+direction, scoring:
+
+- per frame: length deviation and end type (visible tip, short branch, hidden);
+- per step: mean midline displacement, each end's displacement (a guessed hidden end gets a
+  wider allowance), a visible end vanishing or a hidden one reappearing, and a reversal of
+  loop direction;
+- a frame may be skipped at a fixed cost (up to three in a row) and is then filled from its
+  neighbours and flagged.
+
+The search runs once for each pairing of the right island's ends. The cheaper pairing
+orients the right island; the cost difference is the bridge **margin**. Islands linked by a
+bridge with margin ≥ `reviewMargin` (4) form one **continuity chain** with consistent
+labels. A weaker bridge still records its best guess as a weak link, and its frames are
+flagged for review.
 
 ## Steps (what happens on one frame)
 
@@ -86,7 +105,8 @@ detection; if the cut blob classifies as `Clean` it replaces the original for th
 |---|---|---|
 | **D-1** clean graph path | `Clean` | Shortest path through the skeleton graph from head tip to tail tip |
 | **D-1** synthetic-hole retry | D-1 path is shorter than half the body length (worm tightly coiled but no hole detected) | Punch a synthetic hole where the body overlaps, re-skeletonise, and run S-1 on it; restore the D-1 path if that fails |
-| **S-1** self-crossed route selection | `SelfCrossed`, any number of visible tips | Choose among skeleton routes (below) |
+| **B-1** contact bridge | `SelfCrossed` frame inside a gap (the worker's normal path) | Route chosen by the two-sided sequence in Pass 2 |
+| **S-1** self-crossed route selection | `SelfCrossed`, when `processFrame` runs on its own (Pass 1 output, later replaced by B-1) | Choose among skeleton routes (below) |
 | **S-0** self-crossed unresolved | S-1 found no route within the body-length window | No centerline; the visible tips and their roles are still stored |
 | **D-4** fallback contour skeleton | `Merged`, or D-1 failed to produce a centerline | Legacy `Tracking::populateCenterlineFromContour` |
 
@@ -133,20 +153,23 @@ Head/tail assignment in `detectEndpoints` step (g) uses the same age-weighted li
 On a clean frame that follows a clean frame, the previous centerline's order is a second
 check on the two tips.
 
-## Post-sweep passes (per worm, after both directions)
+## Naming and review (per worm, after the bridges)
 
-1. **Motion-based head/tail refinement** (`refineHeadTailByMotion`). Over windows
-   of at least a few seconds of frames, compares the worm's motion with its recorded head.
-   Windows in which more than `maxReversalFraction` of steps oppose the majority direction
-   are treated as turning events and skipped. Produces `motionSwapped`, emitted as
-   `headTailMotionSwapEvent`.
-2. **Geometry-based head/tail refinement** (`refineHeadTailByGeometry`). Collects tip
-   geometry features on `Clean` frames and, when the head and tail distributions separate
-   significantly (Cohen's d), flips segments whose assignment disagrees. Produces
-   `geoSwapped`, emitted as `headTailGeometrySwapEvent`.
-3. **Net swap** = XOR of the two lists (a frame flipped by both passes is unchanged),
-   emitted as `headTailSwapEvent` and written to `<basename>_headtail_swaps.xlsx`.
-4. **Midpoint smoothing** (optional, `setSmoothCenterline`). A degree-2 Savitzky–Golay
+1. **Motion per chain** (`refineChainsByMotion`). Over consecutive clean frames of a chain,
+   the centroid should move toward the head. A chain needs five seconds of clean frames and
+   no more than `maxReversalFraction` of its steps against the majority; otherwise it is
+   left undecided. A decided chain is flipped as a unit, contact frames included.
+2. **Continuity across weak links** (`propagateAcrossWeakLinks`). An undecided chain next to
+   a decided one follows the weak bridge's best guess.
+3. **Geometry per chain** (`refineChainsByGeometry`). Tip statistics (Cohen's d) learned on
+   chains motion named decide the chains still undecided; continuity is then propagated again.
+   Flips from all three are XORed into `headTailSwapEvent` and written as `SWAP` in
+   `<basename>_headtail_swaps.xlsx`.
+4. **Review flags.** Frames from weak bridges, skipped or unresolved bridge frames, bridge
+   frames with a high cost, and chains nothing could name get `BlobCenterline::needsReview`
+   with a reason (saved in `worms.json`), `REVIEW` in the head/tail workbook, a count in the
+   processing summary, and a `REVIEW:` line in their DEBUG log.
+5. **Midpoint smoothing** (optional, `setSmoothCenterline`). A degree-2 Savitzky–Golay
    filter over a window of `2 · sgHalfWindow + 1` consecutive frames smooths the
    centerline midpoint used for the trace. On `Clean` frames, the filtered midpoint
    guides a second snake relaxation while the detected head and tail remain pinned.

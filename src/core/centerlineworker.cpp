@@ -1,5 +1,6 @@
 #include "centerlineworker.h"
 #include "centerlineprocessor.h"
+#include "centerlinetrack.h"
 #include "../debug/debugdatastore.h"
 #include "../debug/debugrecords.h"
 #include "../data/trackingcommon.h"
@@ -11,165 +12,146 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
 
-// Refine head/tail assignment by examining clean segments of the track.
+// Clean frames an island needs, in seconds, before it anchors a contact bridge.
+static constexpr double kMinIslandSeconds = 1.0;
+
+// ── Pass 3: name head and tail once per continuity chain ────────────────────
 //
-// For each continuous run of Clean-topology frames long enough to establish a
-// reliable direction (>= fps * kWindowSeconds frames), the motion of the worm's
-// centroid is compared against the front-to-back axis of the centerline.  If
-// the back end is leading (score < 0), the centerline and head/tail indices are
-// reversed for every frame in that segment.
-//
-// maxReversalFraction: if more than this fraction of usable direction steps
-// within a segment point against the majority direction, the segment is treated
-// as ambiguous (direction reversal / turning event) and skipped.
-//
-// Returns the frame numbers whose centerlines were reversed.
-static QList<int> refineHeadTailByMotion(
-    TrackingDataStorage* storage,
-    QMutex* storageMutex,
-    int wormId,
-    const Tracking::Track& sortedPoints,
-    double fps,
-    float maxReversalFraction)
+// processTrackContinuity() leaves each chain internally consistent: its clean
+// frames, bridged contacts and short clean runs all agree on which physical end
+// is which. These passes only decide which end of a chain is the head, using
+// the chain's clean frames as evidence, and flip the whole chain as a unit, so
+// a contact frame can never disagree with its neighbours afterwards.
+
+namespace {
+
+struct ChainDecision {
+    bool decided = false;      // head/tail naming settled
+    bool flipped = false;      // reversed since processTrackContinuity
+    QStringList notes;
+};
+
+struct CleanFrame {
+    int frame;
+    cv::Point2f centroid;
+    const Tracking::DetectedBlob* blob;   // valid while `store` below lives
+};
+
+// Clean frames of one chain with a usable centerline and both roles assigned.
+std::vector<CleanFrame> cleanFramesOf(const std::vector<int>& chain,
+                                      const std::map<int, Tracking::DetectedBlob>& store,
+                                      const std::map<int, cv::Point2f>& centroids)
 {
-    QList<int> flippedFrames;
-    if (!storage) return flippedFrames;
+    std::vector<CleanFrame> out;
+    for (int f : chain) {
+        auto it = store.find(f);
+        if (it == store.end()) continue;
+        const auto& cl = it->second.centerline;
+        if (cl.topology != Tracking::TopologyState::Clean || cl.points.size() < 4) continue;
+        if (cl.headTipIdx < 0 || cl.tailTipIdx < 0) continue;
+        auto c = centroids.find(f);
+        if (c == centroids.end()) continue;
+        out.push_back({f, c->second, &it->second});
+    }
+    return out;
+}
 
+void flipChain(Centerline::CenterlineFrameIo& io, int wormId, const std::vector<int>& chain,
+               const QString& reason, QList<int>& flipped)
+{
+    for (int f : chain) {
+        Centerline::reverseStoredFrame(io, wormId, f, reason);
+        flipped.append(f);
+    }
+}
+
+std::map<int, Tracking::DetectedBlob> loadChainBlobs(Centerline::CenterlineFrameIo& io, int wormId,
+                                                    const std::vector<std::vector<int>>& chains)
+{
+    std::map<int, Tracking::DetectedBlob> store;
+    for (const auto& chain : chains)
+        for (int f : chain) {
+            const QMap<int, Tracking::DetectedBlob> blobs = io.getDetectedBlobsForFrame(f);
+            if (blobs.contains(wormId)) store[f] = blobs[wormId];
+        }
+    return store;
+}
+
+} // namespace
+
+// Motion: over consecutive clean frames, the centroid should move toward the
+// head more often than toward the tail. A chain needs kWindowSeconds of clean
+// frames; one whose steps are split between directions by more than
+// maxReversalFraction (reversal bouts) is left undecided.
+static QList<int> refineChainsByMotion(Centerline::CenterlineFrameIo& io,
+                                       int wormId,
+                                       const std::map<int, cv::Point2f>& centroids,
+                                       const std::vector<std::vector<int>>& chains,
+                                       double fps,
+                                       float maxReversalFraction,
+                                       std::vector<ChainDecision>& decisions)
+{
+    QList<int> flipped;
     static constexpr double kWindowSeconds = 5.0;
     const int minFrames = std::max(3, static_cast<int>(fps * kWindowSeconds));
+    const std::map<int, Tracking::DetectedBlob> store = loadChainBlobs(io, wormId, chains);
 
-    struct SegFrame {
-        int frameNumber;
-        cv::Point2f centroid;
-        cv::Point2f front;
-        cv::Point2f back;
-    };
-
-    auto tryLoadClean = [&](const Tracking::TrackPoint& tp) -> std::optional<SegFrame> {
-        QMap<int, Tracking::DetectedBlob> blobs;
-        {
-            QMutexLocker locker(storageMutex);
-            blobs = storage->getDetectedBlobsForFrame(tp.frameNumber);
+    for (size_t c = 0; c < chains.size(); ++c) {
+        const std::vector<CleanFrame> clean = cleanFramesOf(chains[c], store, centroids);
+        if (static_cast<int>(clean.size()) < minFrames) {
+            decisions[c].notes << QStringLiteral("motion: %1 clean frames, need %2")
+                                      .arg(clean.size()).arg(minFrames);
+            continue;
         }
-        if (!blobs.contains(wormId)) return std::nullopt;
-        const Tracking::DetectedBlob& blob = blobs[wormId];
-        if (!blob.isValid || blob.centerline.points.size() < 2) return std::nullopt;
-        if (blob.centerline.topology != Tracking::TopologyState::Clean) return std::nullopt;
-        return SegFrame{tp.frameNumber, tp.position,
-                        blob.centerline.points.front(), blob.centerline.points.back()};
-    };
-
-    // Returns {netScore, minorityFraction} for a segment.
-    // netScore > 0 → front is head. minorityFraction is the fraction of usable
-    // steps that go against the majority — high values indicate a reversal.
-    struct SegmentStats { float score; float minorityFraction; };
-    auto analyzeSegment = [](const std::vector<SegFrame>& seg) -> SegmentStats {
-        float fwdSteps = 0.f, revSteps = 0.f;
-        for (size_t i = 1; i < seg.size(); ++i) {
-            const cv::Point2f motion = seg[i].centroid - seg[i - 1].centroid;
+        float fwd = 0.f, rev = 0.f;
+        for (size_t i = 1; i < clean.size(); ++i) {
+            if (clean[i].frame != clean[i - 1].frame + 1) continue;
+            const cv::Point2f motion = clean[i].centroid - clean[i - 1].centroid;
             const float mLen = std::hypot(motion.x, motion.y);
             if (mLen < 0.5f) continue;
-            const cv::Point2f axis = seg[i - 1].front - seg[i - 1].back;
+            const auto& pts = clean[i - 1].blob->centerline.points;
+            const cv::Point2f axis = pts.front() - pts.back();
             const float aLen = std::hypot(axis.x, axis.y);
             if (aLen < 2.f) continue;
             const float align = (motion.x * axis.x + motion.y * axis.y) / (mLen * aLen);
-            if (align >= 0.f) fwdSteps += align;
-            else              revSteps += -align;
+            if (align >= 0.f) fwd += align; else rev -= align;
         }
-        const float total = fwdSteps + revSteps;
-        const float minFrac = (total > 1e-6f)
-            ? std::min(fwdSteps, revSteps) / total
-            : 0.f;
-        return {fwdSteps - revSteps, minFrac};
-    };
-
-    auto flipSegment = [&](const std::vector<SegFrame>& seg) {
-        for (const SegFrame& sf : seg) {
-            QMap<int, Tracking::DetectedBlob> blobs;
-            {
-                QMutexLocker locker(storageMutex);
-                blobs = storage->getDetectedBlobsForFrame(sf.frameNumber);
-            }
-            if (!blobs.contains(wormId)) continue;
-            Tracking::DetectedBlob blob = blobs[wormId];
-            if (blob.centerline.points.size() >= 2)
-                std::reverse(blob.centerline.points.begin(), blob.centerline.points.end());
-            std::swap(blob.centerline.headTipIdx, blob.centerline.tailTipIdx);
-            {
-                QMutexLocker locker(storageMutex);
-                storage->setDetectedBlobForFrame(sf.frameNumber, wormId, blob);
-            }
-            flippedFrames.append(sf.frameNumber);
+        const float total = fwd + rev;
+        const float minority = total > 1e-6f ? std::min(fwd, rev) / total : 0.f;
+        if (total <= 1e-6f) {
+            decisions[c].notes << QStringLiteral("motion: no usable steps");
+            continue;
         }
-    };
-
-    auto finalizeSegment = [&](const std::vector<SegFrame>& seg) {
-        if (static_cast<int>(seg.size()) < minFrames) return;
-
-        auto [score, minFrac] = analyzeSegment(seg);
-
-        // Skip this segment if there is a significant direction reversal within it.
-        if (minFrac > maxReversalFraction) {
-            YAWT_INFO(lcCoreCenterlineWorker)
-                << QStringLiteral("Worm %1 segment [%2–%3] (%4 frames): "
-                                  "skipped (reversal fraction=%5 > threshold=%6)")
-                       .arg(wormId)
-                       .arg(seg.front().frameNumber)
-                       .arg(seg.back().frameNumber)
-                       .arg(static_cast<int>(seg.size()))
-                       .arg(minFrac, 0, 'f', 3)
-                       .arg(maxReversalFraction, 0, 'f', 3);
-            return;
+        if (minority > maxReversalFraction) {
+            decisions[c].notes << QStringLiteral("motion: reversal fraction %1 > %2")
+                                      .arg(minority, 0, 'f', 2).arg(maxReversalFraction, 0, 'f', 2);
+            continue;
         }
-
-        const bool needsFlip = score < 0.f;
-        if (needsFlip) flipSegment(seg);
-
+        decisions[c].decided = true;
+        const bool flip = fwd < rev;
+        decisions[c].flipped = flip;
+        if (flip) flipChain(io, wormId, chains[c], QStringLiteral("motion: chain's back end leads"), flipped);
         YAWT_INFO(lcCoreCenterlineWorker)
-            << QStringLiteral("Worm %1 segment [%2–%3] (%4 frames): "
-                              "score=%5 reversalFrac=%6 flip=%7")
-                   .arg(wormId)
-                   .arg(seg.front().frameNumber)
-                   .arg(seg.back().frameNumber)
-                   .arg(static_cast<int>(seg.size()))
-                   .arg(score, 0, 'f', 3)
-                   .arg(minFrac, 0, 'f', 3)
-                   .arg(needsFlip ? "yes" : "no");
-    };
-
-    std::vector<SegFrame> currentSegment;
-
-    for (const Tracking::TrackPoint& tp : sortedPoints) {
-        if (tp.quality == Tracking::TrackPointQuality::Lost) {
-            finalizeSegment(currentSegment);
-            currentSegment.clear();
-            continue;
-        }
-        auto frame = tryLoadClean(tp);
-        if (!frame) {
-            finalizeSegment(currentSegment);
-            currentSegment.clear();
-            continue;
-        }
-        currentSegment.push_back(*frame);
+            << QStringLiteral("Worm %1 chain [%2–%3] (%4 clean frames): motion score=%5 reversalFrac=%6 flip=%7")
+                   .arg(wormId).arg(chains[c].front()).arg(chains[c].back()).arg(clean.size())
+                   .arg(fwd - rev, 0, 'f', 3).arg(minority, 0, 'f', 3).arg(flip ? "yes" : "no");
     }
-    finalizeSegment(currentSegment);
-
-    return flippedFrames;
+    return flipped;
 }
 
-// ── Geometry-based head/tail refinement ─────────────────────────────────────
+// ── Geometry-based head/tail naming ─────────────────────────────────────────
 //
 // Three tip statistics per frame:
 //   A – contour asymmetry at the tip apex (head tends to be more symmetric)
 //   B – local centerline curvature variance near the tip (head is more flexible)
 //   C – |signed tip curvature| from TipCandidate
 //
-// Global Cohen's d (threshold 0.4, min 15 frames) selects which statistics are
-// informative for this worm.  Then each clean segment >= fps*2 s is given a
-// majority vote across the significant statistics; if the observed head/tail
-// difference contradicts the global signal, the segment is flipped.
+// Cohen's d (threshold 0.4, min 15 frames) over the chains motion already named
+// selects which statistics distinguish this worm's head from its tail; each
+// chain motion left undecided is then named by a majority vote of those
+// statistics over its clean frames.
 
 struct TipGeomFeatures {
     float asymmetry = 0.f;
@@ -276,78 +258,51 @@ static TipGeomFeatures computeTipGeomFeatures(
     return result;
 }
 
-static QList<int> refineHeadTailByGeometry(
-    TrackingDataStorage* storage,
-    QMutex* storageMutex,
-    int wormId,
-    const Tracking::Track& sortedPoints,
-    double fps)
+static QList<int> refineChainsByGeometry(Centerline::CenterlineFrameIo& io,
+                                         int wormId,
+                                         const std::map<int, cv::Point2f>& centroids,
+                                         const std::vector<std::vector<int>>& chains,
+                                         double fps,
+                                         std::vector<ChainDecision>& decisions)
 {
-    QList<int> flippedFrames;
-    if (!storage) return flippedFrames;
-
+    QList<int> flipped;
     static constexpr double kMinSegSeconds  = 2.0;
     const int minSegFrames = std::max(3, static_cast<int>(fps * kMinSegSeconds));
     static constexpr int   kMinSamples      = 15;
     static constexpr float kCohensThreshold = 0.4f;
+    const std::map<int, Tracking::DetectedBlob> store = loadChainBlobs(io, wormId, chains);
 
-    struct FrameGeom {
-        int frameNumber = -1;
-        TipGeomFeatures head;
-        TipGeomFeatures tail;
-    };
-
-    // Load features for one track point; returns nullopt for non-Clean frames.
-    auto tryLoadGeom = [&](const Tracking::TrackPoint& tp)
-        -> std::optional<FrameGeom>
-    {
-        QMap<int, Tracking::DetectedBlob> blobs;
-        {
-            QMutexLocker locker(storageMutex);
-            blobs = storage->getDetectedBlobsForFrame(tp.frameNumber);
+    struct FrameGeom { TipGeomFeatures head, tail; };
+    std::vector<std::vector<FrameGeom>> perChain(chains.size());
+    for (size_t c = 0; c < chains.size(); ++c) {
+        for (const CleanFrame& cf : cleanFramesOf(chains[c], store, centroids)) {
+            FrameGeom fg{computeTipGeomFeatures(*cf.blob, cf.blob->centerline.headTipIdx, true),
+                         computeTipGeomFeatures(*cf.blob, cf.blob->centerline.tailTipIdx, false)};
+            if (fg.head.valid && fg.tail.valid) perChain[c].push_back(fg);
         }
-        if (!blobs.contains(wormId)) return std::nullopt;
-        const Tracking::DetectedBlob& blob = blobs[wormId];
-        if (!blob.isValid) return std::nullopt;
-        if (blob.centerline.topology != Tracking::TopologyState::Clean) return std::nullopt;
-        if (blob.centerline.headTipIdx < 0 || blob.centerline.tailTipIdx < 0) return std::nullopt;
-        if (blob.centerline.points.size() < 4) return std::nullopt;
-
-        FrameGeom fg;
-        fg.frameNumber = tp.frameNumber;
-        fg.head = computeTipGeomFeatures(blob, blob.centerline.headTipIdx, true);
-        fg.tail = computeTipGeomFeatures(blob, blob.centerline.tailTipIdx, false);
-        if (!fg.head.valid || !fg.tail.valid) return std::nullopt;
-        return fg;
-    };
-
-    // Pass 1: collect all clean-frame geometries, parallel to sortedPoints.
-    std::vector<std::optional<FrameGeom>> perPoint;
-    perPoint.reserve(sortedPoints.size());
-    std::vector<FrameGeom> allFrameGeoms;
-    for (const Tracking::TrackPoint& tp : sortedPoints) {
-        auto fg = tryLoadGeom(tp);
-        if (fg) allFrameGeoms.push_back(*fg);
-        perPoint.push_back(std::move(fg));
     }
 
-    if (static_cast<int>(allFrameGeoms.size()) < kMinSamples) return flippedFrames;
-
-    // Build per-statistic head/tail vectors from all clean frames.
+    // Learn which statistics separate head from tail on chains motion named;
+    // fall back to every chain when motion named none.
+    bool anyDecided = false;
+    for (const auto& d : decisions) anyDecided |= d.decided;
     std::vector<float> headA, tailA, headB, tailB, headC, tailC;
-    headA.reserve(allFrameGeoms.size()); tailA.reserve(allFrameGeoms.size());
-    headB.reserve(allFrameGeoms.size()); tailB.reserve(allFrameGeoms.size());
-    headC.reserve(allFrameGeoms.size()); tailC.reserve(allFrameGeoms.size());
-    for (const FrameGeom& fg : allFrameGeoms) {
-        headA.push_back(fg.head.asymmetry);  tailA.push_back(fg.tail.asymmetry);
-        headB.push_back(fg.head.curvVar);    tailB.push_back(fg.tail.curvVar);
-        headC.push_back(fg.head.curvature);  tailC.push_back(fg.tail.curvature);
+    for (size_t c = 0; c < chains.size(); ++c) {
+        if (anyDecided && !decisions[c].decided) continue;
+        for (const FrameGeom& fg : perChain[c]) {
+            headA.push_back(fg.head.asymmetry);  tailA.push_back(fg.tail.asymmetry);
+            headB.push_back(fg.head.curvVar);    tailB.push_back(fg.tail.curvVar);
+            headC.push_back(fg.head.curvature);  tailC.push_back(fg.tail.curvature);
+        }
+    }
+    if (static_cast<int>(headA.size()) < kMinSamples) {
+        for (auto& d : decisions)
+            if (!d.decided) d.notes << QStringLiteral("geometry: %1 reference frames, need %2")
+                                           .arg(headA.size()).arg(kMinSamples);
+        return flipped;
     }
 
-    // Cohen's d = (mean_head − mean_tail) / pooled_std.
-    // Positive d → head typically larger; negative → tail typically larger.
-    auto cohensD = [](const std::vector<float>& h,
-                      const std::vector<float>& t) -> float {
+    auto cohensD = [](const std::vector<float>& h, const std::vector<float>& t) -> float {
         if (h.size() < 2 || t.size() < 2) return 0.f;
         float mH = 0.f, mT = 0.f;
         for (float v : h) mH += v;
@@ -360,118 +315,57 @@ static QList<int> refineHeadTailByGeometry(
         const float pooled = std::sqrt((vH + vT) / 2.f);
         return pooled < 1e-9f ? 0.f : (mH - mT) / pooled;
     };
-
     const float dA = cohensD(headA, tailA);
     const float dB = cohensD(headB, tailB);
     const float dC = cohensD(headC, tailC);
-
-    YAWT_INFO(lcCoreCenterlineWorker)
-        << QStringLiteral("Worm %1 geometry: Cohen's d  A=%2  B=%3  C=%4  "
-                          "(threshold ±%5, n=%6)")
-               .arg(wormId)
-               .arg(dA, 0, 'f', 3).arg(dB, 0, 'f', 3).arg(dC, 0, 'f', 3)
-               .arg(kCohensThreshold, 0, 'f', 2)
-               .arg(allFrameGeoms.size());
-
     const bool sigA = std::abs(dA) >= kCohensThreshold;
     const bool sigB = std::abs(dB) >= kCohensThreshold;
     const bool sigC = std::abs(dC) >= kCohensThreshold;
-
+    YAWT_INFO(lcCoreCenterlineWorker)
+        << QStringLiteral("Worm %1 geometry: Cohen's d  A=%2  B=%3  C=%4  (threshold ±%5, n=%6)")
+               .arg(wormId).arg(dA, 0, 'f', 3).arg(dB, 0, 'f', 3).arg(dC, 0, 'f', 3)
+               .arg(kCohensThreshold, 0, 'f', 2).arg(headA.size());
     if (!sigA && !sigB && !sigC) {
-        YAWT_INFO(lcCoreCenterlineWorker)
-            << QStringLiteral("Worm %1 geometry: no significant statistics, "
-                              "skipping geometry refinement").arg(wormId);
-        return flippedFrames;
+        for (auto& d : decisions)
+            if (!d.decided) d.notes << QStringLiteral("geometry: no statistic separates head from tail");
+        return flipped;
     }
 
-    // Flip all frames in a segment.
-    auto flipSegGeom = [&](const std::vector<FrameGeom>& seg) {
-        for (const FrameGeom& fg : seg) {
-            QMap<int, Tracking::DetectedBlob> blobs;
-            {
-                QMutexLocker locker(storageMutex);
-                blobs = storage->getDetectedBlobsForFrame(fg.frameNumber);
-            }
-            if (!blobs.contains(wormId)) continue;
-            Tracking::DetectedBlob blob = blobs[wormId];
-            if (blob.centerline.points.size() >= 2)
-                std::reverse(blob.centerline.points.begin(), blob.centerline.points.end());
-            std::swap(blob.centerline.headTipIdx, blob.centerline.tailTipIdx);
-            {
-                QMutexLocker locker(storageMutex);
-                storage->setDetectedBlobForFrame(fg.frameNumber, wormId, blob);
-            }
-            flippedFrames.append(fg.frameNumber);
-        }
+    auto median = [](std::vector<float> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
     };
-
-    // Vote across significant statistics for one segment.
-    auto finalizeSegGeom = [&](const std::vector<FrameGeom>& seg) {
-        if (static_cast<int>(seg.size()) < minSegFrames) return;
-
-        // Segment median head – median tail for a statistic.
-        auto segMedianDiff = [&](
-            std::function<float(const FrameGeom&)> headGetter,
-            std::function<float(const FrameGeom&)> tailGetter) -> float
-        {
-            std::vector<float> hv, tv;
-            hv.reserve(seg.size()); tv.reserve(seg.size());
-            for (const auto& fg : seg) {
-                hv.push_back(headGetter(fg));
-                tv.push_back(tailGetter(fg));
-            }
-            std::sort(hv.begin(), hv.end());
-            std::sort(tv.begin(), tv.end());
-            return hv[hv.size() / 2] - tv[tv.size() / 2];
-        };
-
+    for (size_t c = 0; c < chains.size(); ++c) {
+        if (decisions[c].decided) continue;
+        const auto& seg = perChain[c];
+        if (static_cast<int>(seg.size()) < minSegFrames) {
+            decisions[c].notes << QStringLiteral("geometry: %1 clean frames, need %2")
+                                      .arg(seg.size()).arg(minSegFrames);
+            continue;
+        }
         int voteFlip = 0, voteKeep = 0;
-        if (sigA) {
-            const float diff = segMedianDiff(
-                [](const FrameGeom& f){ return f.head.asymmetry; },
-                [](const FrameGeom& f){ return f.tail.asymmetry; });
-            if (diff * dA < 0.f) ++voteFlip; else ++voteKeep;
+        auto vote = [&](bool sig, float d, auto headOf, auto tailOf) {
+            if (!sig) return;
+            std::vector<float> hv, tv;
+            for (const FrameGeom& fg : seg) { hv.push_back(headOf(fg)); tv.push_back(tailOf(fg)); }
+            if ((median(hv) - median(tv)) * d < 0.f) ++voteFlip; else ++voteKeep;
+        };
+        vote(sigA, dA, [](const FrameGeom& f) { return f.head.asymmetry; }, [](const FrameGeom& f) { return f.tail.asymmetry; });
+        vote(sigB, dB, [](const FrameGeom& f) { return f.head.curvVar; }, [](const FrameGeom& f) { return f.tail.curvVar; });
+        vote(sigC, dC, [](const FrameGeom& f) { return f.head.curvature; }, [](const FrameGeom& f) { return f.tail.curvature; });
+        if (voteFlip == voteKeep) {
+            decisions[c].notes << QStringLiteral("geometry: tied vote %1-%2").arg(voteFlip).arg(voteKeep);
+            continue;
         }
-        if (sigB) {
-            const float diff = segMedianDiff(
-                [](const FrameGeom& f){ return f.head.curvVar; },
-                [](const FrameGeom& f){ return f.tail.curvVar; });
-            if (diff * dB < 0.f) ++voteFlip; else ++voteKeep;
-        }
-        if (sigC) {
-            const float diff = segMedianDiff(
-                [](const FrameGeom& f){ return f.head.curvature; },
-                [](const FrameGeom& f){ return f.tail.curvature; });
-            if (diff * dC < 0.f) ++voteFlip; else ++voteKeep;
-        }
-
-        const bool needsFlip = voteFlip > voteKeep;
-        if (needsFlip) flipSegGeom(seg);
-
+        decisions[c].decided = true;
+        decisions[c].flipped = voteFlip > voteKeep;
+        if (voteFlip > voteKeep)
+            flipChain(io, wormId, chains[c], QStringLiteral("geometry: tip statistics favour the other end"), flipped);
         YAWT_INFO(lcCoreCenterlineWorker)
-            << QStringLiteral("Worm %1 geo-seg [%2–%3] (%4 frames): "
-                              "voteFlip=%5 voteKeep=%6 flip=%7")
-                   .arg(wormId)
-                   .arg(seg.front().frameNumber)
-                   .arg(seg.back().frameNumber)
-                   .arg(static_cast<int>(seg.size()))
-                   .arg(voteFlip).arg(voteKeep)
-                   .arg(needsFlip ? "yes" : "no");
-    };
-
-    // Pass 2: walk perPoint, finalize segments on breaks.
-    std::vector<FrameGeom> currentSeg;
-    for (size_t i = 0; i < sortedPoints.size(); ++i) {
-        if (!perPoint[i]) {
-            finalizeSegGeom(currentSeg);
-            currentSeg.clear();
-        } else {
-            currentSeg.push_back(*perPoint[i]);
-        }
+            << QStringLiteral("Worm %1 chain [%2–%3]: geometry voteFlip=%4 voteKeep=%5")
+                   .arg(wormId).arg(chains[c].front()).arg(chains[c].back()).arg(voteFlip).arg(voteKeep);
     }
-    finalizeSegGeom(currentSeg);
-
-    return flippedFrames;
+    return flipped;
 }
 
 // ── CenterlineWorker ────────────────────────────────────────────────────────
@@ -572,26 +466,6 @@ void CenterlineWorker::setCenterlineDebugFrame(const Debug::CenterlineFrameDebug
     m_debugStore->setCenterlineFrame(record);
 }
 
-// 2-sweep / 5-step pipeline. docs/centerline_pipeline.md defines the
-// vocabulary (Phase A/B/C, Sweep, Step, D-1, D-4, S-0/S-1). Structure:
-//
-//   Sweep 0 — read-only walk over all non-merged, non-lost frames; build a
-//             throwaway skeleton centerline per frame; collect arc lengths;
-//             refLength = median of resampled lengths (the baseline measure).
-//
-//   Sweep 1 — keyframe-outward bidirectional per-frame loop. Each frame:
-//             Step 1: detectEndpoints() → tip data + topology + assignment.
-//                     Write back to blob.centerline.tipCandidates (source = SkeletonEndpoint),
-//                     blob.centerline.headTipIdx, blob.centerline.tailTipIdx,
-//                     blob.centerline.topology. On Clean frames, sample baseline.
-//             Step 2: build centerline.
-//                       Clean    → skeleton-graph Dijkstra head→tail.
-//                       SC       → S-1 route selection (centerlineroutes.cpp),
-//                                  hidden ends stored as HypothesizedHidden;
-//                                  S-0 leaves the frame unresolved.
-//                       fallback → populateCenterlineFromContour (D-4).
-//             Step 3: resample to nPoints.
-//             Step 4: snake refinement (Clean only).
 // Degree-2 Savitzky-Golay smoothing over a 1-D float sequence.
 // Half-window h means we look h samples on each side; boundary samples are unchanged.
 // Formula: c[k] = 3h(h+1) - 1 - 5k^2,  norm = (2h-1)(2h+1)(2h+3)/3
@@ -704,7 +578,18 @@ static void smoothMidpointsAndRelaxCenterlines(
     }
 }
 
-//             Step 5: predictor update for next frame.
+// Per worm (docs/centerline_pipeline.md defines the vocabulary):
+//
+//   Sweep 0 — read-only walk over all non-merged, non-lost frames; build a
+//             throwaway skeleton centerline per frame; refLength = median of
+//             resampled lengths (the baseline measure).
+//   Pass 1  — every clean frame on its own (processFrame); consecutive clean
+//             frames are linked into islands by matching whole centerlines.
+//   Pass 2  — each gap between anchoring islands is bridged from both sides
+//             (processTrackContinuity), forming continuity chains.
+//   Pass 3  — motion, then geometry, names head and tail once per chain.
+//   Pass 4  — frames that could not be settled are flagged for review.
+//   Then optional midpoint smoothing of clean frames.
 void CenterlineWorker::doWork()
 {
     if (!m_storage) {
@@ -759,11 +644,6 @@ void CenterlineWorker::doWork()
                       return a.frameNumber < b.frameNumber;
                   });
 
-        // Per-worm keyframe (the user-clicked frame).
-        int keyframe = -1;
-        if (const TableItems::AnnotationItem* item = m_storage->getItem(wormId))
-            keyframe = item->frameOfSelection;
-
         // ── Sweep 0 — body length learning ──────────────────────────────
         // Read-only: skeleton on a TEMPORARY blob copy so storage stays
         // untouched. Only non-ring, non-merged, non-lost frames contribute.
@@ -794,19 +674,6 @@ void CenterlineWorker::doWork()
                              validLengths.end());
             refLength = validLengths[validLengths.size() / 2];
         }
-
-        // Find keyframe index. Fall back to frame 0 if the click frame is
-        // missing from the track (rare; happens on retracking).
-        int keyframeIdx = -1;
-        if (keyframe >= 0) {
-            for (size_t i = 0; i < sortedPoints.size(); ++i) {
-                if (sortedPoints[i].frameNumber == keyframe) {
-                    keyframeIdx = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
-        if (keyframeIdx < 0) keyframeIdx = 0;
 
         Centerline::CenterlineFrameContext context;
         context.wormId = wormId;
@@ -840,68 +707,76 @@ void CenterlineWorker::doWork()
             setCenterlineDebugFrame(record);
         };
 
-        // ── Sweep 1 entry: process keyframe, then propagate outward ────
-        // skipIfMerged is passed on every request; processFrame uses the
-        // per-worm TrackPointQuality to decide whether a frame is merged.
-        // result.processed == false means the frame was skipped (merged or lost);
-        // the next frame is then treated as a fresh keyframe bootstrap.
-        Centerline::CenterlineSweepState seedState;
-        bool seedWasSkipped = false;
-        {
-            Centerline::CenterlineFrameRequest req{keyframeIdx, 1, true};
-            req.skipIfMerged = m_skipMergedFrames;
-            auto r = Centerline::processFrame(context, req, seedState, io);
-            seedWasSkipped = !r.processed;
-            if (seedWasSkipped) seedState = Centerline::CenterlineSweepState{};
-        }
+        io.getCenterlineDebugFrame = [this](int id, int frameNumber, Debug::CenterlineFrameDebug& out) {
+            if (!m_debugStore) return false;
+            QMutexLocker locker(m_sharedStorageMutex.data());
+            return m_debugStore->getCenterlineFrame(id, frameNumber, out);
+        };
 
-        // Forward pass.
-        {
-            Centerline::CenterlineSweepState sweepState = seedState;
-            bool prevWasSkipped = seedWasSkipped;
-            for (int i = keyframeIdx + 1;
-                 i < static_cast<int>(sortedPoints.size()); ++i) {
-                const bool bootstrap = prevWasSkipped;
-                if (bootstrap) sweepState = Centerline::CenterlineSweepState{};
-                Centerline::CenterlineFrameRequest req{i, 1, bootstrap};
-                req.skipIfMerged = m_skipMergedFrames;
-                auto r = Centerline::processFrame(context, req, sweepState, io);
-                prevWasSkipped = !r.processed;
+        // ── Passes 1-2: clean islands and two-sided contact bridges ────────
+        Centerline::TrackPassConfig passConfig;
+        passConfig.skipMergedFrames = m_skipMergedFrames;
+        passConfig.minIslandFrames = std::max(3, static_cast<int>(std::lround(m_fps * kMinIslandSeconds)));
+        const Centerline::TrackPassResult continuity =
+            Centerline::processTrackContinuity(context, io, passConfig);
+        for (const QString& line : continuity.log)
+            YAWT_INFO(lcCoreCenterlineWorker) << line;
+
+        // ── Pass 3: name head and tail once per chain ────────────────────
+        std::map<int, cv::Point2f> centroids;
+        for (const Tracking::TrackPoint& tp : sortedPoints)
+            centroids[tp.frameNumber] = tp.position;
+        // Direct evidence first; then continuity across weak bridges carries a
+        // decided chain's naming to its undecided neighbours before geometry
+        // is consulted, and again afterwards.
+        std::vector<ChainDecision> decisions(continuity.chains.size());
+        auto propagate = [&]() {
+            std::vector<bool> decided(decisions.size()), flipped(decisions.size());
+            for (size_t c = 0; c < decisions.size(); ++c) {
+                decided[c] = decisions[c].decided;
+                flipped[c] = decisions[c].flipped;
             }
-        }
-
-        // Backward pass.
-        {
-            Centerline::CenterlineSweepState sweepState = seedState;
-            bool prevWasSkipped = seedWasSkipped;
-            for (int i = keyframeIdx - 1; i >= 0; --i) {
-                const bool bootstrap = prevWasSkipped;
-                if (bootstrap) sweepState = Centerline::CenterlineSweepState{};
-                Centerline::CenterlineFrameRequest req{i, -1, bootstrap};
-                req.skipIfMerged = m_skipMergedFrames;
-                auto r = Centerline::processFrame(context, req, sweepState, io);
-                prevWasSkipped = !r.processed;
+            const QList<int> frames = Centerline::propagateAcrossWeakLinks(io, wormId, continuity, decided, flipped);
+            for (size_t c = 0; c < decisions.size(); ++c) {
+                if (decided[c] && !decisions[c].decided)
+                    decisions[c].notes << QStringLiteral("named by continuity across a weak bridge");
+                decisions[c].decided = decided[c];
+                decisions[c].flipped = flipped[c];
             }
-        }
-
-        const QList<int> motionSwapped = refineHeadTailByMotion(
-            m_storage, m_sharedStorageMutex.data(),
-            wormId, sortedPoints, m_fps, m_maxReversalFraction);
+            return frames;
+        };
+        const QList<int> motionSwapped = refineChainsByMotion(
+            io, wormId, centroids, continuity.chains, m_fps, m_maxReversalFraction, decisions);
         emit headTailMotionSwapEvent(wormId, motionSwapped);
-
-        const QList<int> geoSwapped = refineHeadTailByGeometry(
-            m_storage, m_sharedStorageMutex.data(),
-            wormId, sortedPoints, m_fps);
+        QList<int> linkSwapped = propagate();
+        const QList<int> geoSwapped = refineChainsByGeometry(
+            io, wormId, centroids, continuity.chains, m_fps, decisions);
         emit headTailGeometrySwapEvent(wormId, geoSwapped);
+        linkSwapped += propagate();
 
-        // XOR: a frame flipped by both passes cancels out (net no change).
+        // XOR: a frame flipped an even number of times is unchanged.
         QSet<int> netSet;
-        for (int f : motionSwapped) netSet.insert(f);
-        for (int f : geoSwapped) {
-            if (netSet.contains(f)) netSet.remove(f);
-            else netSet.insert(f);
-        }
+        for (const QList<int>* list : std::initializer_list<const QList<int>*>{&motionSwapped, &linkSwapped, &geoSwapped})
+            for (int f : *list) {
+                if (netSet.contains(f)) netSet.remove(f);
+                else netSet.insert(f);
+            }
         emit headTailSwapEvent(wormId, QList<int>(netSet.begin(), netSet.end()));
+
+        // ── Pass 4: flag what could not be settled ───────────────────────
+        QSet<int> reviewFrames;
+        for (const auto& [frame, reason] : continuity.review) reviewFrames.insert(frame);
+        for (size_t c = 0; c < continuity.chains.size(); ++c) {
+            if (decisions[c].decided) continue;
+            const QString reason = QStringLiteral("head/tail naming undetermined for chain %1-%2 (%3)")
+                .arg(continuity.chains[c].front()).arg(continuity.chains[c].back())
+                .arg(decisions[c].notes.join(QStringLiteral("; ")));
+            for (int f : continuity.chains[c]) {
+                Centerline::flagStoredFrame(io, wormId, f, reason);
+                reviewFrames.insert(f);
+            }
+        }
+        emit centerlineReviewEvent(wormId, QList<int>(reviewFrames.begin(), reviewFrames.end()));
 
         if (m_smoothCenterline) {
             smoothMidpointsAndRelaxCenterlines(

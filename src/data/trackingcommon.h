@@ -253,6 +253,8 @@ struct BlobCenterline {
     int headTipIdx = -1;                      // Index into tipCandidates of the assigned head, or -1
     int tailTipIdx = -1;                      // Index into tipCandidates of the assigned tail, or -1
     TopologyState topology = TopologyState::Unknown;  // Per-frame geometric classification (Phase C.2)
+    bool needsReview = false;                 // Flagged by the centerline pass for human assessment
+    QString reviewReason;                     // Why it was flagged; empty when not flagged
 
     bool isEmpty() const {
         return points.empty() && tipCandidates.empty() && topology == TopologyState::Unknown;
