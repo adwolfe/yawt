@@ -75,6 +75,59 @@ static QModelIndex firstWorm(AnalysisSessionModel& model)
     return model.index(0, 0, video);
 }
 
+// Fixed saved-file fixtures protect the JSON schema while serializers are shared.
+static void testGeometrySerialization()
+{
+    const QJsonObject fixture = QJsonDocument::fromJson(R"json({
+        "frame":7,"quality":0,"position":{"x":10.25,"y":-2.5},
+        "roi":{"x":1,"y":2,"width":30,"height":40},
+        "area":20,"aspectRatio":2,"bodyLength":5,
+        "tips":{"head":{"x":1.25,"y":2.5},"tail":{"x":4.25,"y":6.5}},
+        "blob":{
+            "isValid":true,"area":20,"convexHullArea":25,"touchesROIboundary":true,
+            "centroid":{"x":10.25,"y":-2.5},
+            "boundingBox":{"x":1,"y":2,"width":30,"height":40},
+            "contourPoints":[[-1,2],[3,4],[5,6]],
+            "holeContourPoints":[[[1,2],[2,3]],[]]
+        },
+        "centerline":{
+            "points":[[1.25,2.5],[4.25,6.5]],"hasCutPoint":true,
+            "cutPoint":{"x":2.25,"y":3.5},"tipCandidates":[],
+            "headTipIdx":-1,"tailTipIdx":-1,"topology":0
+        }
+    })json").object();
+    check(!fixture.isEmpty(), "parse geometry fixture");
+    Tracking::DetectedBlob blob;
+    bool hasBlob = false;
+    const auto point = WormsJson::trackPointFromJson(fixture, &blob, &hasBlob);
+    check(hasBlob && blob.holeContourPoints.size() == 2, "load ring geometry");
+    check(blob.centerline.cutPoint == cv::Point2f(2.25f, 3.5f), "load fractional cut point");
+    check(WormsJson::trackPointToJson(point, &blob) == fixture, "preserve saved geometry schema");
+
+    // The former combined layout remains readable as well as the split layout.
+    QJsonObject combined = fixture.value("blob").toObject();
+    combined["centerlinePoints"] = fixture["centerline"].toObject()["points"];
+    combined["hasCenterlineCutPoint"] = true;
+    combined["centerlineCutPoint"] = fixture["centerline"].toObject()["cutPoint"];
+    combined["tipCandidates"] = QJsonArray();
+    combined["assignedHeadTipIdx"] = -1;
+    combined["assignedTailTipIdx"] = -1;
+    combined["topologyState"] = 0;
+    check(Tracking::detectedBlobToJson(Tracking::detectedBlobFromJson(combined)) == combined,
+          "preserve combined blob schema");
+
+    // Old centerline-only files can include incomplete coordinate entries.
+    const auto legacy = QJsonDocument::fromJson(R"json({
+        "frame":7,"position":{"x":10.25},"roi":{"width":30},
+        "centerlinePoints":[[1.25,2.5],[],[99],null,[4.25,6.5]]
+    })json").object();
+    const auto oldPoint = WormsJson::trackPointFromJson(legacy, &blob, &hasBlob);
+    check(hasBlob && blob.centerline.points.size() == 2, "skip incomplete legacy coordinates");
+    check(oldPoint.position == cv::Point2f(10.25f, 0.f), "preserve missing-coordinate defaults");
+    check(oldPoint.searchWindow == QRectF(0, 0, 30, 0), "preserve missing rectangle defaults");
+    check(oldPoint.bodyLength == 5.f, "retain legacy centerline length derivation");
+}
+
 static void testIndex(const QString& root)
 {
     const QString path = QDir(root).filePath("worms.json");
@@ -423,6 +476,11 @@ int main(int argc, char** argv)
         }
         if (app.arguments().contains("--benchmark-speed")) {
             benchmarkPlaybackSpeed(temp.path(), app.arguments().contains("--light"));
+            return 0;
+        }
+        testGeometrySerialization();
+        if (app.arguments().contains("--geometry-only")) {
+            std::puts("Geometry serialization regressions passed.");
             return 0;
         }
         testIndex(temp.path());

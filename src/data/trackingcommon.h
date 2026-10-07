@@ -151,19 +151,19 @@ namespace Tracking {
 Q_NAMESPACE
 
 // Helper function to calculate squared Euclidean distance
-static double sqDistance(const QPointF& p1, const QPointF& p2) {
+inline double sqDistance(const QPointF& p1, const QPointF& p2) {
     QPointF diff = p1 - p2;
     return QPointF::dotProduct(diff, diff);
 }
 
 // Overload for cv::Point2f
-static double sqDistance(const cv::Point2f& p1, const cv::Point2f& p2) {
+inline double sqDistance(const cv::Point2f& p1, const cv::Point2f& p2) {
     cv::Point2f diff = p1 - p2;
     return diff.dot(diff); // cv::Point2f::dot returns float, implicitly convertible to double
 }
 
-// You could add one for cv::Point2d as well if needed
-static double sqDistance(const cv::Point2d& p1, const cv::Point2d& p2) {
+// Overload for cv::Point2d
+inline double sqDistance(const cv::Point2d& p1, const cv::Point2d& p2) {
     cv::Point2d diff = p1 - p2;
     return diff.dot(diff); // cv::Point2d::dot returns double
 }

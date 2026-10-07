@@ -1,6 +1,7 @@
 #include "wormsjsoncodec.h"
 
 #include "../utils/yawtjsonio.h"
+#include "../utils/jsongeometry.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -17,36 +18,6 @@ namespace WormsJson {
 
 namespace {
 
-QJsonObject pointObj(double x, double y)
-{
-    QJsonObject o;
-    o["x"] = x;
-    o["y"] = y;
-    return o;
-}
-
-QJsonObject rectObj(const QRectF& r)
-{
-    QJsonObject o;
-    o["x"] = r.x();
-    o["y"] = r.y();
-    o["width"] = r.width();
-    o["height"] = r.height();
-    return o;
-}
-
-QRectF rectFrom(const QJsonObject& o)
-{
-    return QRectF(o.value("x").toDouble(), o.value("y").toDouble(),
-                  o.value("width").toDouble(), o.value("height").toDouble());
-}
-
-cv::Point2f point2fFrom(const QJsonObject& o)
-{
-    return cv::Point2f(static_cast<float>(o.value("x").toDouble()),
-                       static_cast<float>(o.value("y").toDouble()));
-}
-
 float arcLength(const std::vector<cv::Point2f>& pts)
 {
     double len = 0.0;
@@ -55,20 +26,6 @@ float arcLength(const std::vector<cv::Point2f>& pts)
         len += std::sqrt(static_cast<double>(d.x * d.x + d.y * d.y));
     }
     return static_cast<float>(len);
-}
-
-std::vector<cv::Point2f> pointArrayFrom(const QJsonArray& arr)
-{
-    std::vector<cv::Point2f> pts;
-    pts.reserve(static_cast<size_t>(arr.size()));
-    for (const QJsonValue& v : arr) {
-        const QJsonArray a = v.toArray();
-        if (a.size() >= 2) {
-            pts.emplace_back(static_cast<float>(a[0].toDouble()),
-                             static_cast<float>(a[1].toDouble()));
-        }
-    }
-    return pts;
 }
 
 QJsonObject headerJson(const QString& videoPath, int keyFrame)
@@ -115,9 +72,9 @@ QJsonObject itemToJson(const TableItems::AnnotationItem& item)
     color["hex"] = item.color.name(QColor::HexArgb);
     o["color"] = color;
 
-    o["initialCentroid"] = pointObj(item.initialCentroid.x(), item.initialCentroid.y());
-    o["initialBoundingBox"] = rectObj(item.initialBoundingBox);
-    o["originalClickedBoundingBox"] = rectObj(item.originalClickedBoundingBox);
+    o["initialCentroid"] = JsonGeometry::toJson(item.initialCentroid);
+    o["initialBoundingBox"] = JsonGeometry::toJson(item.initialBoundingBox);
+    o["originalClickedBoundingBox"] = JsonGeometry::toJson(item.originalClickedBoundingBox);
     return o;
 }
 
@@ -139,14 +96,13 @@ TableItems::AnnotationItem itemFromJson(const QJsonObject& obj)
         }
     }
     if (obj.value("initialCentroid").isObject()) {
-        const QJsonObject c = obj["initialCentroid"].toObject();
-        item.initialCentroid = QPointF(c.value("x").toDouble(), c.value("y").toDouble());
+        item.initialCentroid = JsonGeometry::pointFromJson(obj["initialCentroid"].toObject());
     }
     if (obj.value("initialBoundingBox").isObject()) {
-        item.initialBoundingBox = rectFrom(obj["initialBoundingBox"].toObject());
+        item.initialBoundingBox = JsonGeometry::rectFromJson(obj["initialBoundingBox"].toObject());
     }
     if (obj.value("originalClickedBoundingBox").isObject()) {
-        item.originalClickedBoundingBox = rectFrom(obj["originalClickedBoundingBox"].toObject());
+        item.originalClickedBoundingBox = JsonGeometry::rectFromJson(obj["originalClickedBoundingBox"].toObject());
     }
     return item;
 }
@@ -159,9 +115,8 @@ QJsonObject trackPointToJson(const Tracking::TrackPoint& p,
     QJsonObject o;
     o["frame"] = p.frameNumber;
     o["quality"] = static_cast<int>(p.quality);
-    o["position"] = pointObj(static_cast<double>(p.position.x),
-                             static_cast<double>(p.position.y));
-    o["roi"] = rectObj(p.searchWindow);
+    o["position"] = JsonGeometry::toJson(p.position);
+    o["roi"] = JsonGeometry::toJson(p.searchWindow);
 
     // Derived morphology lives on the point itself (TrackingDataStorage joins it
     // in from the blob store); write what the point holds.
@@ -170,8 +125,8 @@ QJsonObject trackPointToJson(const Tracking::TrackPoint& p,
     if (p.bodyLength > 0.f)  o["bodyLength"] = static_cast<double>(p.bodyLength);
     if (p.hasTips) {
         QJsonObject tips;
-        tips["head"] = pointObj(static_cast<double>(p.headTip.x), static_cast<double>(p.headTip.y));
-        tips["tail"] = pointObj(static_cast<double>(p.tailTip.x), static_cast<double>(p.tailTip.y));
+        tips["head"] = JsonGeometry::toJson(p.headTip);
+        tips["tail"] = JsonGeometry::toJson(p.tailTip);
         o["tips"] = tips;
     }
 
@@ -193,10 +148,10 @@ Tracking::TrackPoint trackPointFromJson(const QJsonObject& obj,
     Tracking::TrackPoint p;
     p.frameNumber = obj.value("frame").toInt();
     if (obj.value("position").isObject()) {
-        p.position = point2fFrom(obj["position"].toObject());
+        p.position = JsonGeometry::cvPointFromJson(obj["position"].toObject());
     }
     if (obj.value("roi").isObject()) {
-        p.searchWindow = rectFrom(obj["roi"].toObject());
+        p.searchWindow = JsonGeometry::rectFromJson(obj["roi"].toObject());
     }
     p.quality = static_cast<Tracking::TrackPointQuality>(
         obj.value("quality").toInt(static_cast<int>(Tracking::TrackPointQuality::Single)));
@@ -208,8 +163,8 @@ Tracking::TrackPoint trackPointFromJson(const QJsonObject& obj,
     if (obj.value("tips").isObject()) {
         const QJsonObject tips = obj["tips"].toObject();
         if (tips.contains("head") && tips.contains("tail")) {
-            p.headTip = point2fFrom(tips["head"].toObject());
-            p.tailTip = point2fFrom(tips["tail"].toObject());
+            p.headTip = JsonGeometry::cvPointFromJson(tips["head"].toObject());
+            p.tailTip = JsonGeometry::cvPointFromJson(tips["tail"].toObject());
             p.hasTips = true;
         }
     }
@@ -228,7 +183,7 @@ Tracking::TrackPoint trackPointFromJson(const QJsonObject& obj,
         blob = Tracking::detectedBlobFromJson(obj["detectedBlob"].toObject());
         hasBlob = true;
     } else if (obj.value("centerlinePoints").isArray()) {
-        blob.centerline.points = pointArrayFrom(obj["centerlinePoints"].toArray());
+        blob.centerline.points = JsonGeometry::pointsFromJson(obj["centerlinePoints"].toArray());
         hasBlob = blob.centerline.points.size() >= 2;
     }
 

@@ -77,7 +77,6 @@ set(SOURCES
     src/gui/widgets/mergeviewer.cpp
     src/gui/widgets/miniloader.cpp
     src/gui/widgets/wormtimeline.cpp
-   # src/gui/widgets/cachestatuswidget.cpp
     src/gui/widgets/videofiletreeview.cpp
     src/gui/widgets/framecache.cpp
     src/gui/widgets/frameloader.cpp
@@ -103,7 +102,6 @@ set(SOURCES
 
     # Core processing
     src/core/processing/videoprocessor.cpp
- #   src/core/processing/frameloader_internal.cpp
 
     # Data
     src/data/trackingdatastorage.cpp
@@ -150,7 +148,6 @@ set(HEADERS
     src/gui/widgets/mergeviewer.h
     src/gui/widgets/miniloader.h
     src/gui/widgets/wormtimeline.h
-  #  src/gui/widgets/cachestatuswidget.h
     src/gui/widgets/videofiletreeview.h
     src/gui/widgets/framecache.h
     src/gui/widgets/frameloader.h
@@ -178,7 +175,6 @@ set(HEADERS
 
     # Core processing
     src/core/processing/videoprocessor.h
-#    src/core/processing/frameloader_internal.h
 
     # Data
     src/data/trackingdatastorage.h
@@ -197,6 +193,7 @@ set(HEADERS
     src/utils/thresholdingutils.h
     src/utils/cvimageutils.h
     src/utils/yawtpaths.h
+    src/utils/jsongeometry.h
     src/utils/yawtjsonio.h
 
     # Plugins

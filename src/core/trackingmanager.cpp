@@ -50,6 +50,7 @@
 #include "../utils/loggingcategories.h"
 #include "../utils/debugutils.h"
 #include "../utils/yawtjsonio.h"
+#include "../utils/jsongeometry.h"
 #include "../debug/debugdatastore.h"
 
 #ifdef TRACKING_DEBUG
@@ -86,23 +87,6 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
-
-// frame_atomic_state.json has been eliminated.
-// All merge/split state is now saved inside worms.json (mergeState section).
-// The helpers below replace loadFrameAtomicStateFromJson.
-
-// ---------------------------------------------------------------------------
-// Shared JSON helpers for DetectedBlob <-> JSON (used by save and load paths)
-// ---------------------------------------------------------------------------
-static QJsonObject storageDetectedBlobToJson(const Tracking::DetectedBlob& db)
-{
-    return Tracking::detectedBlobToJson(db);
-}
-
-static Tracking::DetectedBlob storageDetectedBlobFromJson(const QJsonObject& obj)
-{
-    return Tracking::detectedBlobFromJson(obj);
-}
 
 // ---------------------------------------------------------------------------
 // Load merge/split state from the mergeState section of worms.json.
@@ -156,27 +140,13 @@ static bool loadMergeStateFromWormsJson(
                 pb.frameNumber = pbObj.value("frameNumber").toInt();
                 pb.currentArea = pbObj.value("currentArea").toDouble();
                 if (pbObj.contains("currentCentroid")) {
-                    const QJsonObject c = pbObj["currentCentroid"].toObject();
-                    pb.currentCentroid = cv::Point2f(static_cast<float>(c.value("x").toDouble()),
-                                                      static_cast<float>(c.value("y").toDouble()));
+                    pb.currentCentroid = JsonGeometry::cvPointFromJson(pbObj["currentCentroid"].toObject());
                 }
                 if (pbObj.contains("currentBoundingBox")) {
-                    const QJsonObject b = pbObj["currentBoundingBox"].toObject();
-                    pb.currentBoundingBox = QRectF(b.value("x").toDouble(), b.value("y").toDouble(),
-                                                   b.value("width").toDouble(), b.value("height").toDouble());
+                    pb.currentBoundingBox = JsonGeometry::rectFromJson(pbObj["currentBoundingBox"].toObject());
                 }
-                for (const QJsonValue& cv2 : pbObj.value("contourPoints").toArray()) {
-                    const QJsonArray a = cv2.toArray();
-                    if (a.size() >= 2) pb.contourPoints.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
-                }
-                for (const QJsonValue& hv : pbObj.value("holeContourPoints").toArray()) {
-                    std::vector<cv::Point> hole;
-                    for (const QJsonValue& pv : hv.toArray()) {
-                        const QJsonArray a = pv.toArray();
-                        if (a.size() >= 2) hole.push_back(cv::Point(a[0].toInt(), a[1].toInt()));
-                    }
-                    pb.holeContourPoints.push_back(std::move(hole));
-                }
+                pb.contourPoints = JsonGeometry::contourFromJson(pbObj.value("contourPoints").toArray());
+                pb.holeContourPoints = JsonGeometry::holeContoursFromJson(pbObj.value("holeContourPoints").toArray());
                 for (const QJsonValue& pid : pbObj.value("participatingWormTrackerIDs").toArray())
                     pb.participatingWormTrackerIDs.insert(pid.toInt());
                 pb.selectedByWormTrackerId = pbObj.value("selectedByWormTrackerId").toInt();
@@ -201,7 +171,7 @@ static bool loadMergeStateFromWormsJson(
                 bool okw = false;
                 const int wormId = wit.key().toInt(&okw);
                 if (!okw || !wit.value().isObject()) continue;
-                inner.insert(wormId, storageDetectedBlobFromJson(wit.value().toObject()));
+                inner.insert(wormId, Tracking::detectedBlobFromJson(wit.value().toObject()));
             }
             outSplitResolutionMap.insert(frameNum, inner);
         }
@@ -863,7 +833,6 @@ void TrackingManager::startFullTrackingProcess(
     emit overallTrackingProgress(0);
 
     // --- Determine actual total frames, FPS, and frame size ONCE ---
-    // (This logic remains the same as your version with parallel video processing)
     cv::VideoCapture preliminaryCap;
     int actualTotalFrames = 0;
     try {
@@ -892,7 +861,6 @@ void TrackingManager::startFullTrackingProcess(
     if (m_keyFrameNum < 0 || m_keyFrameNum >= actualTotalFrames) { emit trackingFailed("Keyframe out of bounds."); m_isTrackingRunning = false; return; }
 
     // --- Parallel Video Processing Logic ---
-    // (This logic remains the same as your version with parallel video processing)
     int numThreads = QThread::idealThreadCount();
     numThreads = qMax(1, qMin(numThreads, 8));
     emit trackingStatusUpdate(QString("Processing video in chunks across %1 threads...").arg(numThreads));
@@ -917,7 +885,7 @@ void TrackingManager::startFullTrackingProcess(
     if (m_totalVideoChunksToProcess == 0) {
         handleInitialProcessingComplete({}, {}, m_videoFps, m_videoFrameSize); return;
     }
-    auto launch_chunk_processor = [this](int sF, int eF, bool isFwd) { /* ... same as your version ... */
+    auto launch_chunk_processor = [this](int sF, int eF, bool isFwd) {
                                                                        int chunkId = sF; m_videoChunkProgressMap[chunkId] = 0;
                                                                        VideoProcessor* proc = new VideoProcessor(); QThread* thr = new QThread(); proc->moveToThread(thr);
                                                                        m_videoProcessorThreads.append(thr);
@@ -968,7 +936,6 @@ void TrackingManager::cleanupThreadsAndObjects() {
         tracksMemoryBefore += points.size() * sizeof(Tracking::TrackPoint);
     }
 
-    // (Largely same as your version, ensuring QPointer safety and clearing new maps)
     QList<QPointer<QThread>> videoThreadsToClean = m_videoProcessorThreads;
     m_videoProcessorThreads.clear();
     for (QPointer<QThread> thread : videoThreadsToClean) { /* ... quit, wait, delete ... */
@@ -1626,7 +1593,6 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
 // This function has been replaced by immediate resolution in processFrameSpecificSplit
 
 // --- Helper and Utility functions (calculateIoU, launchWormTrackers, progress, finish handlers etc.) ---
-// These remain largely the same as your version with parallel video processing.
 // calculateIoU is used by processFrameSpecificMerge.
 // launchWormTrackers, updateOverallProgress, checkForAllTrackersFinished, outputTracksToWorkbook,
 // handleWormTrackerFinished, handleWormTrackerError, handleWormTrackerProgress are mostly independent
@@ -1640,7 +1606,7 @@ double TrackingManager::calculateIoU(const QRectF& r1, const QRectF& r2) const {
     return unionArea > 0 ? (intersectionArea / unionArea) : 0.0;
 }
 
-void TrackingManager::launchWormTrackers() { /* ... same as your version ... */
+void TrackingManager::launchWormTrackers() {
     if (m_cancelRequested) { m_isTrackingRunning = false; emit trackingCancelled(); return; }
     if (m_initialWormInfos.empty()) { emit trackingStatusUpdate("No worms selected."); emit trackingFinishedSuccessfully(""); m_isTrackingRunning = false; return; }
     m_expectedTrackersToFinish = 0; m_finishedTrackersCount = 0; m_individualTrackerProgress.clear();
@@ -1682,7 +1648,7 @@ void TrackingManager::launchWormTrackers() { /* ... same as your version ... */
     else if (m_expectedTrackersToFinish > 0) { emit trackingStatusUpdate(QString("Launching %1 trackers...").arg(m_expectedTrackersToFinish)); }
     updateOverallProgress();
 }
-void TrackingManager::updateOverallProgress() { /* ... same as your version ... */
+void TrackingManager::updateOverallProgress() {
     if (m_cancelRequested && !m_isTrackingRunning) { emit overallTrackingProgress(m_videoProcessingOverallProgress); return; }
     if (!m_isTrackingRunning && !m_cancelRequested) { emit overallTrackingProgress(0); return; }
     double totalProgressValue = 0.0; double videoProcWeight = (m_expectedTrackersToFinish > 0 || m_initialWormInfos.empty()) ? 0.20 : 1.0;
@@ -1702,7 +1668,7 @@ void TrackingManager::updateOverallProgress() { /* ... same as your version ... 
     if (m_expectedTrackersToFinish > 0 || (m_initialWormInfos.empty() && videoProcWeight < 1.0) ) totalProgressValue += overallTrackerPercentage * trackersWeight;
     emit overallTrackingProgress(qBound(0, static_cast<int>(totalProgressValue * 100.0), 100));
 }
-void TrackingManager::checkForAllTrackersFinished() { /* ... same as your version ... */
+void TrackingManager::checkForAllTrackersFinished() {
     QMutexLocker locker(&m_dataMutex);
     bool allDoneOrCancelled = false;
     if (m_isTrackingRunning && (m_finishedTrackersCount >= m_expectedTrackersToFinish)) allDoneOrCancelled = true;
@@ -1753,7 +1719,7 @@ void TrackingManager::checkForAllTrackersFinished() { /* ... same as your versio
         locker.unlock(); emit trackingCancelled();
     }
 }
-void TrackingManager::handleWormTrackerFinished() { /* ... same as your version ... */
+void TrackingManager::handleWormTrackerFinished() {
     WormTracker* ft = qobject_cast<WormTracker*>(sender()); if (!ft) { QMutexLocker l(&m_dataMutex); if(m_expectedTrackersToFinish > m_finishedTrackersCount) m_finishedTrackersCount++; l.unlock(); checkForAllTrackersFinished(); return; }
     int cId = ft->getWormId(); WormTracker::TrackingDirection dir = ft->getDirection();
     QMutexLocker locker(&m_dataMutex); m_wormTrackersList.removeOne(ft);
@@ -1761,7 +1727,7 @@ void TrackingManager::handleWormTrackerFinished() { /* ... same as your version 
     m_individualTrackerProgress.remove(ft); m_finishedTrackersCount++; locker.unlock();
     updateOverallProgress(); checkForAllTrackersFinished();
 }
-void TrackingManager::handleWormTrackerError(int reportingWormId, QString errorMessage) { /* ... same as your version ... */
+void TrackingManager::handleWormTrackerError(int reportingWormId, QString errorMessage) {
     WormTracker* et = qobject_cast<WormTracker*>(sender());
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested || !m_isTrackingRunning) { /* Handle error during cancel/stop */ if(et && m_wormTrackersList.removeOne(et)){ m_individualTrackerProgress.remove(et); if(m_expectedTrackersToFinish > m_finishedTrackersCount) m_finishedTrackersCount++;} locker.unlock(); updateOverallProgress(); checkForAllTrackersFinished(); return; }
@@ -1777,7 +1743,7 @@ void TrackingManager::handleWormTrackerError(int reportingWormId, QString errorM
     emit trackingStatusUpdate(QString("Error tracker %1.").arg(reportingWormId));
     updateOverallProgress(); checkForAllTrackersFinished();
 }
-void TrackingManager::handleWormTrackerProgress(int, int percentDone) { /* ... same as your version ... */
+void TrackingManager::handleWormTrackerProgress(int, int percentDone) {
     if (m_cancelRequested || !m_isTrackingRunning) return; WormTracker* trk = qobject_cast<WormTracker*>(sender());
     QMutexLocker locker(&m_dataMutex); if (trk && m_wormTrackersList.contains(trk)) { m_individualTrackerProgress[trk] = percentDone; locker.unlock(); updateOverallProgress(); }
 }
@@ -2611,35 +2577,10 @@ QJsonObject TrackingManager::mergeStateToJson() const {
             pbObj["frameNumber"] = pb.frameNumber;
             pbObj["currentArea"] = pb.currentArea;
 
-            QJsonObject cObj;
-            cObj["x"] = static_cast<double>(pb.currentCentroid.x);
-            cObj["y"] = static_cast<double>(pb.currentCentroid.y);
-            pbObj["currentCentroid"] = cObj;
-
-            QJsonObject bObj;
-            bObj["x"]      = pb.currentBoundingBox.x();
-            bObj["y"]      = pb.currentBoundingBox.y();
-            bObj["width"]  = pb.currentBoundingBox.width();
-            bObj["height"] = pb.currentBoundingBox.height();
-            pbObj["currentBoundingBox"] = bObj;
-
-            QJsonArray contourArr;
-            for (const cv::Point& pt : pb.contourPoints) {
-                QJsonArray a; a.append(pt.x); a.append(pt.y);
-                contourArr.append(a);
-            }
-            pbObj["contourPoints"] = contourArr;
-
-            QJsonArray holesArr;
-            for (const auto& hole : pb.holeContourPoints) {
-                QJsonArray holeArr;
-                for (const cv::Point& pt : hole) {
-                    QJsonArray a; a.append(pt.x); a.append(pt.y);
-                    holeArr.append(a);
-                }
-                holesArr.append(holeArr);
-            }
-            pbObj["holeContourPoints"] = holesArr;
+            pbObj["currentCentroid"] = JsonGeometry::toJson(pb.currentCentroid);
+            pbObj["currentBoundingBox"] = JsonGeometry::toJson(pb.currentBoundingBox);
+            pbObj["contourPoints"] = JsonGeometry::contourToJson(pb.contourPoints);
+            pbObj["holeContourPoints"] = JsonGeometry::holeContoursToJson(pb.holeContourPoints);
 
             QJsonArray partArr;
             for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
@@ -2659,7 +2600,7 @@ QJsonObject TrackingManager::mergeStateToJson() const {
         QJsonObject wormMapObj;
         for (auto wit = sfit.value().constBegin();
              wit != sfit.value().constEnd(); ++wit)
-            wormMapObj[QString::number(wit.key())] = storageDetectedBlobToJson(wit.value());
+            wormMapObj[QString::number(wit.key())] = Tracking::detectedBlobToJson(wit.value());
         splitObj[QString::number(sfit.key())] = wormMapObj;
     }
     ms["splitResolutionMap"] = splitObj;
