@@ -87,6 +87,7 @@ private:
     std::shared_ptr<FrameCache> m_frameCache;
     QQueue<FrameLoadRequest> m_requestQueue;
     mutable QMutex m_queueMutex;
+    int m_inFlightFrame = -1;
     quint64 m_generation = 0;
     bool m_openPending = false;
     QWaitCondition m_waitCondition;

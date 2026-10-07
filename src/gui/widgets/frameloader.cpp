@@ -28,6 +28,7 @@ FrameLoader::~FrameLoader() {
 void FrameLoader::setVideoPath(const QString& path, quint64 generation) {
     QMutexLocker locker(&m_queueMutex);
     m_requestQueue.clear();
+    m_inFlightFrame = -1;
     m_videoPath = path;
     m_generation = generation;
     m_openPending = true;
@@ -77,7 +78,7 @@ void FrameLoader::requestFrames(const QList<int>& frameNumbers, int priority) {
     bool anyAdded = false;
     for (int frameNumber : frameNumbers) {
         // Skip invalid frame numbers
-        if (frameNumber < 0) continue;
+        if (frameNumber < 0 || frameNumber == m_inFlightFrame) continue;
 
         // Skip if frame is already in cache
         if (m_frameCache && m_frameCache->hasFrame(frameNumber)) {
@@ -104,7 +105,7 @@ void FrameLoader::requestFrames(const QList<int>& frameNumbers, int priority) {
 void FrameLoader::requestSingleFrame(int frameNumber, int priority) {
     QMutexLocker locker(&m_queueMutex);
 
-    if (frameNumber < 0) {
+    if (frameNumber < 0 || frameNumber == m_inFlightFrame) {
         return;
     }
 
@@ -158,8 +159,11 @@ void FrameLoader::processRequests() {
         const FrameLoadRequest request = *best;
         m_requestQueue.erase(best);
         const quint64 generation = m_generation;
+        m_inFlightFrame = request.frameNumber;
         locker.unlock();
         loadFrame(request.frameNumber, generation);
+        locker.relock();
+        m_inFlightFrame = -1;
     }
     m_videoCapture.release();
     m_isProcessing = false;

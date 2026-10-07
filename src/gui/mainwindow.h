@@ -183,6 +183,8 @@ public slots:
     void onMainTabChanged(int index);
 
 private:
+    QTimer* m_scrubTimer = nullptr;
+    bool m_resumeAfterScrub = false;
     void setupConnections();
     void initializeUIStates();
     /** Called when the user finishes manually editing the pixel-size spinbox.

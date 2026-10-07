@@ -136,6 +136,8 @@ VideoLoader::VideoLoader(QWidget* parent)
     setMouseTracking(true);
     updateCursorShape();
 
+    playbackTimer->setTimerType(Qt::PreciseTimer);
+
     // Initialize frame caching system
     m_frameCache = std::make_shared<FrameCache>(500);
     startFrameLoader();
@@ -280,10 +282,10 @@ bool VideoLoader::loadVideo(const QString& filePath) {
 
 void VideoLoader::play() {
     if (!isVideoLoaded() || m_isPlaying) return;
-    if (currentFrameIdx >= totalFramesCount - 1 && totalFramesCount > 0) {
+    if (m_pendingSeekFrame < 0 && currentFrameIdx >= totalFramesCount - 1 && totalFramesCount > 0) {
         seekToFrame(0, true);
     }
-    if (currentFrameIdx == -1 && totalFramesCount > 0) {
+    if (m_pendingSeekFrame < 0 && currentFrameIdx == -1 && totalFramesCount > 0) {
         seekToFrame(0, true);
     }
     m_isPlaying = true;
@@ -302,6 +304,9 @@ void VideoLoader::pause() {
 void VideoLoader::seekToFrame(int frameNumber, bool suppressEmit) {
     if (!isVideoLoaded()) return;
     frameNumber = qBound(0, frameNumber, totalFramesCount > 0 ? totalFramesCount - 1 : 0);
+    // Explicit navigation supersedes all speculative work at the old position.
+    if (m_frameLoader && m_pendingSeekFrame != frameNumber) m_frameLoader->clearRequests();
+    m_lastPreloadCenter = -1;
     displayFrame(frameNumber, suppressEmit);
 }
 
@@ -719,7 +724,8 @@ void VideoLoader::presentFrame(int frameNumber, const cv::Mat& frame, bool suppr
 
     if (!currentCvFrame.empty()) {
         currentFrameIdx = frameNumber;
-        applyThresholding();
+        if (m_activeViewModes.testFlag(ViewModeOption::Threshold)) applyThresholding();
+        else m_thresholdedFrame_mono.release();
     }
 
     if (m_activeViewModes.testFlag(ViewModeOption::Threshold) && !m_thresholdedFrame_mono.empty()) {
@@ -742,7 +748,7 @@ void VideoLoader::convertCvMatToQImage(const cv::Mat& mat, QImage& qimg) const {
 }
 
 void VideoLoader::processNextFrame() {
-    if (!m_isPlaying || !isVideoLoaded()) return;
+    if (!m_isPlaying || !isVideoLoaded() || m_pendingSeekFrame >= 0) return;
     if (currentFrameIdx < totalFramesCount - 1) {
         displayFrame(currentFrameIdx + 1);
     } else {

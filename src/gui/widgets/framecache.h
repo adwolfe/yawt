@@ -44,6 +44,8 @@ private:
     mutable QMutex m_mutex;
     QMap<int, CachedFrame> m_frames;
     int m_maxSize;
+    size_t m_cachedBytes = 0;
+    static constexpr size_t MaxCacheBytes = 256 * 1024 * 1024;
     mutable QAtomicInt m_hits;
     mutable QAtomicInt m_requests;
 };

@@ -656,6 +656,26 @@ void MainWindow::setupConnections() {
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateVideoTimeLabel);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
+    m_scrubTimer = new QTimer(this);
+    m_scrubTimer->setSingleShot(true);
+    m_scrubTimer->setInterval(40);
+    connect(m_scrubTimer, &QTimer::timeout, this, [this] {
+        ui->videoLoader->seekToFrame(ui->frameSlider->value());
+    });
+    connect(ui->frameSlider, &QAbstractSlider::sliderPressed, this, [this] {
+        m_resumeAfterScrub = m_isVideoPlaying;
+        ui->videoLoader->pause();
+    });
+    connect(ui->frameSlider, &QAbstractSlider::sliderReleased, this, [this] {
+        m_scrubTimer->stop();
+        ui->videoLoader->seekToFrame(ui->frameSlider->value());
+        if (m_resumeAfterScrub) ui->videoLoader->play();
+        m_resumeAfterScrub = false;
+    });
+    connect(ui->videoLoader, &VideoLoader::videoLoadStarted, this, [this] {
+        m_scrubTimer->stop();
+        m_resumeAfterScrub = false;
+    });
 
     // Interaction Mode Buttons -> VideoLoader (via slots that call VideoLoader)
     connect(ui->panModeButton, &QToolButton::clicked, this, &MainWindow::panModeButtonClicked);
@@ -1676,6 +1696,9 @@ void MainWindow::updateVideoTimeLabel(int frameNumber) {
 
 void MainWindow::updateFrameDisplay(int currentFrameNumber, const QImage& currentFrame) {
     Q_UNUSED(currentFrame);
+    const QSignalBlocker sliderBlocker(ui->frameSlider);
+    const QSignalBlocker positionBlocker(ui->framePosition);
+    updateVideoTimeLabel(currentFrameNumber);
     if (!ui->frameSlider->isSliderDown()) {
         ui->frameSlider->setValue(currentFrameNumber);
     }
@@ -1758,24 +1781,6 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
     left = qBound(0.0, left, currentFrame.width() - cropWidth);
     top = qBound(0.0, top, currentFrame.height() - cropHeight);
 
-    const QPointF cropOffset(left, top);
-    if (!m_isVideoPlaying && ui->videoLoader) {
-        if (m_lastMiniLoaderFrame < 0) {
-            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-        } else if (currentFrameNumber > m_lastMiniLoaderFrame) {
-            if (currentFrameNumber - m_lastMiniLoaderFrame == 1) {
-                if (!ui->videoLoader->prefetchNextSequentialFrame()) {
-                    ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-                }
-            } else {
-                ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-            }
-        } else if (currentFrameNumber < m_lastMiniLoaderFrame) {
-            ui->videoLoader->cacheWindowAroundFrame(currentFrameNumber, 2);
-        }
-        m_lastMiniLoaderFrame = currentFrameNumber;
-    }
-
     QRect cropRect(static_cast<int>(std::round(left)), static_cast<int>(std::round(top)),
                    static_cast<int>(std::round(cropWidth)), static_cast<int>(std::round(cropHeight)));
 
@@ -1788,66 +1793,13 @@ void MainWindow::updateMiniLoaderCrop(int currentFrameNumber, const QImage& curr
         return;
     }
 
-    {
-        int totalFrames = 0;
-        if (ui->videoLoader) totalFrames = ui->videoLoader->getTotalFrames();
-        const bool thresholdView = ui->videoLoader
-            && ui->videoLoader->getActiveViewModes().testFlag(VideoLoader::ViewModeOption::Threshold);
-        Thresholding::ThresholdSettings threshSettings;
-        if (thresholdView && ui->videoLoader) {
-            threshSettings = ui->videoLoader->getCurrentThresholdSettings();
-        }
-
-        // Helper lambda to get a cropped frame (real or black placeholder) for a specific absolute frame.
-        auto buildCroppedForFrame = [&](int frameNum) -> std::tuple<QImage, QPointF, QSizeF> {
-            QRect localCrop = cropRect;
-            QImage img;
-            if (ui->videoLoader && frameNum >= 0 && (totalFrames == 0 || frameNum < totalFrames)) {
-                img = ui->videoLoader->getQImageForFrame(frameNum);
-            }
-            if (img.isNull() && frameNum == currentFrameNumber) {
-                img = currentFrame;
-            }
-
-            if (thresholdView && !img.isNull()) {
-                QImage bgr = img.convertToFormat(QImage::Format_BGR888);
-                cv::Mat inputMat(bgr.height(), bgr.width(), CV_8UC3,
-                                 const_cast<uchar*>(bgr.bits()), bgr.bytesPerLine());
-                cv::Mat threshMat;
-                ThresholdingUtils::applyThresholding(inputMat, threshMat, threshSettings);
-                if (!threshMat.empty()) {
-                    img = CvImageUtils::matToQImage(threshMat);
-                }
-            }
-
-            if (!img.isNull()) {
-                QRect imgBounds(0, 0, img.width(), img.height());
-                localCrop = localCrop.intersected(imgBounds);
-            }
-            if (localCrop.isEmpty()) localCrop = cropRect;
-            QImage cf;
-            if (!img.isNull()) cf = img.copy(localCrop);
-            else {
-                cf = QImage(localCrop.size(), QImage::Format_RGB32);
-                cf.fill(Qt::black);
-            }
-            QPointF offset(localCrop.left() + 0.0, localCrop.top() + 0.0);
-            QSizeF size(localCrop.width(), localCrop.height());
-            return std::make_tuple(cf, offset, size);
-        };
-
-        // Primary miniLoader (zoom-only) should receive the central frame for display consistency
-        if (ui->miniLoader) {
-            QImage cf_center;
-            QPointF off_center;
-            QSizeF sz_center;
-            std::tie(cf_center, off_center, sz_center) = buildCroppedForFrame(currentFrameNumber);
-            ui->miniLoader->updateWithCroppedFrame(currentFrameNumber, cf_center, off_center, sz_center, centerPoint);
-            YAWT_DEBUG(lcGuiMainWindow) << "updateMiniLoaderCrop - sent center cropped frame to primary miniLoader, frame:" << currentFrameNumber;
-        }
-
-    }
+    // The main display has already converted and, when enabled, thresholded
+    // this frame. Crop that same image instead of processing the raw frame again.
+    ui->miniLoader->updateWithCroppedFrame(
+        currentFrameNumber, currentFrame.copy(cropRect),
+        QPointF(cropRect.topLeft()), newSize, centerPoint);
 }
+
 
 bool MainWindow::applyThresholdSettings(const QJsonObject& obj) {
     Thresholding::ThresholdSettings settings = ui->videoLoader->getCurrentThresholdSettings();
@@ -1937,10 +1889,18 @@ void MainWindow::onMainTabChanged(int index)
 }
 
 void MainWindow::frameSliderMoved(int value) {
-    ui->videoLoader->seekToFrame(value, false);
+    // Sample the latest drag position at most every 40 ms; do not queue every
+    // mouse event. Release bypasses the timer for an exact final frame.
+    if (ui->frameSlider->isSliderDown()) {
+        if (!m_scrubTimer->isActive()) m_scrubTimer->start();
+    } else {
+        ui->videoLoader->seekToFrame(value, false);
+    }
     if (!ui->framePosition->hasFocus()) {
+        const QSignalBlocker blocker(ui->framePosition);
         ui->framePosition->setValue(value);
     }
+    updateVideoTimeLabel(value);
     // Also update the mirrored spinbox if it's not being edited
 }
 
@@ -1953,6 +1913,7 @@ void MainWindow::frameSliderMoved(int value) {
 void MainWindow::seekFrame(int frame) {
     ui->videoLoader->seekToFrame(frame, false);
     if (!ui->frameSlider->isSliderDown()) {
+        const QSignalBlocker blocker(ui->frameSlider);
         ui->frameSlider->setValue(frame);
     }
 }
@@ -2287,15 +2248,8 @@ void MainWindow::performPostTrackingMemoryCleanup() {
     YAWT_INFO(lcGuiMainWindow) << "VideoLoader cache status before cleanup - Size:" << cacheSize
              << "frames, Hit rate:" << QString::number(cacheHitRate, 'f', 1) << "%";
 
-    // Reduce VideoLoader frame cache size significantly after tracking
-    // During tracking, we don't need as many cached frames since we're not seeking rapidly
-    int originalCacheSize = 50; // Default cache size
-    int reducedCacheSize = 10;  // Smaller cache for post-tracking
-
-    if (cacheSize > reducedCacheSize) {
-        ui->videoLoader->setCacheSize(reducedCacheSize);
-        YAWT_INFO(lcGuiMainWindow) << "Reduced VideoLoader cache from" << cacheSize << "to" << reducedCacheSize << "frames";
-    }
+    // Playback retains its normal cache capacity after tracking. A permanent
+    // ten-frame cap cannot retain both the current frame and playback lookahead.
 
     // Clear any temporary UI state that might hold large data
     // Model will automatically refresh when needed

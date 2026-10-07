@@ -6,7 +6,18 @@ completion. FrameLoader owns the only playback decoder and performs opening,
 seeking, sequential prefetch, and frame reads on its worker thread. Requests and
 results carry a video generation so switching videos cannot display old frames.
 Uncached seeks retain the current display until the requested frame arrives.
-The crop preview requests neighbors asynchronously and refreshes as they arrive.
+Dragging the frame slider samples the latest target every 40 ms and requests the
+exact target immediately on release. Playback pauses during the drag and resumes
+on release if it was previously playing. Playback ticks cannot replace a pending
+seek. Explicit navigation clears obsolete queued prefetch work; an OpenCV read
+already in progress must still finish. Duplicate requests for that in-flight
+frame are suppressed.
+
+The raw-frame cache retains at most 500 frames and targets a 256 MiB memory
+budget (one oversized frame is retained so it remains usable). Tracking completion
+does not reduce its capacity. Playback prefetches ten frames ahead. The crop
+preview reuses the current display image, including its thresholding, without
+requesting neighboring frames or processing a full frame again.
 
 AnalysisSessionModel discovers directories and loads metadata on workers. Model
 changes happen on the GUI thread. Superseded scans stop between directories and
@@ -38,3 +49,8 @@ latest-request seeks, failed opens, folder switching, preserved state/caches,
 metadata write ordering, and index invalidation. On Unix it also blocks a file
 read with a FIFO whose writer is released by a GUI timer: a synchronous scan
 would prevent that timer from firing and fail the test's timeout.
+
+Run `python3 scripts/test_disk_access.py build --playback-only` to isolate video
+open/seek and playback-navigation regressions. These check control synchronization,
+pending seeks during playback ticks, drag coalescing, exact release positioning,
+and pause/resume during dragging.

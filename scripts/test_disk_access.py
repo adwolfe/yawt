@@ -38,4 +38,4 @@ with tempfile.TemporaryDirectory(prefix='yawt-disk-test-') as temp:
     subprocess.run(link_args, cwd=build, check=True)
     import os
     environment = dict(os.environ, QT_QPA_PLATFORM="offscreen")
-    subprocess.run([binary], check=True, env=environment, timeout=60)
+    subprocess.run([binary, *sys.argv[2:]], check=True, env=environment, timeout=60)

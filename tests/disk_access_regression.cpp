@@ -17,6 +17,8 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QSlider>
+#include <QSpinBox>
 #include <opencv2/videoio.hpp>
 #include <cstdio>
 #include <functional>
@@ -258,6 +260,53 @@ static void testVideo(const QString& root)
     check(!video.isVideoLoaded(), "failed open leaves video unloaded");
 }
 
+static void testPlaybackNavigation(const QString& root)
+{
+    const QString path = QDir(root).filePath("navigation.avi");
+    makeVideo(path, 100);
+    MainWindow window;
+    auto* video = window.findChild<VideoLoader*>();
+    auto* slider = window.findChild<QSlider*>("frameSlider");
+    auto* position = window.findChild<QSpinBox*>("framePosition");
+    check(video && slider && position, "find navigation controls");
+    video->loadVideo(path);
+    check(waitFor([&] { return video->getCurrentFrameNumber() == 0; }), "navigation fixture opens");
+    int changed = 0;
+    bool playing = false;
+    QObject::connect(video, &VideoLoader::playbackStateChanged, [&](bool value, double) { playing = value; });
+    QObject::connect(video, &VideoLoader::frameChanged, [&] { ++changed; });
+    video->seekToFrame(10);
+    check(waitFor([&] { return video->getCurrentFrameNumber() == 10; }), "navigation seek completes");
+    check(changed == 1, "control synchronization does not present the frame again");
+    check(slider->value() == 10 && position->value() == 10, "controls follow presented frame");
+
+    // Force a playback tick before queued decode results can reach the GUI.
+    video->play();
+    video->seekToFrame(18);
+    check(QMetaObject::invokeMethod(video, "processNextFrame", Qt::DirectConnection), "invoke playback tick");
+    video->pause();
+    check(waitFor([&] { return video->getCurrentFrameNumber() == 18; }), "playback tick preserves explicit seek");
+
+    const int before = changed;
+    slider->setSliderDown(true);
+    slider->setValue(5);
+    slider->setValue(9);
+    slider->setValue(14);
+    check(changed == before, "drag events are coalesced before decoding");
+    slider->setSliderDown(false);
+    check(waitFor([&] { return video->getCurrentFrameNumber() == 14; }), "release seeks exact final frame");
+    check(changed == before + 1, "only final position presented for a short drag");
+
+    video->play();
+    slider->setSliderDown(true);
+    check(!playing, "drag pauses playback");
+    slider->setValue(7);
+    slider->setSliderDown(false);
+    check(playing, "release resumes previously playing video");
+    video->pause();
+    check(waitFor([&] { return video->getCurrentFrameNumber() == 7; }), "resumed drag keeps release target");
+}
+
 static void testRunImport(const QString& root)
 {
     const QString project = QDir(root).filePath("import");
@@ -313,6 +362,12 @@ int main(int argc, char** argv)
     QTemporaryDir temp;
     try {
         check(temp.isValid(), "create temporary fixtures");
+        if (app.arguments().contains("--playback-only")) {
+            testVideo(temp.path());
+            testPlaybackNavigation(temp.path());
+            std::puts("Playback regressions passed.");
+            return 0;
+        }
         testIndex(temp.path());
         testMetadata(temp.path());
         testAnalysis(temp.path());
@@ -320,6 +375,7 @@ int main(int argc, char** argv)
         testSlowDisk(temp.path());
 #endif
         testVideo(temp.path());
+        testPlaybackNavigation(temp.path());
         testRunImport(temp.path());
         std::puts("Disk access regressions passed.");
         return 0;

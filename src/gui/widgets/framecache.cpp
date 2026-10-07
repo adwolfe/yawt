@@ -8,7 +8,7 @@
 // ============================================================================
 
 FrameCache::FrameCache(int maxCacheSize)
-    : m_maxSize(maxCacheSize), m_hits(0), m_requests(0) {
+    : m_maxSize(qMax(1, maxCacheSize)), m_hits(0), m_requests(0) {
     YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache created with max size:" << m_maxSize;
 }
 
@@ -23,13 +23,19 @@ void FrameCache::insertFrame(int frameNumber, const cv::Mat& frame) {
     QMutexLocker locker(&m_mutex);
 
     // Remove existing frame if present
-    m_frames.remove(frameNumber);
+    auto existing = m_frames.find(frameNumber);
+    if (existing != m_frames.end()) {
+        m_cachedBytes -= existing->rawFrame.total() * existing->rawFrame.elemSize();
+        m_frames.erase(existing);
+    }
 
     // Add new frame
     m_frames.insert(frameNumber, CachedFrame(frameNumber, frame));
+    m_cachedBytes += frame.total() * frame.elemSize();
 
     // Evict if over capacity
-    while (m_frames.size() > m_maxSize) {
+    while (m_frames.size() > m_maxSize ||
+           (m_cachedBytes > MaxCacheBytes && m_frames.size() > 1)) {
         evictLRU();
     }
 
@@ -61,12 +67,13 @@ bool FrameCache::hasFrame(int frameNumber) const {
 void FrameCache::clear() {
     QMutexLocker locker(&m_mutex);
     m_frames.clear();
+    m_cachedBytes = 0;
     YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache: Cleared all frames";
 }
 
 void FrameCache::setMaxSize(int maxSize) {
     QMutexLocker locker(&m_mutex);
-    m_maxSize = maxSize;
+    m_maxSize = qMax(1, maxSize);
     while (m_frames.size() > m_maxSize) {
         evictLRU();
     }
@@ -100,6 +107,7 @@ void FrameCache::evictLRU() {
     }
 
     YAWT_DEBUG(lcGuiVideoLoader) << "FrameCache: Evicting frame" << oldest->frameNumber;
+    m_cachedBytes -= oldest->rawFrame.total() * oldest->rawFrame.elemSize();
     m_frames.erase(oldest);
 }
 
