@@ -106,55 +106,7 @@ void VideoProcessor::processFrameRange(
 }
 
 
-void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame, const Thresholding::ThresholdSettings& settings) {
-    if (inputFrame.empty()) {
-        outputFrame = cv::Mat();
-        return;
-    }
-
-    cv::Mat grayFrame;
-    if (inputFrame.channels() == 3 || inputFrame.channels() == 4) {
-        cv::cvtColor(inputFrame, grayFrame, cv::COLOR_BGR2GRAY);
-    } else {
-        grayFrame = inputFrame.clone(); // Already grayscale or single channel
-    }
-
-    // Optional: Apply Gaussian blur
-    if(settings.enableBlur) {
-        // Ensure kernel size is odd and positive
-        int kernelSize = settings.blurKernelSize;
-        if (kernelSize % 2 == 0) kernelSize++;
-        if (kernelSize <= 0) kernelSize = 1;
-        cv::GaussianBlur(grayFrame, grayFrame, cv::Size(kernelSize, kernelSize), settings.blurSigmaX);
-    }
-
-    int thresholdTypeOpenCV = settings.assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
-
-    // Ensure adaptive block size is odd and greater than 1
-    int adaptiveBlock = settings.adaptiveBlockSize;
-    if (adaptiveBlock <= 1) adaptiveBlock = 3;
-    else if (adaptiveBlock % 2 == 0) adaptiveBlock++;
-
-
-    switch (settings.algorithm) {
-    case Thresholding::ThresholdAlgorithm::Global:
-        cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
-        break;
-    case Thresholding::ThresholdAlgorithm::Otsu:
-        cv::threshold(grayFrame, outputFrame, 0, 255, thresholdTypeOpenCV | cv::THRESH_OTSU);
-        break;
-    case Thresholding::ThresholdAlgorithm::AdaptiveMean:
-        cv::adaptiveThreshold(grayFrame, outputFrame, 255,
-                              cv::ADAPTIVE_THRESH_MEAN_C, thresholdTypeOpenCV,
-                              adaptiveBlock, settings.adaptiveCValue);
-        break;
-    case Thresholding::ThresholdAlgorithm::AdaptiveGaussian:
-        cv::adaptiveThreshold(grayFrame, outputFrame, 255,
-                              cv::ADAPTIVE_THRESH_GAUSSIAN_C, thresholdTypeOpenCV,
-                              adaptiveBlock, settings.adaptiveCValue);
-        break;
-    default:
-        cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
-        break;
-    }
+void VideoProcessor::applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
+                                      const Thresholding::ThresholdSettings& settings) {
+    ThresholdingUtils::applyThresholding(inputFrame, outputFrame, settings);
 }

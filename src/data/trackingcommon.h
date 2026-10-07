@@ -135,6 +135,10 @@ struct ThresholdSettings {
     double adaptiveCValue = 0.0;   // Constant subtracted from the mean/weighted mean.
 
     // --- Pre-processing: Gaussian Blur ---
+    // The model is transient, immutable, and shared with processing workers.
+    bool enableBackgroundSubtraction = false;
+    cv::Mat medianBackground;
+
     bool enableBlur = false;        // Whether to apply Gaussian blur before thresholding.
     int blurKernelSize = 3;        // Must be odd, >=3.
     double blurSigmaX = 0.0;       // 0 for auto calculation from kernel size.

@@ -4,6 +4,8 @@
 
 This was written to process C. elegans chemotaxis behavior and follows a simple flow: if I know how many worms there are in an experiment (say, 8) then I should be able to start from a point where I can see all 8 worms and track outwards from that. This was written to see whether that is a better way of doing things. 
 
+In the Processing tab, **Subtract background** below **Enable blur** removes stationary debris before thresholding. It estimates a median background from up to 31 frames evenly spaced across the video, using the existing **Light/Dark** background selection. The same background is used for the preview and tracking and is rebuilt when the video changes. This option is saved with tracking settings; older runs default to off. Objects that remain stationary in most sampled frames can also be removed. Adjust the threshold after enabling subtraction if needed.
+
 ## Build notes
 
 YAWT uses CMake with >= Qt 6.10 and OpenCV. Basler Pylon support is not part of the current build.

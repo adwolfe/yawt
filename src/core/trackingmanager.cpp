@@ -2822,6 +2822,10 @@ bool TrackingManager::compareThresholdSettings(const QString& filePath, const Th
         differences << QString("adaptiveCValue: %1 vs %2").arg(stored["adaptiveCValue"].toDouble()).arg(current["adaptiveCValue"].toDouble());
         match = false;
     }
+    if (stored["enableBackgroundSubtraction"].toBool(false) != currentSettings.enableBackgroundSubtraction) {
+        differences << "enableBackgroundSubtraction differs";
+        match = false;
+    }
     if (stored["enableBlur"].toBool() != current["enableBlur"].toBool()) {
         differences << QString("enableBlur: %1 vs %2").arg(stored["enableBlur"].toBool()).arg(current["enableBlur"].toBool());
         match = false;
@@ -2854,6 +2858,7 @@ QJsonObject TrackingManager::thresholdSettingsToJson(const Thresholding::Thresho
     obj["assumeLightBackground"] = settings.assumeLightBackground;
     obj["adaptiveBlockSize"] = settings.adaptiveBlockSize;
     obj["adaptiveCValue"] = settings.adaptiveCValue;
+    obj["enableBackgroundSubtraction"] = settings.enableBackgroundSubtraction;
     obj["enableBlur"] = settings.enableBlur;
     obj["blurKernelSize"] = settings.blurKernelSize;
     obj["blurSigmaX"] = settings.blurSigmaX;

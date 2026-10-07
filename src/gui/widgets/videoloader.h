@@ -181,6 +181,7 @@ public slots:
     void setAssumeLightBackground(bool isLight);
     void setAdaptiveThresholdBlockSize(int blockSize);
     void setAdaptiveThresholdC(double cValue);
+    void setEnableBackgroundSubtraction(bool enabled);
     void setEnableBlur(bool enabled);
     void setBlurKernelSize(int kernelSize);
     void setBlurSigmaX(double sigmaX);
@@ -382,6 +383,8 @@ private:
     bool m_assumeLightBackground;
     int m_adaptiveBlockSize;
     double m_adaptiveC;
+    bool m_enableBackgroundSubtraction = false;
+    cv::Mat m_medianBackground;
     bool m_enableBlur;
     int m_blurKernelSize;
     double m_blurSigmaX;

@@ -14,9 +14,41 @@ void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
 
     cv::Mat grayFrame;
     if (inputFrame.channels() == 3 || inputFrame.channels() == 4) {
-        cv::cvtColor(inputFrame, grayFrame, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(inputFrame, grayFrame, inputFrame.channels() == 4
+                     ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
     } else {
-        grayFrame = inputFrame.clone(); // Already grayscale or single channel
+        grayFrame = inputFrame.clone();
+    }
+    if (grayFrame.type() != CV_8UC1) {
+        double low, high;
+        cv::minMaxLoc(grayFrame, &low, &high);
+        if (high > low)
+            grayFrame.convertTo(grayFrame, CV_8U, 255.0 / (high - low),
+                                -low * 255.0 / (high - low));
+        else
+            grayFrame = cv::Mat::zeros(grayFrame.size(), CV_8U);
+    }
+
+    cv::Mat foregroundMask;
+    if (settings.enableBackgroundSubtraction) {
+        if (settings.medianBackground.empty() ||
+            settings.medianBackground.size() != grayFrame.size() ||
+            settings.medianBackground.type() != CV_8UC1) {
+            YAWT_WARN(lcUtilsThresholding) << "Missing or incompatible background model";
+            outputFrame.release();
+            return;
+        }
+        if (settings.assumeLightBackground) {
+            // Dark foreground on a white baseline, preserving inverse threshold semantics.
+            cv::Mat contrast;
+            cv::subtract(settings.medianBackground, grayFrame, contrast);
+            cv::compare(contrast, 0, foregroundMask, cv::CMP_GT);
+            cv::subtract(cv::Scalar::all(255), contrast, grayFrame);
+        } else {
+            // Bright foreground on a black baseline.
+            cv::subtract(grayFrame, settings.medianBackground, grayFrame);
+            cv::compare(grayFrame, 0, foregroundMask, cv::CMP_GT);
+        }
     }
 
     // Optional: Apply Gaussian blur
@@ -62,6 +94,9 @@ void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
             cv::threshold(grayFrame, outputFrame, settings.globalThresholdValue, 255, thresholdTypeOpenCV);
             break;
         }
+        // Adaptive thresholds can classify a perfectly flat dark background as foreground.
+        // A pixel must also differ from the model in the selected foreground direction.
+        if (!foregroundMask.empty()) cv::bitwise_and(outputFrame, foregroundMask, outputFrame);
     } catch (const cv::Exception& ex) {
         YAWT_WARN(lcUtilsThresholding) << "Thresholding Exception:" << ex.what();
         outputFrame = cv::Mat();
@@ -69,97 +104,57 @@ void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
 }
 
 cv::Mat computeMedianBackground(const std::vector<cv::Mat>& sampleFrames) {
-    if (sampleFrames.empty()) {
-        return cv::Mat();
-    }
-    
-    // Convert all frames to grayscale
-    std::vector<cv::Mat> grayFrames;
+    if (sampleFrames.empty()) return {};
+    std::vector<cv::Mat> frames;
     for (const auto& frame : sampleFrames) {
+        if (frame.empty()) return {};
         cv::Mat gray;
-        if (frame.channels() == 3 || frame.channels() == 4) {
-            cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-        } else {
-            gray = frame.clone();
-        }
-        grayFrames.push_back(gray);
+        if (frame.channels() == 3 || frame.channels() == 4)
+            cv::cvtColor(frame, gray, frame.channels() == 4
+                         ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
+        else
+            gray = frame;
+        if (gray.type() != CV_8UC1 || gray.size() != sampleFrames.front().size()) return {};
+        frames.push_back(gray);
     }
-    
-    // Create a 3D matrix to hold all frames
-    cv::Mat_<uchar> frames3D(static_cast<int>(grayFrames.size()), 
-                             grayFrames[0].rows * grayFrames[0].cols, 1);
-    
-    // Copy each frame into the 3D matrix
-    for (size_t i = 0; i < grayFrames.size(); i++) {
-        cv::Mat frame = grayFrames[i].reshape(1, 1); // Flatten to 1D array
-        frame.copyTo(frames3D.row(static_cast<int>(i)));
-    }
-    
-    // Calculate median for each pixel
-    cv::Mat medianFrame(grayFrames[0].size(), CV_8UC1);
-    for (int i = 0; i < frames3D.cols; i++) {
-        cv::Mat column = frames3D.col(i);
-        std::vector<uchar> values;
-        values.assign(column.begin<uchar>(), column.end<uchar>());
-        std::nth_element(values.begin(), values.begin() + values.size()/2, values.end());
-        medianFrame.data[i] = values[values.size()/2];
-    }
-    
-    return medianFrame;
-}
-
-void subtractMedianBackground(const cv::Mat& inputFrame, cv::Mat& outputFrame,
-                             const cv::Mat& medianBackground, bool clipToZero) {
-    if (inputFrame.empty() || medianBackground.empty()) {
-        outputFrame = inputFrame.clone();
-        return;
-    }
-    
-    cv::Mat grayInput;
-    if (inputFrame.channels() == 3 || inputFrame.channels() == 4) {
-        cv::cvtColor(inputFrame, grayInput, cv::COLOR_BGR2GRAY);
-    } else {
-        grayInput = inputFrame.clone();
-    }
-    
-    // Perform subtraction
-    cv::Mat subtracted;
-    cv::absdiff(grayInput, medianBackground, subtracted);
-    
-    if (clipToZero) {
-        // For cases where we want positive differences only
-        cv::subtract(grayInput, medianBackground, outputFrame, cv::noArray(), CV_8U);
-    } else {
-        outputFrame = subtracted;
-    }
-}
-
-void thresholdWithBackgroundSubtraction(
-    const cv::Mat& inputFrame, 
-    cv::Mat& outputFrame,
-    const Thresholding::ThresholdSettings& settings,
-    const cv::Mat& medianBackground,
-    bool performSubtraction) {
-    
-    if (inputFrame.empty()) {
-        outputFrame = cv::Mat();
-        return;
-    }
-    
-    cv::Mat preprocessedFrame;
-    
-    if (performSubtraction && !medianBackground.empty()) {
-        subtractMedianBackground(inputFrame, preprocessedFrame, medianBackground, true);
-    } else {
-        if (inputFrame.channels() == 3 || inputFrame.channels() == 4) {
-            cv::cvtColor(inputFrame, preprocessedFrame, cv::COLOR_BGR2GRAY);
-        } else {
-            preprocessedFrame = inputFrame.clone();
+    cv::Mat median(frames.front().size(), CV_8UC1);
+    std::vector<uchar> values(frames.size());
+    for (int y = 0; y < median.rows; ++y) {
+        for (int x = 0; x < median.cols; ++x) {
+            for (size_t i = 0; i < frames.size(); ++i) values[i] = frames[i].ptr<uchar>(y)[x];
+            auto middle = values.begin() + values.size() / 2;
+            std::nth_element(values.begin(), middle, values.end());
+            median.ptr<uchar>(y)[x] = *middle;
         }
     }
-    
-    // Apply thresholding to the preprocessed frame
-    applyThresholding(preprocessedFrame, outputFrame, settings);
+    return median;
+}
+
+cv::Mat computeVideoBackground(const QString& videoPath) {
+    try {
+        cv::VideoCapture capture(videoPath.toStdString());
+        if (!capture.isOpened()) return {};
+        const int count = static_cast<int>(capture.get(cv::CAP_PROP_FRAME_COUNT));
+        if (count <= 0) return {};
+        const int samples = std::min(31, count);
+        std::vector<cv::Mat> frames;
+        for (int i = 0; i < samples; ++i) {
+            const int index = samples == 1 ? 0 : static_cast<int>(
+                static_cast<long long>(i) * (count - 1) / (samples - 1));
+            if (!capture.set(cv::CAP_PROP_POS_FRAMES, index)) return {};
+            cv::Mat frame, gray;
+            if (!capture.read(frame) || frame.empty()) return {};
+            if (frame.channels() == 3 || frame.channels() == 4)
+                cv::cvtColor(frame, gray, frame.channels() == 4
+                             ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
+            else gray = frame;
+            frames.push_back(gray);
+        }
+        return computeMedianBackground(frames);
+    } catch (const cv::Exception& ex) {
+        YAWT_WARN(lcUtilsThresholding) << "Background estimation failed:" << ex.what();
+        return {};
+    }
 }
 
 } // namespace ThresholdingUtils

@@ -1232,7 +1232,7 @@ QToolButton#lastFrameButton {
               <attribute name="title">
                <string>Tracking</string>
               </attribute>
-              <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+              <layout class="QGridLayout" name="gridLayout" rowstretch="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
                <property name="leftMargin">
                 <number>6</number>
                </property>
@@ -1248,6 +1248,12 @@ QToolButton#lastFrameButton {
                <property name="spacing">
                 <number>0</number>
                </property>
+               <item row="10" column="0" colspan="3">
+                <widget class="QCheckBox" name="backgroundSubtractCheck">
+                 <property name="text"><string>Subtract background</string></property>
+                 <property name="toolTip"><string>Remove stationary debris using the median of up to 31 frames spread across the video. Uses the Light/Dark background selection. Objects stationary for most sampled frames may also be removed. You may need to adjust the threshold after enabling this.</string></property>
+                </widget>
+               </item>
                <item row="9" column="0" colspan="2">
                 <widget class="QCheckBox" name="blurCheck">
                  <property name="text">
@@ -1255,7 +1261,7 @@ QToolButton#lastFrameButton {
                  </property>
                 </widget>
                </item>
-               <item row="13" column="0" colspan="3">
+               <item row="14" column="0" colspan="3">
                 <layout class="QHBoxLayout" name="horizontalLayout_5">
                  <property name="spacing">
                   <number>20</number>
@@ -1282,7 +1288,7 @@ QToolButton#lastFrameButton {
                  </item>
                 </layout>
                </item>
-               <item row="17" column="0" colspan="3">
+               <item row="18" column="0" colspan="3">
                 <widget class="QGroupBox" name="adaptiveGroupBox">
                  <property name="title">
                   <string>Adaptive parameters</string>
@@ -1395,7 +1401,7 @@ QToolButton#lastFrameButton {
                  </property>
                 </widget>
                </item>
-               <item row="12" column="0" colspan="3">
+               <item row="13" column="0" colspan="3">
                 <widget class="Line" name="line">
                  <property name="orientation">
                   <enum>Qt::Orientation::Horizontal</enum>
@@ -1438,7 +1444,7 @@ QToolButton#lastFrameButton {
                  </item>
                 </widget>
                </item>
-               <item row="16" column="0" colspan="3">
+               <item row="17" column="0" colspan="3">
                 <widget class="QGroupBox" name="globalGroupBox">
                  <property name="title">
                   <string>Global parameters</string>
@@ -1540,14 +1546,14 @@ QToolButton#lastFrameButton {
                  </property>
                 </widget>
                </item>
-               <item row="18" column="0" colspan="3">
+               <item row="19" column="0" colspan="3">
                 <widget class="QPushButton" name="trackingDialogButton">
                  <property name="text">
                   <string>Begin Tracking</string>
                  </property>
                 </widget>
                </item>
-               <item row="11" column="0">
+               <item row="12" column="0">
                 <spacer name="verticalSpacer">
                  <property name="orientation">
                   <enum>Qt::Orientation::Vertical</enum>

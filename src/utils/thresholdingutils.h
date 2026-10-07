@@ -10,21 +10,11 @@ namespace ThresholdingUtils {
     void applyThresholding(const cv::Mat& inputFrame, cv::Mat& outputFrame,
                           const Thresholding::ThresholdSettings& settings);
 
+    // Sample up to 31 evenly spaced frames without moving the playback decoder.
+    cv::Mat computeVideoBackground(const QString& videoPath);
+
     // Median background computation
     cv::Mat computeMedianBackground(const std::vector<cv::Mat>& sampleFrames);
-
-    // Median background subtraction
-    void subtractMedianBackground(const cv::Mat& inputFrame, cv::Mat& outputFrame,
-                                 const cv::Mat& medianBackground,
-                                 bool clipToZero = true);
-
-    // Combined function to perform both operations
-    void thresholdWithBackgroundSubtraction(
-        const cv::Mat& inputFrame,
-        cv::Mat& outputFrame,
-        const Thresholding::ThresholdSettings& settings,
-        const cv::Mat& medianBackground,
-        bool performSubtraction = true);
 
 } // namespace ThresholdingUtils
 

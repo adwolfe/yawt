@@ -291,6 +291,18 @@ static void testRunImport(const QString& root)
     check(video->getCurrentVideoPath() == path, "import displays associated video");
     check(video->getCurrentThresholdSettings().globalThresholdValue == 77, "import applies threshold snapshot");
     check(storage->getAllItems().size() == 2, "import applies worms and ROI points");
+    check(!video->getCurrentThresholdSettings().enableBackgroundSubtraction,
+          "older threshold snapshots default subtraction off");
+    writeFile(QDir(run).filePath("thresholding.json"),
+              "{\"algorithm\":0,\"globalThresholdValue\":77,\"enableBackgroundSubtraction\":true}");
+    MainWindow restored;
+    auto* restoredVideo = restored.findChild<VideoLoader*>();
+    restored.loadRunFromDirectoryPath(run);
+    check(waitFor([&] { return restoredVideo->getCurrentFrameNumber() == 0; }),
+          "import with subtraction opens video");
+    const auto restoredSettings = restoredVideo->getCurrentThresholdSettings();
+    check(restoredSettings.enableBackgroundSubtraction && !restoredSettings.medianBackground.empty(),
+          "import restores subtraction and rebuilds transient background model");
 }
 
 int main(int argc, char** argv)

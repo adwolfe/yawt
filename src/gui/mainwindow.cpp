@@ -737,6 +737,13 @@ void MainWindow::setupConnections() {
     connect(ui->adaptiveTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::setAdaptiveThresholdType);
     connect(ui->blockSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::setAdaptiveBlockSize);
     connect(ui->tuningDoubleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &MainWindow::setAdaptiveCValue);
+    connect(ui->backgroundSubtractCheck, &QCheckBox::toggled,
+            ui->videoLoader, &VideoLoader::setEnableBackgroundSubtraction);
+    connect(ui->videoLoader, &VideoLoader::thresholdParametersChanged, this,
+            [this](const Thresholding::ThresholdSettings& settings) {
+        const QSignalBlocker blocker(ui->backgroundSubtractCheck);
+        ui->backgroundSubtractCheck->setChecked(settings.enableBackgroundSubtraction);
+    });
     connect(ui->blurCheck, &QCheckBox::toggled, this, &MainWindow::setBlurEnabled);
     connect(ui->blurKernelSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::setBlurKernel);
     connect(ui->bgCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::setBackgroundAssumption);
@@ -1850,6 +1857,7 @@ bool MainWindow::applyThresholdSettings(const QJsonObject& obj) {
     settings.adaptiveBlockSize = obj.value("adaptiveBlockSize").toInt(settings.adaptiveBlockSize);
     settings.adaptiveCValue = obj.value("adaptiveCValue").toDouble(settings.adaptiveCValue);
     settings.assumeLightBackground = obj.value("assumeLightBackground").toBool(settings.assumeLightBackground);
+    settings.enableBackgroundSubtraction = obj.value("enableBackgroundSubtraction").toBool(false);
     settings.enableBlur = obj.value("enableBlur").toBool(settings.enableBlur);
     settings.blurKernelSize = obj.value("blurKernelSize").toInt(settings.blurKernelSize);
     settings.blurSigmaX = obj.value("blurSigmaX").toDouble(settings.blurSigmaX);
@@ -1875,6 +1883,7 @@ bool MainWindow::applyThresholdSettings(const QJsonObject& obj) {
         setAdaptiveThresholdType(ui->adaptiveTypeCombo->currentIndex());
     }
 
+    ui->backgroundSubtractCheck->setChecked(settings.enableBackgroundSubtraction);
     ui->blurCheck->setChecked(settings.enableBlur);
     ui->blurKernelSpin->setValue(settings.blurKernelSize);
     ui->videoLoader->setBlurSigmaX(settings.blurSigmaX);

@@ -3,6 +3,11 @@
 #include "../../core/centerlinegeometry.h"
 
 #include <QDebug>
+#include <QtConcurrent>
+#include <QFutureWatcher>
+#include <QProgressDialog>
+#include <QEventLoop>
+#include "../../utils/thresholdingutils.h"
 #include <cmath>
 #include "../../utils/loggingcategories.h"
 #include "../../utils/cvimageutils.h"
@@ -198,6 +203,8 @@ Thresholding::ThresholdSettings VideoLoader::getCurrentThresholdSettings() const
     settings.globalThresholdValue = m_thresholdValue;
     settings.adaptiveBlockSize = m_adaptiveBlockSize;
     settings.adaptiveCValue = m_adaptiveC;
+    settings.enableBackgroundSubtraction = m_enableBackgroundSubtraction;
+    settings.medianBackground = m_medianBackground;
     settings.enableBlur = m_enableBlur;
     settings.blurKernelSize = m_blurKernelSize;
     settings.blurSigmaX = m_blurSigmaX;
@@ -256,6 +263,7 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     totalFramesCount = 0;
     currentFrameIdx = -1;
     currentCvFrame.release();
+    m_medianBackground.release();
     currentQImageFrame = QImage();
     originalFrameSize = QSize();
     m_dataDirectory.clear();
@@ -514,6 +522,36 @@ void VideoLoader::setAdaptiveThresholdC(double cValue) {
             displayFrame(currentFrameIdx, true);
         }
     }
+    emitThresholdParametersChanged();
+}
+
+void VideoLoader::setEnableBackgroundSubtraction(bool enabled) {
+    if (enabled == m_enableBackgroundSubtraction &&
+        (!enabled || !isVideoLoaded() || !m_medianBackground.empty())) return;
+    pause();
+    m_enableBackgroundSubtraction = enabled;
+    if (enabled && isVideoLoaded() && m_medianBackground.empty()) {
+        QProgressDialog progress("Estimating background from video frames…", QString(), 0, 0, this);
+        progress.setWindowModality(Qt::ApplicationModal);
+        progress.setCancelButton(nullptr);
+        progress.setMinimumDuration(0);
+        QFutureWatcher<cv::Mat> watcher;
+        QEventLoop loop;
+        connect(&watcher, &QFutureWatcher<cv::Mat>::finished, &loop, &QEventLoop::quit);
+        const auto generation = m_videoGeneration;
+        watcher.setFuture(QtConcurrent::run(ThresholdingUtils::computeVideoBackground, currentFilePath));
+        progress.show();
+        if (!watcher.isFinished()) loop.exec();
+        progress.hide();
+        if (generation != m_videoGeneration) return;
+        m_medianBackground = watcher.result();
+        if (m_medianBackground.empty()) {
+            m_enableBackgroundSubtraction = false;
+            QMessageBox::warning(this, "Background subtraction",
+                                 "Could not estimate the background from this video. Background subtraction has been disabled.");
+        }
+    }
+    if (isVideoLoaded() && currentFrameIdx >= 0) displayFrame(currentFrameIdx, true);
     emitThresholdParametersChanged();
 }
 
@@ -2124,79 +2162,8 @@ bool VideoLoader::performVideoCrop(
 }
 
 void VideoLoader::applyThresholding() {
-    if (currentCvFrame.empty()) {
-        m_thresholdedFrame_mono = cv::Mat();
-        return;
-    }
-    cv::Mat grayFrame;
-    if (currentCvFrame.channels() >= 3)
-        cv::cvtColor(currentCvFrame, grayFrame, cv::COLOR_BGR2GRAY);
-    else
-        grayFrame = currentCvFrame.clone();
-
-    // Ensure 8-bit grayscale for thresholding; some videos can load as 16-bit.
-    if (grayFrame.type() != CV_8UC1) {
-        cv::Mat gray8;
-        double minVal = 0.0;
-        double maxVal = 0.0;
-        cv::minMaxLoc(grayFrame, &minVal, &maxVal);
-        if (maxVal > minVal) {
-            grayFrame.convertTo(
-                gray8,
-                CV_8U,
-                255.0 / (maxVal - minVal),
-                -minVal * 255.0 / (maxVal - minVal));
-        } else {
-            gray8 = cv::Mat::zeros(grayFrame.size(), CV_8U);
-        }
-        grayFrame = gray8;
-    }
-    if (m_enableBlur && m_blurKernelSize >= 3) {
-        try {
-            cv::GaussianBlur(grayFrame, grayFrame,
-                             cv::Size(m_blurKernelSize, m_blurKernelSize),
-                             m_blurSigmaX);
-        } catch (const cv::Exception& ex) {
-            YAWT_WARN(lcGuiVideoLoader) << "GaussianBlur Exception:" << ex.what();
-        }
-    }
-    int type =
-        m_assumeLightBackground ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
-    try {
-        switch (m_thresholdAlgorithm) {
-        case Thresholding::ThresholdAlgorithm::Global:
-            cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255,
-                          type);
-            break;
-        case Thresholding::ThresholdAlgorithm::Otsu:
-            cv::threshold(grayFrame, m_thresholdedFrame_mono, 0, 255,
-                          type | cv::THRESH_OTSU);
-            break;
-        case Thresholding::ThresholdAlgorithm::AdaptiveMean:
-            if (m_adaptiveBlockSize >= 3)
-                cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
-                                      cv::ADAPTIVE_THRESH_MEAN_C, type,
-                                      m_adaptiveBlockSize, m_adaptiveC);
-            else
-                m_thresholdedFrame_mono = cv::Mat();
-            break;
-        case Thresholding::ThresholdAlgorithm::AdaptiveGaussian:
-            if (m_adaptiveBlockSize >= 3)
-                cv::adaptiveThreshold(grayFrame, m_thresholdedFrame_mono, 255,
-                                      cv::ADAPTIVE_THRESH_GAUSSIAN_C, type,
-                                      m_adaptiveBlockSize, m_adaptiveC);
-            else
-                m_thresholdedFrame_mono = cv::Mat();
-            break;
-        default:
-            cv::threshold(grayFrame, m_thresholdedFrame_mono, m_thresholdValue, 255,
-                          type);
-            break;
-        }
-    } catch (const cv::Exception& ex) {
-        YAWT_WARN(lcGuiVideoLoader) << "Thresholding Exception:" << ex.what();
-        m_thresholdedFrame_mono = cv::Mat();
-    }
+    ThresholdingUtils::applyThresholding(currentCvFrame, m_thresholdedFrame_mono,
+                                         getCurrentThresholdSettings());
 }
 void VideoLoader::updateTimerInterval() {
     if (framesPerSecond > 0 && m_playbackSpeedMultiplier > 0)
@@ -2264,6 +2231,7 @@ void VideoLoader::startFrameLoader() {
         if (!dataDir.isEmpty()) emit dataDirectoryChanged(dataDir);
         emit videoLoaded(currentFilePath, count, fps, size);
         if (generation != m_videoGeneration) return;
+        if (m_enableBackgroundSubtraction) setEnableBackgroundSubtraction(true);
         seekToFrame(0);
         cacheWindowAroundFrame(0, 4);
         emit zoomFactorChanged(m_zoomFactor);

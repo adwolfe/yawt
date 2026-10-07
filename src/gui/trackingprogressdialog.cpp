@@ -204,6 +204,7 @@ QString TrackingProgressDialog::formatThresholdSettings(const Thresholding::Thre
         details += QString("    C Value: %1\n").arg(s.adaptiveCValue);
         break;
     }
+    details += QString("  Background Subtraction: %1\n").arg(s.enableBackgroundSubtraction ? "Yes (temporal median)" : "No");
     details += QString("  Blur Enabled: %1\n").arg(s.enableBlur ? "Yes" : "No");
     if (s.enableBlur) {
         details += QString("    Blur Kernel Size: %1\n").arg(s.blurKernelSize);
