@@ -54,6 +54,7 @@ class VideoLoader : public QWidget {
     Q_OBJECT
 
 public:
+    void setFrameCrop(int first, int last);
     explicit VideoLoader(QWidget *parent = nullptr);
     ~VideoLoader();
 
@@ -325,6 +326,8 @@ private:
     // --- Video Properties ---
     QString currentFilePath;
     int totalFramesCount;
+    int m_cropStartFrame = 0;
+    int m_cropStopFrame = 0;
     double framesPerSecond;
     int currentFrameIdx;
     QSize originalFrameSize;

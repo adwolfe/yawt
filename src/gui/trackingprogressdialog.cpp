@@ -128,7 +128,7 @@ void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
                                                    const Thresholding::ThresholdSettings& settings,
                                                    int numberOfWorms,
                                                    int totalFramesInVideo,
-                                                   int numberOfWormsWithTracks) {
+                                                   int numberOfWormsWithTracks, int startFrame, int stopFrame) {
     m_videoPath = videoPath;
     m_keyFrame = keyFrame;
     m_thresholdSettings = settings;
@@ -139,6 +139,9 @@ void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
     QString summary;
     summary += "Video File: " + QFileInfo(videoPath).fileName() + "\n"; // Show only filename
     summary += "Total Frames: " + QString::number(totalFramesInVideo) + "\n";
+    const int lastFrame = stopFrame < 0 ? totalFramesInVideo - 1 : stopFrame;
+    summary += QString("Processing frames: %1–%2 (%3 frames, inclusive)\n")
+        .arg(startFrame).arg(lastFrame).arg(lastFrame - startFrame + 1);
     summary += "Keyframe for Initial Selection: " + QString::number(keyFrame) + "\n";
     // Add diagnostics about how many of the provided blobs already have track data
     summary += QString("Blobs detected: %1  —  %2 have track data\n\n").arg(numberOfWorms).arg(numberOfWormsWithTracks);

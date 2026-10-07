@@ -6,6 +6,8 @@ This was written to process C. elegans chemotaxis behavior and follows a simple 
 
 In the Processing tab, **Subtract background** below **Enable blur** removes stationary debris before thresholding. It estimates a median background from up to 31 frames evenly spaced across the video, using the existing **Light/Dark** background selection. The same background is used for the preview and tracking and is rebuilt when the video changes. This option is saved with tracking settings; older runs default to off. Objects that remain stationary in most sampled frames can also be removed. Adjust the threshold after enabling subtraction if needed.
 
+Use **Start frame** and **Stop frame** above **Begin Tracking** to process an inclusive range of zero-based frame numbers. The scrub bar keeps the full video scale, with thick gray bars over excluded frames; scrubbing, frame navigation, and playback stay inside the selected range. The worms’ selection frame must be inside it. Outputs keep the original video frame numbers. Opening a video resets the range to the whole video.
+
 ## Build notes
 
 YAWT uses CMake with >= Qt 6.10 and OpenCV. Basler Pylon support is not part of the current build.

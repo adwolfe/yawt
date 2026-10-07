@@ -32,7 +32,8 @@ public:
                                const Thresholding::ThresholdSettings& settings,
                                int numberOfWorms,
                                int totalFramesInVideo,
-                               int numberOfWormsWithTracks = 0);
+                               int numberOfWormsWithTracks = 0,
+                               int startFrame = 0, int stopFrame = -1);
 
     // Returns whether the "Only track missing worms" checkbox is checked in the dialog.
     // If true, callers should filter the provided worm list to include only items

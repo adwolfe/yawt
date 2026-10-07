@@ -147,6 +147,8 @@ set(HEADERS
     # GUI widgets / delegates
     src/gui/widgets/mergeviewer.h
     src/gui/widgets/miniloader.h
+    src/gui/widgets/framecropslider.h
+    src/gui/widgets/stopframespinbox.h
     src/gui/widgets/wormtimeline.h
     src/gui/widgets/videofiletreeview.h
     src/gui/widgets/framecache.h

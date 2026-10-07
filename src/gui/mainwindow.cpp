@@ -655,6 +655,17 @@ void MainWindow::setupConnections() {
     connect(ui->lastFrameButton, &QToolButton::clicked, this, &MainWindow::goToLastFrame);
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::seekFrame);
     connect(ui->framePosition, QOverload<int>::of(&QSpinBox::valueChanged), this, &MainWindow::updateVideoTimeLabel);
+    auto updateFrameCrop = [this] {
+        const int first = ui->startFrameSpinBox->value();
+        const int last = ui->stopFrameSpinBox->value();
+        ui->startFrameSpinBox->setMaximum(last);
+        ui->stopFrameSpinBox->setMinimum(first);
+        ui->videoLoader->setFrameCrop(first, last);
+        ui->frameSlider->setFrameCrop(first, last);
+        ui->framePosition->setRange(first, last);
+    };
+    connect(ui->startFrameSpinBox, &QSpinBox::valueChanged, this, updateFrameCrop);
+    connect(ui->stopFrameSpinBox, &QSpinBox::valueChanged, this, updateFrameCrop);
     connect(ui->frameSlider, &QAbstractSlider::valueChanged, this, &MainWindow::frameSliderMoved);
     m_scrubTimer = new QTimer(this);
     m_scrubTimer->setSingleShot(true);
@@ -1657,9 +1668,21 @@ bool MainWindow::loadRunFromDirectoryInternal(const QString& selectedDir) {
 }
 
 void MainWindow::initiateFrameDisplay(const QString& filePath, int totalFrames, double fps, QSize frameSize) {
-    ui->frameSlider->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+    const int lastFrame = qMax(0, totalFrames - 1);
+    {
+        const QSignalBlocker startBlocker(ui->startFrameSpinBox);
+        const QSignalBlocker stopBlocker(ui->stopFrameSpinBox);
+        ui->startFrameSpinBox->setRange(0, lastFrame);
+        ui->stopFrameSpinBox->setRange(0, lastFrame);
+        ui->startFrameSpinBox->setValue(0);
+        ui->stopFrameSpinBox->setValue(lastFrame);
+        ui->startFrameSpinBox->setEnabled(totalFrames > 0);
+        ui->stopFrameSpinBox->setEnabled(totalFrames > 0);
+    }
+    ui->frameSlider->setMaximum(lastFrame);
+    ui->frameSlider->setFrameCrop(0, lastFrame);
     ui->frameSlider->setValue(0);
-    ui->framePosition->setMaximum(totalFrames > 0 ? totalFrames - 1 : 0);
+    ui->framePosition->setRange(0, lastFrame);
     ui->framePosition->setValue(0);
     m_videoFps = fps;
     ui->fpsLabel->setText(QString::number(fps, 'f', 2) + " fps");
@@ -1889,6 +1912,7 @@ void MainWindow::onMainTabChanged(int index)
 }
 
 void MainWindow::frameSliderMoved(int value) {
+    value = ui->frameSlider->boundedFrame(value);
     // Sample the latest drag position at most every 40 ms; do not queue every
     // mouse event. Release bypasses the timer for an exact final frame.
     if (ui->frameSlider->isSliderDown()) {
@@ -1911,6 +1935,7 @@ void MainWindow::frameSliderMoved(int value) {
    Reintroduce a separate component or helper if this functionality is required again. */
 
 void MainWindow::seekFrame(int frame) {
+    frame = ui->frameSlider->boundedFrame(frame);
     ui->videoLoader->seekToFrame(frame, false);
     if (!ui->frameSlider->isSliderDown()) {
         const QSignalBlocker blocker(ui->frameSlider);
@@ -1919,18 +1944,18 @@ void MainWindow::seekFrame(int frame) {
 }
 
 void MainWindow::goToFirstFrame() {
-    ui->videoLoader->seekToFrame(0, false);
+    const int firstFrame = ui->startFrameSpinBox->value();
+    ui->videoLoader->seekToFrame(firstFrame, false);
     if (!ui->frameSlider->isSliderDown()) {
-        ui->frameSlider->setValue(0);
+        ui->frameSlider->setValue(firstFrame);
     }
     if (!ui->framePosition->hasFocus()) {
-        ui->framePosition->setValue(0);
+        ui->framePosition->setValue(firstFrame);
     }
 }
 
 void MainWindow::goToLastFrame() {
-    int totalFrames = ui->videoLoader->getTotalFrames();
-    int lastFrame = totalFrames - 1; // Assuming 0-based indexing
+    const int lastFrame = ui->stopFrameSpinBox->value();
     ui->videoLoader->seekToFrame(lastFrame, false);
     if (!ui->frameSlider->isSliderDown()) {
         ui->frameSlider->setValue(lastFrame);
@@ -1986,7 +2011,8 @@ void MainWindow::onStartTrackingActionTriggered() {
     if (m_appController) {
         bool onlyTrackMissing = true; // Default behavior; dialog can override when created by controller.
         QString dataDirectory = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
-        m_appController->showTrackingDialog(videoPath, settings, onlyTrackMissing, totalFrames, dataDirectory, this);
+        m_appController->showTrackingDialog(videoPath, settings, onlyTrackMissing, totalFrames, dataDirectory, this,
+                                            ui->startFrameSpinBox->value(), ui->stopFrameSpinBox->value());
     } else {
         QMessageBox::critical(this, "Error", "Internal error: AppController missing.");
     }
@@ -2006,7 +2032,8 @@ void MainWindow::handleBeginTrackingFromDialog() {
     // Let the controller handle filtering (only-missing) and orchestration.
     bool onlyTrackMissing = true;
     QString dataDirectory = ui->videoLoader ? ui->videoLoader->getDataDirectory() : QString();
-    m_appController->beginTrackingFromModel(videoPath, settings, onlyTrackMissing, totalFrames, dataDirectory);
+    m_appController->beginTrackingFromModel(videoPath, settings, onlyTrackMissing, totalFrames, dataDirectory,
+                                             ui->startFrameSpinBox->value(), ui->stopFrameSpinBox->value());
 }
 
 void MainWindow::handleCancelTrackingFromDialog() {

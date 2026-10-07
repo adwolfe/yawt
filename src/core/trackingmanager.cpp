@@ -748,7 +748,8 @@ void TrackingManager::setUmPerPixel(double umPerPixel)
 void TrackingManager::startFullTrackingProcess(
     const QString& videoPath, const QString& dataDirectory, int keyFrameNum,
     const std::vector<Tracking::InitialWormInfo>& initialWorms,
-    const Thresholding::ThresholdSettings& settings, int totalFramesInVideoHint) {
+    const Thresholding::ThresholdSettings& settings, int totalFramesInVideoHint,
+    int startFrame, int stopFrame) {
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << "): startFullTrackingProcess called.";
     if (m_isTrackingRunning) {
         qWarning() << "TrackingManager: Attempted to start tracking while already running.";
@@ -860,12 +861,20 @@ void TrackingManager::startFullTrackingProcess(
     if (m_videoFrameSize.width <= 0 || m_videoFrameSize.height <= 0) { emit trackingFailed("Could not determine frame size."); m_isTrackingRunning = false; return; }
     if (m_keyFrameNum < 0 || m_keyFrameNum >= actualTotalFrames) { emit trackingFailed("Keyframe out of bounds."); m_isTrackingRunning = false; return; }
 
+    if (stopFrame == -1) stopFrame = actualTotalFrames - 1;
+    if (startFrame < 0 || stopFrame >= actualTotalFrames || startFrame > stopFrame ||
+        m_keyFrameNum < startFrame || m_keyFrameNum > stopFrame) {
+        emit trackingFailed("Invalid frame range: the worms' selection frame must be within the start and stop frames.");
+        m_isTrackingRunning = false;
+        return;
+    }
+
     // --- Parallel Video Processing Logic ---
     int numThreads = QThread::idealThreadCount();
     numThreads = qMax(1, qMin(numThreads, 8));
     emit trackingStatusUpdate(QString("Processing video in chunks across %1 threads...").arg(numThreads));
     QList<QPair<int, int>> forwardFrameRanges, backwardFrameRanges;
-    int forwardSegmentStart = m_keyFrameNum, forwardSegmentEnd = actualTotalFrames;
+    int forwardSegmentStart = m_keyFrameNum, forwardSegmentEnd = stopFrame + 1;
     int totalForwardSegmentFrames = forwardSegmentEnd - forwardSegmentStart;
     if (totalForwardSegmentFrames > 0) {
         int framesPerThread = std::max(1, static_cast<int>(std::ceil(static_cast<double>(totalForwardSegmentFrames) / numThreads)));
@@ -873,7 +882,7 @@ void TrackingManager::startFullTrackingProcess(
             forwardFrameRanges.append({cs, std::min(cs + framesPerThread, forwardSegmentEnd)});
         }
     }
-    int backwardSegmentStart = 0, backwardSegmentEnd = m_keyFrameNum;
+    int backwardSegmentStart = startFrame, backwardSegmentEnd = m_keyFrameNum;
     int totalBackwardSegmentFrames = backwardSegmentEnd - backwardSegmentStart;
     if (totalBackwardSegmentFrames > 0) {
         int framesPerThread = std::max(1, static_cast<int>(std::ceil(static_cast<double>(totalBackwardSegmentFrames) / numThreads)));
@@ -1615,7 +1624,7 @@ void TrackingManager::launchWormTrackers() {
 
     for (const auto& info : m_initialWormInfos) {
         int wId = info.id; QRectF iRoi = info.initialSearchWindow;
-        if (!m_finalProcessedForwardFrames.empty() || m_keyFrameNum == (m_videoFrameSize.width > 0 ? static_cast<int>(m_videoFps * (m_totalFramesInVideoHint > 0 ? m_totalFramesInVideoHint : 1) / m_videoFps) -1 : 0) ) {
+        if (!m_finalProcessedForwardFrames.empty()) {
             WormTracker* trk = new WormTracker(wId, iRoi, WormTracker::TrackingDirection::Forward, m_keyFrameNum);
             trk->setFrames(&m_finalProcessedForwardFrames); QThread* thr = new QThread(); trk->moveToThread(thr);
             trk->setProperty("wormId", wId); trk->setProperty("direction", "Forward"); m_trackerThreads.append(thr);
@@ -1629,7 +1638,7 @@ void TrackingManager::launchWormTrackers() {
             m_wormTrackersList.append(trk); m_wormIdToForwardTrackerInstanceMap[wId] = trk; m_individualTrackerProgress[trk] = 0;
             thr->start(); m_expectedTrackersToFinish++;
         }
-        if (!m_finalProcessedReversedFrames.empty() || m_keyFrameNum == 0) {
+        if (!m_finalProcessedReversedFrames.empty()) {
             WormTracker* trk = new WormTracker(wId, iRoi, WormTracker::TrackingDirection::Backward, m_keyFrameNum);
             trk->setFrames(&m_finalProcessedReversedFrames); QThread* thr = new QThread(); trk->moveToThread(thr);
             trk->setProperty("wormId", wId); trk->setProperty("direction", "Backward"); m_trackerThreads.append(thr);

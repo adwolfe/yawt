@@ -406,7 +406,7 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
                                           const Thresholding::ThresholdSettings& settings,
                                           bool onlyTrackMissing,
                                           int totalFrames,
-                                          const QString& dataDirectory)
+                                          const QString& dataDirectory, int startFrame, int stopFrame)
 {
     if (!m_manager) {
         YAWT_WARN(lcCoreAppController) << "beginTrackingFromModel: TrackingManager not available";
@@ -434,7 +434,7 @@ void AppController::beginTrackingFromModel(const QString& videoPath,
 
     emit trackingStarted();
 
-    m_manager->startFullTrackingProcess(videoPath, dataDirectory, derivedKeyFrame, initialWorms, settings, totalFrames);
+    m_manager->startFullTrackingProcess(videoPath, dataDirectory, derivedKeyFrame, initialWorms, settings, totalFrames, startFrame, stopFrame);
 }
 
 int AppController::countWormItems() const
@@ -466,7 +466,7 @@ void AppController::showTrackingDialog(const QString& videoPath,
                                        bool onlyTrackMissing,
                                        int totalFrames,
                                        const QString& dataDirectory,
-                                       QWidget* parent)
+                                       QWidget* parent, int startFrame, int stopFrame)
 {
     // Validate that worms-to-track share a keyframe before opening the dialog.
     int derivedKeyFrame;
@@ -483,6 +483,8 @@ void AppController::showTrackingDialog(const QString& videoPath,
     m_dialogSettings = settings;
     m_dialogOnlyTrackMissing = onlyTrackMissing;
     m_dialogTotalFrames = totalFrames;
+    m_dialogStartFrame = startFrame;
+    m_dialogStopFrame = stopFrame < 0 ? totalFrames - 1 : stopFrame;
     m_dialogDataDirectory = dataDirectory;
 
     if (!m_trackingDialog) {
@@ -510,7 +512,8 @@ void AppController::showTrackingDialog(const QString& videoPath,
     int wormsWithTracks = countWormsWithTracks();
 
     m_trackingDialog->setTrackingParameters(m_dialogVideoPath, m_dialogKeyFrame, m_dialogSettings,
-                                            wormCount, m_dialogTotalFrames, wormsWithTracks);
+                                            wormCount, m_dialogTotalFrames, wormsWithTracks,
+                                            m_dialogStartFrame, m_dialogStopFrame);
 
     // Execute the dialog modally. The dialog will emit begin/cancel signals which the controller handles.
     m_trackingDialog->exec();
@@ -549,6 +552,11 @@ void AppController::onDialogBeginRequested()
         return;
     }
     m_dialogKeyFrame = derivedKeyFrame;
+    if (derivedKeyFrame < m_dialogStartFrame || derivedKeyFrame > m_dialogStopFrame) {
+        if (m_trackingDialog) m_trackingDialog->onTrackingFailed(QString("The worms' selection frame (%1) is outside the selected range (%2–%3). Adjust the range or select worms within it.")
+            .arg(derivedKeyFrame).arg(m_dialogStartFrame).arg(m_dialogStopFrame));
+        return;
+    }
 
     // Build initial worm list from model, respecting the dialog's only-missing preference.
     std::vector<Tracking::InitialWormInfo> initialWorms = buildInitialWormsFromModel(m_dialogOnlyTrackMissing);
@@ -574,7 +582,8 @@ void AppController::onDialogBeginRequested()
     // Start tracking via the manager using stored dialog parameters.
     emit trackingStarted();
     m_manager->startFullTrackingProcess(m_dialogVideoPath, m_dialogDataDirectory, m_dialogKeyFrame,
-                                        initialWorms, m_dialogSettings, m_dialogTotalFrames);
+                                        initialWorms, m_dialogSettings, m_dialogTotalFrames,
+                                        m_dialogStartFrame, m_dialogStopFrame);
 
     // Leave the dialog open — progress/status signals from the manager will be forwarded to it.
 }

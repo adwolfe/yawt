@@ -110,7 +110,8 @@ public:
                                             const Thresholding::ThresholdSettings& settings,
                                             bool onlyTrackMissing,
                                             int totalFrames,
-                                            const QString& dataDirectory);
+                                            const QString& dataDirectory,
+                                            int startFrame = 0, int stopFrame = -1);
 
     // Helper queries for UI
     // - Returns the number of items currently marked as worms in the annotation model
@@ -141,7 +142,8 @@ public:
                                         bool onlyTrackMissing,
                                         int totalFrames,
                                         const QString& dataDirectory,
-                                        QWidget* parent = nullptr);
+                                        QWidget* parent = nullptr,
+                                        int startFrame = 0, int stopFrame = -1);
 
     /**
      * @brief Update the active-contour parameters used for ring/coiled centerline refinement.
@@ -271,6 +273,8 @@ private:
     Thresholding::ThresholdSettings m_dialogSettings;
     bool m_dialogOnlyTrackMissing = true;
     int m_dialogTotalFrames = 0;
+    int m_dialogStartFrame = 0;
+    int m_dialogStopFrame = -1;
     QString m_dialogDataDirectory;
 
     // Active-contour params stored persistently. Updated by the Debug tab via

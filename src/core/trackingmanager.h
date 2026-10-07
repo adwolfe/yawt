@@ -168,13 +168,16 @@ public slots:
      * @param initialWorms Initial worm descriptors (IDs, ROIs, colors).
      * @param settings Thresholding parameters for pre-processing.
      * @param totalFramesInVideoHint Optional hint for total frames (progress/bounds).
+     * @param startFrame First included absolute frame (zero-based).
+     * @param stopFrame Last included absolute frame, or -1 for the end of the video.
      */
     void startFullTrackingProcess(const QString& videoPath,
                                   const QString& dataDirectory,
                                   int keyFrameNum,
                                   const std::vector<Tracking::InitialWormInfo>& initialWorms,
                                   const Thresholding::ThresholdSettings& settings,
-                                  int totalFramesInVideoHint);
+                                  int totalFramesInVideoHint,
+                                  int startFrame = 0, int stopFrame = -1);
     /**
      * @brief Request cancellation of the current tracking run.
      *

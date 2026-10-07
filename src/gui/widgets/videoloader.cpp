@@ -282,11 +282,11 @@ bool VideoLoader::loadVideo(const QString& filePath) {
 
 void VideoLoader::play() {
     if (!isVideoLoaded() || m_isPlaying) return;
-    if (m_pendingSeekFrame < 0 && currentFrameIdx >= totalFramesCount - 1 && totalFramesCount > 0) {
-        seekToFrame(0, true);
+    if (m_pendingSeekFrame < 0 && currentFrameIdx >= m_cropStopFrame && totalFramesCount > 0) {
+        seekToFrame(m_cropStartFrame, true);
     }
     if (m_pendingSeekFrame < 0 && currentFrameIdx == -1 && totalFramesCount > 0) {
-        seekToFrame(0, true);
+        seekToFrame(m_cropStartFrame, true);
     }
     m_isPlaying = true;
     updateTimerInterval();
@@ -301,9 +301,17 @@ void VideoLoader::pause() {
     emit playbackStateChanged(false, m_playbackSpeedMultiplier);
 }
 
+void VideoLoader::setFrameCrop(int first, int last) {
+    m_cropStartFrame = qBound(0, first, qMax(0, totalFramesCount - 1));
+    m_cropStopFrame = qBound(m_cropStartFrame, last, qMax(0, totalFramesCount - 1));
+    const int target = m_pendingSeekFrame >= 0 ? m_pendingSeekFrame.loadRelaxed() : currentFrameIdx;
+    if (target < m_cropStartFrame || target > m_cropStopFrame)
+        seekToFrame(qBound(m_cropStartFrame, target, m_cropStopFrame));
+}
+
 void VideoLoader::seekToFrame(int frameNumber, bool suppressEmit) {
     if (!isVideoLoaded()) return;
-    frameNumber = qBound(0, frameNumber, totalFramesCount > 0 ? totalFramesCount - 1 : 0);
+    frameNumber = qBound(m_cropStartFrame, frameNumber, m_cropStopFrame);
     // Explicit navigation supersedes all speculative work at the old position.
     if (m_frameLoader && m_pendingSeekFrame != frameNumber) m_frameLoader->clearRequests();
     m_lastPreloadCenter = -1;
@@ -720,6 +728,7 @@ void VideoLoader::displayFrame(int frameNumber, bool suppressEmit) {
 }
 
 void VideoLoader::presentFrame(int frameNumber, const cv::Mat& frame, bool suppressEmit) {
+    if (frameNumber < m_cropStartFrame || frameNumber > m_cropStopFrame) return;
     m_pendingSeekFrame = -1;
     currentCvFrame = frame;
     if (m_isPlaying) preloadAdjacentFrames(frameNumber, 10);
@@ -751,7 +760,7 @@ void VideoLoader::convertCvMatToQImage(const cv::Mat& mat, QImage& qimg) const {
 
 void VideoLoader::processNextFrame() {
     if (!m_isPlaying || !isVideoLoaded() || m_pendingSeekFrame >= 0) return;
-    if (currentFrameIdx < totalFramesCount - 1) {
+    if (currentFrameIdx < m_cropStopFrame) {
         displayFrame(currentFrameIdx + 1);
     } else {
         pause();
@@ -2232,6 +2241,8 @@ void VideoLoader::startFrameLoader() {
         if (generation != m_videoGeneration) return;
         m_videoReady = true;
         totalFramesCount = count;
+        m_cropStartFrame = 0;
+        m_cropStopFrame = qMax(0, count - 1);
         framesPerSecond = fps;
         originalFrameSize = size;
         m_dataDirectory = dataDir;
