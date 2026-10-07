@@ -269,6 +269,9 @@ static void testPlaybackNavigation(const QString& root)
     auto* slider = window.findChild<QSlider*>("frameSlider");
     auto* position = window.findChild<QSpinBox*>("framePosition");
     check(video && slider && position, "find navigation controls");
+    video->setPlaybackSpeed(20.0);
+    check(video->getPlaybackSpeed() == 20.0, "20x playback is supported without clamping to 10x");
+    video->setPlaybackSpeed(1.0);
     video->loadVideo(path);
     check(waitFor([&] { return video->getCurrentFrameNumber() == 0; }), "navigation fixture opens");
     int changed = 0;
@@ -354,6 +357,56 @@ static void testRunImport(const QString& root)
           "import restores subtraction and rebuilds transient background model");
 }
 
+// Opt-in throughput experiment: fresh application/cache for each run, real Qt
+// event-loop timing, and alternating order to reduce warm filesystem bias.
+static void benchmarkPlaybackSpeed(const QString& root, bool light = false)
+{
+    for (const auto size : {cv::Size(640, 480), cv::Size(1920, 1080)}) {
+        const QString path = QDir(root).filePath(QString("speed-%1.avi").arg(size.width));
+        cv::VideoWriter writer(path.toStdString(), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 25, size);
+        check(writer.isOpened(), "open benchmark writer");
+        cv::Mat frame(size, CV_8UC3);
+        cv::RNG random(12345);
+        random.fill(frame, cv::RNG::UNIFORM, 0, 256);
+        if (light) {
+            // Smooth spatial gradient provides an inexpensive decode control.
+            for (int y = 0; y < size.height; ++y)
+                for (int x = 0; x < size.width; ++x)
+                    frame.at<cv::Vec3b>(y, x) = cv::Vec3b(x * 255 / size.width, y * 255 / size.height, 100);
+        }
+        for (int i = 0; i < 240; ++i) writer.write(frame);
+        writer.release();
+        for (const double speed : {10.0, 20.0, 20.0, 10.0}) {
+            MainWindow window;
+            window.resize(1000, 700);
+            window.show();
+            auto* video = window.findChild<VideoLoader*>();
+            video->loadVideo(path);
+            check(waitFor([&] { return video->getCurrentFrameNumber() == 0; }), "benchmark opens");
+            video->setPlaybackSpeed(speed);
+            check(video->getPlaybackSpeed() == speed, "benchmark speed is not clamped");
+            QEventLoop loop;
+            QTimer deadline;
+            deadline.setSingleShot(true);
+            QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+            QObject::connect(video, &VideoLoader::frameChanged, &loop, [&](int number, const QImage&) {
+                if (number == 239) loop.quit();
+            });
+            QElapsedTimer elapsed;
+            elapsed.start();
+            deadline.start(15000);
+            video->play();
+            loop.exec();
+            const double seconds = elapsed.nsecsElapsed() / 1e9;
+            video->pause();
+            check(video->getCurrentFrameNumber() == 239, "benchmark finishes before timeout");
+            std::printf("BENCH %dx%d requested=%.0fx seconds=%.3f fps=%.1f achieved=%.2fx\n",
+                        size.width, size.height, speed, seconds, 239 / seconds, 239 / seconds / 25);
+            std::fflush(stdout);
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
     QApplication app(argc, argv);
@@ -366,6 +419,10 @@ int main(int argc, char** argv)
             testVideo(temp.path());
             testPlaybackNavigation(temp.path());
             std::puts("Playback regressions passed.");
+            return 0;
+        }
+        if (app.arguments().contains("--benchmark-speed")) {
+            benchmarkPlaybackSpeed(temp.path(), app.arguments().contains("--light"));
             return 0;
         }
         testIndex(temp.path());

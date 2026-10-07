@@ -54,3 +54,28 @@ Run `python3 scripts/test_disk_access.py build --playback-only` to isolate video
 open/seek and playback-navigation regressions. These check control synchronization,
 pending seeks during playback ticks, drag coalescing, exact release positioning,
 and pause/resume during dragging.
+
+Playback speed throughput experiment:
+
+- `python3 scripts/test_disk_access.py build --benchmark-speed` generates
+  high-detail deterministic noise MJPEG fixtures at 640x480 and 1920x1080.
+- Add `--light` to use inexpensive smooth-gradient MJPEG fixtures instead.
+- Each fixture has 240 frames at 25 fps. Each run opens a fresh MainWindow/cache,
+  measures advancement from frame 0 to 239 with the Qt event loop, and alternates
+  requested speeds in the order 10x, 20x, 20x, 10x. The runner uses Qt offscreen;
+  results measure application frame advancement, not physical screen refresh.
+
+Local results (two runs per speed, rounded):
+
+| Fixture | Requested 10x: achieved | Requested 20x: achieved |
+| --- | --- | --- |
+| Smooth gradient, 640x480 | 9.98x | 19.38x |
+| Smooth gradient, 1920x1080 | 9.97x | 15.54x |
+| High detail, 640x480 | 9.42x | 9.34x |
+| High detail, 1920x1080 | 1.49x | 1.50x |
+
+These synthetic fixtures show that 20x can improve throughput when there is
+headroom, but cannot overcome a saturated playback pipeline. They do not isolate
+decoder time from GUI work or predict performance for a particular user video.
+The supported speed range now includes 20x; previously the UI offered 20x while
+VideoLoader clamped it to 10x. Playback continues to preserve every source frame.

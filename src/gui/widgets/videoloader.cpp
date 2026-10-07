@@ -449,7 +449,9 @@ void VideoLoader::setScaleMeasureMode(bool enabled)
 }
 
 void VideoLoader::setPlaybackSpeed(double multiplier) {
-    double newSpeed = qBound(0.1, multiplier, 10.0);
+    // Match the UI's supported range; actual throughput depends on decoding and
+    // presentation cost because playback preserves every source frame.
+    double newSpeed = qBound(0.1, multiplier, 20.0);
     if (qFuzzyCompare(m_playbackSpeedMultiplier, newSpeed)) return;
     m_playbackSpeedMultiplier = newSpeed;
     if (m_isPlaying) {
