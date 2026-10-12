@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QRectF>
 #include <QPainter>
+#include <QPainterPath>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QCursor>
@@ -36,6 +37,7 @@
 
 #include "../../data/trackingcommon.h" // Contains TableItems::AnnotationItem, Tracking::DetectedBlob, etc.
 #include "../../data/trackingdatastorage.h" // Central data storage
+#include "../../data/referenceannotations.h"
 
 // Forward declarations
 class TrackingDataStorage;
@@ -68,7 +70,8 @@ public:
         Point,          // For selecting a single point marker
         Crop,           // For defining a crop area (uses DrawROI mechanics initially)
         EditBlobs,      // For selecting/clicking blobs on the thresholded image to add to AnnotationTableModel
-        EditTracks      // For interacting with displayed tracks (e.g., selecting, merging - future)
+        EditTracks,     // For interacting with displayed tracks (e.g., selecting, merging - future)
+        ReferenceAnnotation // Independent human labels, available in --debug only
     };
     /**
  * @brief Defines the visual content modes for the VideoLoader widget.
@@ -131,6 +134,11 @@ public:
     QString getCurrentVideoPath() const;
     QString getDataDirectory() const;
     CropShape getCropShape() const;
+    QPair<int, int> getFrameCrop() const { return {m_cropStartFrame, m_cropStopFrame}; }
+    void setReferenceViewActive(bool active);
+    void setReferenceOverlay(const QMap<int, ReferenceAnnotations::Frame>& annotations, int selectedWorm);
+    double videoPixelsPerWidgetPixel() const;
+    void setVideoLoadGuard(std::function<bool()> guard) { m_videoLoadGuard = std::move(guard); }
 
     // Frame cache management
     void setCacheSize(int maxFrames);
@@ -226,6 +234,7 @@ signals:
     void videoProcessingProgress(int currentStep, int totalSteps, const QString& message);
     void videoProcessingFinished(const QString& message, bool success);
     void frameChanged(int currentFrameNumber, const QImage& currentFrame); // QImage is current frame (raw or thresholded based on ViewMode)
+    void framePresented(int frameNumber); // Also emitted for silent seeks; reference labels follow the displayed frame.
     void playbackStateChanged(bool isPlaying, double currentSpeed);
     void roiDefined(const QRectF &roi); // For the general purpose ROI
     void pointDefined(const QPointF &point); // For the point marker tool
@@ -251,6 +260,9 @@ signals:
     void blobClickedForAddition(const Tracking::DetectedBlob& blobData);
 
     void trackPointClicked(int wormId, int frameNumber, QPointF videoPoint); // For interaction in EditTracks mode
+    void referencePointerPressed(QPointF videoPoint, bool removePoint);
+    void referencePointerMoved(QPointF videoPoint);
+    void referencePointerReleased();
 
     /**
      * @brief Emitted when the data directory is created or changed.
@@ -299,6 +311,10 @@ private:
     void emitThresholdParametersChanged();
     QColor getTrackColor(int wormId) const; // Used for drawing tracks
     void rebuildCenterlineMidpointCache();
+    void invalidateTrackGeometry();
+    void rebuildTrackPaths();
+    void drawTrackOverlay(QPainter& painter, const QRectF& targetRect);
+    void paintReferenceOverlay(QPainter& painter);
 
     // Frame caching and loading helpers
     bool getCachedFrame(int frameNumber, cv::Mat& outFrame);
@@ -314,6 +330,12 @@ private:
     // --- OpenCV Video Members ---
     quint64 m_videoGeneration = 0;
     bool m_videoReady = false;
+    std::function<bool()> m_videoLoadGuard;
+    bool m_referenceViewActive = false;
+    bool m_referencePointerDown = false;
+    QImage m_referenceRawFrame;
+    QMap<int, ReferenceAnnotations::Frame> m_referenceOverlay;
+    int m_referenceSelectedWorm = 1;
     double m_loadedUmPerPixel = 0.0;
     bool m_pendingSeekSuppressEmit = false;
     cv::Mat currentCvFrame;          // Holds the raw/original current frame from video
@@ -368,6 +390,15 @@ private:
     TrackingDataStorage* m_storage;      // Pointer to central data storage
     TrackDisplayMode m_trackDisplayMode; // Whether to draw centroid or centerline midpoint tracks
     QMap<int, QMap<int, QPointF>> m_centerlineMidpointCache; // wormId -> frameNum -> midpoint
+    bool m_centerlineMidpointsDirty = true;
+    bool m_trackPathsDirty = true;
+    QMap<int, QPainterPath> m_trackPaths; // Source-video coordinates, independent of the view.
+    QImage m_trackOverlay; // View-sized transparent image at the widget's device pixel ratio.
+    bool m_trackOverlayDirty = true;
+    QRectF m_trackOverlayTargetRect;
+    QSize m_trackOverlayPixelSize;
+    qreal m_trackOverlayDevicePixelRatio = 0;
+    QMap<int, QColor> m_trackOverlayColors; // Only currently visible tracks.
 
     // --- Zoom & Pan Members ---
     double m_zoomFactor;

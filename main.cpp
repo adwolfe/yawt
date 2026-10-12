@@ -19,7 +19,7 @@ int main(int argc, char *argv[])
     parser.setApplicationDescription("YAWT - Yet Another Worm Tracker");
     parser.addHelpOption();
     QCommandLineOption verboseOpt("verbose", "Enable YAWT command-line debug logging.");
-    QCommandLineOption debugOpt("debug", "Enable the Debug tab and in-memory debug capture.");
+    QCommandLineOption debugOpt("debug", "Enable Debug and Reference annotation tabs and in-memory debug capture.");
     parser.addOption(verboseOpt);
     parser.addOption(debugOpt);
     parser.process(a);

@@ -1,6 +1,7 @@
 #include "src/gui/analysissessionmodel.h"
 #include "src/gui/mainwindow.h"
 #include "src/gui/widgets/videoloader.h"
+#include "src/gui/widgets/miniloader.h"
 #include "src/data/wormsjsoncodec.h"
 #include "src/data/videometadatastore.h"
 #include <QtConcurrent>
@@ -19,7 +20,10 @@
 #include <QTimer>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTableView>
+#include <QtMath>
 #include <opencv2/videoio.hpp>
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
@@ -363,6 +367,125 @@ static void testPlaybackNavigation(const QString& root)
     check(waitFor([&] { return video->getCurrentFrameNumber() == 7; }), "resumed drag keeps release target");
 }
 
+static QImage renderVideo(VideoLoader& video)
+{
+    const qreal ratio = video.devicePixelRatioF();
+    QImage image(QSize(qCeil(video.width() * ratio), qCeil(video.height() * ratio)),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(ratio);
+    image.fill(Qt::black);
+    video.render(&image);
+    return image;
+}
+
+static void checkTrackRendering(VideoLoader& video, const QRectF& target,
+                                const QColor& color, double sourceY, bool visible,
+                                const char* message)
+{
+    const QImage actual = renderVideo(video);
+    QImage expected(actual.size(), actual.format());
+    expected.setDevicePixelRatio(actual.devicePixelRatio());
+    expected.fill(Qt::black);
+    {
+        QPainter painter(&expected);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawImage(target, video.getCurrentQImageFrame(), video.getCurrentQImageFrame().rect());
+        if (visible) {
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            QPainterPath path;
+            path.moveTo(target.left() + target.width() * 8 / 64, target.top() + target.height() * sourceY / 64);
+            path.lineTo(target.left() + target.width() * 56 / 64, target.top() + target.height() * sourceY / 64);
+            painter.strokePath(path, QPen(color, 2));
+        }
+    }
+    // Transparent-layer composition can round edge pixels slightly differently
+    // from direct drawing; compare the entire image, including the empty regions.
+    for (int y = 0; y < actual.height(); ++y) {
+        for (int x = 0; x < actual.width(); ++x) {
+            const QColor a = actual.pixelColor(x, y), e = expected.pixelColor(x, y);
+            if (qAbs(a.red() - e.red()) > 3 || qAbs(a.green() - e.green()) > 3 ||
+                qAbs(a.blue() - e.blue()) > 3) {
+                std::fprintf(stderr, "pixel mismatch at %d,%d actual=%s expected=%s\n", x, y,
+                             qPrintable(a.name()), qPrintable(e.name()));
+                check(false, message);
+            }
+        }
+    }
+}
+
+static void testTrackOverlay(const QString& root)
+{
+    const QString path = QDir(root).filePath("overlay.avi");
+    makeVideo(path, 100);
+    TrackingDataStorage storage;
+    VideoLoader video;
+    video.resize(128, 128);
+    video.setTrackingDataStorage(&storage);
+    video.loadVideo(path);
+    check(waitFor([&] { return video.getCurrentFrameNumber() == 0; }), "overlay fixture opens");
+    WormsJson::Document doc;
+    TableItems::AnnotationItem item;
+    item.id = 1;
+    item.type = TableItems::ItemType::Worm;
+    item.color = Qt::red;
+    doc.items.append(item);
+    for (int i = 0; i < 3; ++i) {
+        Tracking::TrackPoint point{};
+        point.frameNumber = i;
+        point.position = cv::Point2f(8 + i * 24, i == 1 ? 50 : 16);
+        point.quality = i == 1 ? Tracking::TrackPointQuality::Lost : Tracking::TrackPointQuality::Single;
+        doc.tracks[1].push_back(point);
+        Tracking::DetectedBlob blob;
+        blob.isValid = true;
+        blob.centerline.points.push_back(cv::Point2f(8 + i * 24, 32));
+        doc.blobsByFrame[i][1] = blob;
+    }
+    storage.applyWormsDocument(std::move(doc));
+    video.setTracksToDisplay(storage.getAllTracks());
+    video.setVisibleTrackIDs({1});
+    video.setViewModeOption(VideoLoader::ViewModeOption::Tracks, true);
+    video.setTrackDisplayMode(VideoLoader::TrackDisplayMode::Centroid);
+    const QRectF fit(0, 0, 128, 128);
+    checkTrackRendering(video, fit, Qt::red, 16, true, "cached centroid geometry matches direct rendering");
+    const QImage first = renderVideo(video);
+    video.seekToFrame(1);
+    check(waitFor([&] { return video.getCurrentFrameNumber() == 1; }), "overlay frame changes");
+    check(renderVideo(video) == first, "overlay stays identical across video frames");
+    storage.setItemColor(1, QColor(0, 255, 0, 128));
+    const QColor green(0, 255, 0, 128);
+    checkTrackRendering(video, fit, green, 16, true, "color change invalidates rendered overlay");
+    storage.setItemVisibility(1, false);
+    checkTrackRendering(video, fit, green, 16, false, "hidden items disappear from cached overlay");
+    storage.setItemVisibility(1, true);
+    video.setVisibleTrackIDs({});
+    checkTrackRendering(video, fit, green, 16, false, "selection visibility invalidates overlay");
+    video.setVisibleTrackIDs({1});
+    video.setTrackDisplayMode(VideoLoader::TrackDisplayMode::CenterlineMidpoint);
+    checkTrackRendering(video, fit, green, 32, true, "display mode rebuilds midpoint geometry");
+    Tracking::DetectedBlob changedBlob;
+    changedBlob.isValid = true;
+    changedBlob.centerline.points.push_back(cv::Point2f(8, 40));
+    storage.setDetectedBlobForFrame(0, 1, changedBlob);
+    changedBlob.centerline.points[0] = cv::Point2f(56, 40);
+    storage.setDetectedBlobForFrame(2, 1, changedBlob);
+    storage.allDataChanged();
+    checkTrackRendering(video, fit, green, 40, true, "blob refresh invalidates midpoint cache");
+    video.setTrackDisplayMode(VideoLoader::TrackDisplayMode::Centroid);
+    video.setZoomFactor(2);
+    checkTrackRendering(video, QRectF(-63, -63, 256, 256), green, 16, true, "zoom refreshes overlay with constant stroke width");
+    video.centerOnVideoPoint(QPointF(16, 16));
+    checkTrackRendering(video, QRectF(0, 0, 256, 256), green, 16, true, "pan refreshes overlay and clips geometry");
+    video.setZoomFactor(1);
+    video.resize(192, 128);
+    checkTrackRendering(video, QRectF(32, 0, 128, 128), green, 16, true, "resize refreshes overlay with letterboxing");
+    video.setTracksToDisplay({});
+    checkTrackRendering(video, QRectF(32, 0, 128, 128), green, 16, false, "replacing tracks clears old overlay");
+    video.setTracksToDisplay(storage.getAllTracks());
+    checkTrackRendering(video, QRectF(32, 0, 128, 128), green, 16, true, "replacement rebuilds track paths");
+    video.clearDisplayedTracks();
+    checkTrackRendering(video, QRectF(32, 0, 128, 128), green, 16, false, "cleared tracks release stale overlay");
+}
+
 static void testRunImport(const QString& root)
 {
     const QString project = QDir(root).filePath("import");
@@ -460,6 +583,208 @@ static void benchmarkPlaybackSpeed(const QString& root, bool light = false)
     }
 }
 
+// Compare equal source durations at fractional FPS while keeping pixel content
+// and codec identical. Include cheap frames and a decode-heavy control.
+static void benchmarkFractionalFps(const QString& root)
+{
+    for (const bool detail : {false, true}) {
+        const cv::Size size = detail ? cv::Size(1920, 1080) : cv::Size(640, 480);
+        cv::Mat frame(size, CV_8UC3);
+        cv::RNG random(12345);
+        random.fill(frame, cv::RNG::UNIFORM, 0, 256);
+        if (!detail) {
+            for (int y = 0; y < size.height; ++y)
+                for (int x = 0; x < size.width; ++x)
+                    frame.at<cv::Vec3b>(y, x) = cv::Vec3b(x * 255 / size.width, y * 255 / size.height, 100);
+        }
+        for (const double fps : {3.75, 7.5}) {
+            const int last = qRound(fps * 4);
+            const QString path = QDir(root).filePath(QString("fractional-%1-%2.avi").arg(detail).arg(fps));
+            cv::VideoWriter writer(path.toStdString(), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, size);
+            check(writer.isOpened(), "fractional benchmark writer opens");
+            for (int i = 0; i <= last; ++i) writer.write(frame);
+            writer.release();
+            cv::VideoCapture decode(path.toStdString());
+            QElapsedTimer decodeTime;
+            decodeTime.start();
+            cv::Mat decoded;
+            int decodedCount = 0;
+            while (decode.read(decoded)) ++decodedCount;
+            const double decodeFps = decodedCount / (decodeTime.nsecsElapsed() / 1e9);
+            decode.release();
+            for (const double speed : {1.0, 10.0, 20.0}) {
+                MainWindow window;
+                window.resize(1000, 700);
+                window.show();
+                auto* video = window.findChild<VideoLoader*>();
+                video->loadVideo(path);
+                check(waitFor([&] { return video->getCurrentFrameNumber() == 0; }), "fractional video opens");
+                check(qAbs(video->getFPS() - fps) < 0.01, "fractional FPS survives metadata loading");
+                video->setPlaybackSpeed(speed);
+                QEventLoop loop;
+                QTimer deadline;
+                deadline.setSingleShot(true);
+                QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+                QObject::connect(video, &VideoLoader::frameChanged, &loop, [&](int number, const QImage&) {
+                    if (number == last) loop.quit();
+                });
+                QElapsedTimer elapsed;
+                elapsed.start();
+                deadline.start(12000);
+                video->play();
+                loop.exec();
+                const double seconds = elapsed.nsecsElapsed() / 1e9;
+                video->pause();
+                check(video->getCurrentFrameNumber() == last, "fractional benchmark finishes");
+                std::printf("FPSBENCH detail=%d source=%.1f requested=%.0fx seconds=%.3f frames_per_second=%.2f achieved=%.2fx decode_fps=%.1f\n",
+                            detail, fps, speed, seconds, last / seconds, last / seconds / fps, decodeFps);
+                std::fflush(stdout);
+                if (!detail && speed == 1.0)
+                    check(qAbs(seconds - 4.0) < 0.5, "fractional FPS has correct real-time playback duration");
+            }
+        }
+    }
+}
+
+static void benchmarkPlaybackFile(const QString& originalPath, const QString& root,
+                                  const QString& originalRun = QString(), const QString& overlays = QString(),
+                                  bool benchmarkMini = false)
+{
+    // Copy bytes without transcoding; isolate generated metadata from user data.
+    const QString path = QDir(root).filePath(QFileInfo(originalPath).fileName());
+    QString run;
+    if (!originalRun.isEmpty()) {
+        run = QDir(root).filePath("yawt/" + QFileInfo(originalPath).completeBaseName() + "/" + QFileInfo(originalRun).fileName());
+        check(QDir().mkpath(run), "create isolated tracking run");
+        const QDir sourceRun(originalRun);
+        for (const QString& name : sourceRun.entryList({"worms.json", "thresholding.json", "roi_points.json", "*_tracks.xlsx", "*_tracks.csv"}, QDir::Files))
+            check(QFile::copy(sourceRun.filePath(name), QDir(run).filePath(name)), "copy tracking data for benchmark");
+    }
+    check(QFile::copy(originalPath, path), "copy benchmark input without modifying original");
+    cv::VideoCapture decode(path.toStdString());
+    check(decode.isOpened(), "real video opens for decode benchmark");
+    const double fps = decode.get(cv::CAP_PROP_FPS);
+    const int total = static_cast<int>(decode.get(cv::CAP_PROP_FRAME_COUNT));
+    const auto backend = decode.getBackendName();
+    QElapsedTimer elapsed;
+    elapsed.start();
+    cv::Mat decoded;
+    int count = 0, positionMismatches = 0;
+    for (; count < qMin(total, 150); ++count) {
+        const double position = decode.get(cv::CAP_PROP_POS_FRAMES);
+        if (static_cast<int>(position) != count) {
+            if (positionMismatches < 3) std::printf("POSITION expected=%d actual=%.17g\n", count, position);
+            ++positionMismatches;
+        }
+        check(decode.read(decoded), "decode real video sample");
+    }
+    const double decodeFps = count / (elapsed.nsecsElapsed() / 1e9);
+    std::printf("INPUT backend=%s fps=%.6f width=%d height=%d total=%d decode_fps=%.2f position_mismatches=%d\n",
+                backend.c_str(), fps, decoded.cols, decoded.rows, total, decodeFps, positionMismatches);
+    decode.release();
+    // Alternate preview conditions to reduce order bias. Keep the main video,
+    // selection and layout identical, including when preview work is disabled.
+    const QStringList miniModes = benchmarkMini
+        ? QStringList{"off", "image", "overlays", "overlays", "image", "off"}
+        : QStringList{"default", "default", "default"};
+    for (int trial = 0; trial < miniModes.size(); ++trial) {
+        const double speed = benchmarkMini ? 20.0 : (trial == 0 ? 1.0 : trial == 1 ? 10.0 : 20.0);
+        const QString miniMode = miniModes[trial];
+        MainWindow window;
+        window.resize(1000, 700);
+        window.show();
+        auto* video = window.findChild<VideoLoader*>();
+        video->loadVideo(path);
+        check(waitFor([&] { return video->getCurrentFrameNumber() == 0; }), "real benchmark opens");
+        if (!run.isEmpty()) {
+            // Import into a new window without triggering the annotation-clear dialog.
+            auto* storage = window.findChild<TrackingDataStorage*>();
+            window.loadRunFromDirectoryPath(run);
+            check(waitFor([&] { return video->getCurrentFrameNumber() >= 0 && !storage->getAllTracks().empty(); }), "real run imports");
+        }
+        video->setViewModeOption(VideoLoader::ViewModeOption::Tracks, overlays.contains("tracks"));
+        video->setViewModeOption(VideoLoader::ViewModeOption::Centerlines, overlays.contains("centerlines"));
+        video->setViewModeOption(VideoLoader::ViewModeOption::Threshold, overlays.contains("threshold"));
+        if (benchmarkMini)
+            video->setViewModeOption(VideoLoader::ViewModeOption::Blobs, true);
+        const int startFrame = !run.isEmpty() ? qRound(fps * 100) : 0;
+        video->seekToFrame(startFrame);
+        check(waitFor([&] { return video->getCurrentFrameNumber() == startFrame; }), "benchmark seek completes");
+        if (benchmarkMini) {
+            check(!run.isEmpty(), "mini benchmark requires tracking results");
+            auto* table = window.findChild<QTableView*>("wormTableView");
+            auto* mini = window.findChild<MiniLoader*>("miniLoader");
+            check(table && mini && table->model()->rowCount() > 0, "mini benchmark has a selectable worm");
+            table->selectRow(0);
+            window.updateMiniLoaderCrop(startFrame, video->getCurrentQImageFrame());
+            check(!mini->getCurrentCropSize().isEmpty(), "selected worm produces a crop");
+            QApplication::processEvents();
+            if (trial == 0) {
+                const QImage frame = video->getCurrentQImageFrame();
+                constexpr int repetitions = 300;
+                elapsed.restart();
+                for (int i = 0; i < repetitions; ++i)
+                    window.updateMiniLoaderCrop(startFrame, frame);
+                const double cropMs = elapsed.nsecsElapsed() / 1e6 / repetitions;
+                QImage target(mini->size() * mini->devicePixelRatioF(), QImage::Format_ARGB32_Premultiplied);
+                target.setDevicePixelRatio(mini->devicePixelRatioF());
+                for (bool showOverlays : {false, true}) {
+                    mini->setShowOverlays(showOverlays);
+                    mini->setShowCenterline(true);
+                    mini->render(&target); // Warm up fonts and paint resources.
+                    elapsed.restart();
+                    for (int i = 0; i < repetitions; ++i) mini->render(&target);
+                    std::printf("MINICOST source=%.2f crop=%dx%d widget=%dx%d overlays=%d crop_ms=%.4f paint_ms=%.4f visible_blobs=%d\n",
+                        fps, qRound(mini->getCurrentCropSize().width()), qRound(mini->getCurrentCropSize().height()),
+                        mini->width(), mini->height(), showOverlays, cropMs,
+                        elapsed.nsecsElapsed() / 1e6 / repetitions, static_cast<int>(mini->getVisibleWormIds().size()));
+                    if (showOverlays)
+                        check(!mini->getVisibleWormIds().isEmpty(), "mini paint benchmark exercises visible blob geometry");
+                }
+            }
+            mini->setShowOverlays(miniMode == "overlays");
+            mini->setShowCenterline(miniMode == "overlays");
+            if (miniMode == "off") {
+                QObject::disconnect(video, &VideoLoader::frameChanged, &window, &MainWindow::updateMiniLoaderCrop);
+                // This signal's only MainWindow receiver also refreshes the crop.
+                QObject::disconnect(video, &VideoLoader::cachedFrameAvailable, &window, nullptr);
+                mini->setUpdatesEnabled(false);
+            }
+            QApplication::processEvents();
+        }
+        video->setPlaybackSpeed(speed);
+        QEventLoop loop;
+        QTimer duration;
+        duration.setSingleShot(true);
+        duration.setTimerType(Qt::PreciseTimer);
+        QObject::connect(&duration, &QTimer::timeout, &loop, &QEventLoop::quit);
+        QVector<double> gaps;
+        double previous = 0;
+        int presented = 0;
+        elapsed.restart();
+        QObject::connect(video, &VideoLoader::frameChanged, &loop, [&](int, const QImage&) {
+            const double now = elapsed.nsecsElapsed() / 1e6;
+            gaps.append(now - previous);
+            previous = now;
+            ++presented;
+        });
+        duration.start(4000);
+        video->play();
+        loop.exec();
+        const double seconds = elapsed.nsecsElapsed() / 1e9;
+        video->pause();
+        std::sort(gaps.begin(), gaps.end());
+        const double median = gaps.isEmpty() ? 0 : gaps[gaps.size() / 2];
+        const double maximum = gaps.isEmpty() ? 0 : gaps.last();
+        const int advanced = video->getCurrentFrameNumber() - startFrame;
+        std::printf("REALBENCH source=%.2f requested=%.0fx frames=%d presented=%d seconds=%.3f playback_fps=%.2f achieved=%.2fx median_gap_ms=%.1f max_gap_ms=%.1f hit_rate=%.1f mini=%s\n",
+                    fps, speed, advanced, presented, seconds,
+                    advanced / seconds, advanced / seconds / fps,
+                    median, maximum, video->getCacheHitRate(), miniMode.toUtf8().constData());
+        std::fflush(stdout);
+    }
+}
+
 int main(int argc, char** argv)
 {
     QApplication app(argc, argv);
@@ -471,7 +796,23 @@ int main(int argc, char** argv)
         if (app.arguments().contains("--playback-only")) {
             testVideo(temp.path());
             testPlaybackNavigation(temp.path());
+            testTrackOverlay(temp.path());
             std::puts("Playback regressions passed.");
+            return 0;
+        }
+        const int fileOption = app.arguments().indexOf("--benchmark-file");
+        if (fileOption >= 0) {
+            check(fileOption + 1 < app.arguments().size(), "benchmark-file requires a path");
+            const int runOption = app.arguments().indexOf("--run");
+            const int overlayOption = app.arguments().indexOf("--overlays");
+            benchmarkPlaybackFile(app.arguments()[fileOption + 1], temp.path(),
+                runOption >= 0 ? app.arguments().value(runOption + 1) : QString(),
+                overlayOption >= 0 ? app.arguments().value(overlayOption + 1) : QString(),
+                app.arguments().contains("--benchmark-mini"));
+            return 0;
+        }
+        if (app.arguments().contains("--benchmark-fps")) {
+            benchmarkFractionalFps(temp.path());
             return 0;
         }
         if (app.arguments().contains("--benchmark-speed")) {
@@ -491,6 +832,7 @@ int main(int argc, char** argv)
 #endif
         testVideo(temp.path());
         testPlaybackNavigation(temp.path());
+        testTrackOverlay(temp.path());
         testRunImport(temp.path());
         std::puts("Disk access regressions passed.");
         return 0;

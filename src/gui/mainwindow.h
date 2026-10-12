@@ -24,6 +24,7 @@ class AppController; // Application controller (owns core non-UI components)
 class AnalysisPanel;
 class CapturePanel;
 class QProgressBar;
+class ReferenceAnnotationPanel;
 
 // Include VideoLoader header for enums and QFlags type
 #include "widgets/videoloader.h"    // For VideoLoader::ViewModeOption, VideoLoader::ViewModeOptions etc.
@@ -78,6 +79,7 @@ public:
     ~MainWindow();
 
 protected:
+    void closeEvent(QCloseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -183,6 +185,7 @@ public slots:
     void onMainTabChanged(int index);
 
 private:
+    ReferenceAnnotationPanel* m_referenceAnnotationPanel = nullptr;
     QTimer* m_scrubTimer = nullptr;
     bool m_resumeAfterScrub = false;
     void setupConnections();

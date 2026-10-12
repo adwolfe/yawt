@@ -81,6 +81,7 @@ set(SOURCES
     src/gui/widgets/framecache.cpp
     src/gui/widgets/frameloader.cpp
     src/gui/widgets/videoloader.cpp
+    src/gui/widgets/referenceannotationpanel.cpp
     src/gui/widgets/liveview.cpp
     src/gui/widgets/opencvcamerasource.cpp
     src/gui/widgets/cameraenumerator.cpp
@@ -108,6 +109,7 @@ set(SOURCES
     src/data/wormsjsoncodec.cpp
     src/data/trackingcommon.cpp
     src/data/videometadatastore.cpp
+    src/data/referenceannotations.cpp
 
     # Debug
     src/debug/debugdatastore.cpp
@@ -154,6 +156,7 @@ set(HEADERS
     src/gui/widgets/framecache.h
     src/gui/widgets/frameloader.h
     src/gui/widgets/videoloader.h
+    src/gui/widgets/referenceannotationpanel.h
     src/gui/widgets/liveview.h
     src/gui/widgets/icamerasource.h
     src/gui/widgets/opencvcamerasource.h
@@ -184,6 +187,7 @@ set(HEADERS
     src/data/trackingcommon.h
     src/data/analysistypes.h
     src/data/videometadatastore.h
+    src/data/referenceannotations.h
 
     # Debug
     src/debug/debugrecords.h

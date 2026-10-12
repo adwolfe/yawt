@@ -8,6 +8,8 @@ In the Processing tab, **Subtract background** below **Enable blur** removes sta
 
 Use **Start frame** and **Stop frame** above **Begin Tracking** to process an inclusive range of zero-based frame numbers. The scrub bar keeps the full video scale, with thick gray bars over excluded frames; scrubbing, frame navigation, and playback stay inside the selected range. The worms’ selection frame must be inside it. Outputs keep the original video frame numbers. Opening a video resets the range to the whole video.
 
+Launch with `--debug` to use the **Reference** tab in Processing. It lets you annotate independent worm IDs, approximate positions, endpoints A/B, and centerlines on selected frames, with visibility, event, and review labels. Edits autosave beside the video as `<video filename>.reference.json`; reopening the video reloads them. See [reference annotation guide](docs/reference_annotations.md) for controls and the reference-data format.
+
 ## Build notes
 
 YAWT uses CMake with >= Qt 6.10 and OpenCV. Basler Pylon support is not part of the current build.

@@ -144,7 +144,11 @@ VideoLoader::VideoLoader(QWidget* parent)
 }
 
 void VideoLoader::setTrackingDataStorage(TrackingDataStorage* storage) {
+    if (m_storage == storage) return;
+    if (m_storage) disconnect(m_storage, nullptr, this, nullptr);
     m_storage = storage;
+    m_centerlineMidpointsDirty = true;
+    invalidateTrackGeometry();
 
     // If we have valid storage, connect to its signals
     if (m_storage) {
@@ -152,10 +156,16 @@ void VideoLoader::setTrackingDataStorage(TrackingDataStorage* storage) {
         // Use the bulk itemsChanged signal to receive the full items list so we can
         // update our internal color map via updateItemsToDisplay(...)
         connect(m_storage, &TrackingDataStorage::itemsChanged, this, &VideoLoader::updateItemsToDisplay);
+        connect(m_storage, &TrackingDataStorage::itemChanged, this, [this](int) {
+            m_trackOverlayDirty = true;
+            update();
+        });
 
         connect(m_storage, &TrackingDataStorage::allDataChanged, this, [this]() {
-            // Full refresh when all data changes
-            update(); // Trigger repaint
+            // Blob edits can change the midpoint geometry even if tracks are unchanged.
+            m_centerlineMidpointsDirty = true;
+            invalidateTrackGeometry();
+            update();
         });
     }
 }
@@ -227,6 +237,7 @@ double VideoLoader::getBlurSigmaX() const { return m_blurSigmaX; }
 
 // --- Control Slots ---
 bool VideoLoader::loadVideo(const QString& filePath) {
+    if (m_videoLoadGuard && !m_videoLoadGuard()) return false;
     if (m_isPlaying) pause();
 
     // If there is existing user or processing state, prompt before clearing it.
@@ -253,6 +264,9 @@ bool VideoLoader::loadVideo(const QString& filePath) {
     clearDisplayedTracks();
 
     m_isPanning = false;
+    m_referencePointerDown = false;
+    m_referenceOverlay.clear();
+    m_referenceRawFrame = QImage();
     m_isDefiningRoi = false;
     m_cropCircleEditMode = CropCircleEditMode::None;
 
@@ -399,9 +413,11 @@ void VideoLoader::centerOnVideoPoint(const QPointF& videoPoint) {
 
 // --- Mode Setting Slots ---
 void VideoLoader::setInteractionMode(InteractionMode mode) {
+    if (mode == InteractionMode::ReferenceAnnotation && !DebugUtils::isDebugCaptureEnabled()) return;
     if (m_currentInteractionMode == mode) return;
     m_currentInteractionMode = mode;
     m_isPanning = false;
+    m_referencePointerDown = false;
     m_isDefiningRoi = false;
     m_cropCircleEditMode = CropCircleEditMode::None;
     if (mode != InteractionMode::Crop) {
@@ -411,6 +427,26 @@ void VideoLoader::setInteractionMode(InteractionMode mode) {
     emit interactionModeChanged(m_currentInteractionMode);
     YAWT_INFO(lcGuiVideoLoader) << "Interaction mode set to:" << static_cast<int>(m_currentInteractionMode);
     update();
+}
+
+void VideoLoader::setReferenceViewActive(bool active) {
+    m_referenceViewActive = active && DebugUtils::isDebugCaptureEnabled();
+    setFocusPolicy(m_referenceViewActive ? Qt::StrongFocus : Qt::NoFocus);
+    if (m_referenceViewActive && !currentCvFrame.empty())
+        convertCvMatToQImage(currentCvFrame, m_referenceRawFrame);
+    else m_referenceRawFrame = QImage();
+    update();
+}
+
+void VideoLoader::setReferenceOverlay(const QMap<int, ReferenceAnnotations::Frame>& annotations, int selectedWorm) {
+    m_referenceOverlay = annotations;
+    m_referenceSelectedWorm = selectedWorm;
+    update();
+}
+
+double VideoLoader::videoPixelsPerWidgetPixel() const {
+    const auto target = calculateTargetRect();
+    return target.width() > 0 ? originalFrameSize.width() / target.width() : 1.0;
 }
 
 void VideoLoader::setViewModeOption(VideoLoader::ViewModeOption option, bool active) {
@@ -619,7 +655,9 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::AnnotationItem>& 
             m_trackColors[item.id] = item.color;
         }
     }
-    if (m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
+    m_trackOverlayDirty = true;
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
+        m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
         m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
         update();
     }
@@ -629,7 +667,8 @@ void VideoLoader::updateItemsToDisplay(const QList<TableItems::AnnotationItem>& 
 void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
     // For backward compatibility - in the future we'll get tracks directly from storage
     m_allTracksToDisplay = tracks;
-    rebuildCenterlineMidpointCache();
+    m_centerlineMidpointsDirty = true;
+    invalidateTrackGeometry();
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
         m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
@@ -641,6 +680,7 @@ void VideoLoader::setTracksToDisplay(const Tracking::AllWormTracks& tracks) {
 void VideoLoader::setVisibleTrackIDs(const QSet<int>& visibleTrackIDs) {
     if (m_visibleTrackIDs == visibleTrackIDs) return;
     m_visibleTrackIDs = visibleTrackIDs;
+    m_trackOverlayDirty = true;
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
         m_activeViewModes.testFlag(ViewModeOption::Centerlines)) {
@@ -653,6 +693,9 @@ void VideoLoader::clearDisplayedTracks() {
     m_allTracksToDisplay.clear();
     m_visibleTrackIDs.clear();
     m_centerlineMidpointCache.clear();
+    m_centerlineMidpointsDirty = true;
+    m_trackPaths.clear();
+    invalidateTrackGeometry();
     // m_trackColors is cleared on new video load.
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks) ||
         m_activeViewModes.testFlag(ViewModeOption::Blobs) ||
@@ -665,6 +708,7 @@ void VideoLoader::clearDisplayedTracks() {
 void VideoLoader::setTrackDisplayMode(TrackDisplayMode mode) {
     if (m_trackDisplayMode == mode) return;
     m_trackDisplayMode = mode;
+    invalidateTrackGeometry();
     if (m_activeViewModes.testFlag(ViewModeOption::Tracks))
         update();
 }
@@ -679,22 +723,106 @@ void VideoLoader::setCropShape(CropShape shape) {
 }
 
 void VideoLoader::rebuildCenterlineMidpointCache() {
+    m_centerlineMidpointsDirty = false;
     m_centerlineMidpointCache.clear();
     if (!m_storage) return;
     for (const auto& [wormId, trackPoints] : m_allTracksToDisplay) {
         QMap<int, QPointF>& wormCache = m_centerlineMidpointCache[wormId];
         for (const auto& pt : trackPoints) {
             if (pt.quality == Tracking::TrackPointQuality::Lost) continue;
-            const QMap<int, Tracking::DetectedBlob> blobs =
-                m_storage->getDetectedBlobsForFrame(pt.frameNumber);
-            auto it = blobs.constFind(wormId);
-            if (it != blobs.constEnd() && it->isValid && !it->centerline.points.empty()) {
-                const auto& clPts = it->centerline.points;
+            const auto* blob = m_storage->findDetectedBlob(pt.frameNumber, wormId);
+            if (blob && blob->isValid && !blob->centerline.points.empty()) {
+                const auto& clPts = blob->centerline.points;
                 const cv::Point2f& mid = clPts[clPts.size() / 2];
                 wormCache[pt.frameNumber] = QPointF(mid.x, mid.y);
             }
         }
     }
+}
+
+void VideoLoader::invalidateTrackGeometry() {
+    m_trackPathsDirty = true;
+    m_trackOverlayDirty = true;
+    m_trackOverlay = QImage();
+}
+
+void VideoLoader::rebuildTrackPaths() {
+    m_trackPaths.clear();
+    if (m_trackDisplayMode == TrackDisplayMode::CenterlineMidpoint && m_centerlineMidpointsDirty)
+        rebuildCenterlineMidpointCache();
+    for (const auto& [wormId, points] : m_allTracksToDisplay) {
+        const auto midpoints = m_centerlineMidpointCache.constFind(wormId);
+        QPainterPath path;
+        bool first = true;
+        for (const auto& point : points) {
+            if (point.quality == Tracking::TrackPointQuality::Lost) continue;
+            QPointF position(point.position.x, point.position.y);
+            if (m_trackDisplayMode == TrackDisplayMode::CenterlineMidpoint &&
+                midpoints != m_centerlineMidpointCache.constEnd())
+                position = midpoints->value(point.frameNumber, position);
+            // Match the source bounds used by mapPointFromVideo(). View clipping
+            // happens during rasterization, so panning does not rebuild geometry.
+            position.setX(qBound(0.0, position.x(), qreal(originalFrameSize.width())));
+            position.setY(qBound(0.0, position.y(), qreal(originalFrameSize.height())));
+            if (first) { path.moveTo(position); first = false; }
+            else path.lineTo(position);
+        }
+        if (!path.isEmpty()) m_trackPaths.insert(wormId, path);
+    }
+    m_trackPathsDirty = false;
+    m_trackOverlayDirty = true;
+}
+
+void VideoLoader::drawTrackOverlay(QPainter& painter, const QRectF& targetRect) {
+    if (originalFrameSize.isEmpty() || !targetRect.isValid()) return;
+    if (m_trackPathsDirty) rebuildTrackPaths();
+
+    // Inspect only the small per-worm style list. Storage visibility/color changes
+    // are reflected even when they did not replace the track data.
+    QMap<int, QColor> colors;
+    for (auto it = m_trackPaths.cbegin(); it != m_trackPaths.cend(); ++it) {
+        if (!m_visibleTrackIDs.contains(it.key())) continue;
+        bool visible = false;
+        if (m_storage) {
+            const auto* item = m_storage->getItem(it.key());
+            visible = item && item->visible;
+        } else {
+            for (const auto& item : m_itemsToDisplay)
+                if (item.id == it.key()) { visible = item.visible; break; }
+        }
+        if (visible) colors.insert(it.key(), getTrackColor(it.key()));
+    }
+
+    const qreal ratio = devicePixelRatioF();
+    const QSize pixelSize(qCeil(width() * ratio), qCeil(height() * ratio));
+    if (m_trackOverlayDirty || targetRect != m_trackOverlayTargetRect ||
+        pixelSize != m_trackOverlayPixelSize || ratio != m_trackOverlayDevicePixelRatio ||
+        colors != m_trackOverlayColors) {
+        m_trackOverlay = QImage();
+        if (!colors.isEmpty() && !pixelSize.isEmpty()) {
+            m_trackOverlay = QImage(pixelSize, QImage::Format_ARGB32_Premultiplied);
+            m_trackOverlay.setDevicePixelRatio(ratio);
+            m_trackOverlay.fill(Qt::transparent);
+            QPainter overlayPainter(&m_trackOverlay);
+            overlayPainter.setRenderHint(QPainter::Antialiasing, true);
+            QTransform transform;
+            transform.translate(targetRect.left(), targetRect.top());
+            transform.scale(targetRect.width() / originalFrameSize.width(),
+                            targetRect.height() / originalFrameSize.height());
+            for (auto it = colors.cbegin(); it != colors.cend(); ++it) {
+                // Transform the cached path, keeping the original two-pixel pen
+                // width at every zoom level rather than scaling the stroke.
+                overlayPainter.strokePath(transform.map(m_trackPaths.value(it.key())),
+                                          QPen(it.value(), TRACK_LINE_WIDTH));
+            }
+        }
+        m_trackOverlayTargetRect = targetRect;
+        m_trackOverlayPixelSize = pixelSize;
+        m_trackOverlayDevicePixelRatio = ratio;
+        m_trackOverlayColors = colors;
+        m_trackOverlayDirty = false;
+    }
+    if (!m_trackOverlay.isNull()) painter.drawImage(QPointF(0, 0), m_trackOverlay);
 }
 
 /* Per-item color update slot removed.
@@ -731,6 +859,7 @@ void VideoLoader::presentFrame(int frameNumber, const cv::Mat& frame, bool suppr
     if (frameNumber < m_cropStartFrame || frameNumber > m_cropStopFrame) return;
     m_pendingSeekFrame = -1;
     currentCvFrame = frame;
+    if (m_referenceViewActive) convertCvMatToQImage(frame, m_referenceRawFrame);
     if (m_isPlaying) preloadAdjacentFrames(frameNumber, 10);
 
     if (!currentCvFrame.empty()) {
@@ -751,6 +880,7 @@ void VideoLoader::presentFrame(int frameNumber, const cv::Mat& frame, bool suppr
     if (!suppressEmit) {
         emit frameChanged(currentFrameIdx, currentQImageFrame);
     }
+    emit framePresented(currentFrameIdx);
     update();
 }
 
@@ -782,6 +912,11 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     }
 
     QRectF targetRect = calculateTargetRect();
+    if (m_referenceViewActive) {
+        painter.drawImage(targetRect, m_referenceRawFrame, m_referenceRawFrame.rect());
+        paintReferenceOverlay(painter);
+        return;
+    }
     painter.drawImage(targetRect, currentQImageFrame, currentQImageFrame.rect());
 
     // Draw general purpose ROI if active
@@ -1153,85 +1288,8 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
         }
     }
 
-    // Draw Tracks if ViewMode is Tracks
-    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && !m_allTracksToDisplay.empty() && currentFrameIdx >= 0) {
-        // Paint tracks for all worms
-        // For each track, paint its path
-        for (auto it_map = m_allTracksToDisplay.cbegin(); it_map != m_allTracksToDisplay.cend(); ++it_map) { // Use different iterator name
-            int wormId = it_map->first;
-            const Tracking::Track& trackPoints = it_map->second;
-
-            // Only show tracks for items with visible checkbox checked
-            bool isVisible = false;
-            if (m_storage) {
-                // Get item from storage if available
-                const TableItems::AnnotationItem* item = m_storage->getItem(wormId);
-                if (item) {
-                    isVisible = item->visible;
-                }
-            } else {
-                // Fallback to legacy method
-                for (const TableItems::AnnotationItem& item : std::as_const(m_itemsToDisplay)) {
-                    if (item.id == wormId) {
-                        isVisible = item.visible;
-                        break;
-                    }
-                }
-            }
-
-            if (!isVisible || !m_visibleTrackIDs.contains(wormId) || trackPoints.empty()) continue;
-
-            QPainterPath path;
-            QColor trackColorWithAlpha = getTrackColor(wormId); // Assuming getTrackColor provides color with desired alpha
-            // If getTrackColor returns opaque, set alpha here:
-            // trackColorWithAlpha.setAlphaF(0.5); // Example: 50% opacity for lines
-
-            QPen trackPen(trackColorWithAlpha, TRACK_LINE_WIDTH);
-            painter.setPen(trackPen);
-
-            const QMap<int, QPointF>* clCache = nullptr;
-            if (m_trackDisplayMode == TrackDisplayMode::CenterlineMidpoint) {
-                auto cit = m_centerlineMidpointCache.constFind(wormId);
-                if (cit != m_centerlineMidpointCache.constEnd())
-                    clCache = &(*cit);
-            }
-
-            bool firstPoint = true;
-            for (const Tracking::TrackPoint& pt : trackPoints) {
-                // Skip lost tracking points - they create gaps in the track display
-                if (pt.quality == Tracking::TrackPointQuality::Lost) {
-                    continue;
-                }
-
-                QPointF currentPointVideo;
-                if (clCache) {
-                    auto fit = clCache->constFind(pt.frameNumber);
-                    currentPointVideo = (fit != clCache->constEnd())
-                        ? *fit
-                        : QPointF(pt.position.x, pt.position.y);
-                } else {
-                    currentPointVideo = QPointF(pt.position.x, pt.position.y);
-                }
-
-                QPointF currentPointWidget = mapPointFromVideo(currentPointVideo);
-                if (currentPointWidget.x() < 0) continue; // Skip points not visible on screen
-
-                if (firstPoint) {
-                    path.moveTo(currentPointWidget);
-                    firstPoint = false;
-                } else {
-                    path.lineTo(currentPointWidget);
-                }
-                // To make points less obtrusive if lines are the focus:
-                // painter.setBrush(trackColorWithAlpha);
-                // painter.drawEllipse(currentPointWidget, 1, 1); // Smaller points
-                // painter.setBrush(Qt::NoBrush);
-            }
-            if (!firstPoint) { // If path has content
-                painter.strokePath(path, trackPen); // Draw the continuous line
-            }
-        }
-    }
+    if (m_activeViewModes.testFlag(ViewModeOption::Tracks) && currentFrameIdx >= 0)
+        drawTrackOverlay(painter, targetRect);
     // ── Scale-measure overlay ────────────────────────────────────────────────
     if (m_scaleMeasureMode && isVideoLoaded()) {
         const QColor scaleColor(255, 220, 60);
@@ -1275,9 +1333,52 @@ void VideoLoader::paintEvent(QPaintEvent* event) {
     }
 } // End of paintEvent
 
+void VideoLoader::paintReferenceOverlay(QPainter& painter) {
+    painter.save();
+    painter.setClipRect(calculateTargetRect().intersected(rect()));
+    for (auto it = m_referenceOverlay.cbegin(); it != m_referenceOverlay.cend(); ++it) {
+        const auto& a = it.value();
+        const bool selected = it.key() == m_referenceSelectedWorm;
+        const QColor color = selected ? QColor("#00ffff") : QColor("#ffcc66");
+        painter.setPen(QPen(color, selected ? 2.0 : 1.0));
+        painter.setBrush(Qt::NoBrush);
+        QPolygonF line;
+        for (const auto& p : a.centerline) line.append(mapPointFromVideo(p));
+        painter.drawPolyline(line);
+        for (const auto& p : line) painter.drawEllipse(p, 3, 3);
+        auto marker = [&](const std::optional<QPointF>& p, const QString& label) {
+            if (!p) return;
+            const auto wp = mapPointFromVideo(*p);
+            painter.drawEllipse(wp, 5, 5);
+            painter.drawText(wp + QPointF(7, -7), QString("%1 %2").arg(it.key()).arg(label));
+        };
+        marker(a.position, "P");
+        marker(a.endA, a.orientation == "a_is_head" ? "A / head" : a.orientation == "b_is_head" ? "A / tail" : "A");
+        marker(a.endB, a.orientation == "b_is_head" ? "B / head" : a.orientation == "a_is_head" ? "B / tail" : "B");
+    }
+    painter.restore();
+}
+
 void VideoLoader::mousePressEvent(QMouseEvent* event) {
     m_lastMousePos = event->position();
     if (!isVideoLoaded()) { QWidget::mousePressEvent(event); return; }
+    if (m_referenceViewActive && event->button() == Qt::LeftButton) setFocus(Qt::MouseFocusReason);
+
+    if (m_referenceViewActive && m_currentInteractionMode == InteractionMode::ReferenceAnnotation) {
+        if (event->button() == Qt::LeftButton || event->button() == Qt::RightButton) {
+            pause();
+            const auto p = mapPointToVideo(event->position());
+            if (m_pendingSeekFrame < 0 && p.x() >= 0 && p.y() >= 0) {
+                setFocus(Qt::MouseFocusReason);
+                m_referencePointerDown = event->button() == Qt::LeftButton;
+                emit referencePointerPressed(QPointF(qMin(p.x(), originalFrameSize.width() - 1.0),
+                                                     qMin(p.y(), originalFrameSize.height() - 1.0)),
+                                             event->button() == Qt::RightButton);
+            }
+            event->accept();
+            return;
+        }
+    }
 
     // Scale-measure mode intercepts all left clicks before the normal mode handling.
     if (m_scaleMeasureMode && event->button() == Qt::LeftButton) {
@@ -1461,6 +1562,14 @@ void VideoLoader::mouseMoveEvent(QMouseEvent* event) {
         QWidget::mouseMoveEvent(event);
         return;
     }
+    if (m_referencePointerDown) {
+        const auto p = mapPointToVideo(currentPos);
+        if (p.x() >= 0 && p.y() >= 0)
+            emit referencePointerMoved(QPointF(qMin(p.x(), originalFrameSize.width() - 1.0),
+                                               qMin(p.y(), originalFrameSize.height() - 1.0)));
+        event->accept();
+        return;
+    }
     // Keep the live measurement line updated while in scale-measure mode.
     if (m_scaleMeasureMode && m_scaleHasStart) {
         QPointF vp = mapPointToVideo(currentPos);
@@ -1513,6 +1622,16 @@ void VideoLoader::leaveEvent(QEvent* event) {
 }
 
 void VideoLoader::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_referencePointerDown && event->button() == Qt::LeftButton) {
+        const auto p = mapPointToVideo(event->position());
+        if (p.x() >= 0 && p.y() >= 0)
+            emit referencePointerMoved(QPointF(qMin(p.x(), originalFrameSize.width() - 1.0),
+                                               qMin(p.y(), originalFrameSize.height() - 1.0)));
+        m_referencePointerDown = false;
+        emit referencePointerReleased();
+        event->accept();
+        return;
+    }
     if (!isVideoLoaded()) {
         QWidget::mouseReleaseEvent(event);
         return;
@@ -1697,6 +1816,7 @@ void VideoLoader::updateCursorShape() {
     case InteractionMode::DrawROI:
     case InteractionMode::Point:
     case InteractionMode::Crop:
+    case InteractionMode::ReferenceAnnotation:
         setCursor(Qt::CrossCursor);
         break;
     case InteractionMode::EditBlobs:

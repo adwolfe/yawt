@@ -77,6 +77,8 @@
 #include <QFutureWatcher>
 #include <QtConcurrent>
 #include "../data/wormsjsoncodec.h"
+#include "widgets/referenceannotationpanel.h"
+#include <QCloseEvent>
 #include <memory>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -305,6 +307,25 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     initializeUIStates();
 
+    if (DebugUtils::isDebugCaptureEnabled()) {
+        m_referenceAnnotationPanel = new ReferenceAnnotationPanel(ui->videoLoader, ui->tabWidget);
+        ui->tabWidget->addTab(m_referenceAnnotationPanel, "Reference");
+        connect(ui->tabWidget, &QTabWidget::currentChanged, this, [this] {
+            m_referenceAnnotationPanel->setActive(ui->tabWidget->currentWidget() == m_referenceAnnotationPanel &&
+                                                  ui->mainTabWidget->currentWidget() == ui->processingTab);
+        });
+        connect(ui->mainTabWidget, &QTabWidget::currentChanged, this, [this] {
+            m_referenceAnnotationPanel->setActive(ui->tabWidget->currentWidget() == m_referenceAnnotationPanel &&
+                                                  ui->mainTabWidget->currentWidget() == ui->processingTab);
+        });
+        ui->videoLoader->setVideoLoadGuard([this] { return m_referenceAnnotationPanel->flushBeforeLeaving(); });
+        connect(ui->videoLoader, &VideoLoader::interactionModeChanged, this, [this](VideoLoader::InteractionMode mode) {
+            if (ui->tabWidget->currentWidget() == m_referenceAnnotationPanel &&
+                mode != VideoLoader::InteractionMode::ReferenceAnnotation && mode != VideoLoader::InteractionMode::PanZoom)
+                ui->tabWidget->setCurrentIndex(0);
+        });
+    }
+
     // Wire the Analysis tab panel to the widgets defined in mainwindow.ui.
     {
         m_analysisPanel = new AnalysisPanel(m_trackingDataStorage, this);
@@ -406,6 +427,14 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (m_referenceAnnotationPanel && !m_referenceAnnotationPanel->flushBeforeLeaving()) {
+        event->ignore();
+        return;
+    }
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::setPlayButtonsState(bool playing, bool blockSignals) {
     // Helper: set playback state and keep the play button consistent.
     if (!ui) return;
@@ -495,6 +524,8 @@ void MainWindow::onMeasureButtonClicked()
     }
     ScaleDialog dlg(this);
     if (dlg.exec() != QDialog::Accepted) return;
+    if (m_referenceAnnotationPanel && ui->tabWidget->currentWidget() == m_referenceAnnotationPanel)
+        ui->tabWidget->setCurrentIndex(0);
 
     // Stash dialog values so onVideoScaleMeasured can use them.
     m_pendingScalePhysical = dlg.physicalValue();

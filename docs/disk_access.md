@@ -79,3 +79,116 @@ headroom, but cannot overcome a saturated playback pipeline. They do not isolate
 decoder time from GUI work or predict performance for a particular user video.
 The supported speed range now includes 20x; previously the UI offered 20x while
 VideoLoader clamped it to 10x. Playback continues to preserve every source frame.
+
+
+Fractional-FPS investigation (2026-10-08):
+
+`python3 scripts/test_disk_access.py build --benchmark-fps` compares equal
+four-second source intervals at 3.75 and 7.5 fps with identical pixel content and
+MJPEG encoding. It checks fractional FPS metadata and normal-speed duration,
+and reports playback and standalone decode throughput at 1x, 10x, and 20x.
+
+`python3 scripts/test_disk_access.py build --benchmark-file /absolute/video.avi`
+benchmarks an existing video. The input is copied without transcoding into a
+temporary directory, isolating metadata and leaving the original video untouched.
+Add `--run /absolute/run/directory --overlays tracks,centerlines,threshold` to
+import a temporary copy of tracking results and select overlays. Run benchmarks
+serially to avoid competing for CPU. Real-file tests sample four wall-clock
+seconds at each speed; run tests start at source time 100 seconds.
+
+The supplied AVI files have consistent duration and fractional frame-rate metadata:
+S4_N2-0_0001_cropped is H.264, 1814x1716, 3.75 fps, 2250 frames, 600 seconds;
+S2_PFk-50_0002_cropped is H.264, 1886x1892, 7.5 fps, 4500 frames, 600 seconds.
+OpenCV's FFmpeg backend decoded the first 150 frames at approximately 538 and
+738 fps respectively. Sequential frame-position checks showed no mismatches.
+
+| Playback configuration | Achieved at requested 10x | Achieved at requested 20x |
+| --- | --- | --- |
+| 3.75 fps AVI, plain | 9.86x | 20.46x |
+| 7.5 fps AVI, plain | 10.23x | 19.03x |
+| 3.75 fps AVI, tracking + tracks/centerlines/threshold | 9.82x | 11.34x |
+| 7.5 fps AVI, tracking + tracks/centerlines/threshold | 3.58x | 3.56x |
+| 7.5 fps AVI, tracking + tracks only | 3.44x | 3.44x |
+| 7.5 fps AVI, tracking + threshold only (saved blur enabled) | 10.23x | 19.03x |
+
+Tracking comparisons used PROC_2026-10-08-123422 for S4 and
+PROC_2026-10-08-124030 for S2. The full track-path overlay reproduces the large
+slowdown; removing it restores throughput with the same data and threshold
+settings. VideoLoader::paintEvent rebuilds each visible worm's entire
+QPainterPath from all recorded track points and strokes it on every repaint.
+The higher input FPS also requires twice as many presented frames per source
+second, amplifying a per-frame rendering bottleneck. Blur and raw decode are
+not the limiting work in these measured configurations.
+
+Normal-speed frame cadence remained approximately 267 ms for S4 and 133 ms for
+S2, including with results loaded. The reported plain-video/1x slowdown was not
+reproduced. These tests use Qt offscreen rendering with fresh MainWindows;
+physical display, existing session state, and other UI modes can differ.
+
+Track-overlay caching (2026-10-11):
+
+VideoLoader now caches each worm's complete QPainterPath in source-video
+coordinates. Replacing/clearing tracks, changing the centroid/midpoint display
+mode, or refreshing blob geometry invalidates those paths. Midpoint lookup is
+lazy and uses individual stored blobs rather than copying each frame's blob map.
+
+A second cache stores the rasterized track overlay as a transparent, view-sized
+image at the widget's device pixel ratio. It is reused across frame presentation
+and seeking. Track styles/visibility, geometry, view bounds (zoom/pan), widget
+size, or display pixel ratio refresh the image. View changes reuse the source
+paths, with a constant two-logical-pixel stroke. Dynamic markers and current-frame
+centerlines remain separate. Active panning/following still rasterizes a new view;
+there is no frame-rate cap or frame skipping in this change.
+
+The playback regression now compares complete rendered images against direct
+path drawing, allowing three channel levels of edge rounding for transparent
+composition. It covers frame changes, transparent colors, item and selected-track
+visibility, centroid/midpoint switching, blob refresh, zoom, pan, resize,
+replacement and clearing of tracks. The suite passes at default and 2x scaling
+(`QT_SCALE_FACTOR=2 python3 scripts/test_disk_access.py build --playback-only`).
+
+Repeating the real-file benchmark with the same saved runs, 100-second starting
+position, and tracks/centerlines/threshold enabled produced:
+
+| Video | Previous 10x request | Cached 10x request | Previous 20x request | Cached 20x request |
+| --- | --- | --- | --- | --- |
+| S4, 3.75 fps | 9.82x | 9.86x | 11.34x | 20.25x |
+| S2, 7.5 fps | 3.58x | 10.14x | 3.56x | 19.03x |
+
+These are achieved source-time speeds in four-second Qt offscreen measurements,
+compared with the earlier recorded measurements; they are not physical display
+refresh rates. Cache misses after view/data changes still include one full
+rasterization, while steady playback only composites the cached image.
+
+Mini preview investigation (2026-10-11):
+
+Add `--benchmark-mini` to `--benchmark-file ... --run ... --overlays
+tracks,centerlines,threshold` to select the first worm and compare an active crop
+preview. This runs six four-second trials at requested 20x, alternating preview
+off, image only, and image with blob/centerline overlays, then reversing that
+order. Main-video overlays, worm selection and widget layout stay the same.
+The off condition disconnects crop refresh signals and disables preview painting;
+simply hiding the widget would leave crop updates running. Inputs and tracking
+runs remain isolated temporary copies. Earlier real-file benchmarks did not
+select a worm, so they did not measure an active mini crop.
+
+| Video / scaling | Preview off | Image only | Preview with overlays |
+| --- | --- | --- | --- |
+| S4, 3.75 fps / 1x | 20.45–20.46x | 20.46x | 20.46x |
+| S2, 7.5 fps / 1x | 19.03x | 19.03x | 18.86–19.03x |
+| S2, 7.5 fps / 2x | 18.82–19.04x | 19.02x | 19.02–19.04x |
+
+At the 100-second starting frame, 300 repeated isolated crop updates averaged
+0.002 ms. Repeated preview rendering, including overlays, averaged 0.12 ms for
+S4 and 0.14 ms for S2 at 1x scaling; S2 took 0.22 ms at 2x scaling. These use
+57x57 and 63x63 source crops and approximately 198x102 logical-pixel widgets
+(189x102 at 2x). Blob geometry was confirmed visible in the overlay paint probe.
+Paint probes reuse that starting frame; the throughput trials advance normally.
+
+MiniLoader does not decode or threshold independently. MainWindow crops the
+already prepared display image; MiniLoader scales it and draws current-frame
+blob/centerline geometry on the GUI thread. Its contour/hole clipping is repeated
+on every overlay repaint, but it does not redraw entire track histories. The
+older multi-frame crop helper has no current callers. These offscreen tests show
+no meaningful throughput penalty from the active preview in these configurations;
+they do not measure physical display refresh or every crop/contour complexity.

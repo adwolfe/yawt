@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run disk-access regressions using an existing CMake Unix Makefiles build.
 
-Usage: python3 scripts/test_disk_access.py [build-dir]
+Usage: python3 scripts/test_disk_access.py [build-dir] [regression/benchmark options]
 Reuses the application's compiled objects and link flags with a test main.
 """
 import json
