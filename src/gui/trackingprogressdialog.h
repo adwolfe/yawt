@@ -51,6 +51,8 @@ public slots:
     void onTrackingCancelledByManager();
     void onCenterlineProgress(int percentage);
     void onCenterlineFinished();
+    void onSavingProgress(int percentage, const QString& status);
+    void reject() override;
 
 signals:
     void beginTrackingRequested();
@@ -75,6 +77,7 @@ private:
     int m_numberOfWormsWithTracks;
 
     bool m_isTrackingRunning;
+    bool m_isFinishing = false;
 
     QString formatThresholdSettings(const Thresholding::ThresholdSettings& settings) const;
 };

@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonParseError>
 
 namespace {
@@ -57,8 +58,8 @@ bool YawtJsonIO::writeCompressedJsonDocument(const QString& filePath,
                                              const QJsonDocument& document,
                                              QString* error)
 {
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
         if (error) {
             *error = file.errorString();
         }
@@ -66,7 +67,9 @@ bool YawtJsonIO::writeCompressedJsonDocument(const QString& filePath,
     }
 
     const QByteArray json = document.toJson(QJsonDocument::Compact);
-    const QByteArray compressed = qCompress(json, 9);
+    // Level 6 preserves nearly all of level 9's size savings without its long
+    // compression pause; existing qUncompress readers remain compatible.
+    const QByteArray compressed = qCompress(json, 6);
     if (file.write(kCompressedJsonMagic) != kCompressedJsonMagic.size()
         || file.write(compressed) != compressed.size()) {
         if (error) {
@@ -75,5 +78,9 @@ bool YawtJsonIO::writeCompressedJsonDocument(const QString& filePath,
         return false;
     }
 
+    if (!file.commit()) {
+        if (error) *error = file.errorString();
+        return false;
+    }
     return true;
 }

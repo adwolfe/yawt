@@ -428,12 +428,16 @@ bool writeRoiPoints(const QString& filePath, const QString& videoPath, int keyFr
     root["items"] = arr;
     root["itemsCount"] = arr.size();
 
-    QFile f(filePath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QSaveFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly)) {
         if (error) *error = f.errorString();
         return false;
     }
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (f.write(bytes) != bytes.size() || !f.commit()) {
+        if (error) *error = f.errorString();
+        return false;
+    }
     return true;
 }
 

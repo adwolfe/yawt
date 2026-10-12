@@ -124,6 +124,8 @@ void AppController::connectTrackingManagerSignals()
             this, &AppController::onTrackingManagerCenterlineProgress);
     connect(m_manager, &TrackingManager::centerlineFinished,
             this, &AppController::onTrackingManagerCenterlineFinished);
+    connect(m_manager, &TrackingManager::savingProgress,
+            this, &AppController::savingProgress);
 
     // All tracks updated: handle storage and re-emit
     connect(m_manager, &TrackingManager::allTracksUpdated,
@@ -505,6 +507,7 @@ void AppController::showTrackingDialog(const QString& videoPath,
         connect(this, &AppController::trackingCancelled, m_trackingDialog, &TrackingProgressDialog::onTrackingCancelledByManager);
         connect(this, &AppController::centerlineProgress, m_trackingDialog, &TrackingProgressDialog::onCenterlineProgress);
         connect(this, &AppController::centerlineFinished, m_trackingDialog, &TrackingProgressDialog::onCenterlineFinished);
+        connect(this, &AppController::savingProgress, m_trackingDialog, &TrackingProgressDialog::onSavingProgress);
     }
 
     // Provide the dialog with accurate context using the parameters passed in and model/storage counts.

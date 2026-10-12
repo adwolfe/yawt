@@ -502,6 +502,10 @@ const Tracking::DetectedBlob* TrackingDataStorage::findDetectedBlob(int frameNum
     return &wormIt.value();
 }
 
+QMap<int, QMap<int, Tracking::DetectedBlob>> TrackingDataStorage::detectedBlobsSnapshot() const {
+    return m_detectedBlobsByFrame;
+}
+
 void TrackingDataStorage::applyBlobDerivedFields(Tracking::TrackPoint& point,
                                                  const Tracking::DetectedBlob& blob) const {
     if (blob.area > 0.0)

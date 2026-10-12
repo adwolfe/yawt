@@ -8,6 +8,8 @@ In the Processing tab, **Subtract background** below **Enable blur** removes sta
 
 Use **Start frame** and **Stop frame** above **Begin Tracking** to process an inclusive range of zero-based frame numbers. The scrub bar keeps the full video scale, with thick gray bars over excluded frames; scrubbing, frame navigation, and playback stay inside the selected range. The worms’ selection frame must be inside it. Outputs keep the original video frame numbers. Opening a video resets the range to the whole video.
 
+After tracking and centerline processing, **Saving results** runs in the background while the interface remains responsive. Results and the workbook are written once at the end; **Close** becomes available after saving succeeds. Compressed results retain the existing format and use compression level 6 to balance file size and save time. Each output replaces its previous file only after a successful write.
+
 Launch with `--debug` to use the **Reference** tab in Processing. It lets you annotate independent worm IDs, approximate positions, endpoints A/B, and centerlines on selected frames, with visibility, event, and review labels. Edits autosave beside the video as `<video filename>.reference.json`; reopening the video reloads them. See [reference annotation guide](docs/reference_annotations.md) for controls and the reference-data format.
 
 ## Build notes

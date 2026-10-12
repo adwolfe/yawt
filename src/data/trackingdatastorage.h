@@ -341,6 +341,10 @@ public:
      */
     const Tracking::DetectedBlob* findDetectedBlob(int frameNumber, int wormId) const;
 
+    // Capture on the storage thread after all centerline writers have stopped.
+    // The returned map owns a stable, implicitly shared snapshot for export.
+    QMap<int, QMap<int, Tracking::DetectedBlob>> detectedBlobsSnapshot() const;
+
     /**
      * @brief Populate the blob-derived fields of stored track points (area,
      *        aspectRatio, bodyLength, head/tail tips) from the detected-blob store.

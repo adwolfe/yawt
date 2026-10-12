@@ -5,15 +5,15 @@
  *
  * Responsibilities:
  *  - Orchestrate end-to-end tracking: initial video processing, per-worm trackers (forward/backward),
- *    merge/split handling, progress aggregation, and finalization (CSV/JSON/video saving).
- *  - Own worker threads for video processing, per-worm tracking, and optional background video saving.
+ *    merge/split handling, progress aggregation, and finalization (JSON/workbook/report saving).
+ *  - Own worker threads for video processing, per-worm tracking, and final result saving.
  *  - Persist run metadata: threshold settings, input blobs, and per-frame merge history.
  *
  * Threading model:
  *  - GUI thread: constructs TrackingManager and receives high-level signals.
  *  - Video processing: one or more QThreads running VideoProcessor workers (chunked processing).
  *  - Worm tracking: one QThread per WormTracker (forward/backward per conceptual worm).
- *  - Video saving: optional background worker thread (VideoSaverWorker).
+ *  - Final saving: TrackingExportWorker owns a value snapshot and retires temporary buffers.
  *  - All cross-thread communication uses Qt queued signals/slots; custom types must be registered via registerMetaTypes().
  *
  * Lifecycle:
@@ -44,7 +44,7 @@
  *  - clearProcessedVideoMemory() frees accumulated processed frames early after save/cancel/fail and emits a status update to inform the UI.
   */
 #include "trackingmanager.h"
-#include "centerlinegeometry.h"
+#include "trackingexportworker.h"
 #include "../data/videometadatastore.h"
 #include "../data/wormsjsoncodec.h"
 #include "../utils/loggingcategories.h"
@@ -59,11 +59,9 @@
 #define TRACKING_DEBUG() YAWT_DEBUG(lcCoreTrackingManager)
 
 #include <QDebug>
-#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QTextStream>
 #include <QPair>
 #include <QRectF>
 #include <QSizeF>
@@ -73,7 +71,7 @@
 #include <QJsonArray>
 #include <QThread>
 #include <QDateTime>
-#include <QXmlStreamWriter>
+#include <QTimer>
 
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
@@ -82,11 +80,6 @@
 #include <numeric>   // For std::accumulate
 #include <limits>    // For std::numeric_limits
 #include <cmath>     // For std::ceil
-
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QFile>
 
 // ---------------------------------------------------------------------------
 // Load merge/split state from the mergeState section of worms.json.
@@ -183,474 +176,6 @@ static bool loadMergeStateFromWormsJson(
 
 // (saveFrameAtomicStateToJson removed — data now lives in worms.json mergeState section)
 
-namespace {
-
-constexpr const char* kSpreadsheetMainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-constexpr const char* kOfficeDocumentRelsNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-constexpr const char* kPackageRelsNs = "http://schemas.openxmlformats.org/package/2006/relationships";
-constexpr const char* kContentTypesNs = "http://schemas.openxmlformats.org/package/2006/content-types";
-
-struct WorkbookCell {
-    QString value;
-    bool isString = true;
-};
-
-using WorkbookRow = QList<WorkbookCell>;
-
-struct ZipEntry {
-    QString name;
-    QByteArray data;
-    quint32 crc32 = 0;
-    quint32 offset = 0;
-};
-
-WorkbookCell stringCell(const QString& value)
-{
-    return WorkbookCell{value, true};
-}
-
-WorkbookCell numberCell(const QString& value)
-{
-    return WorkbookCell{value, false};
-}
-
-QString excelColumnName(int zeroBasedColumn)
-{
-    QString result;
-    int column = zeroBasedColumn;
-    do {
-        const int remainder = column % 26;
-        result.prepend(QChar(static_cast<char>('A' + remainder)));
-        column = (column / 26) - 1;
-    } while (column >= 0);
-
-    return result;
-}
-
-double tipToTipDistance(const QList<QPointF>& points)
-{
-    if (points.size() < 2) {
-        return -1.0;
-    }
-
-    const QPointF delta = points.last() - points.first();
-    return std::hypot(delta.x(), delta.y());
-}
-
-QByteArray buildWorksheetXml(const QList<WorkbookRow>& rows)
-{
-    QByteArray xmlData;
-    QBuffer buffer(&xmlData);
-    buffer.open(QIODevice::WriteOnly);
-
-    QXmlStreamWriter xml(&buffer);
-    xml.writeStartDocument();
-    xml.writeStartElement("worksheet");
-    xml.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
-    xml.writeStartElement("sheetData");
-
-    for (int rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
-        const WorkbookRow& row = rows.at(rowIndex);
-        const int excelRow = rowIndex + 1;
-
-        xml.writeStartElement("row");
-        xml.writeAttribute("r", QString::number(excelRow));
-
-        for (int columnIndex = 0; columnIndex < row.size(); ++columnIndex) {
-            const WorkbookCell& cell = row.at(columnIndex);
-            const QString cellReference = excelColumnName(columnIndex) + QString::number(excelRow);
-
-            xml.writeStartElement("c");
-            xml.writeAttribute("r", cellReference);
-
-            if (cell.isString) {
-                xml.writeAttribute("t", "inlineStr");
-                xml.writeStartElement("is");
-                xml.writeTextElement("t", cell.value);
-                xml.writeEndElement();
-            } else {
-                xml.writeTextElement("v", cell.value);
-            }
-
-            xml.writeEndElement();
-        }
-
-        xml.writeEndElement();
-    }
-
-    xml.writeEndElement();
-    xml.writeEndElement();
-    xml.writeEndDocument();
-
-    return xmlData;
-}
-
-QByteArray buildWorkbookXml()
-{
-    QByteArray xmlData;
-    QBuffer buffer(&xmlData);
-    buffer.open(QIODevice::WriteOnly);
-
-    QXmlStreamWriter xml(&buffer);
-    xml.writeStartDocument();
-    xml.writeStartElement("workbook");
-    xml.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
-    xml.writeNamespace(QString::fromLatin1(kOfficeDocumentRelsNs), "r");
-    xml.writeStartElement("sheets");
-
-    xml.writeEmptyElement("sheet");
-    xml.writeAttribute("name", "Tracks");
-    xml.writeAttribute("sheetId", "1");
-    xml.writeAttribute("r:id", "rId1");
-
-    xml.writeEmptyElement("sheet");
-    xml.writeAttribute("name", "start-end coords");
-    xml.writeAttribute("sheetId", "2");
-    xml.writeAttribute("r:id", "rId2");
-
-    xml.writeEmptyElement("sheet");
-    xml.writeAttribute("name", "Parameters");
-    xml.writeAttribute("sheetId", "3");
-    xml.writeAttribute("r:id", "rId3");
-
-    xml.writeEmptyElement("sheet");
-    xml.writeAttribute("name", "Centerlines");
-    xml.writeAttribute("sheetId", "4");
-    xml.writeAttribute("r:id", "rId4");
-    xml.writeEndElement();
-    xml.writeEndElement();
-    xml.writeEndDocument();
-
-    return xmlData;
-}
-
-QByteArray buildWorkbookRelsXml()
-{
-    QByteArray xmlData;
-    QBuffer buffer(&xmlData);
-    buffer.open(QIODevice::WriteOnly);
-
-    QXmlStreamWriter xml(&buffer);
-    xml.writeStartDocument();
-    xml.writeStartElement("Relationships");
-    xml.writeDefaultNamespace(QString::fromLatin1(kPackageRelsNs));
-
-    xml.writeEmptyElement("Relationship");
-    xml.writeAttribute("Id", "rId1");
-    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
-    xml.writeAttribute("Target", "worksheets/sheet1.xml");
-
-    xml.writeEmptyElement("Relationship");
-    xml.writeAttribute("Id", "rId2");
-    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
-    xml.writeAttribute("Target", "worksheets/sheet2.xml");
-
-    xml.writeEmptyElement("Relationship");
-    xml.writeAttribute("Id", "rId3");
-    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
-    xml.writeAttribute("Target", "worksheets/sheet3.xml");
-
-    xml.writeEmptyElement("Relationship");
-    xml.writeAttribute("Id", "rId4");
-    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
-    xml.writeAttribute("Target", "worksheets/sheet4.xml");
-
-    xml.writeEmptyElement("Relationship");
-    xml.writeAttribute("Id", "rId5");
-    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles");
-    xml.writeAttribute("Target", "styles.xml");
-
-    xml.writeEndElement();
-    xml.writeEndDocument();
-
-    return xmlData;
-}
-
-QByteArray buildRootRelsXml()
-{
-    QByteArray xmlData;
-    QBuffer buffer(&xmlData);
-    buffer.open(QIODevice::WriteOnly);
-
-    QXmlStreamWriter xml(&buffer);
-    xml.writeStartDocument();
-    xml.writeStartElement("Relationships");
-    xml.writeDefaultNamespace(QString::fromLatin1(kPackageRelsNs));
-
-    xml.writeEmptyElement("Relationship");
-    xml.writeAttribute("Id", "rId1");
-    xml.writeAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument");
-    xml.writeAttribute("Target", "xl/workbook.xml");
-
-    xml.writeEndElement();
-    xml.writeEndDocument();
-
-    return xmlData;
-}
-
-QByteArray buildStylesXml()
-{
-    QByteArray xmlData;
-    QBuffer buffer(&xmlData);
-    buffer.open(QIODevice::WriteOnly);
-
-    QXmlStreamWriter xml(&buffer);
-    xml.writeStartDocument();
-    xml.writeStartElement("styleSheet");
-    xml.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
-
-    xml.writeStartElement("fonts");
-    xml.writeAttribute("count", "1");
-    xml.writeStartElement("font");
-    xml.writeEmptyElement("sz");
-    xml.writeAttribute("val", "11");
-    xml.writeEmptyElement("name");
-    xml.writeAttribute("val", "Calibri");
-    xml.writeEmptyElement("family");
-    xml.writeAttribute("val", "2");
-    xml.writeEndElement();
-    xml.writeEndElement();
-
-    xml.writeStartElement("fills");
-    xml.writeAttribute("count", "2");
-    xml.writeStartElement("fill");
-    xml.writeEmptyElement("patternFill");
-    xml.writeAttribute("patternType", "none");
-    xml.writeEndElement();
-    xml.writeStartElement("fill");
-    xml.writeEmptyElement("patternFill");
-    xml.writeAttribute("patternType", "gray125");
-    xml.writeEndElement();
-    xml.writeEndElement();
-
-    xml.writeStartElement("borders");
-    xml.writeAttribute("count", "1");
-    xml.writeStartElement("border");
-    xml.writeEmptyElement("left");
-    xml.writeEmptyElement("right");
-    xml.writeEmptyElement("top");
-    xml.writeEmptyElement("bottom");
-    xml.writeEmptyElement("diagonal");
-    xml.writeEndElement();
-    xml.writeEndElement();
-
-    xml.writeStartElement("cellStyleXfs");
-    xml.writeAttribute("count", "1");
-    xml.writeEmptyElement("xf");
-    xml.writeAttribute("numFmtId", "0");
-    xml.writeAttribute("fontId", "0");
-    xml.writeAttribute("fillId", "0");
-    xml.writeAttribute("borderId", "0");
-    xml.writeEndElement();
-
-    xml.writeStartElement("cellXfs");
-    xml.writeAttribute("count", "1");
-    xml.writeEmptyElement("xf");
-    xml.writeAttribute("numFmtId", "0");
-    xml.writeAttribute("fontId", "0");
-    xml.writeAttribute("fillId", "0");
-    xml.writeAttribute("borderId", "0");
-    xml.writeAttribute("xfId", "0");
-    xml.writeEndElement();
-
-    xml.writeStartElement("cellStyles");
-    xml.writeAttribute("count", "1");
-    xml.writeEmptyElement("cellStyle");
-    xml.writeAttribute("name", "Normal");
-    xml.writeAttribute("xfId", "0");
-    xml.writeAttribute("builtinId", "0");
-    xml.writeEndElement();
-
-    xml.writeEndElement();
-    xml.writeEndDocument();
-
-    return xmlData;
-}
-
-QByteArray buildContentTypesXml()
-{
-    QByteArray xmlData;
-    QBuffer buffer(&xmlData);
-    buffer.open(QIODevice::WriteOnly);
-
-    QXmlStreamWriter xml(&buffer);
-    xml.writeStartDocument();
-    xml.writeStartElement("Types");
-    xml.writeDefaultNamespace(QString::fromLatin1(kContentTypesNs));
-
-    xml.writeEmptyElement("Default");
-    xml.writeAttribute("Extension", "rels");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-package.relationships+xml");
-
-    xml.writeEmptyElement("Default");
-    xml.writeAttribute("Extension", "xml");
-    xml.writeAttribute("ContentType", "application/xml");
-
-    xml.writeEmptyElement("Override");
-    xml.writeAttribute("PartName", "/xl/workbook.xml");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml");
-
-    xml.writeEmptyElement("Override");
-    xml.writeAttribute("PartName", "/xl/styles.xml");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml");
-
-    xml.writeEmptyElement("Override");
-    xml.writeAttribute("PartName", "/xl/worksheets/sheet1.xml");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
-
-    xml.writeEmptyElement("Override");
-    xml.writeAttribute("PartName", "/xl/worksheets/sheet2.xml");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
-
-    xml.writeEmptyElement("Override");
-    xml.writeAttribute("PartName", "/xl/worksheets/sheet3.xml");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
-
-    xml.writeEmptyElement("Override");
-    xml.writeAttribute("PartName", "/xl/worksheets/sheet4.xml");
-    xml.writeAttribute("ContentType", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
-    xml.writeEndElement();
-    xml.writeEndDocument();
-
-    return xmlData;
-}
-
-quint32 crc32ForData(const QByteArray& data)
-{
-    static quint32 table[256];
-    static bool initialized = false;
-    if (!initialized) {
-        for (quint32 i = 0; i < 256; ++i) {
-            quint32 crc = i;
-            for (int bit = 0; bit < 8; ++bit) {
-                crc = (crc & 1U) ? (0xEDB88320U ^ (crc >> 1U)) : (crc >> 1U);
-            }
-            table[i] = crc;
-        }
-        initialized = true;
-    }
-
-    quint32 crc = 0xFFFFFFFFU;
-    for (unsigned char byte : data) {
-        crc = table[(crc ^ byte) & 0xFFU] ^ (crc >> 8U);
-    }
-    return crc ^ 0xFFFFFFFFU;
-}
-
-bool writeUInt16(QFile& file, quint16 value)
-{
-    const char bytes[2] = {
-        static_cast<char>(value & 0xFF),
-        static_cast<char>((value >> 8) & 0xFF)
-    };
-    return file.write(bytes, sizeof(bytes)) == sizeof(bytes);
-}
-
-bool writeUInt32(QFile& file, quint32 value)
-{
-    const char bytes[4] = {
-        static_cast<char>(value & 0xFF),
-        static_cast<char>((value >> 8) & 0xFF),
-        static_cast<char>((value >> 16) & 0xFF),
-        static_cast<char>((value >> 24) & 0xFF)
-    };
-    return file.write(bytes, sizeof(bytes)) == sizeof(bytes);
-}
-
-quint16 dosTime(const QDateTime& dateTime)
-{
-    const QTime time = dateTime.time();
-    return static_cast<quint16>(((time.hour() & 0x1F) << 11) |
-                                ((time.minute() & 0x3F) << 5) |
-                                ((time.second() / 2) & 0x1F));
-}
-
-quint16 dosDate(const QDateTime& dateTime)
-{
-    const QDate date = dateTime.date();
-    const int year = std::max(1980, date.year());
-    return static_cast<quint16>((((year - 1980) & 0x7F) << 9) |
-                                ((date.month() & 0x0F) << 5) |
-                                (date.day() & 0x1F));
-}
-
-bool writeStoredZip(const QString& outputFilePath, QList<ZipEntry> entries)
-{
-    QFile file(outputFilePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return false;
-    }
-
-    const QDateTime now = QDateTime::currentDateTime();
-    const quint16 modTime = dosTime(now);
-    const quint16 modDate = dosDate(now);
-
-    for (ZipEntry& entry : entries) {
-        const QByteArray nameBytes = entry.name.toUtf8();
-        entry.crc32 = crc32ForData(entry.data);
-        entry.offset = static_cast<quint32>(file.pos());
-
-        if (!writeUInt32(file, 0x04034B50U) ||
-            !writeUInt16(file, 20) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, modTime) ||
-            !writeUInt16(file, modDate) ||
-            !writeUInt32(file, entry.crc32) ||
-            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
-            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
-            !writeUInt16(file, static_cast<quint16>(nameBytes.size())) ||
-            !writeUInt16(file, 0) ||
-            file.write(nameBytes) != nameBytes.size() ||
-            file.write(entry.data) != entry.data.size()) {
-            file.close();
-            return false;
-        }
-    }
-
-    const quint32 centralDirectoryOffset = static_cast<quint32>(file.pos());
-    for (const ZipEntry& entry : std::as_const(entries)) {
-        const QByteArray nameBytes = entry.name.toUtf8();
-        if (!writeUInt32(file, 0x02014B50U) ||
-            !writeUInt16(file, 20) ||
-            !writeUInt16(file, 20) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, modTime) ||
-            !writeUInt16(file, modDate) ||
-            !writeUInt32(file, entry.crc32) ||
-            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
-            !writeUInt32(file, static_cast<quint32>(entry.data.size())) ||
-            !writeUInt16(file, static_cast<quint16>(nameBytes.size())) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt16(file, 0) ||
-            !writeUInt32(file, 0) ||
-            !writeUInt32(file, entry.offset) ||
-            file.write(nameBytes) != nameBytes.size()) {
-            file.close();
-            return false;
-        }
-    }
-
-    const quint32 centralDirectorySize = static_cast<quint32>(file.pos()) - centralDirectoryOffset;
-    const quint16 entryCount = static_cast<quint16>(entries.size());
-    const bool success = writeUInt32(file, 0x06054B50U) &&
-                         writeUInt16(file, 0) &&
-                         writeUInt16(file, 0) &&
-                         writeUInt16(file, entryCount) &&
-                         writeUInt16(file, entryCount) &&
-                         writeUInt32(file, centralDirectorySize) &&
-                         writeUInt32(file, centralDirectoryOffset) &&
-                         writeUInt16(file, 0);
-
-    file.close();
-    return success && file.error() == QFile::NoError;
-}
-
-} // namespace
-
 static QString findLatestRunDirectory(const QString& videoDirectory) {
     if (videoDirectory.isEmpty()) return QString();
     QDir baseDir(videoDirectory);
@@ -734,6 +259,14 @@ TrackingManager::~TrackingManager() {
         QThread::msleep(300);
     }
 
+    // A save owns its inputs and must finish its atomic writes before shutdown.
+    // Normal completion is asynchronous; waiting is restricted to destruction.
+    if (m_exportThread) {
+        m_exportThread->quit();
+        m_exportThread->wait();
+    }
+    m_isFinalizing = false;
+    m_isPostProcessing = false;
     // Force a final cleanup to ensure all resources are released
     cleanupThreadsAndObjects();
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << ") DESTRUCTOR - FINISHED cleaning up.";
@@ -751,9 +284,8 @@ void TrackingManager::startFullTrackingProcess(
     const Thresholding::ThresholdSettings& settings, int totalFramesInVideoHint,
     int startFrame, int stopFrame) {
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager (" << this << "): startFullTrackingProcess called.";
-    if (m_isTrackingRunning) {
-        qWarning() << "TrackingManager: Attempted to start tracking while already running.";
-        emit trackingFailed("Another tracking process is already running.");
+    if (m_isTrackingRunning || m_isPostProcessing || m_isFinalizing) {
+        emit trackingStatusUpdate("The current run is still processing or saving results.");
         return;
     }
 
@@ -814,6 +346,10 @@ void TrackingManager::startFullTrackingProcess(
     m_frameMergeRecords.clear();
     m_splitResolutionMap.clear();
     m_wormToSharedBlobIdMap.clear();
+    m_headTailSwapData.clear();
+    m_centerlineReviewData.clear();
+    m_motionHeadTailSwapData.clear();
+    m_geoHeadTailSwapData.clear();
 
     m_trackHistory.clear();
     for (const auto& info : m_initialWormInfos) {
@@ -914,6 +450,10 @@ void TrackingManager::startFullTrackingProcess(
 }
 
 void TrackingManager::cancelTracking() {
+    if (m_isPostProcessing || m_isFinalizing) {
+        emit trackingStatusUpdate("Finishing the current run and saving results...");
+        return;
+    }
     QMutexLocker locker(&m_dataMutex);
     if (m_cancelRequested && !m_isTrackingRunning) return;
     if (m_cancelRequested) return;
@@ -936,6 +476,7 @@ void TrackingManager::cancelTracking() {
 }
 
 void TrackingManager::cleanupThreadsAndObjects() {
+    if (m_isFinalizing) return;
     YAWT_DEBUG(lcCoreTrackingManager) << "TrackingManager: Starting aggressive memory cleanup...";
 
     // Calculate memory usage before cleanup for reporting
@@ -1603,7 +1144,7 @@ bool TrackingManager::attemptImmediateSplitResolution(int signedWormId, int fram
 
 // --- Helper and Utility functions (calculateIoU, launchWormTrackers, progress, finish handlers etc.) ---
 // calculateIoU is used by processFrameSpecificMerge.
-// launchWormTrackers, updateOverallProgress, checkForAllTrackersFinished, outputTracksToWorkbook,
+// launchWormTrackers, updateOverallProgress, checkForAllTrackersFinished,
 // handleWormTrackerFinished, handleWormTrackerError, handleWormTrackerProgress are mostly independent
 // of the merge group internal logic, dealing with tracker lifecycle and overall progress.
 
@@ -1697,31 +1238,13 @@ void TrackingManager::checkForAllTrackersFinished() {
         } else {
             rebuildFinalTracks();
             emit allTracksUpdated(m_finalTracks);
-            QString outputPath = trackWorkbookOutputPath();
-            if (outputTracksToWorkbook(m_finalTracks, outputPath)) {
-                emit trackingStatusUpdate("Tracks saved: " + outputPath);
-
-                // Populate merge history storage in one batch before saving JSON state
-                populateMergeHistoryInStorage();
-
-                if (!m_runDirectory.isEmpty()) {
-                    // worms.json now contains everything (tracks, centerlines, merge state)
-                    if (!saveWormsJson(m_runDirectory)) {
-                        emit trackingStatusUpdate("Warning: Failed to save worms.json");
-                    }
-                    if (!saveRoiPointsJson(m_runDirectory)) {
-                        emit trackingStatusUpdate("Warning: Failed to save roi_points.json");
-                    }
-                }
-
-                emit trackingFinishedSuccessfully(outputPath);
-
-                // Launch post-tracking centerline computation in background.
-                // cleanup is deferred until handleCenterlineFinished.
-                QMetaObject::invokeMethod(this, "startCenterlineComputation", Qt::QueuedConnection);
-                return; // skip the cleanup block below; centerline handler will call it
-            }
-            else { emit trackingStatusUpdate("Failed to save workbook: " + outputPath); emit trackingFailed("Failed to save workbook."); }
+            populateMergeHistoryInStorage();
+            m_isPostProcessing = true;
+            // Tracking completion starts the centerline phase. All persistence
+            // happens once, in the background, after that phase finishes.
+            emit trackingFinishedSuccessfully(trackWorkbookOutputPath());
+            QMetaObject::invokeMethod(this, "startCenterlineComputation", Qt::QueuedConnection);
+            return;
         }
         QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
     } else if (!m_isTrackingRunning && m_cancelRequested) {
@@ -1776,199 +1299,6 @@ QString TrackingManager::trackWorkbookOutputPath() const
     return QDir(QFileInfo(m_videoPath).absolutePath()).filePath(workbookName);
 }
 
-// OUTPUT: {runDir}/{basename}_tracks.xlsx
-// FORMAT: XLSX (Office Open XML, written as a ZIP with hand-built XML)
-// DATA:   Four sheets:
-//   "Tracks"          — one row per (worm, frame): WormID, SourceItemID, Frame,
-//                        PositionX/Y (4 dp), RoiX/Y/Width/Height, Quality.
-//   "start-end coords"— StartPoint and EndPoint items: PointType, SourceItemID,
-//                        FrameSelected, PositionX/Y (4 dp).
-//   "Parameters"      — Capture Rate (fps) and Pixel Size (pixels/µm).
-//   "Centerlines"     — one row per (worm, frame): WormID, SourceItemID, Frame,
-//                        TipToTipDistance, Point1..10 X/Y (10 resampled centerline points).
-// TRIGGER: Written at tracking finalization, then rewritten after centerline finalization.
-bool TrackingManager::outputTracksToWorkbook(const Tracking::AllWormTracks& tracks, const QString& outputFilePath) const {
-    if (outputFilePath.isEmpty()) {
-        return false;
-    }
-
-    QList<WorkbookRow> trackRows;
-    trackRows.append(WorkbookRow{
-        stringCell("WormID"),
-        stringCell("SourceItemID"),
-        stringCell("Frame"),
-        stringCell("PositionX"),
-        stringCell("PositionY"),
-        stringCell("RoiX"),
-        stringCell("RoiY"),
-        stringCell("RoiWidth"),
-        stringCell("RoiHeight"),
-        stringCell("Quality")
-    });
-
-    QMap<int, int> sourceToExportId;
-    int nextExportId = 1;
-    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        sourceToExportId.insert(it->first, nextExportId++);
-    }
-
-    for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-        const int sourceItemId = it->first;
-        const int exportWormId = sourceToExportId.value(sourceItemId);
-        Tracking::Track sortedTrackPoints = it->second;
-        std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
-                  [](const Tracking::TrackPoint& lhs, const Tracking::TrackPoint& rhs) {
-                      return lhs.frameNumber < rhs.frameNumber;
-                  });
-
-        for (const Tracking::TrackPoint& point : sortedTrackPoints) {
-            trackRows.append(WorkbookRow{
-                numberCell(QString::number(exportWormId)),
-                numberCell(QString::number(sourceItemId)),
-                numberCell(QString::number(point.frameNumber)),
-                numberCell(QString::number(static_cast<double>(point.position.x), 'f', 4)),
-                numberCell(QString::number(static_cast<double>(point.position.y), 'f', 4)),
-                numberCell(QString::number(point.searchWindow.x(), 'f', 2)),
-                numberCell(QString::number(point.searchWindow.y(), 'f', 2)),
-                numberCell(QString::number(point.searchWindow.width(), 'f', 2)),
-                numberCell(QString::number(point.searchWindow.height(), 'f', 2)),
-                numberCell(QString::number(static_cast<int>(point.quality)))
-            });
-        }
-    }
-
-    QList<WorkbookRow> startEndRows;
-    startEndRows.append(WorkbookRow{
-        stringCell("PointType"),
-        stringCell("SourceItemID"),
-        stringCell("FrameSelected"),
-        stringCell("PositionX"),
-        stringCell("PositionY")
-    });
-
-    const TableItems::AnnotationItem* startPoint = nullptr;
-    const TableItems::AnnotationItem* endPoint = nullptr;
-    if (m_storage) {
-        const QList<TableItems::AnnotationItem>& items = m_storage->getAllItems();
-        for (const TableItems::AnnotationItem& item : items) {
-            if (item.type == TableItems::ItemType::StartPoint) {
-                startPoint = &item;
-            } else if (item.type == TableItems::ItemType::EndPoint) {
-                endPoint = &item;
-            }
-        }
-    }
-
-    const auto appendPointRow = [&startEndRows](const TableItems::AnnotationItem* item) {
-        if (!item) {
-            return;
-        }
-
-        startEndRows.append(WorkbookRow{
-            stringCell(TableItems::itemTypeToString(item->type)),
-            numberCell(QString::number(item->id)),
-            numberCell(QString::number(item->frameOfSelection)),
-            numberCell(QString::number(item->initialCentroid.x(), 'f', 4)),
-            numberCell(QString::number(item->initialCentroid.y(), 'f', 4))
-        });
-    };
-
-    appendPointRow(startPoint);
-    appendPointRow(endPoint);
-
-    QList<WorkbookRow> parameterRows;
-    parameterRows.append(WorkbookRow{
-        stringCell("Parameter"),
-        stringCell("Value"),
-        stringCell("Unit")
-    });
-    parameterRows.append(WorkbookRow{
-        stringCell("Capture Rate"),
-        numberCell(QString::number(m_videoFps, 'f', 6)),
-        stringCell("fps")
-    });
-    parameterRows.append(WorkbookRow{
-        stringCell("Pixel Size"),
-        numberCell(QString::number(m_umPerPixel, 'f', 6)),
-        stringCell("um/pixel")
-    });
-
-    QList<WorkbookRow> centerlineRows;
-    WorkbookRow centerlineHeader{
-        stringCell("WormID"),
-        stringCell("SourceItemID"),
-        stringCell("Frame"),
-        stringCell("TipToTipDistance")
-    };
-    for (int pointIndex = 1; pointIndex <= 10; ++pointIndex) {
-        centerlineHeader.append(stringCell(QString("Point%1X").arg(pointIndex)));
-        centerlineHeader.append(stringCell(QString("Point%1Y").arg(pointIndex)));
-    }
-    centerlineRows.append(centerlineHeader);
-
-    if (m_storage) {
-        for (auto it = tracks.begin(); it != tracks.end(); ++it) {
-            const int sourceItemId = it->first;
-            const int exportWormId = sourceToExportId.value(sourceItemId);
-            Tracking::Track sortedTrackPoints = it->second;
-            std::sort(sortedTrackPoints.begin(), sortedTrackPoints.end(),
-                      [](const Tracking::TrackPoint& lhs, const Tracking::TrackPoint& rhs) {
-                          return lhs.frameNumber < rhs.frameNumber;
-                      });
-
-            for (const Tracking::TrackPoint& point : sortedTrackPoints) {
-                QList<QPointF> centerlinePoints;
-                if (point.quality != Tracking::TrackPointQuality::Lost) {
-                    const QMap<int, Tracking::DetectedBlob> blobsForFrame =
-                        m_storage->getDetectedBlobsForFrame(point.frameNumber);
-                    const auto blobIt = blobsForFrame.constFind(sourceItemId);
-                    if (blobIt != blobsForFrame.constEnd()) {
-                        centerlinePoints =
-                            Centerline::resampleCenterlinePoints(blobIt.value().centerline.points, 10);
-                    }
-
-                }
-
-                WorkbookRow centerlineRow{
-                    numberCell(QString::number(exportWormId)),
-                    numberCell(QString::number(sourceItemId)),
-                    numberCell(QString::number(point.frameNumber))
-                };
-                const double distance = tipToTipDistance(centerlinePoints);
-                if (distance >= 0.0) {
-                    centerlineRow.append(numberCell(QString::number(distance, 'f', 4)));
-                } else {
-                    centerlineRow.append(stringCell(""));
-                }
-                for (int pointIndex = 0; pointIndex < 10; ++pointIndex) {
-                    if (pointIndex < centerlinePoints.size()) {
-                        const QPointF& centerlinePoint = centerlinePoints.at(pointIndex);
-                        centerlineRow.append(numberCell(QString::number(centerlinePoint.x(), 'f', 4)));
-                        centerlineRow.append(numberCell(QString::number(centerlinePoint.y(), 'f', 4)));
-                    } else {
-                        centerlineRow.append(stringCell(""));
-                        centerlineRow.append(stringCell(""));
-                    }
-                }
-                centerlineRows.append(centerlineRow);
-            }
-        }
-    }
-
-    QList<ZipEntry> workbookEntries{
-        ZipEntry{"[Content_Types].xml", buildContentTypesXml()},
-        ZipEntry{"_rels/.rels", buildRootRelsXml()},
-        ZipEntry{"xl/workbook.xml", buildWorkbookXml()},
-        ZipEntry{"xl/_rels/workbook.xml.rels", buildWorkbookRelsXml()},
-        ZipEntry{"xl/styles.xml", buildStylesXml()},
-        ZipEntry{"xl/worksheets/sheet1.xml", buildWorksheetXml(trackRows)},
-        ZipEntry{"xl/worksheets/sheet2.xml", buildWorksheetXml(startEndRows)},
-        ZipEntry{"xl/worksheets/sheet3.xml", buildWorksheetXml(parameterRows)},
-        ZipEntry{"xl/worksheets/sheet4.xml", buildWorksheetXml(centerlineRows)}
-    };
-
-    return writeStoredZip(outputFilePath, workbookEntries);
-}
 QString TrackingManager::createVideoDirectory(const QString& dataDirectory, const QString& videoPath) {
     if (dataDirectory.isEmpty() || videoPath.isEmpty()) {
         qWarning() << "TrackingManager: Invalid data directory or video path";
@@ -1992,483 +1322,6 @@ QString TrackingManager::createVideoDirectory(const QString& dataDirectory, cons
     }
 
     return videoDirPath;
-}
-
-// ── Head/tail swap xlsx export ─────────────────────────────────────────────
-// Minimal single-sheet xlsx helpers, parallel to the multi-sheet track workbook.
-
-static QByteArray buildSwapContentTypesXml()
-{
-    QByteArray d; QBuffer b(&d); b.open(QIODevice::WriteOnly);
-    QXmlStreamWriter x(&b);
-    x.writeStartDocument();
-    x.writeStartElement("Types");
-    x.writeDefaultNamespace(QString::fromLatin1(kContentTypesNs));
-    x.writeEmptyElement("Default"); x.writeAttribute("Extension","rels");
-    x.writeAttribute("ContentType","application/vnd.openxmlformats-package.relationships+xml");
-    x.writeEmptyElement("Default"); x.writeAttribute("Extension","xml");
-    x.writeAttribute("ContentType","application/xml");
-    x.writeEmptyElement("Override"); x.writeAttribute("PartName","/xl/workbook.xml");
-    x.writeAttribute("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml");
-    x.writeEmptyElement("Override"); x.writeAttribute("PartName","/xl/styles.xml");
-    x.writeAttribute("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml");
-    x.writeEmptyElement("Override"); x.writeAttribute("PartName","/xl/worksheets/sheet1.xml");
-    x.writeAttribute("ContentType","application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
-    x.writeEndElement(); x.writeEndDocument();
-    return d;
-}
-
-static QByteArray buildSwapWorkbookXml()
-{
-    QByteArray d; QBuffer b(&d); b.open(QIODevice::WriteOnly);
-    QXmlStreamWriter x(&b);
-    x.writeStartDocument();
-    x.writeStartElement("workbook");
-    x.writeDefaultNamespace(QString::fromLatin1(kSpreadsheetMainNs));
-    x.writeNamespace(QString::fromLatin1(kOfficeDocumentRelsNs),"r");
-    x.writeStartElement("sheets");
-    x.writeEmptyElement("sheet"); x.writeAttribute("name","HeadTailSwaps");
-    x.writeAttribute("sheetId","1"); x.writeAttribute("r:id","rId1");
-    x.writeEndElement(); x.writeEndElement(); x.writeEndDocument();
-    return d;
-}
-
-static QByteArray buildSwapWorkbookRelsXml()
-{
-    QByteArray d; QBuffer b(&d); b.open(QIODevice::WriteOnly);
-    QXmlStreamWriter x(&b);
-    x.writeStartDocument();
-    x.writeStartElement("Relationships");
-    x.writeDefaultNamespace(QString::fromLatin1(kPackageRelsNs));
-    x.writeEmptyElement("Relationship"); x.writeAttribute("Id","rId1");
-    x.writeAttribute("Type","http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet");
-    x.writeAttribute("Target","worksheets/sheet1.xml");
-    x.writeEmptyElement("Relationship"); x.writeAttribute("Id","rId2");
-    x.writeAttribute("Type","http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles");
-    x.writeAttribute("Target","styles.xml");
-    x.writeEndElement(); x.writeEndDocument();
-    return d;
-}
-
-// OUTPUT: {directoryPath}/worm_summary.json
-// FORMAT: JSON (indented)
-// DATA:   Per-worm statistics for use by the analysis plugin system: frame quality counts,
-//           distance, displacement, speed, and morphology averages (area, body length, aspect ratio).
-//           All _um fields are 0 when no pixel calibration is available.
-// TRIGGER: Written once at end of centerline computation (tracking finalization).
-void TrackingManager::saveWormSummaryJson(const QString& directoryPath) const
-{
-    if (directoryPath.isEmpty() || !m_storage) return;
-
-    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    const double umPerPixel = m_umPerPixel;
-
-    QJsonObject wormsObj;
-
-    QList<int> sortedIds;
-    for (const auto& entry : tracks) sortedIds.append(entry.first);
-    std::sort(sortedIds.begin(), sortedIds.end());
-
-    for (int wormId : sortedIds) {
-        const auto& rawPoints = tracks.at(wormId);
-        if (rawPoints.empty()) continue;
-
-        Tracking::Track pts = rawPoints;
-        std::sort(pts.begin(), pts.end(),
-                  [](const Tracking::TrackPoint& a, const Tracking::TrackPoint& b) {
-                      return a.frameNumber < b.frameNumber;
-                  });
-
-        int nSingle = 0, nSplit = 0, nMerged = 0, nLost = 0;
-        double totalDist = 0.0;
-        double sumAreaPx = 0.0;
-        double sumBodyLenPx = 0.0;
-        double sumAspectRatio = 0.0;
-        int nAreaSamples = 0, nBodyLenSamples = 0, nAspectSamples = 0;
-
-        for (const Tracking::TrackPoint& tp : pts) {
-            using Q = Tracking::TrackPointQuality;
-            switch (tp.quality) {
-            case Q::Single: ++nSingle; break;
-            case Q::Split:  ++nSplit;  break;
-            case Q::Merged: ++nMerged; break;
-            case Q::Lost:   ++nLost;   break;
-            }
-
-            // Morphology from detected blobs (skip merged/lost for cleaner stats)
-            if (tp.quality == Q::Single || tp.quality == Q::Split) {
-                QMap<int, Tracking::DetectedBlob> blobs =
-                    m_storage->getDetectedBlobsForFrame(tp.frameNumber);
-                if (blobs.contains(wormId)) {
-                    const Tracking::DetectedBlob& blob = blobs[wormId];
-                    if (blob.isValid) {
-                        if (blob.area > 0) { sumAreaPx += blob.area; ++nAreaSamples; }
-                        // Body length: arc length of centerline
-                        if (blob.centerline.points.size() >= 2) {
-                            double arcLen = 0.0;
-                            for (size_t k = 1; k < blob.centerline.points.size(); ++k) {
-                                cv::Point2f d = blob.centerline.points[k] - blob.centerline.points[k-1];
-                                arcLen += std::sqrt(d.x*d.x + d.y*d.y);
-                            }
-                            sumBodyLenPx += arcLen;
-                            ++nBodyLenSamples;
-                        }
-                        // Aspect ratio from bounding box
-                        if (blob.boundingBox.width() > 0 && blob.boundingBox.height() > 0) {
-                            double ar = blob.boundingBox.width() / blob.boundingBox.height();
-                            sumAspectRatio += (ar < 1.0 ? 1.0 / ar : ar);
-                            ++nAspectSamples;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Distance: sum displacement between consecutive non-lost frames
-        cv::Point2f prevPos{};
-        bool hasPrev = false;
-        for (const Tracking::TrackPoint& tp : pts) {
-            if (tp.quality == Tracking::TrackPointQuality::Lost) { hasPrev = false; continue; }
-            if (hasPrev) {
-                cv::Point2f d = tp.position - prevPos;
-                totalDist += std::sqrt(d.x*d.x + d.y*d.y);
-            }
-            prevPos = tp.position;
-            hasPrev = true;
-        }
-
-        // Net displacement: first to last non-lost position
-        cv::Point2f firstPos{}, lastPos{};
-        bool hasFirst = false;
-        for (const Tracking::TrackPoint& tp : pts) {
-            if (tp.quality == Tracking::TrackPointQuality::Lost) continue;
-            if (!hasFirst) { firstPos = tp.position; hasFirst = true; }
-            lastPos = tp.position;
-        }
-        cv::Point2f netVec = lastPos - firstPos;
-        double netDisp = std::sqrt(netVec.x*netVec.x + netVec.y*netVec.y);
-
-        // Speed: total distance / tracked time (non-lost frames, using FPS)
-        int nTrackedFrames = nSingle + nSplit + nMerged;
-        double trackedTimeSec = (m_videoFps > 0 && nTrackedFrames > 1)
-                                    ? (nTrackedFrames - 1) / m_videoFps : 0.0;
-        double meanSpeed = (trackedTimeSec > 0) ? totalDist / trackedTimeSec : 0.0;
-
-        double meanArea       = nAreaSamples    > 0 ? sumAreaPx / nAreaSamples       : 0.0;
-        double meanBodyLen    = nBodyLenSamples > 0 ? sumBodyLenPx / nBodyLenSamples : 0.0;
-        double meanAspectRatio = nAspectSamples > 0 ? sumAspectRatio / nAspectSamples : 0.0;
-
-        QJsonObject w;
-        w["frames_tracked"] = static_cast<int>(pts.size());
-        w["frames_single"]  = nSingle;
-        w["frames_split"]   = nSplit;
-        w["frames_merged"]  = nMerged;
-        w["frames_lost"]    = nLost;
-        w["total_distance_px"]    = totalDist;
-        w["total_distance_um"]    = umPerPixel > 0 ? totalDist * umPerPixel : 0.0;
-        w["net_displacement_px"]  = netDisp;
-        w["net_displacement_um"]  = umPerPixel > 0 ? netDisp * umPerPixel : 0.0;
-        w["mean_speed_px_per_s"]  = meanSpeed;
-        w["mean_speed_um_per_s"]  = umPerPixel > 0 ? meanSpeed * umPerPixel : 0.0;
-        w["mean_area_px2"]        = meanArea;
-        w["mean_area_um2"]        = umPerPixel > 0 ? meanArea * umPerPixel * umPerPixel : 0.0;
-        w["mean_body_length_px"]  = meanBodyLen;
-        w["mean_body_length_um"]  = umPerPixel > 0 ? meanBodyLen * umPerPixel : 0.0;
-        w["mean_aspect_ratio"]    = meanAspectRatio;
-
-        wormsObj[QString::number(wormId)] = w;
-    }
-
-    QJsonObject root;
-    root["fps"]          = m_videoFps;
-    root["um_per_pixel"] = umPerPixel;
-    root["frame_width"]  = m_videoFrameSize.width;
-    root["frame_height"] = m_videoFrameSize.height;
-    root["worms"]        = wormsObj;
-
-    const QString path = QDir(directoryPath).filePath("worm_summary.json");
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning() << "TrackingManager: could not write worm_summary.json to" << path;
-        return;
-    }
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    qDebug() << "TrackingManager: worm_summary.json saved to" << path;
-}
-
-// OUTPUT: caller-specified path (typically {runDir}/{basename}_summary.txt)
-// FORMAT: UTF-8 plain text (human-readable report)
-// DATA:   High-level tracking run report: video metadata (fps, frame range, worm count),
-//           per-worm statistics (track frame range, quality breakdown by category,
-//           centerline topology, merge event count, head/tail swap count).
-// TRIGGER: Written once at tracking finalization.
-void TrackingManager::exportProcessingSummary(const QString& outputPath) const
-{
-    if (outputPath.isEmpty() || !m_storage) return;
-
-    QFile file(outputPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "ProcessingSummary: could not write" << outputPath;
-        return;
-    }
-    QTextStream out(&file);
-    out.setEncoding(QStringConverter::Utf8);
-
-    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-
-    // Overall frame range
-    int minFrame = INT_MAX, maxFrame = INT_MIN;
-    for (const auto& entry : tracks) {
-        for (const auto& tp : entry.second) {
-            minFrame = std::min(minFrame, tp.frameNumber);
-            maxFrame = std::max(maxFrame, tp.frameNumber);
-        }
-    }
-
-    // Sorted worm IDs
-    QList<int> sortedWormIds;
-    for (const auto& entry : tracks) sortedWormIds.append(entry.first);
-    std::sort(sortedWormIds.begin(), sortedWormIds.end());
-
-    // Padding helpers
-    auto lpad = [](const QString& s, int w) {
-        return s.rightJustified(w);
-    };
-    auto pct = [](int n, int total) -> QString {
-        if (total <= 0) return QStringLiteral("  0.0%");
-        return QString("%1%").arg(100.0 * n / total, 5, 'f', 1);
-    };
-
-    // ── Header ──────────────────────────────────────────────────────────────
-    const QString rule = QString(62, '=');
-    const QString dash  = QString(62, '-');
-    out << rule << "\n";
-    out << "  YAWT Processing Summary\n";
-    out << rule << "\n";
-    out << QString("Generated:        %1\n")
-               .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-    out << QString("Video:            %1\n").arg(QFileInfo(m_videoPath).fileName());
-    out << QString("FPS:              %1\n").arg(m_videoFps, 0, 'f', 2);
-    if (minFrame <= maxFrame) {
-        out << QString("Frame range:      %1 \xe2\x80\x93 %2  (%3 frames)\n")
-                   .arg(minFrame).arg(maxFrame).arg(maxFrame - minFrame + 1);
-    }
-    out << QString("Worms tracked:    %1\n").arg(sortedWormIds.size());
-    out << "\n";
-    out << "Settings\n";
-    out << QString("  Centerline computation:  %1\n")
-               .arg(m_centerlineEnabled ? "enabled" : "disabled");
-    out << QString("  Skip merged frames:      %1\n")
-               .arg(m_skipMergedFrames ? "yes" : "no");
-    out << QString("  Max reversal fraction:   %1\n")
-               .arg(m_maxReversalFraction, 0, 'f', 2);
-    out << "\n";
-
-    // ── Per-worm sections ────────────────────────────────────────────────────
-    for (int wormId : sortedWormIds) {
-        const auto& rawPoints = tracks.at(wormId);
-        if (rawPoints.empty()) continue;
-
-        // Sort by frame number
-        Tracking::Track pts = rawPoints;
-        std::sort(pts.begin(), pts.end(),
-                  [](const Tracking::TrackPoint& a,
-                     const Tracking::TrackPoint& b) {
-                      return a.frameNumber < b.frameNumber;
-                  });
-
-        const int total = static_cast<int>(pts.size());
-        const int wFirst = pts.front().frameNumber;
-        const int wLast  = pts.back().frameNumber;
-
-        // Per-point stats
-        int nSingle = 0, nSplit = 0, nMerged = 0, nLost = 0;
-        int nCLcomputed = 0, nCLskipped = 0;
-        int nCleanTopo = 0, nSCTopo = 0;
-        int mergeRunCount = 0, mergeRunMaxLen = 0;
-        int mergeRunCurrent = 0;
-        bool inMergeRun = false;
-
-        for (const Tracking::TrackPoint& tp : pts) {
-            using Q = Tracking::TrackPointQuality;
-            const bool isMerged = (tp.quality == Q::Merged);
-            const bool isLost   = (tp.quality == Q::Lost);
-
-            switch (tp.quality) {
-            case Q::Single: ++nSingle; break;
-            case Q::Split:  ++nSplit;  break;
-            case Q::Merged: ++nMerged; break;
-            case Q::Lost:   ++nLost;   break;
-            }
-
-            // Merge run detection
-            if (isMerged) {
-                ++mergeRunCurrent;
-                if (!inMergeRun) { ++mergeRunCount; inMergeRun = true; }
-            } else {
-                if (inMergeRun) {
-                    mergeRunMaxLen = std::max(mergeRunMaxLen, mergeRunCurrent);
-                    mergeRunCurrent = 0;
-                }
-                inMergeRun = false;
-            }
-
-            // Centerline and topology — read the blob for accuracy
-            if (isLost) {
-                ++nCLskipped;
-            } else {
-                QMap<int, Tracking::DetectedBlob> blobs =
-                    m_storage->getDetectedBlobsForFrame(tp.frameNumber);
-                if (blobs.contains(wormId)) {
-                    const Tracking::DetectedBlob& blob = blobs[wormId];
-                    if (blob.isValid && blob.centerline.points.size() >= 2) {
-                        ++nCLcomputed;
-                    } else {
-                        ++nCLskipped;
-                    }
-                    using T = Tracking::TopologyState;
-                    if (blob.centerline.topology == T::Clean)       ++nCleanTopo;
-                    if (blob.centerline.topology == T::SelfCrossed) ++nSCTopo;
-                } else {
-                    ++nCLskipped;
-                }
-            }
-        }
-        // Flush last merge run
-        if (inMergeRun) mergeRunMaxLen = std::max(mergeRunMaxLen, mergeRunCurrent);
-
-        // Head/tail swap counts
-        const int motionSwaps = m_motionHeadTailSwapData.value(wormId).size();
-        const int geoSwaps = m_geoHeadTailSwapData.value(wormId).size();
-        const int netSwaps = m_headTailSwapData.value(wormId).size();
-
-        out << dash << "\n";
-        out << QString("WORM %1\n").arg(wormId);
-        out << dash << "\n";
-        out << QString("Track range:   frames %1 \xe2\x80\x93 %2  (%3 track points)\n")
-                   .arg(wFirst).arg(wLast).arg(total);
-        out << "\n";
-
-        // Frame quality
-        out << "Frame quality (from tracker)\n";
-        out << QString("  Single:      %1  (%2)\n").arg(lpad(QString::number(nSingle), 6)).arg(pct(nSingle, total));
-        out << QString("  Split:       %1  (%2)\n").arg(lpad(QString::number(nSplit),  6)).arg(pct(nSplit,  total));
-        out << QString("  Merged:      %1  (%2)\n").arg(lpad(QString::number(nMerged), 6)).arg(pct(nMerged, total));
-        out << QString("  Lost:        %1  (%2)\n").arg(lpad(QString::number(nLost),   6)).arg(pct(nLost,   total));
-        out << "\n";
-
-        // Topology (only meaningful for processed frames)
-        const int nTopoTotal = nCleanTopo + nSCTopo;
-        out << "Centerline topology (processed frames only)\n";
-        out << QString("  Clean:       %1  (%2)\n").arg(lpad(QString::number(nCleanTopo), 6)).arg(pct(nCleanTopo, nTopoTotal));
-        out << QString("  Self-crossed:%1  (%2)\n").arg(lpad(QString::number(nSCTopo),    6)).arg(pct(nSCTopo,    nTopoTotal));
-        out << "\n";
-
-        // Centerline frames
-        out << "Centerline frames\n";
-        out << QString("  Computed:    %1\n").arg(lpad(QString::number(nCLcomputed), 6));
-        out << QString("  Skipped:     %1\n").arg(lpad(QString::number(nCLskipped),  6));
-        out << "\n";
-
-        // Merge events
-        out << "Merge events\n";
-        out << QString("  Merged frames:   %1\n").arg(lpad(QString::number(nMerged), 6));
-        out << QString("  Merge runs:      %1\n").arg(lpad(QString::number(mergeRunCount), 6));
-        if (mergeRunCount > 0) {
-            const double avgLen = static_cast<double>(nMerged) / mergeRunCount;
-            out << QString("  Avg run length:  %1 frames  (%2 s)\n")
-                       .arg(avgLen, 6, 'f', 1)
-                       .arg(avgLen / m_videoFps, 0, 'f', 1);
-            out << QString("  Longest run:     %1 frames  (%2 s)\n")
-                       .arg(lpad(QString::number(mergeRunMaxLen), 6))
-                       .arg(mergeRunMaxLen / m_videoFps, 0, 'f', 1);
-        }
-        out << "\n";
-
-        // Head/tail refinement
-        out << "Head/tail refinement\n";
-        out << QString("  Direction-based swapped frames:  %1\n").arg(lpad(QString::number(motionSwaps), 6));
-        out << QString("  Geometry-based swapped frames:   %1\n").arg(lpad(QString::number(geoSwaps), 6));
-        out << QString("  Net swapped frames (XOR):        %1\n").arg(lpad(QString::number(netSwaps), 6));
-        out << QString("  Frames flagged for review:       %1\n")
-                   .arg(lpad(QString::number(m_centerlineReviewData.value(wormId).size()), 6));
-        out << "\n";
-    }
-
-    out << rule << "\n";
-    out << "End of Processing Summary\n";
-    out << rule << "\n";
-}
-
-// OUTPUT: {runDir}/{basename}_headtail_swaps.xlsx
-// FORMAT: XLSX (Office Open XML, written as a ZIP with hand-built XML)
-// DATA:   One sheet with a row per frame and one column per worm;
-//           cells contain "SWAP" on frames where the post-pass head/tail naming
-//           reversed the continuity pass's labels, "REVIEW" on frames flagged for
-//           human assessment, "SWAP REVIEW" for both, blank otherwise.
-// TRIGGER: Written at tracking finalization when any swap or review flag exists.
-void TrackingManager::exportHeadTailSwapXlsx(
-    const QMap<int, QList<int>>& swapData,
-    const QMap<int, QList<int>>& reviewData,
-    const QString& outputPath) const
-{
-    if (outputPath.isEmpty() || !m_storage) return;
-
-    // Collect the full frame range from all tracks.
-    int minFrame = INT_MAX, maxFrame = INT_MIN;
-    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    for (const auto& entry : tracks) {
-        for (const auto& tp : entry.second) {
-            minFrame = std::min(minFrame, tp.frameNumber);
-            maxFrame = std::max(maxFrame, tp.frameNumber);
-        }
-    }
-    if (minFrame > maxFrame) return;
-
-    // Sorted worm IDs (columns).
-    QSet<int> wormIdSet;
-    for (int wid : swapData.keys()) wormIdSet.insert(wid);
-    for (int wid : reviewData.keys()) wormIdSet.insert(wid);
-    QList<int> wormIds(wormIdSet.begin(), wormIdSet.end());
-    std::sort(wormIds.begin(), wormIds.end());
-
-    // Build fast-lookup sets of swapped and flagged frames per worm.
-    QMap<int, QSet<int>> swapSets, reviewSets;
-    for (int wid : wormIds) {
-        for (int f : swapData.value(wid)) swapSets[wid].insert(f);
-        for (int f : reviewData.value(wid)) reviewSets[wid].insert(f);
-    }
-
-    // Build sheet rows: header + one row per frame.
-    QList<WorkbookRow> rows;
-
-    WorkbookRow header;
-    header.append(stringCell("Frame"));
-    for (int wid : wormIds)
-        header.append(stringCell(QString("Worm %1").arg(wid)));
-    rows.append(header);
-
-    for (int f = minFrame; f <= maxFrame; ++f) {
-        WorkbookRow row;
-        row.append(numberCell(QString::number(f)));
-        for (int wid : wormIds) {
-            QStringList marks;
-            if (swapSets.value(wid).contains(f)) marks << QStringLiteral("SWAP");
-            if (reviewSets.value(wid).contains(f)) marks << QStringLiteral("REVIEW");
-            row.append(stringCell(marks.join(QLatin1Char(' '))));
-        }
-        rows.append(row);
-    }
-
-    QList<ZipEntry> entries{
-        ZipEntry{"[Content_Types].xml",        buildSwapContentTypesXml()},
-        ZipEntry{"_rels/.rels",                buildRootRelsXml()},
-        ZipEntry{"xl/workbook.xml",            buildSwapWorkbookXml()},
-        ZipEntry{"xl/_rels/workbook.xml.rels", buildSwapWorkbookRelsXml()},
-        ZipEntry{"xl/styles.xml",              buildStylesXml()},
-        ZipEntry{"xl/worksheets/sheet1.xml",   buildWorksheetXml(rows)},
-    };
-    writeStoredZip(outputPath, entries);
 }
 
 QString TrackingManager::createRunDirectory(const QString& videoDirectory) {
@@ -2553,146 +1406,6 @@ void TrackingManager::saveThresholdingJson(const QString& directoryPath, const T
     } else {
         qWarning() << "TrackingManager: Failed to save thresholding to:" << filePath;
     }
-}
-
-// OUTPUT: {runDir}/worms.json
-// FORMAT: JSON (indented)
-// DATA:   Single authoritative file for all tracking results:
-//           version, videoPath, keyFrame, metrics, items (color, centroid, bounding box),
-//           tracks (per-frame position, ROI, quality, centerlinePoints for each worm),
-//           mergeGroupsByFrame,
-//           mergeState (nextSharedBlobId, frameMergeRecords, splitResolutionMap,
-//                        wormToSharedBlobIdMap — used to resume tracking if settings match).
-// TRIGGER: Written once at tracking finalization.  Replaces frame_atomic_state.json.
-QJsonObject TrackingManager::mergeStateToJson() const {
-    QJsonObject ms;
-    ms["nextPhysicalBlobId"] = m_nextSharedBlobId;
-
-    // wormToSharedBlobIdMap
-    QJsonObject wormToPhysObj;
-    for (auto it = m_wormToSharedBlobIdMap.constBegin();
-         it != m_wormToSharedBlobIdMap.constEnd(); ++it)
-        wormToPhysObj[QString::number(it.key())] = it.value();
-    ms["wormToPhysicalBlobIdMap"] = wormToPhysObj;
-
-    // frameMergeRecords
-    QJsonObject fmObj;
-    for (auto fit = m_frameMergeRecords.constBegin();
-         fit != m_frameMergeRecords.constEnd(); ++fit) {
-        QJsonArray blobsArr;
-        for (const SharedBlob& pb : fit.value()) {
-            QJsonObject pbObj;
-            pbObj["uniqueId"]    = pb.uniqueId;
-            pbObj["frameNumber"] = pb.frameNumber;
-            pbObj["currentArea"] = pb.currentArea;
-
-            pbObj["currentCentroid"] = JsonGeometry::toJson(pb.currentCentroid);
-            pbObj["currentBoundingBox"] = JsonGeometry::toJson(pb.currentBoundingBox);
-            pbObj["contourPoints"] = JsonGeometry::contourToJson(pb.contourPoints);
-            pbObj["holeContourPoints"] = JsonGeometry::holeContoursToJson(pb.holeContourPoints);
-
-            QJsonArray partArr;
-            for (int wid : pb.participatingWormTrackerIDs) partArr.append(wid);
-            pbObj["participatingWormTrackerIDs"] = partArr;
-            pbObj["selectedByWormTrackerId"] = pb.selectedByWormTrackerId;
-
-            blobsArr.append(pbObj);
-        }
-        fmObj[QString::number(fit.key())] = blobsArr;
-    }
-    ms["frameMergeRecords"] = fmObj;
-
-    // splitResolutionMap
-    QJsonObject splitObj;
-    for (auto sfit = m_splitResolutionMap.constBegin();
-         sfit != m_splitResolutionMap.constEnd(); ++sfit) {
-        QJsonObject wormMapObj;
-        for (auto wit = sfit.value().constBegin();
-             wit != sfit.value().constEnd(); ++wit)
-            wormMapObj[QString::number(wit.key())] = Tracking::detectedBlobToJson(wit.value());
-        splitObj[QString::number(sfit.key())] = wormMapObj;
-    }
-    ms["splitResolutionMap"] = splitObj;
-
-    return ms;
-}
-
-bool TrackingManager::saveWormsJson(const QString& directoryPath) {
-    if (!m_storage) {
-        qWarning() << "TrackingManager: Cannot save worms.json - storage missing";
-        return false;
-    }
-    if (directoryPath.isEmpty()) {
-        qWarning() << "TrackingManager: Cannot save worms.json - empty directory path";
-        return false;
-    }
-
-    WormsJson::Document doc;
-    doc.videoPath = m_videoPath;
-    doc.keyFrame  = m_keyFrameNum;
-
-    doc.metrics.valid = true;
-    doc.metrics.roiSizeMultiplier      = m_storage->getRoiSizeMultiplier();
-    doc.metrics.fixedRoiSize           = m_storage->getCurrentFixedRoiSize();
-    doc.metrics.minObservedArea        = m_storage->getMinObservedArea();
-    doc.metrics.maxObservedArea        = m_storage->getMaxObservedArea();
-    doc.metrics.minObservedAspectRatio = m_storage->getMinObservedAspectRatio();
-    doc.metrics.maxObservedAspectRatio = m_storage->getMaxObservedAspectRatio();
-
-    for (const TableItems::AnnotationItem& item : m_storage->getAllItems()) {
-        if (item.type == TableItems::ItemType::Worm) doc.items.append(item);
-    }
-    doc.tracks = m_storage->getAllTracks();
-    doc.mergeGroupsByFrame = m_storage->getAllMergeGroups();
-    doc.tipBaselines = m_storage->getAllTipBaselines();   // empty until the centerline pass has run
-    doc.blobLookup = [this](int frameNumber, int wormId) {
-        return m_storage->findDetectedBlob(frameNumber, wormId);
-    };
-    doc.mergeState = mergeStateToJson();
-
-    const QString filePath = QDir(directoryPath).absoluteFilePath("worms.json");
-    QString error;
-    if (WormsJson::write(filePath, doc, &error)) {
-        TRACKING_DEBUG() << "TrackingManager: Saved compressed worms.json to:" << filePath;
-        return true;
-    }
-    qWarning() << "TrackingManager: Failed to save worms.json to:" << filePath << error;
-    return false;
-}
-
-// OUTPUT: {runDir}/roi_points.json
-// FORMAT: JSON (indented)
-// DATA:   All user-placed reference items (ROI, StartPoint, EndPoint, CenterPoint):
-//           version, videoPath, keyFrame, items array mirroring the worms.json item structure.
-// TRIGGER: Written once at tracking finalization.
-bool TrackingManager::saveRoiPointsJson(const QString& directoryPath) const {
-    if (!m_storage) {
-        qWarning() << "TrackingManager: Cannot save roi_points.json - storage missing";
-        return false;
-    }
-    if (directoryPath.isEmpty()) {
-        qWarning() << "TrackingManager: Cannot save roi_points.json - empty directory path";
-        return false;
-    }
-
-    QList<TableItems::AnnotationItem> referenceItems;
-    for (const TableItems::AnnotationItem& item : m_storage->getAllItems()) {
-        if (item.type == TableItems::ItemType::Region ||
-            item.type == TableItems::ItemType::StartPoint ||
-            item.type == TableItems::ItemType::EndPoint ||
-            item.type == TableItems::ItemType::CenterPoint) {
-            referenceItems.append(item);
-        }
-    }
-
-    const QString filePath = QDir(directoryPath).absoluteFilePath("roi_points.json");
-    QString error;
-    if (WormsJson::writeRoiPoints(filePath, m_videoPath, m_keyFrameNum, referenceItems, &error)) {
-        TRACKING_DEBUG() << "TrackingManager: Saved roi_points.json to:" << filePath;
-        return true;
-    }
-    qWarning() << "TrackingManager: Failed to save roi_points.json to:" << filePath << error;
-    return false;
 }
 
 // OUTPUT: {runDir}/input_blobs.json
@@ -2914,26 +1627,26 @@ void TrackingManager::setLoadedRunContext(const QString& videoPath,
 }
 
 void TrackingManager::startCenterlineComputation() {
-    if (!m_centerlineEnabled) {
-        emit trackingStatusUpdate("Centerline computation disabled.");
-        emit centerlineProgress(100);
-        emit centerlineFinished();
+    if (m_isTrackingRunning || m_totalCenterlineWorkers > 0 || m_isFinalizing) {
+        emit trackingStatusUpdate("The current run is still processing or saving results.");
         return;
     }
-
-    if (!m_storage) {
-        emit centerlineFinished();
+    if (m_videoPath.isEmpty()) {
+        emit trackingFailed("No video is available for centerline processing.");
+        return;
+    }
+    m_isPostProcessing = true;
+    if (!m_centerlineEnabled || !m_storage) {
+        emit trackingStatusUpdate("Centerline computation skipped. Preparing results...");
+        beginFinalization();
         return;
     }
 
     QList<int> wormIds;
-    const Tracking::AllWormTracks& tracks = m_storage->getAllTracks();
-    for (const auto& trackEntry : tracks) {
+    for (const auto& trackEntry : m_storage->getAllTracks())
         wormIds.append(trackEntry.first);
-    }
     if (wormIds.isEmpty()) {
-        emit centerlineProgress(100);
-        emit centerlineFinished();
+        beginFinalization();
         return;
     }
 
@@ -3023,8 +1736,8 @@ void TrackingManager::startCenterlineComputation() {
                 [this](const QString& reason) {
                     handleCenterlineFailed(reason);
                 });
-        connect(worker, &CenterlineWorker::finished, thread, &QThread::quit);
-        connect(worker, &CenterlineWorker::failed, thread, &QThread::quit);
+        connect(worker, &CenterlineWorker::finished, thread, &QThread::quit, Qt::DirectConnection);
+        connect(worker, &CenterlineWorker::failed, thread, &QThread::quit, Qt::DirectConnection);
         connect(thread, &QThread::finished, worker, &QObject::deleteLater);
         connect(thread, &QThread::finished, thread, &QObject::deleteLater);
 
@@ -3033,59 +1746,10 @@ void TrackingManager::startCenterlineComputation() {
 }
 
 void TrackingManager::handleCenterlineFinished() {
-    if (m_totalCenterlineWorkers == 0) {
-        return;
-    }
+    if (m_totalCenterlineWorkers == 0) return;
     m_totalCenterlineWorkers = 0;
-    emit trackingStatusUpdate("Centerline computation complete.");
-    emit centerlineProgress(100);
-
-    // The centerline workers rewrote head/tail assignments in the blob store;
-    // push that back onto the in-memory tracks before anything reads them.
-    if (m_storage) m_storage->refreshDerivedTrackData();
-
-    const QString dir = !m_runDirectory.isEmpty()
-        ? m_runDirectory
-        : m_videoDirectory;
-    const QString baseName = QFileInfo(m_videoPath).completeBaseName();
-
-    // Rewrite worms.json now that centerlines and head/tail assignments have
-    // been written back into storage by the post-tracking centerline workers.
-    if (!dir.isEmpty()) {
-        if (!saveWormsJson(dir)) {
-            emit trackingStatusUpdate("Warning: Failed to save final worms.json");
-        }
-    }
-
-    const QString workbookPath = trackWorkbookOutputPath();
-    if (!workbookPath.isEmpty()) {
-        if (outputTracksToWorkbook(m_finalTracks, workbookPath)) {
-            emit trackingStatusUpdate("Tracks saved with centerlines: " + workbookPath);
-        } else {
-            emit trackingStatusUpdate("Warning: Failed to save final workbook with centerlines: " + workbookPath);
-        }
-    }
-
-    // Export head/tail swap report alongside the other output files.
-    if ((!m_headTailSwapData.isEmpty() || !m_centerlineReviewData.isEmpty()) && !dir.isEmpty()) {
-        const QString path = QDir(dir).filePath(baseName + "_headtail_swaps.xlsx");
-        exportHeadTailSwapXlsx(m_headTailSwapData, m_centerlineReviewData, path);
-        emit trackingStatusUpdate("Head/tail swap report saved: " + path);
-    }
-
-    // Export human-readable processing summary.
-    if (!dir.isEmpty()) {
-        const QString summaryPath = QDir(dir).filePath(baseName + "_ProcessingSummary.txt");
-        exportProcessingSummary(summaryPath);
-        emit trackingStatusUpdate("Processing summary saved: " + summaryPath);
-    }
-
-    // Export machine-readable per-worm summary for the plugin/analysis system.
-    if (!dir.isEmpty())
-        saveWormSummaryJson(dir);
-
-    emit centerlineFinished();
-    QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
+    emit trackingStatusUpdate("Centerline computation complete. Preparing results...");
+    beginFinalization();
 }
 
 void TrackingManager::handleCenterlineFailed(const QString& reason) {
@@ -3101,6 +1765,126 @@ void TrackingManager::handleCenterlineFailed(const QString& reason) {
     }
     qWarning() << "TrackingManager: Centerline computation failed:" << reason;
     emit trackingStatusUpdate("Warning: Centerline computation failed - " + reason);
+    beginFinalization();
+}
+
+void TrackingManager::beginFinalization()
+{
+    if (m_isFinalizing) return;
+    m_isFinalizing = true;
+    m_isPostProcessing = true;
+    emit savingProgress(0, "Saving results: preparing data...");
+
+    // Never join workers on the UI thread during normal completion. Their
+    // finished signals retry this step once their final storage writes stop.
+    QList<QPointer<QThread>> threads = m_videoProcessorThreads;
+    threads.append(m_trackerThreads);
+    threads.append(m_centerlineThreads);
+    for (const auto& thread : threads) {
+        if (!thread) continue;
+        connect(thread, &QThread::finished, this,
+                &TrackingManager::launchExportWhenWorkersStopped, Qt::QueuedConnection);
+        thread->quit();
+    }
+    QTimer::singleShot(0, this, &TrackingManager::launchExportWhenWorkersStopped);
+}
+
+void TrackingManager::launchExportWhenWorkersStopped()
+{
+    if (!m_isFinalizing || m_exportThread) return;
+    for (const auto& threads : {m_videoProcessorThreads, m_trackerThreads, m_centerlineThreads})
+        for (const auto& thread : threads)
+            if (thread && thread->isRunning()) return;
+
+    TrackingExportSnapshot snapshot;
+    snapshot.directory = !m_runDirectory.isEmpty() ? m_runDirectory : m_videoDirectory;
+    snapshot.workbookPath = trackWorkbookOutputPath();
+    snapshot.worms.videoPath = m_videoPath;
+    snapshot.worms.keyFrame = m_keyFrameNum;
+    snapshot.fps = m_videoFps;
+    snapshot.umPerPixel = m_umPerPixel;
+    snapshot.frameSize = m_videoFrameSize;
+    snapshot.centerlineEnabled = m_centerlineEnabled;
+    snapshot.skipMergedFrames = m_skipMergedFrames;
+    snapshot.maxReversalFraction = m_maxReversalFraction;
+    if (m_storage) {
+        m_storage->refreshDerivedTrackData();
+        snapshot.items = m_storage->getAllItems();
+        for (const auto& item : snapshot.items)
+            if (item.type == TableItems::ItemType::Worm) snapshot.worms.items.append(item);
+        snapshot.worms.tracks = m_storage->getAllTracks();
+        snapshot.worms.blobsByFrame = m_storage->detectedBlobsSnapshot();
+        snapshot.worms.mergeGroupsByFrame = m_storage->getAllMergeGroups();
+        snapshot.worms.tipBaselines = m_storage->getAllTipBaselines();
+        auto& metrics = snapshot.worms.metrics;
+        metrics.valid = true;
+        metrics.roiSizeMultiplier = m_storage->getRoiSizeMultiplier();
+        metrics.fixedRoiSize = m_storage->getCurrentFixedRoiSize();
+        metrics.minObservedArea = m_storage->getMinObservedArea();
+        metrics.maxObservedArea = m_storage->getMaxObservedArea();
+        metrics.minObservedAspectRatio = m_storage->getMinObservedAspectRatio();
+        metrics.maxObservedAspectRatio = m_storage->getMaxObservedAspectRatio();
+    }
+    // Also support callers that consume allTracksUpdated without a controller
+    // that mirrors those tracks into storage.
+    if (snapshot.worms.tracks.empty()) snapshot.worms.tracks = std::move(m_finalTracks);
+    snapshot.nextSharedBlobId = m_nextSharedBlobId;
+    snapshot.mergeRecords.swap(m_frameMergeRecords);
+    snapshot.splitResolutions.swap(m_splitResolutionMap);
+    snapshot.wormToSharedBlobId.swap(m_wormToSharedBlobIdMap);
+    snapshot.headTailSwaps = m_headTailSwapData;
+    snapshot.centerlineReviews = m_centerlineReviewData;
+    snapshot.motionSwaps = m_motionHeadTailSwapData;
+    snapshot.geometrySwaps = m_geoHeadTailSwapData;
+
+    // Move ownership cheaply here; deallocate large histories and video buffers
+    // on the saving thread, after every tracker has stopped referencing them.
+    struct RetiredData {
+        std::vector<cv::Mat> forward, reversed;
+        QMap<int, std::vector<cv::Mat>> forwardChunks, backwardChunks;
+        QMap<int, std::map<int, Tracking::TrackPoint>> history;
+        Tracking::AllWormTracks finalTracks;
+    };
+    auto retired = std::make_shared<RetiredData>();
+    retired->forward.swap(m_finalProcessedForwardFrames);
+    retired->reversed.swap(m_finalProcessedReversedFrames);
+    retired->forwardChunks.swap(m_assembledForwardFrameChunks);
+    retired->backwardChunks.swap(m_assembledBackwardFrameChunks);
+    retired->history.swap(m_trackHistory);
+    retired->finalTracks.swap(m_finalTracks);
+
+    auto* thread = new QThread(this);
+    auto* worker = new TrackingExportWorker(std::move(snapshot), std::move(retired));
+    worker->moveToThread(thread);
+    m_exportThread = thread;
+    m_exportError.clear();
+    connect(thread, &QThread::started, worker, &TrackingExportWorker::run);
+    connect(worker, &TrackingExportWorker::progress, this,
+            [this](int percentage, const QString& status) {
+                emit trackingStatusUpdate(status);
+                emit savingProgress(percentage, status);
+            });
+    connect(worker, &TrackingExportWorker::finished, this,
+            [this](const QString& error) { m_exportError = error; });
+    connect(worker, &TrackingExportWorker::finished, thread, &QThread::quit, Qt::DirectConnection);
+    connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+    connect(thread, &QThread::finished, this, &TrackingManager::handleExportFinished);
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+void TrackingManager::handleExportFinished()
+{
+    const QString error = m_exportError;
+    m_exportThread.clear();
+    m_isFinalizing = false;
+    m_isPostProcessing = false;
+    cleanupThreadsAndObjects();
+    if (!error.isEmpty()) {
+        emit trackingFailed("Saving results failed: " + error);
+        return;
+    }
+    emit savingProgress(100, "Results saved.");
+    emit trackingStatusUpdate("Results saved: " + trackWorkbookOutputPath());
     emit centerlineFinished();
-    QMetaObject::invokeMethod(this, "cleanupThreadsAndObjects", Qt::QueuedConnection);
 }

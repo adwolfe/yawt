@@ -166,17 +166,20 @@ static void testTracking(const QString& path, const QString& directory, int firs
     TrackingManager manager(&storage);
     manager.setCenterlineEnabled(false);
     bool finished = false;
+    bool saved = false;
     QString error;
     Tracking::AllWormTracks tracks;
     QObject::connect(&manager, &TrackingManager::allTracksUpdated, [&](const Tracking::AllWormTracks& result) { tracks = result; });
     QObject::connect(&manager, &TrackingManager::trackingFinishedSuccessfully, [&](const QString&) { finished = true; });
+    QObject::connect(&manager, &TrackingManager::centerlineFinished, [&] { saved = true; });
     QObject::connect(&manager, &TrackingManager::trackingFailed, [&](const QString& message) { error = message; });
     Tracking::InitialWormInfo worm;
     worm.id = 1;
     worm.initialSearchWindow = QRectF(20, 20, 50, 40);
     manager.startFullTrackingProcess(path, directory, key, {worm}, {}, 20, first, last);
-    check(waitFor([&] { return finished || !error.isEmpty(); }), "tracking completes");
+    check(waitFor([&] { return saved || !error.isEmpty(); }), "tracking and background saving complete");
     if (!error.isEmpty()) throw std::runtime_error(error.toStdString());
+    check(finished, "tracking completion precedes final save");
     check(tracks.count(1) && tracks.at(1).size() == size_t(last - first + 1), "only selected frames tracked");
     for (int i = first; i <= last; ++i)
         check(tracks.at(1).at(i - first).frameNumber == i, "absolute frame numbers and inclusive endpoints preserved");

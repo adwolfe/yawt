@@ -1040,6 +1040,19 @@ void MainWindow::setupConnections() {
                 this, &MainWindow::onDebugCenterlineProgress);
         connect(m_appController, &AppController::centerlineFinished,
                 this, &MainWindow::onDebugCenterlineFinished);
+        connect(m_appController, &AppController::savingProgress, this,
+                [this](int percentage, const QString& status) {
+                    ui->rerunCenterlineButton->setEnabled(false);
+                    ui->centerlineDebugProgressBar->setVisible(true);
+                    ui->centerlineDebugProgressBar->setValue(percentage);
+                    ui->centerlineDebugStatusLabel->setText(status);
+                });
+        connect(m_appController, &AppController::trackingFailed, this,
+                [this](const QString& reason) {
+                    ui->rerunCenterlineButton->setEnabled(true);
+                    ui->centerlineDebugProgressBar->setVisible(false);
+                    ui->centerlineDebugStatusLabel->setText(reason);
+                });
     }
 
     // Annotation table selection

@@ -93,6 +93,7 @@ set(SOURCES
 
     # Core tracking
     src/core/trackingmanager.cpp
+    src/core/trackingexportworker.cpp
     src/core/wormtracker.cpp
     src/core/centerlineworker.cpp
     src/core/centerlineprocessor.cpp
@@ -169,6 +170,8 @@ set(HEADERS
 
     # Core
     src/core/trackingmanager.h
+    src/core/trackingexportworker.h
+    src/core/sharedblob.h
     src/core/wormtracker.h
     src/core/centerlinetypes.h
     src/core/centerlineworker.h

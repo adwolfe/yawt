@@ -152,6 +152,7 @@ void TrackingProgressDialog::setTrackingParameters(const QString& videoPath,
     ui->settingsSummaryTextEdit->setReadOnly(true);
 
     m_isTrackingRunning = false;
+    m_isFinishing = false;
     ui->overallProgressBar->setValue(0);
     ui->overallProgressBar->setVisible(false);
     ui->statusLabel->setText("Ready. Click 'Begin Tracking' to start.");
@@ -261,6 +262,7 @@ void TrackingProgressDialog::updateOverallProgress(int percentage) {
 
 void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
     m_isTrackingRunning = false;
+    m_isFinishing = true;
     const QString clMsg = computeCenterlineChecked()
         ? "Tracking complete. Computing centerlines..."
         : "Tracking complete. Skipping centerline computation.";
@@ -282,11 +284,31 @@ void TrackingProgressDialog::onTrackingSuccessfullyFinished() {
 }
 
 void TrackingProgressDialog::onCenterlineProgress(int percentage) {
+    ui->overallProgressBar->setValue(qMin(percentage, 99));
+}
+
+void TrackingProgressDialog::onSavingProgress(int percentage, const QString& status) {
+    m_isFinishing = true;
+    ui->overallProgressBar->setVisible(true);
+    ui->overallProgressBar->setRange(0, 100);
     ui->overallProgressBar->setValue(percentage);
+    ui->statusLabel->setText(status);
+    if (auto* button = ui->buttonBox->button(QDialogButtonBox::Cancel)) {
+        button->setText("Saving...");
+        button->setEnabled(false);
+    }
+    if (auto* button = ui->buttonBox->button(QDialogButtonBox::Apply))
+        button->setEnabled(false);
+}
+
+void TrackingProgressDialog::reject() {
+    // Escape/window close must not imply completion while final files are saving.
+    if (!m_isFinishing) QDialog::reject();
 }
 
 void TrackingProgressDialog::onCenterlineFinished() {
-    ui->statusLabel->setText("Tracking and centerline computation finished!");
+    m_isFinishing = false;
+    ui->statusLabel->setText("Tracking complete. Results saved.");
     ui->overallProgressBar->setValue(100);
 
     QPushButton *cancelButton = ui->buttonBox->button(QDialogButtonBox::Cancel);
@@ -301,6 +323,7 @@ void TrackingProgressDialog::onCenterlineFinished() {
 
 void TrackingProgressDialog::onTrackingFailed(const QString& reason) {
     m_isTrackingRunning = false;
+    m_isFinishing = false;
     ui->statusLabel->setText("Tracking Failed: " + reason);
     ui->overallProgressBar->setValue(ui->overallProgressBar->value()); // Keep current progress
     ui->overallProgressBar->setStyleSheet("QProgressBar::chunk { background-color: red; border-radius: 7px;}");
@@ -321,6 +344,7 @@ void TrackingProgressDialog::onTrackingFailed(const QString& reason) {
 
 void TrackingProgressDialog::onTrackingCancelledByManager() {
     m_isTrackingRunning = false;
+    m_isFinishing = false;
     ui->statusLabel->setText("Tracking was cancelled.");
     // ui->overallProgressBar->setValue(0); // Optionally reset progress
 

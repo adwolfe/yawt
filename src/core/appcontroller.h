@@ -197,7 +197,7 @@ signals:
      * @param statusMessage Optional human-readable status (e.g., chunk info, saving progress).
      */
     void trackingProgress(int overallPercent, const QString& statusMessage);
-    /** Emitted when tracking finishes successfully (after finalization). */
+    /** Tracking phase complete; centerline processing and final saving follow. */
     void trackingFinished();
     /** Emitted when tracking fails irrecoverably. Reason is human-readable. */
     void trackingFailed(const QString& reason);
@@ -207,8 +207,9 @@ signals:
 
     /** Percent progress (0–100) for the post-tracking centerline computation phase. */
     void centerlineProgress(int percentage);
-    /** Emitted when post-tracking centerline computation completes. */
+    /** Emitted after centerline processing and successful final saving. */
     void centerlineFinished();
+    void savingProgress(int percentage, const QString& status);
 
     /** Generic status message stream for detailed updates (can be verbose). */
     void trackingStatusMessage(const QString& message);
